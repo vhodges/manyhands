@@ -2,60 +2,79 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make each write cost about its own work: a write indexes only the contexts it changed, a whole refresh re-reads only what moved, a share uses 4–5 SSH connections, and a close or promotion previews twice and indexes once.
+**Goal:** Make each write cost about its own work: a write indexes only the contexts it changed, a whole refresh re-reads only what moved, a share uses 4–5 SSH connections, and a close or promotion previews twice and indexes once per exit.
 
-**Architecture:** Each context's index rows come from that context alone, with a stored basis (head, branch, file stats and hashes) and a dirty mark; which copy of an item is presented is decided at read. Writes index their contexts under the lease they already hold; a whole refresh scans outside the lease and stores by basis compare under it. Activity keeps today's values through short per-item walks and an incremental map for the primary. Phase 2 reuses one SSH connection per remote call and drops repeated listings, inspections and the post-push refresh; Phase 3 migrates the registry once per process, audits by use, and cuts a lifecycle's previews and refreshes.
+**Architecture:** Each context's index rows come from that context alone, with a stored basis (head, branch, file stats and hashes) and a dirty mark; which copy of an item is presented is decided at read. A write's index step and a whole refresh both observe outside the lease and store under it after a basis re-check. Activity keeps today's values through short per-item walks and an incremental map for the primary. Phase 2 reuses one SSH connection per remote call and drops repeated listings, inspections and the post-push refresh; Phase 3 migrates the registry once per process, audits by use, and cuts a lifecycle's previews and refreshes.
 
 **Tech Stack:** Rust, git2 0.20.4 (libgit2 with libssh2), rusqlite registry, serde_json, the SSH test harness in `tests/support/ssh_*`.
 
-**Spec:** `docs/plans/2026-11-19-fast-writes-design.md` (approved 2026-11-19; decisions 1–14, rulings R-1–R-7, Tables A and B). Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts): its "How to measure" section and planning comments 1–3.
+**Spec:** `docs/plans/2026-11-19-fast-writes-design.md` (approved 2026-11-19; decisions 1–14, rulings R-1–R-7, Tables A and B), with the planning amendments P-1–P-5 below, which the owner approves with this plan. Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts): its "How to measure" section and planning comments 1–3.
+
+## Planning amendments to the design (for the owner's approval)
+
+Each was found while grounding the plan in the code; the design is updated to match once approved.
+
+- **P-1. Cleanup checks.** The full `require_cleanup_clean` check runs once, under the lease, inside worktree removal (`remove_context_worktree`, `src/repository/cleanup.rs:265-272`), as the design says. Because a close deletes the remote branch before it removes the worktree, a cheap head-and-status check of the worktree runs before the remote delete (`src/repository/promotion/run.rs` ~1340), so a dirty worktree still stops it. The other two full checks (~1261, ~1432) go. Four full checks become one full and one cheap.
+- **P-2. Freshness on read keeps today's rule against the context's own time.** The design said reads compare content hashes. Existing tests pin "a file newer than the refresh is stale whatever it holds" (`tests/read_items.rs` `a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds`), and `read/comments.rs` ~349-360 uses that rule to decide whether stored context-wide findings stand. So a read reports stale when its context is dirty or the file's mtime is newer than the context's `indexed_at` (nanoseconds, taken before the observation), instead of the repository's `refreshed_at`. Content hashes are used only by a refresh to settle racy basis entries.
+- **P-3. A write's index step observes outside the lease and stores under it after a basis re-check**, like the whole refresh, instead of observing under the lease (R-3's "under the lease it holds for the write"). The write still holds its per-item row throughout, so no Manyhands writer of the same item can change the context; other items' writers are not held by the lease while it observes, as vh-bhepg's two-writer tests require (`tests/mutation_replay/reenter.rs` `writer_held_in_its_hand_off`), and no scan runs under the lease, as the promotion tests require (`spec4_assert_unleased_scans`, `src/repository/promotion/run_tests.rs` ~3371). A context whose basis moved between the observation and the store is left dirty and the answer is today's `RetryRequired`.
+- **P-4. A sync's index hand-off keeps the `refresh` action** with the per-item target that already exists (`synchronization-local-v1/<kind>/<item>/<oid>`, `src/repository/remote/sync.rs` ~7053), and gets item scope from that target and its `item_id`. A new action would change the `OperationAction` contract enum (`src/repository/read/dto.rs` ~773) and break operation reads.
+- **P-5. Previews add no blockers.** Today a preview's discovery yields only the kind mismatch and the item's path (`src/repository/closure/observe.rs` ~239-242, ~300-322; `src/repository/promotion/observe.rs` ~59-62, ~215-240). `item_preview_facts` yields exactly those, from the item's own context and the primary's index rows after the primary's basis check; duplicates in the item's own worktree are still found by its own context observation.
+
+## Owner questions (answered with the plan's approval)
+
+1. **Approve P-1–P-5** (recommended: yes; each keeps a property today's code has, and the design is updated to match).
+2. **A primary hand-off row is treated as its own item in Table B** (recommended): a crashed close, promotion, folder create or primary sync whose commit landed blocks only further writes to the primary (closes, promotions, folder creates) until resumed; other items' writes, refresh and poll proceed and index the primary. Otherwise it keeps today's repository-wide hold.
+3. **Measurement in scratch registries** (Task 1): the script runs `repo enable`, `repo identity-set`, `key generate` and the `--confirm` of close and promote only in its own scratch registry and replica; the owner adds the throwaway public key to localhost's `authorized_keys` (or names a key to import). Recommended: OK once, recorded in the ledger.
+4. **Approve the named edits E-1–E-8**, and the inventory Task 3 Step 1 brings to the checkpoint.
 
 ## Global Constraints
 
-- Run Rust only as `devenv shell -- cargo <cmd>` with `CARGO_TARGET_DIR=/home/vhodges/work/src/manyhands/target`, so no `target/` is created inside the ticket worktree.
+- Run Rust only as `devenv shell -- cargo <cmd>` with `CARGO_TARGET_DIR=/home/vhodges/work/src/manyhands/target/f3wts`, so this branch's binaries never replace `target/debug/manyhands-cli` or `target/release/manyhands-cli` of the main checkout, and no `target/` is created inside the ticket worktree.
+- The registry migration is one-way: never run a build from this branch against the owner's registry (`~/.local/share/manyhands`). Every run of this branch's CLI or library outside `cargo test` uses an isolated `HOME`, `MANYHANDS_DATA_DIR` and `GIT_CONFIG_GLOBAL` under a temporary root. Ticket operations (status saves, comments, syncs, close) run only as `devenv shell -- cargo run --locked --bin manyhands-cli -- …` from an up-to-date main checkout, never from a prebuilt binary path.
 - Between steps run only the tests you wrote or changed, by exact name (`--lib <module>::<test> -- --exact`, or `--test <target> <name> -- --exact`; an SSH target takes the same filter). Never a whole SSH target between steps. If one test command takes over about 15 minutes, stop, narrow it, and note the target in the ledger.
-- Static gates, the fast tier and the SSH tier run once, in Task 20. This work touches `src/repository/transport/`, so the SSH tier is every SSH-harness target.
-- Tests at the cheapest layer: library unit tests by default, table-driven; non-SSH integration only for CLI or public-API contracts; exactly one new SSH case (Task 15). No real waits: inject the clock, and use the existing hooks to park work.
-- Named edits only: an existing test changes only if this plan names it (section "Named edits") or a task's inventory step lists it in the ledger and it falls inside Table A or B. Any other test that breaks: stop and ask the owner.
-- No change to JSON shapes, codes or recovery actions (design decision 8); every golden under `tests/fixtures/` stays byte-identical.
-- The registry migration is one-way: never run a build from this branch against the owner's registry (`~/.local/share/manyhands`). Scratch registries only: isolated `HOME`, `MANYHANDS_DATA_DIR`, `GIT_CONFIG_GLOBAL`. Ticket operations (comments, saves, syncs) use the CLI built from main, from the main checkout, as AGENTS.md says.
-- Merge `origin/main` into the ticket worktree (never rebase) at the start of a task if main moved; publish the ticket branch after each task with `manyhands-cli item sync` (or the task's `comment add`) from the main checkout.
-- Desktop code is not expected to change (the desktop reads through the library). If a task touches `src/desktop/`, also run `check` and `clippy` with `--features desktop` on its own.
+- Static gates, the fast tier and the SSH tier run once, in the final task. This work touches `src/repository/transport/`, so the SSH tier is every SSH-harness target.
+- Tests at the cheapest layer: library unit tests by default, table-driven; non-SSH integration targets for read and CLI contracts; exactly one new SSH case (Task 18), because connection reuse is transport behaviour. No real waits: inject the clock and use the existing hooks to park work.
+- Named edits only (section "Named edits"). A test that breaks and is not named stops the work: record it in the ledger and ask the owner.
+- No change to JSON shapes, codes, recovery actions or the `OperationAction` enum (design decision 8, P-4); every golden under `tests/fixtures/` stays byte-identical.
+- The test hooks keep their contracts: `set_observation_hook_for_testing` fires after observing and before storing, now in the whole refresh between its two steps, in a write's index step, and in local sync's index; `set_refresh_persist_hook_for_testing` fires before a store. This keeps the tests listed under "Re-run, expected unchanged".
+- Merge `origin/main` into the ticket worktree (never rebase) at the start of a task if main moved; publish the ticket branch after each task with `item sync` (or the task's `comment add`) from the main checkout.
+- Desktop code is not expected to change. If a task touches `src/desktop/`, also run `check` and `clippy` with `--features desktop` on its own.
 - Manyhands content (tickets, comments, documents) is one line per paragraph, no hard wrapping.
 - Commit trailer: `Co-Authored-By:` the executing model, `<noreply@anthropic.com>`.
 
 ## Review Focus
 
-- An item with a live worktree must be listed once, from the worktree, and not read as stale; released or retired, it must come back from main at the next read (Task 5 Table A rows, Task 6).
-- A write must never answer `discovery: current` while one of its contexts is dirty; a crash between the commit and its index step must leave the context dirty and the row resumable to the same commit (Task 10, `a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it`).
-- An editor or an outside `git` command writing while a refresh or a write observes must not be stored as current (Task 4 `an_edit_during_observation_keeps_the_previous_rows_and_marks_the_context_dirty`, Task 11 `an_outside_change_between_the_refresh_steps_leaves_the_context_dirty_and_answers_busy`).
-- A crashed save whose commit landed must not block refresh, poll or other items, and must still close when resumed (Task 8 Table B rows, Task 9).
-- A registry written by an older build must open, read as stale where it must, and be brought current by one refresh (Task 2 `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty`, Task 11 `the_first_refresh_after_migration_observes_every_context_once`).
+- An item with a live worktree must be listed once, from the worktree, and not read as stale; released or retired, it must come back from main at the next read (Task 3 Table A rows, Tasks 6–7).
+- A write must never answer `discovery: current` while one of its contexts is dirty; a crash after the commit and before the index step must leave the context dirty and the row resumable to the same commit (Task 11, `a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it`).
+- An editor or an outside `git` command writing while a context is observed must not be stored as current (Task 5 `an_edit_during_observation_keeps_the_previous_rows_and_marks_the_context_dirty`, Task 13 `an_outside_change_between_the_refresh_steps_leaves_the_context_dirty_and_answers_busy`).
+- A crashed save whose commit landed must not block refresh, poll or other items, and must close when resumed (Task 3 Table B rows, Task 10).
+- A registry written by an older build must open, read as stale where it must, and be brought current by one refresh (Task 2 `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty`, Task 13 `the_first_refresh_after_migration_observes_every_context_once`).
 
 ## Named edits
 
-Each changes only as stated; anything else in these tests stays.
+For the owner's approval with this plan. Each changes only as stated.
 
-- **E-1** `tests/discovery_rebuild.rs`: `refresh_scan_race_retains_previous_rows_then_converges_on_retry`, `no_mutation_scan_race_retry_preserves_state_after_external_change`, `refresh_does_not_persist_private_markdown_while_detecting_source_races`, `refresh_retry_replaces_a_previously_persisted_context_when_its_observation_changes`, `refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes`, and the helper `assert_active_worktree_race_preserves_rows`: the race is injected between the refresh's two steps (Task 11's hook) instead of between two observations; the asserted outcomes (previous rows kept, `busy`, convergence on retry, no private Markdown persisted) stay. `discovery_public_types_hold_metadata_only`: add the basis fields to the expected public shape only if a public type gains them.
-- **E-2** `tests/read_items.rs`: `a_folder_made_while_a_refresh_observes_makes_the_refresh_try_again` (hook moves to between the steps; the outcome stays); `refreshed_at_is_set_only_when_a_refresh_completes` (still true for whole refreshes; add that a per-item write does not set it).
-- **E-3** `tests/read_status.rs`: `index_status_of_an_interrupted_refresh_is_stale_and_says_why` (stale now also from a dirty context; the reason text stays); `index_status_is_stale_when_the_index_holds_an_item_twice` (a primary copy plus its valid worktree copy is not stale; two copies that Table A does not explain still are).
-- **E-4** Duplicate-copy reads, replaced by Table A: `tests/read_comments.rs` `comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_stale`; `tests/read_items.rs` `an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_there` and `a_ticket_the_index_holds_twice_shows_only_its_effective_rows_relationships`, with their helpers `insert_item_worktree_row` and `insert_second_ticket_row`: "chosen copy" stays; "stale" is asserted only for the cases Table A says.
-- **E-5** `tests/mutation_replay/reenter.rs` `writers_on_two_tickets_both_complete_while_one_is_unfinished`: `index refresh` now succeeds and indexes the unfinished ticket instead of answering `recovery_required`; the retry still finishes with the same commit and no pending rows remain.
+- **E-1** `tests/discovery_rebuild.rs`: `refresh_scan_race_retains_previous_rows_then_converges_on_retry`, `no_mutation_scan_race_retry_preserves_state_after_external_change`, `refresh_does_not_persist_private_markdown_while_detecting_source_races`, `refresh_retry_replaces_a_previously_persisted_context_when_its_observation_changes`, `refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes` and the helper `assert_active_worktree_race_preserves_rows`: only if they fail with the hook between the refresh's two steps, adjust where the race is injected; the asserted outcomes (previous rows kept, `busy`, convergence on retry, no private Markdown persisted) stay. `discovery_public_types_hold_metadata_only`: add `DiscoveryContextKind::Invalid` to the expected public shape.
+- **E-2** `tests/read_items.rs`: `refreshed_at_is_set_only_when_a_refresh_completes` (still true for whole refreshes; add that a per-item write does not set it); `a_folder_made_while_a_refresh_observes_makes_the_refresh_try_again` (only if it fails, as E-1).
+- **E-3** `tests/read_status.rs`: `index_status_of_an_interrupted_refresh_is_stale_and_says_why` (stale now also from a dirty context; the reason text stays); `index_status_is_stale_when_the_index_holds_an_item_twice` (a primary copy plus its valid worktree copy is not stale; two copies Table A does not explain still are).
+- **E-4** Duplicate-copy reads, replaced by Table A: `tests/read_comments.rs` `comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_stale`; `tests/read_items.rs` `an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_there` and `a_ticket_the_index_holds_twice_shows_only_its_effective_rows_relationships`, with their helpers `insert_item_worktree_row` and `insert_second_ticket_row`: "chosen copy" stays; "stale" is asserted only where Table A says.
+- **E-5** `tests/mutation_replay/reenter.rs` `writers_on_two_tickets_both_complete_while_one_is_unfinished`: `index refresh` now succeeds and indexes the unfinished ticket instead of answering `recovery_required`; it asserts the unfinished row is still open afterwards; the retry still finishes with the same commit and no pending rows remain.
 - **E-6** `src/repository/recovery_scope_tests.rs`: the rows for item rows against whole-repository calls, per Table B.
-- **E-7** Observation hooks that fire between a refresh's two observations: `src/repository/remote/sync_tests.rs` (~1295, ~1358, ~1400) and `src/repository/comment_publication_tests.rs` (~1612) move to the step hook of Task 11 or the per-context index step of Task 10; their assertions stay.
-- **E-8** Transport reconnects: `tests/ssh_transport/exact.rs` `tracking_boundaries` and `reference_status_rejection`, `tests/ssh_transport/synchronization.rs` `cancel_before_transfer`, and `tests/remote_synchronization.rs` `remote_change_during_fetch` (~1029): they hook the per-transfer reconnect or the listing before the fetch; they move to the transfer checkpoint Task 14 defines, and keep their assertions (moved-remote detected, no leak, `Interrupted` with no new authentication).
-- Expected unchanged, re-run in their task: `a_hand_off_no_operation_owes_is_offered_as_a_refresh` (`outcome_tests.rs:1396`); the no-new-socket checks in `tests/ticket_closure/journeys.rs` (~222, ~1372) and `tests/document_promotion/advanced.rs` (~247); `first_parent_history_respects_the_requested_inspection_bound` (`discovery.rs` ~2548); every golden.
+- **E-7** Checkpoints that mark the repository's `refresh_required`: in `tests/local_authoring.rs`, `document_exact_create_retry_checkpoints_once_then_is_a_no_op`, `document_completed_move_retry_retries_only_registry_invalidation`, `document_noop_registry_failure_returns_pending_then_invalidates_without_commit`, `recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_without_another_commit` and the helper `assert_registry_refresh_is_the_only_row_change`; in `src/repository/closure/checkpoint_tests.rs`, `hook_writes_closing_then_moves_the_context_and_marks_refresh` and `adopted_synchronization_is_integrated_and_the_checkpoint_kept`: assert the context's dirty mark where they assert `refresh_required`.
+- **E-8** Transport: `tests/ssh_transport/exact.rs` `tracking_boundaries` modes 0 and 1 change the server between two connections and assert the download used the second advertisement; with one connection per call they are rewritten to change the server at `Checkpoint::TransferStarted` and assert the moved remote is caught by the "after" listing (`ExternalChange`, tracking unchanged, no `FETCH_HEAD`); modes 2–4 and `reference_status_rejection` and `tests/ssh_transport/synchronization.rs` `cancel_before_transfer` move from `Checkpoint::Reconnected` to `Checkpoint::TransferStarted` and keep their assertions.
+
+**Re-run, expected unchanged** (each in the task that touches it; a failure is recorded and brought to the owner): every user of `set_observation_hook_for_testing` (`src/repository/comment_publication_tests.rs`, `src/repository/remote/sync_tests.rs`, `tests/discovery_rebuild.rs`, `tests/journal_rejection.rs`, `tests/mutation_bridges/folder.rs`, `tests/mutation_confirmation/abandon.rs`, `tests/mutation_replay/local_sync*.rs`, `tests/mutation_replay/reenter.rs`, `tests/read_items/local_sync.rs`, `tests/read_items.rs`, `tests/read_status.rs`, `tests/remote_synchronization.rs`, `tests/ssh_transport/synchronization.rs`); every user of `set_refresh_persist_hook_for_testing`; `tests/remote_synchronization.rs` `remote_change_during_fetch` and the `index_pending` cases (~2199-2251); the `observe_root` shape tests in `src/repository/discovery.rs` (`observes_valid_document_and_ticket_active_contexts`, `invalid_configuration_suppresses_active_context_discovery`, `wrong_root_branch_remains_unverified_while_discovering_valid_active_contexts`, `reports_a_registered_deterministic_worktree_on_a_nonconforming_branch`, `rejects_an_independent_repository_at_a_deterministic_worktree_path`, `rejects_mismatched_and_malformed_active_context_candidates`) and `src/repository/remote/poll_tests.rs` (`poll_tree_conformity_matrix_rejects_without_creation_and_all_accepted_are_discoverable`, `poll_document_selection_matches_discovery_extensions_including_dotfiles`), because `observe_root` keeps its shape; `a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds` and the comment stale cases in `tests/read_comments.rs` (P-2); `a_hand_off_no_operation_owes_is_offered_as_a_refresh` (`outcome_tests.rs` ~1396); the no-new-socket checks in `tests/ticket_closure/journeys.rs` (~222, ~1372) and `tests/document_promotion/advanced.rs` (~247), which cover paths with no remote work; `context_rejects_a_dirty_configuration_path_without_creating_a_context` (`tests/local_authoring.rs`) and `publication_selection_blocks_selected_removal_and_dirty_configuration_path` (`tests/repository_enablement.rs`); `first_parent_history_respects_the_requested_inspection_bound`; every golden.
 
 ---
 
 ### Task 0: Preflight, ledger, start
 
 **Files:**
-- Create: `docs/plans/2026-11-19-fast-writes-execution.md` (execution ledger: one row per task with base SHA, tests run, results, deviations)
+- Create: `docs/plans/2026-11-19-fast-writes-execution.md` (execution ledger: per task the base SHA, tests run by name, results, deviations, measurements)
 
 - [ ] **Step 1:** In the ticket worktree, `git fetch origin && git merge origin/main` (never rebase). Record the base SHA in the ledger.
-- [ ] **Step 2:** Re-check every file, function and line this plan and the design cite (`grep -n`); record drift in the ledger and use the current names.
-- [ ] **Step 3:** From the main checkout, set the ticket's status to `implementing` (`manyhands-tickets`), then add the start comment (`manyhands-comments`): base SHA, the task list, and for each Acceptance item the test or measurement that proves it. Commit the ledger first.
+- [ ] **Step 2:** Re-check every file, function and line this plan and the design cite (`grep -n`); record drift in the ledger and use the current names. List by name, in the ledger, the existing tests that pin the checks this plan keeps (push-absence before a merge, the head and status check before a local update and before a push, re-confirmation at `src/repository/promotion/integrate.rs` ~183, a resumed lifecycle's re-check); the tasks that touch those paths re-run them.
+- [ ] **Step 3:** From the main checkout, set the ticket's status to `implementing`, then add the start comment: base SHA, the task list, and for each Acceptance item the test or measurement that proves it. Commit the ledger first and publish.
 
 ### Task 1: Measurement script and baseline
 
@@ -63,289 +82,338 @@ Each changes only as stated; anything else in these tests stays.
 - Create: `scripts/measure-writes` (bash, executable)
 
 **Interfaces:**
-- Produces: `scripts/measure-writes [--local-only] [--runs N] --out <csv>` prints and writes `command,run,seconds,build_head` rows. Later phase tasks run it unchanged.
+- Produces: `scripts/measure-writes --build-ref <git ref> [--local-only] [--runs N] --out <csv>`. It writes `command,run,seconds,build_ref` rows. Later tasks run it unchanged.
 
-- [ ] **Step 1: Write the script.** It builds the release CLI from the current tree into `CARGO_TARGET_DIR`; makes a scratch `HOME`, `MANYHANDS_DATA_DIR` and `GIT_CONFIG_GLOBAL` under a temporary directory; clones the main checkout with every `origin/manyhands/*` branch into a replica, and a bare copy as its remote at `ssh://$USER@127.0.0.1/<bare path>` (or an unreachable `ssh://git@127.0.0.1:1/...` with `--local-only`); runs `repo enable`, `poll once` (materializing every open context) and `index rebuild`; then times, N runs each (default 3), on fixed items: `ticket save`, `document save`, `ticket create`, `comment add`, `item sync`, `document promote --prepare`/`--confirm`, `ticket close --prepare`/`--confirm`, `index refresh`, `poll once`. Close and promote use fresh items it creates. `comment add` also records its local-checkpoint time from the CLI's `progress:` lines on stderr.
-- [ ] **Step 2: Hand over the scratch trust steps.** Check `ssh -o BatchMode=yes 127.0.0.1 true`. The scratch registry needs a key selection (`key select`, the agent runs it) and a host approval for `127.0.0.1` (`host approve`: show the owner the fingerprint and wait). If localhost SSH with the owner's key does not work, ask the owner; until then run `--local-only`.
-- [ ] **Step 3: Run the baseline** on this branch's base (before any code change), `--runs 3`, and record the medians in the ledger and in a ticket comment. Commit the script.
+- [ ] **Step 1: Write the script.** It: exports `git archive <build-ref>` into a temporary directory and builds the release CLI there with its own `CARGO_TARGET_DIR` under the temporary root (no `git worktree add` in the owner's repository); creates `HOME`, `MANYHANDS_DATA_DIR` and `GIT_CONFIG_GLOBAL` under the temporary root and refuses to run if `MANYHANDS_DATA_DIR` is not under it; clones the main checkout with every `origin/manyhands/*` branch into a replica, and a bare copy as its remote at `ssh://$USER@127.0.0.1/<bare path>` (`--local-only`: an unreachable `ssh://git@127.0.0.1:1/...`); runs `repo enable`, `repo identity-set`, `key generate` for a throwaway key (or `key import` of one the owner names), `key select`, `host approve` for `127.0.0.1`, then `poll once` to materialize every open context (`--local-only`: `context prepare` for each open item instead); then times, N runs each (default 3), on fixed items: `ticket save`, `document save`, `ticket create`, `comment add` (its local-checkpoint time also read from the `progress:` lines on stderr), `item sync`, `document promote --prepare`/`--confirm` and `ticket close --prepare`/`--confirm` on items it creates, `index refresh`, `poll once`. `--local-only` skips the commands that need the remote.
+- [ ] **Step 2: The owner's OK.** The script runs `repo enable`, `repo identity-set`, `key generate` and the `--confirm` of close and promote, all middle-column verbs, but only in its scratch registry and replica. Get the owner's OK once for that, recorded in the ledger; show the `127.0.0.1` fingerprint before the first `host approve`; ask the owner to add the throwaway public key to `~/.ssh/authorized_keys` for localhost (or name an existing key to import). Until then, run `--local-only`.
+- [ ] **Step 3: Run the baseline** with `--build-ref <base SHA> --runs 3` (SSH mode once the owner's steps are done) and record the medians in the ledger and a ticket comment. Commit the script.
 
 ## Phase 1: the index
 
-### Task 2: Registry migration for basis, dirty marks, owed contexts and the invalid kind
+### Task 2: Registry migration, context keys and the invalid kind
 
 **Files:**
-- Modify: `src/repository/discovery.rs` (`migrate_registry` ~1555, table creation ~1599-1664), `src/repository/recovery.rs` (`migrate_operation_records` ~597-775), `src/repository.rs` (`context_kind_name` ~6929, stored kind readers ~7519), `src/repository/read/items.rs` (kind reader ~540)
+- Modify: `src/repository/discovery.rs` (`migrate_registry` ~1555, tables ~1599-1664), `src/repository/recovery.rs` (`migrate_operation_records` ~597-775), `src/repository.rs` (`DiscoveryContextKind`, `context_kind_name` ~6929, kind readers ~7519, ~7548), `src/repository/read/items.rs` (kind reader ~540)
 - Test: `src/repository/discovery.rs` tests
 
 **Interfaces:**
-- Produces: `contexts` gains `basis TEXT` (JSON, NULL = unknown), `indexed_at INTEGER` (unix nanoseconds), `dirty INTEGER NOT NULL DEFAULT 1 CHECK (dirty IN (0,1))`; new table `primary_activity(repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE, path TEXT NOT NULL, commit_oid TEXT NOT NULL, committed_at INTEGER NOT NULL, UNIQUE(repository_id, path))` plus `contexts.activity_base TEXT` (the primary's map base OID); `operation_records.owed_contexts TEXT` (JSON array of context keys, NULL = unknown). Migration marker `cycle_context_basis`, ALTER ADD COLUMN pattern of `migrate_operation_attribution` (recovery.rs ~775), marker-based, never through `migrate_item_read_schema` (which would mark every registration stale).
-- Produces: context kind `invalid` accepted by every kind reader. Step 1 decides whether the existing `unverified` kind already means this.
+- Produces: `contexts` gains `basis TEXT` (JSON; NULL = unknown), `indexed_at INTEGER` (unix nanoseconds, `i64`), `dirty INTEGER NOT NULL DEFAULT 1 CHECK (dirty IN (0,1))`, `activity_base TEXT` (primary only); table `primary_activity(repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE, path TEXT NOT NULL, commit_oid TEXT NOT NULL, committed_at INTEGER NOT NULL, ordinal INTEGER NOT NULL, UNIQUE(repository_id, path))` (`ordinal`: the commit's position on the primary's first-parent chain, larger is newer); `operation_records.owed_contexts TEXT` (JSON array of encoded `ContextKey`s; NULL = unknown; the builder may use the legacy `operation_record_contexts` table, recovery.rs ~618, instead if it fits). Marker `cycle_context_basis`, the ALTER ADD COLUMN pattern of `migrate_operation_attribution` (recovery.rs ~775), never through `migrate_item_read_schema`.
+- Produces: `DiscoveryContextKind::Invalid` (a new public variant; `Unverified` is root-only, repository.rs ~7548), stored as `invalid` and accepted by every kind reader.
 - Produces: `pub(super) enum ContextKey { Primary, Item(canonical::ItemId) }` with `fn encode(&self) -> String` (`"primary"` or the ULID) and `fn decode(&str) -> Option<Self>`, in `src/repository/discovery.rs`.
 
-- [ ] **Step 1:** Read what writes and reads `unverified` and record in the ledger whether `invalid` is a new kind or a rename; use the answer below.
-- [ ] **Step 2: Write failing tests** `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` (create the tables without the new columns, insert a context, open with the new code: columns exist, the row has `dirty=1` and NULL basis, the marker is set once, a second open changes nothing) and `the_invalid_context_kind_round_trips_through_every_kind_reader`.
-- [ ] **Step 3: Run** both by exact name. Expected: FAIL.
-- [ ] **Step 4: Implement** the migration, `ContextKey`, and the kind.
-- [ ] **Step 5: Run** both, and `first_parent_history_respects_the_requested_inspection_bound`. Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` (create the tables without the new columns, insert a context, open with the new code: columns exist, the row has `dirty = 1` and NULL basis, the marker is set once, a second open changes nothing) and `the_invalid_context_kind_round_trips_through_every_kind_reader`.
+- [ ] **Step 2: Run** both by exact name. Expected: FAIL.
+- [ ] **Step 3: Implement.** No reader or writer uses the new columns yet.
+- [ ] **Step 4: Run** both and E-1's `discovery_public_types_hold_metadata_only`. Expected: PASS. Commit.
 
-### Task 3: Activity without per-item history walks
+### Task 3: Tables A and B, tests first — design checkpoint
+
+**Files:**
+- Test: Table A in `tests/read_items.rs`, `tests/read_comments.rs`, `tests/read_status.rs` (non-SSH targets with real registry fixtures: `enabled_repository`, `create_document_context`, `context_worktree`, and the SQL-row helpers the E-4 tests use), plus `src/repository/remote/state.rs` tests for the remote readers; Table B in `src/repository/recovery_scope_tests.rs` (extend `Seed`, which already has `item_id`, with `completed_step`; add `Call` variants for poll, another item's sync reservation, `context sync-local` admission and retirement), `src/repository/remote/reservation.rs` tests, `src/repository/context_retirement/` tests, `src/repository/local_sync/` tests
+
+- [ ] **Step 1: Inventory** (no code): every existing test that asserts a refusal behind a pending local row or a remote `index_pending` row (grep tests for `require_no_pending_local`, `blocking_debt`, `LocalOperationPending`, `index_pending`, `insert_local`, `insert_remote_index_pending`). List each in the ledger with the Table B cell it falls under, and whether that cell changes its answer. These go to the owner at Step 4 as named edits.
+- [ ] **Step 2: Write one failing test per Table A row** (`an_item_only_on_the_primary_is_presented_from_it`, `a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale`, `a_released_or_removed_worktree_presents_the_primary_copy_again`, `an_invalid_worktree_presents_the_primary_copy_and_its_problems`, `an_item_only_in_a_worktree_is_presented_from_it`, `an_invalid_configuration_presents_no_item_contexts`, `relationships_and_short_codes_come_from_presented_copies_only`), each over lists, `find`, `show`, the comment reads, graph reads, `index status`, `repo inspect` and the `list_repositories` problem count as the row says, with rows stored as the new design stores them (primary rows unhidden; an invalid context as its own `invalid` row); and `an_invalid_context_row_does_not_refuse_poll_remote_snapshot_or_history_reads` in `src/repository/remote/state.rs` tests.
+- [ ] **Step 3: Write one failing test row per Table B cell** against the real checks: `is_in_the_way` (`src/repository/recovery.rs` ~2029); `require_no_pending_local` (~1119) through its callers' entry points (`src/repository/remote/reservation.rs` ~317, ~1308, ~1557, ~1970, ~3153; `src/repository/remote/poll.rs` ~1674; `src/repository/context_retirement/execution.rs` ~330, `source.rs` ~116, `authority.rs` ~306/~401/~518); `local_sync/record.rs` `admit` (~1008); `context_retirement/pass.rs` `blocking_debt` (~382); `authority.rs` `local_owner` (~135); `reentry.rs` (~144); `record.rs` (~1734); and the reservation's `busy` behind another remote row whose only debt is `index_pending` (`reservation.rs` ~1309-1318). Include the primary as an item for a primary hand-off row (Owner question 2).
+- [ ] **Step 4: Run** them. Expected: FAIL where Tables A and B change today's answer. Commit them `#[ignore = "fast writes: design checkpoint"]`, so the tree stays green, and publish.
+- [ ] **Step 5: Checkpoint.** Dispatch a fresh reviewer to check the tests against Tables A and B (one test per row and cell, each able to fail). Set the ticket's status to `waiting`; add a comment listing each test and its row or cell, the reviewer's result, and the Step 1 inventory as named edits for approval; publish and stop. When the owner answers, set the status back to `implementing`, apply any change to the design first, and continue.
+
+### Task 4: Activity without per-item history walks
 
 **Files:**
 - Create: `src/repository/activity.rs` (declared in `src/repository.rs`)
-- Modify: `src/repository/discovery.rs` (`observe_activity` ~668 calls the new functions; `latest_commit_touching`, `first_parent_commits`, `commit_touches_paths` move under `#[cfg(test)]` as the oracle)
+- Modify: `src/repository/discovery.rs` (`observe_activity` ~668)
 - Test: `src/repository/activity.rs` tests (helpers copied from `discovery.rs` tests: `repository_on_main`, `checkpoint`, `checkpoint_reference`, `active_worktree_at`)
 
 **Interfaces:**
-- Produces: `pub(super) struct CommitActivity { pub oid: git2::Oid, pub at: OffsetDateTime }`.
-- Produces: `pub(super) fn item_commit_activity(repository: &git2::Repository, head: git2::Oid, owned: &[PathBuf]) -> Result<Option<CommitActivity>, git2::Error>`: first-parent walk from `head`, a diff against the first parent restricted to `owned` (`DiffOptions::pathspec` per path with `disable_pathspec_match(true)`), stopping at the first match, at most `MAX_ACTIVITY_HISTORY_COMMITS` (1024) commits; a root commit diffs against the empty tree.
-- Produces: `pub(super) struct PrimaryActivityMap { base: Option<git2::Oid>, newest: BTreeMap<PathBuf, CommitActivity> }` with `fn load(tx: &rusqlite::Transaction<'_>, repository_id: i64) -> Result<Self, RepositoryError>`, `fn store(&self, tx: &rusqlite::Transaction<'_>, repository_id: i64) -> Result<(), RepositoryError>`, `fn advance(&mut self, repository: &git2::Repository, head: git2::Oid) -> Result<Advance, git2::Error>` and `fn newest_over(&self, owned: &[PathBuf]) -> Option<CommitActivity>`; `pub(super) enum Advance { Unchanged, Incremental { diffed: usize }, Rebuilt { diffed: usize } }`. `advance` goes incremental only when `base` is an ancestor of `head` (`graph_descendant_of`) and found on `head`'s first-parent chain; otherwise one full first-parent walk, one unfiltered diff per commit, mapped to every touched path. No commit window (R-1).
+- Produces: `pub(super) struct CommitActivity { pub oid: git2::Oid, pub at: OffsetDateTime, pub ordinal: i64 }` (ordinal: position on the walked first-parent chain; for an item walk, the commit's distance from the head negated).
+- Produces: `pub(super) fn item_commit_activity(repository: &git2::Repository, head: git2::Oid, owned: &[PathBuf]) -> Result<ItemWalk, git2::Error>` with `pub(super) struct ItemWalk { pub found: Option<CommitActivity>, pub examined: usize }`: a first-parent walk from `head`, a diff against the first parent restricted to `owned` (`DiffOptions::pathspec` per path with `disable_pathspec_match(true)`), stopping at the first match, at most `MAX_ACTIVITY_HISTORY_COMMITS` (1024) commits; a root commit diffs against the empty tree.
+- Produces: `pub(super) struct PrimaryActivityMap { base: Option<git2::Oid>, newest: BTreeMap<PathBuf, CommitActivity> }` with `fn load(tx: &rusqlite::Transaction<'_>, repository_id: i64) -> Result<Self, RepositoryError>`, `fn store(&self, tx: &rusqlite::Transaction<'_>, repository_id: i64) -> Result<(), RepositoryError>`, `fn advance(&mut self, repository: &git2::Repository, head: git2::Oid) -> Result<Advance, git2::Error>` and `fn newest_over(&self, owned: &[PathBuf]) -> Option<CommitActivity>` (the entry with the largest ordinal, so it matches today's first-in-walk-order choice when timestamps are backdated); `pub(super) enum Advance { Unchanged, Incremental { diffed: usize }, Rebuilt { diffed: usize } }`. `advance` goes incremental only when `base` is an ancestor of `head` (`graph_descendant_of`) and found on `head`'s first-parent chain; otherwise one full first-parent walk, one unfiltered diff per commit. Only paths under `.manyhands/` and `docs/` are kept. No commit window (R-1).
+- `latest_commit_touching`, `first_parent_commits` and `commit_touches_paths` stay in the non-test build until Task 7 switches the primary; then they move under `#[cfg(test)]` as the oracle.
 
-- [ ] **Step 1: Write the failing table test** `activity_matches_latest_commit_touching_for_every_history`: rows for direct commits, a backdated first-parent commit, a side-branch-only change, a merge of primary into an item branch, comment added and comment invalid (parent missing), a mode-only change, a path with `*` and `?` in its name, a root commit, a merged item on main; each row asserts `item_commit_activity(head, owned)` equals the oracle and records the commits examined (at most the oracle's).
-- [ ] **Step 2: Write the failing tests** `the_primary_map_advances_incrementally_over_new_first_parent_commits` (diffed equals the new commits), `the_primary_map_rebuilds_after_a_reset_amend_or_second_parent_fast_forward` (three rows, `Rebuilt`, values equal the oracle at the new head), `the_primary_map_drops_a_path_that_leaves_the_owned_set` and `the_primary_map_keeps_an_item_older_than_the_window` (1030 commits; today's walk drops the item, the map keeps its time: R-1).
+- [ ] **Step 1: Write the failing table test** `activity_matches_latest_commit_touching_for_every_history`: rows for direct commits, a backdated first-parent commit, a backdated commit across two owned paths, a side-branch-only change, a merge of primary into an item branch, a comment added and a comment invalid (parent missing), a mode-only change, a path with `*` and `?` in its name, a root commit, a merged item on main, and a rebuild from no map; each row asserts the activity time and `activity_source` equal the oracle's, for `item_commit_activity` and for the map, and `examined` is at most the oracle's walk.
+- [ ] **Step 2: Write the failing tests** `the_primary_map_advances_incrementally_over_new_first_parent_commits` (diffed equals the new commits), `the_primary_map_rebuilds_after_a_reset_amend_or_second_parent_fast_forward` (three rows, `Rebuilt`, values equal the oracle at the new head), `the_primary_map_drops_a_path_that_leaves_the_owned_set` and `the_primary_map_keeps_an_item_older_than_the_window` (1030 commits; today's walk drops the item from the observation, the map keeps its time: R-1).
 - [ ] **Step 3: Run** them by exact name. Expected: FAIL.
-- [ ] **Step 4: Implement** `activity.rs`, and switch `observe_activity` to `item_commit_activity` for item contexts (the primary's use comes in Task 4). The uncommitted part stays as `observe_activity` computes it today.
-- [ ] **Step 5: Run** the new tests and the existing activity tests in `discovery.rs` (`observation_uses_a_newer_comment_commit_for_item_activity`, `observation_uses_the_newer_first_parent_commit_when_its_timestamp_is_backdated`, `observation_ignores_a_newer_side_branch_only_item_change`, `observation_uses_newer_uncommitted_item_or_comment_mtime`, `observation_excludes_invalid_comments_from_trees_and_activity`). Expected: PASS. Commit.
+- [ ] **Step 4: Implement** `activity.rs`; `observe_activity` uses `item_commit_activity` for item contexts. The uncommitted part stays as `observe_activity` computes it.
+- [ ] **Step 5: Run** the new tests and the existing activity tests (`observation_uses_a_newer_comment_commit_for_item_activity`, `observation_uses_the_newer_first_parent_commit_when_its_timestamp_is_backdated`, `observation_ignores_a_newer_side_branch_only_item_change`, `observation_uses_newer_uncommitted_item_or_comment_mtime`, `observation_excludes_invalid_comments_from_trees_and_activity`). Expected: PASS. Commit.
 
-### Task 4: Per-context observation with a basis
+### Task 5: Per-context observation with a basis
 
 **Files:**
-- Modify: `src/repository/discovery.rs` (`observe_root` ~318 and `observe_active_contexts` ~403 split; `leave_active_items_to_their_contexts` ~776 no longer applied to stored rows; `collect_authoring_item_sources` ~952 unchanged)
 - Create: `src/repository/basis.rs`
-- Test: `src/repository/discovery.rs` tests, `src/repository/basis.rs` tests
+- Modify: `src/repository/discovery.rs` (`observe_root` ~318 and `observe_active_contexts` ~403 composed from per-context observations; `observe_root` keeps its shape, including `leave_active_items_to_their_contexts` ~776, for its current callers)
+- Test: `src/repository/basis.rs` and `src/repository/discovery.rs` tests
 
 **Interfaces:**
-- Produces in `basis.rs`: `pub(super) struct Basis { head: Option<git2::Oid>, branch: Option<String>, worktree: PathBuf, config_blob: Option<git2::Oid>, files: Vec<BasisFile>, dirs: Vec<BasisDir> }`, `BasisFile { path, size, inode, ctime_ns, mtime_ns, hash: git2::Oid }`, `BasisDir { path, inode, ctime_ns, mtime_ns }` (inode and ctime absent on Windows), with `fn encode(&self) -> String`, `fn decode(&str) -> Option<Self>`, and `pub(super) fn check(stored: &Basis, current_stat: &Basis, indexed_at_ns: i128) -> BasisCheck` where `pub(super) enum BasisCheck { Same, Racy(Vec<PathBuf>), Moved }` (racy: an entry whose mtime is within 2 s of `indexed_at_ns`; a racy file is settled by comparing its content hash, and a confirmed one is recorded clean).
-- Produces in `discovery.rs`: `pub(super) struct ListedContext { key: ContextKey, worktree: PathBuf }`, `pub(super) fn list_contexts(repository: &git2::Repository, root: &Path) -> Result<Vec<ListedContext>, RootObservationProblem>`, `pub(super) fn stat_basis(repository: &git2::Repository, root: &Path, listed: &ListedContext) -> Basis` (stat only, no reads), and `pub(super) fn observe_context(repository: &git2::Repository, root: &Path, listed: &ListedContext, activity: &mut PrimaryActivityMap) -> ContextObservation`. `ContextObservation` holds today's per-context fields (context, head, sources, validation, items, folders for the primary, problems) plus `basis: Basis`, `valid: bool` and `left_dirty: bool`. Stat, read and parse, stat again; on a difference observe once more; if still different keep `left_dirty = true` and no rows are to be stored. An invalid item context yields its own observation with `valid = false` and its problems (today they go to the primary). The primary's observation uses `PrimaryActivityMap::advance` and `newest_over` for every root item, hidden or not.
-- `observe_root` remains for `index rebuild` and local sync until Tasks 10–11, composed from `list_contexts` and `observe_context`.
+- Produces in `basis.rs`: `pub(super) struct Basis { head: Option<git2::Oid>, branch: Option<String>, worktree: PathBuf, config_blob: Option<git2::Oid>, files: Vec<BasisFile>, dirs: Vec<BasisDir> }`, `BasisFile { path, size, inode: Option<u64>, ctime_ns: Option<i64>, mtime_ns: i64, hash: Option<git2::Oid> }`, `BasisDir { path, inode: Option<u64>, ctime_ns: Option<i64>, mtime_ns: i64 }` (inode and ctime `None` on Windows; `hash` filled by an observation, `None` in a stat-only basis); `fn encode(&self) -> String`, `fn decode(&str) -> Option<Self>`; `pub(super) fn check(stored: &Basis, current: &Basis, indexed_at_ns: i64) -> BasisCheck` with `pub(super) enum BasisCheck { Same, Racy(Vec<PathBuf>), Moved }` (racy: an entry whose mtime is within 2 s of `indexed_at_ns`; the caller settles a racy file by hashing it, and the store records it clean by writing a basis whose `indexed_at` is past the window).
+- Produces in `discovery.rs`: `pub(super) struct ListedContext { key: ContextKey, worktree: PathBuf }`; `pub(super) fn list_contexts(repository: &git2::Repository, root: &Path) -> Result<Vec<ListedContext>, RootObservationProblem>`; `pub(super) fn stat_basis(repository: &git2::Repository, root: &Path, listed: &ListedContext) -> Basis` (stat only, no file reads, re-lists only a directory whose stat changed); `pub(super) fn observe_context(repository: &git2::Repository, root: &Path, listed: &ListedContext, activity: &mut PrimaryActivityMap) -> ContextObservation`. `ContextObservation` holds today's per-context fields (context, head, sources, validation, items, folders for the primary, problems) plus `basis: Basis`, `valid: bool`, `left_dirty: bool`. Stat, read and parse, stat again; on a difference observe once more; if still different, `left_dirty = true` and nothing is to be stored. An invalid item context yields its own observation (`valid = false`, its problems). The primary's items use `PrimaryActivityMap::advance` and `newest_over`, hidden items included. `observe_context` fires its own test counter (`set_context_scan_hook`), not `scan_checkpoint`, so `spec4_assert_unleased_scans` keeps meaning whole-repository scans.
 
-- [ ] **Step 1: Write the failing table test** `observation_and_basis_detect_every_kind_of_change`: rows for an editor write during the read (`an_edit_during_observation_keeps_the_previous_rows_and_marks_the_context_dirty`), a same-second same-size edit (racy, settled by hash), an mtime-preserving copy (`#[cfg(unix)]`), a branch switch at the same OID, a new comment file, a removed comment file, a folder made outside Manyhands (primary), a configuration edit, a racy entry confirmed clean once and not hashed again.
-- [ ] **Step 2: Write the failing tests** `an_invalid_worktree_is_observed_as_its_own_invalid_context` and `the_primary_observation_does_not_depend_on_active_contexts` (adding, invalidating and removing a worktree leaves the primary's observation equal).
+- [ ] **Step 1: Write the failing table test** `observation_and_basis_detect_every_kind_of_change`: rows for an editor write during the read (`an_edit_during_observation_keeps_the_previous_rows_and_marks_the_context_dirty`), a same-second same-size edit (racy, settled by hash), an mtime-preserving copy (`#[cfg(unix)]`), a branch switch at the same OID, a new comment file, a removed comment file, a folder made outside Manyhands (primary), a configuration edit, and a racy entry settled once and not hashed again.
+- [ ] **Step 2: Write the failing tests** `an_invalid_worktree_is_observed_as_its_own_invalid_context` and `the_primary_observation_does_not_depend_on_active_contexts` (adding, invalidating and removing a worktree leaves the primary's `observe_context` equal).
 - [ ] **Step 3: Run** them. Expected: FAIL.
-- [ ] **Step 4: Implement** `basis.rs` and the split.
-- [ ] **Step 5: Run** the new tests and `refresh_keeps_primary_and_active_contexts_with_active_item_precedence` (`tests/discovery_rebuild.rs` ~736). Expected: the new ones PASS; record the existing one's state in the ledger (it is expected to fail until Task 6). Commit.
+- [ ] **Step 4: Implement.** Storage and reads are unchanged in this task.
+- [ ] **Step 5: Run** the new tests and the `observe_root` shape tests listed under "Re-run, expected unchanged". Expected: PASS. Commit.
 
-### Task 5: Table A tests first — design checkpoint
-
-**Files:**
-- Test: `src/repository/read/items_tests.rs` (extend; a tempdir root for `context_exists`), `src/repository/read/comments_tests.rs`, `src/repository/read/status_tests.rs`, `src/repository/read/graph_tests.rs`
-
-- [ ] **Step 1: Write one failing test per row of the design's Table A**, named for the row (`an_item_only_on_the_primary_is_presented_from_it`, `a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale`, `a_released_or_removed_worktree_presents_the_primary_copy_again`, `an_invalid_worktree_presents_the_primary_copy_and_its_problems`, `an_item_only_in_a_worktree_is_presented_from_it`, `an_invalid_configuration_presents_no_item_contexts`, `relationships_and_short_codes_come_from_presented_copies_only`), each over lists, `show`, comments, graph reads and `index status` as the row says, with stored rows built through the existing `context()`/`stored()` helpers.
-- [ ] **Step 2: Run** them. Expected: FAIL. Commit them as failing tests in their own commit, marked `#[ignore = "Table A: design checkpoint"]` so the tree stays green.
-- [ ] **Step 3: Checkpoint.** Set the ticket's status to `waiting`, add a comment listing each test and the row it pins, publish, and stop until the owner answers. A row the owner changes changes the design first.
-
-### Task 6: Read-time presentation
+### Task 6: Readers apply Table A
 
 **Files:**
-- Modify: `src/repository/read/items.rs` (`effective_rows` ~1567, `effective_copy` ~1616, `row_rank` ~1546, `stored_problems` ~804, `stored_index_state` ~572), `src/repository/read/status.rs` (`index_problems` ~871, context count ~929), `src/repository/read/admin.rs` (`list_repositories` ~224), `src/repository/read/graph.rs` (~884-891), `src/repository.rs` (`read_repository_snapshot` ~6983, the "not globally unique" failure ~7220, branch parsing ~7200, ~7555), `src/repository/remote/state.rs` (~2766, ~2816, ~7040, `remote_snapshot` ~7194), `src/repository/local_sync/observe.rs` (~65)
-- Test: Task 5's tests; E-3, E-4
+- Modify: `src/repository/read/items.rs` (`effective_rows` ~1567, `effective_copy` ~1616, `row_rank` ~1546, `stored_problems` ~804, `stored_index_state` ~572), `src/repository/read/status.rs` (`index_problems` ~871, context count ~929), `src/repository/read/admin.rs` (`list_repositories` ~216-254), `src/repository/read/graph.rs` (~884-891), `src/repository.rs` (`read_repository_snapshot` ~6983, the "not globally unique" failure ~7218-7225, branch parsing ~7200, ~7555), `src/repository/remote/state.rs` (~2766, ~2816, ~7040, `remote_snapshot` ~7194), `src/repository/local_sync/observe.rs` (~65)
+- Test: Task 3's Table A tests
 
 **Interfaces:**
-- Consumes: Task 2's `invalid` kind, Task 4's per-context rows.
-- Produces: `effective_rows` and `effective_copy` are the one place a copy is chosen, and apply Table A; the problem readers drop the primary's problems under a presented worktree's item directories; `read_repository_snapshot` chooses copies instead of failing; every `kind='active'` reader excludes `invalid`.
+- Produces: `effective_rows` and `effective_copy` are the one place a copy is chosen, and apply Table A to both the old stored shape (primary rows hidden) and the new one; the problem readers drop the primary's problems under a presented worktree's item directories; `read_repository_snapshot` chooses a copy instead of failing; every `kind='active'` reader excludes `invalid`.
 
-- [ ] **Step 1:** Remove the `#[ignore]` from Task 5's tests. Run them. Expected: FAIL.
-- [ ] **Step 2: Implement** Table A in the readers listed.
-- [ ] **Step 3: Run** Task 5's tests, E-3, E-4 and `refresh_keeps_primary_and_active_contexts_with_active_item_precedence`. Expected: PASS. Commit.
+- [ ] **Step 1:** Remove the `#[ignore]` from the Table A tests. Run them. Expected: FAIL.
+- [ ] **Step 2: Implement.** Storage still writes the old shape, so today's tests keep passing.
+- [ ] **Step 3: Run** the Table A tests, E-3 and E-4. Expected: PASS for the reader rows; record in the ledger any row that needs Task 7's storage. Commit.
 
-### Task 7: Per-context store and freshness
+### Task 7: Store each context from its own observation
 
 **Files:**
-- Modify: `src/repository.rs` (`persist_context_refresh` ~6413, `persist_context` ~6792, `persist_retry_problem` ~6514, `mark_document_refresh_required` ~11284 and its callers ~4008, `checkpoint_owned_paths` ~3907/~3941), `src/repository/bridges/folder.rs` (~514), `src/repository/closure/checkpoint.rs` (~559), `src/repository/promotion/run.rs` (~1694-1699), `src/repository/promotion/lifecycle_record.rs` (~941), `src/repository/remote/state.rs` (~6530), `src/repository/context_retirement/` (`execution.rs` ~392, `preserve.rs` ~324, `reentry.rs` ~247, `run.rs` ~583, `authority.rs` ~421), `src/repository/mutation/bind/lifecycle.rs` (~1235, ~1386), `src/repository/read/mod.rs` (`index_state` ~92), `src/repository/read/items.rs` (`newer_than` callers ~1792, ~1884), `src/repository/read/comments.rs` (~313, ~349)
-- Test: library tests next to `persist_context_refresh` and in `src/repository/read/`
+- Modify: `src/repository.rs` (`persist_context_refresh` ~6413, `persist_context` ~6792, `persist_observation` ~6689, `persist_rebuild_observation` ~6202), `src/repository/discovery.rs` (the stored rows no longer apply `leave_active_items_to_their_contexts`; `latest_commit_touching` and its helpers move under `#[cfg(test)]`)
+- Test: library tests next to `persist_context_refresh`; Table A tests
 
 **Interfaces:**
-- Produces: `pub(super) fn persist_context_index(tx: &rusqlite::Transaction<'_>, repository_id: i64, observation: &ContextObservation, indexed_at_ns: i128) -> Result<(), RepositoryError>` (one context's rows, basis, `indexed_at`, `dirty = 0`; for the primary also configuration observations, folders and the activity map).
-- Produces: `pub(super) fn mark_contexts_dirty(registry_path: &Path, root: &Path, contexts: &[ContextKey], operation: RepositoryOperation) -> Result<(), RepositoryError>`, used by every former `refresh_required` writer except whole-repository facts (`reconcile_registration`, the item-read migration, poll's mark, `persist_rebuild_retry`).
-- Produces: `index_state(refresh_required, refreshed_at, has_contexts, any_dirty: bool)`; reads compare the content hash of the file they read with the stored basis hash, and report stale when the context is dirty; `ItemFile::newer_than` is removed.
+- Consumes: Tasks 4–6.
+- Produces: `pub(super) fn persist_context_index(tx: &rusqlite::Transaction<'_>, repository_id: i64, observation: &ContextObservation, indexed_at_ns: i64) -> Result<(), RepositoryError>`: one context's rows from its own observation, its basis, `indexed_at`, `dirty = 0`; an invalid context as an `invalid` row with its problems; for the primary also configuration observations, folders, `activity_base` and the activity map. Every store of index rows (refresh, rebuild, local sync) goes through it.
 
-- [ ] **Step 1: Write failing tests** `a_checkpoint_marks_only_its_context_dirty`, `indexing_a_context_clears_its_dirty_mark_and_stores_its_basis`, `reads_report_stale_from_a_dirty_context_or_a_changed_file_hash_only` (rows for `show` by ID and path, the comment reads, lists' `data.index`, `index status`, and a row from an older build), `the_lifecycle_reads_the_dirty_marks_of_the_contexts_it_changed`.
+- [ ] **Step 1: Write failing tests** `a_store_writes_the_primary_unhidden_and_an_invalid_context_as_its_own_row` and `indexing_a_context_clears_its_dirty_mark_and_stores_its_basis`.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests and E-2's `refreshed_at_is_set_only_when_a_refresh_completes`. Expected: PASS. Commit.
+- [ ] **Step 4: Run** the new tests, every Table A test, E-1, E-3, E-4, and `refresh_keeps_primary_and_active_contexts_with_active_item_precedence` (`tests/discovery_rebuild.rs` ~736). Expected: PASS. Commit.
 
-### Task 8: Table B tests first — design checkpoint
-
-**Files:**
-- Test: `src/repository/recovery_scope_tests.rs` (extend `Seed` with `completed_step` and `item_id` so a row can owe only its hand-off; add `Call` variants for poll, other items' sync reservation, `context sync-local` admission and retirement), `src/repository/remote/reservation.rs` tests, `src/repository/context_retirement/` tests, `src/repository/local_sync/` tests
-
-- [ ] **Step 1: Inventory** (no code): every existing test that asserts a refusal behind a pending local row or a remote `index_pending` row (grep tests for `require_no_pending_local`, `blocking_debt`, `LocalOperationPending`, `index_pending`, `insert_local`, `insert_remote_index_pending`). List them in the ledger with the Table B cell each falls under. Edits are allowed only where the cell changes.
-- [ ] **Step 2: Write one failing test row per cell of the design's Table B** against the real checks: `is_in_the_way` (`recovery.rs` ~2029), `require_no_pending_local` (~1119) through each of its callers' entry points (`reservation.rs` ~317, ~1308, ~1557, ~1970, ~3153; `poll.rs` ~1674; `context_retirement/execution.rs` ~330, `source.rs` ~116, `authority.rs` ~306/~401/~518), `local_sync/record.rs` `admit` ~1017, `context_retirement/pass.rs` `blocking_debt` ~382, `authority.rs` `local_owner` ~135, `reentry.rs` ~144, `record.rs` ~1734, and the reservation's `busy` behind another remote row whose only debt is `index_pending` (`reservation.rs` ~1309-1318).
-- [ ] **Step 3: Run.** Expected: FAIL where Table B changes today's answer. Commit them `#[ignore = "Table B: design checkpoint"]`.
-- [ ] **Step 4: Checkpoint**, as in Task 5.
-
-### Task 9: Per-item holds
+### Task 8: Dirty marks replace the repository flag for writes
 
 **Files:**
-- Modify: the checks listed in Task 8; `src/repository/recovery.rs` (`ITEM_ACTIONS` ~1085, `INDEX_OWNER_STATES` ~2024, `owes_only_its_hand_off` ~2425, the comment binding check ~182-190); `src/repository/remote/reservation.rs` (`validate_index_identity` ~3643)
-- Test: Task 8's tests; E-5, E-6
+- Modify: the writers of `refresh_required`: `src/repository.rs` (`mark_document_refresh_required` ~11284 and callers ~4008, `checkpoint_owned_paths` ~3907/~3941, `persist_retry_problem` ~6514-6545), `src/repository/bridges/folder.rs` (~514), `src/repository/closure/checkpoint.rs` (~559), `src/repository/promotion/run.rs` (~1694-1699), `src/repository/promotion/lifecycle_record.rs` (~941), `src/repository/remote/state.rs` (~6530), `src/repository/context_retirement/` (`execution.rs` ~392, `preserve.rs` ~324, `reentry.rs` ~247, `run.rs` ~583, `authority.rs` ~421); its readers: `src/repository/read/mod.rs` (`index_state` ~92), `src/repository/read/items.rs` (~572), `src/repository/read/admin.rs` (~216-254), `src/repository.rs` (snapshot ~6991), `src/repository/mutation/bind/lifecycle.rs` (~1235, ~1386), `src/repository/promotion/run.rs` (~1694), `src/repository/remote/poll.rs` (~2500), `src/repository/context_retirement/handoff.rs` (~531), and the readers in `src/repository/discovery.rs` and `src/repository/recovery.rs`
+- Test: library tests next to `mark_document_refresh_required`; E-7
 
 **Interfaces:**
-- Produces: `pub(super) const LOCAL_ROW_HOLDS_OTHERS: &str` (an SQL predicate: a row that is pending and does not owe only its hand-off) used by every SQL check in Task 8; `is_in_the_way` applies `INDEX_OWNER_STATES` to repository-scoped rows only.
-- Produces: action `index_context`, added to `ITEM_ACTIONS`, with target `index-context-v1/<kind>/<item>` (or `index-context-v1/primary`): the per-item index hand-off row Task 13's syncs create. The binding check and `validate_index_identity` accept it.
+- Produces: `pub(super) fn mark_contexts_dirty(registry_path: &Path, root: &Path, contexts: &[ContextKey], operation: RepositoryOperation) -> Result<(), RepositoryError>`, used by every writer above; `refresh_required` stays only for whole-repository facts (`reconcile_registration` ~11347-11376, the item-read migration ~1845, poll's marks ~2242/~2332, `persist_rebuild_retry` ~6250). `index_state(refresh_required, refreshed_at, has_contexts, any_dirty: bool)`.
+- Rule for each reader, recorded per reader in the ledger: a reader that decides whether one context is current reads that context's dirty mark; a reader that decides for the repository reads `refresh_required` or any dirty mark.
 
-- [ ] **Step 1:** Remove the `#[ignore]` from Task 8's tests. Run them. Expected: FAIL.
-- [ ] **Step 2: Implement.**
-- [ ] **Step 3: Run** Task 8's tests, the inventoried tests, E-5 and E-6. Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `a_checkpoint_marks_only_its_context_dirty`, `index_status_is_stale_while_any_context_is_dirty`, `the_lifecycle_reads_the_dirty_marks_of_the_contexts_it_changed`.
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, E-7 and E-3. Expected: PASS. Commit.
 
-### Task 10: Writes index their own contexts
+### Task 9: Freshness on read against the context's time (P-2)
 
 **Files:**
-- Modify: `src/repository.rs` (`handoff_post_authoritative` ~4012 and its callers ~1922, ~2509, ~2863, ~3376, ~4391, ~4451, ~4539, ~4592, ~4727, ~4842, ~5418, ~5454, ~5627; `src/repository/bridges/repair.rs` ~594; `src/repository/context_release.rs` ~335), `src/repository/recovery.rs` (row creation), `src/repository/mutation/bind/resume.rs` (`hand_off` ~1111-1132), `src/repository/local_sync/run.rs` (`index` ~886-907)
+- Modify: `src/repository/read/items.rs` (`ItemFile::newer_than` ~1416 and callers ~1792, ~1884), `src/repository/read/comments.rs` (~313, ~349-360)
+- Test: library tests in `src/repository/read/`
+
+**Interfaces:**
+- Produces: `ItemFile::newer_than(indexed_at_ns: Option<i64>)` compares with the file's context's `indexed_at`; callers also report stale when that context is dirty.
+
+- [ ] **Step 1: Write failing tests** `a_write_to_one_item_leaves_other_items_reads_fresh` and `an_outside_edit_after_indexing_reads_stale_from_its_context`.
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, `a_file_read_by_path_that_is_newer_than_the_refresh_is_stale_whatever_it_holds`, and the comment stale cases in `tests/read_comments.rs` (`a_changed_item_file_or_a_problem_file_that_is_no_longer_a_file_is_stale` and its neighbours). Expected: PASS. Commit.
+
+### Task 10: Per-item holds (Table B)
+
+**Files:**
+- Modify: the checks listed in Task 3 Step 3; `src/repository/recovery.rs` (`Scope::of_row` ~2004, `INDEX_OWNER_STATES` ~2024, `owes_only_its_hand_off` ~2425, `authored_ids` ~1099, the comment binding check ~180-191); `src/repository/remote/reservation.rs` (`validate_index_identity` ~218 and its calls ~1546, ~3129, ~3643); `src/repository/read/status.rs` (`local_action` ~235-275); `src/repository/remote/sync.rs` (replay of a refresh row ~7069, ~7101-7105); `src/repository/bridges/abandon.rs` (~267-270)
+- Test: Table B tests; E-5, E-6; the Step 1 inventory of Task 3
+
+**Interfaces:**
+- Produces: `pub(super) const LOCAL_ROW_HOLDS_OTHERS: &str`, an SQL predicate (a row that is pending and does not owe only its hand-off), used by every SQL check of Task 3 Step 3; the row's own item is still refused (retiring it, writing it). `is_in_the_way` applies `INDEX_OWNER_STATES` to repository-scoped rows only.
+- Produces (P-4): a `refresh` row whose target is `synchronization-local-v1/<kind>/<item>/<oid>` or `synchronization-local-v1/primary/<oid>` and whose `item_id` is set has item scope (the primary as its own item, Owner question 2); the binding check, `validate_index_identity`, `local_action` and sync replay accept it, and still accept the whole-repository shape (`target = ''`) that older builds wrote.
+
+- [ ] **Step 1:** Remove the `#[ignore]` from the Table B tests. Run them. Expected: FAIL.
+- [ ] **Step 2: Implement.**
+- [ ] **Step 3: Run** the Table B tests, the inventoried tests the owner approved as edits, E-5 and E-6. Expected: PASS. Commit.
+
+### Task 11: A write's index step
+
+**Files:**
+- Modify: `src/repository.rs` (`handoff_post_authoritative` ~4012; `claim_lifecycle_indexing` ~4069), `src/repository/recovery.rs` (row creation; a new `FailurePoint::AfterCheckpointBeforeIndexStep`), `src/repository/mutation/bind/resume.rs` (`hand_off` ~1111-1132)
 - Test: library tests next to `handoff_post_authoritative`; `tests/mutation_replay/reenter.rs`
 
 **Interfaces:**
-- Consumes: Tasks 4, 7, 9.
-- Produces: `fn record_owed_contexts(&self, root: &Path, record: RecoveryRecord, contexts: &[ContextKey]) -> Result<(), RepositoryError>`, written before the commit; `fn index_contexts(&self, root: &Path, record: RecoveryRecord, lease: &RepositoryLease, contexts: &[ContextKey]) -> Result<IndexOutcome, RepositoryError>` with `pub(super) enum IndexOutcome { Current, LeftDirty }` (observes each context once, stores it, deletes rows of removed contexts, completes the row; `LeftDirty` maps to today's `RetryRequired` answer). `handoff_post_authoritative` keeps the lease and calls `index_contexts` with the design's command-table contexts; repository-level commands (`remote add/select/remove`, `repo enable`) keep a whole-repository refresh. `hand_off` in `resume.rs` indexes the row's owed contexts, treating a context that no longer exists as indexed. `local_sync::run::index` indexes its context with `index_contexts`.
+- Consumes: Tasks 5, 7, 8, 10.
+- Produces: `fn record_owed_contexts(&self, root: &Path, record: RecoveryRecord, contexts: &[ContextKey]) -> Result<(), RepositoryError>` (written before the commit); `fn index_contexts(&self, root: &Path, record: RecoveryRecord, contexts: &[ContextKey]) -> Result<IndexOutcome, RepositoryError>` with `pub(super) enum IndexOutcome { Current, LeftDirty }`: with the row claimed for indexing and the lease released, observe each context once; fire `set_observation_hook_for_testing`; take the lease, re-stat each context's basis, store those that match with `persist_context_index`, delete the rows of removed contexts, leave moved ones dirty; release; complete the row (`LeftDirty` answers today's `RetryRequired`). `fn complete_hand_off_unobserved(&self, root: &Path, record: RecoveryRecord, context: ContextKey) -> Result<IndexOutcome, RepositoryError>` (completes the row when the stored basis equals a fresh stat and the context is not dirty; else falls back to `index_contexts`; Task 15 uses it). `hand_off` in `resume.rs` calls `index_contexts` with the row's owed contexts, treating a context that no longer exists as indexed.
 
-- [ ] **Step 1: Write the failing table test** `each_command_indexes_only_its_contexts`: one row per row of the design's command table, asserting the contexts observed (a per-context counter hook) and that other contexts' rows and basis are unchanged.
-- [ ] **Step 2: Write failing tests** `a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it` (`FailurePoint::BeforeIndexTransactionCommit`; refresh and poll then proceed and index it; `operation resume` completes the row with the same commit; replay answers `ok`), `a_resume_whose_context_was_retired_completes`, `an_abandon_leaves_the_dirty_marks`, and `a_save_holds_the_lease_through_its_index_step` (a second process's lease attempt during the step is refused within the 250 ms budget, using `set_lifecycle_lease_hook_for_testing`).
-- [ ] **Step 3: Run.** Expected: FAIL.
-- [ ] **Step 4: Implement.**
-- [ ] **Step 5: Run** the new tests, E-5, E-7's comment case and `a_hand_off_no_operation_owes_is_offered_as_a_refresh`. Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it` (`AfterCheckpointBeforeIndexStep`; refresh and poll then proceed and index it; `operation resume` completes the row with the same commit; a replay answers `ok`), `a_crash_inside_the_index_transaction_stores_nothing` (`BeforeIndexTransactionCommit`), `a_resume_whose_context_was_retired_completes`, `an_abandon_leaves_the_dirty_marks`, `an_index_step_stores_only_after_a_basis_recheck_under_the_lease` (a hook moves the file between observe and store: `LeftDirty`), and `two_writers_index_their_items_without_waiting_for_each_other` (park item A's step at the observation hook; item B's save completes; release A; both current).
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, E-5, and the `reenter.rs` users of `writer_held_in_its_hand_off`. Expected: PASS. Commit.
 
-### Task 11: The whole-repository refresh and reads that decide on other items
+### Task 12: Each command indexes its contexts
 
 **Files:**
-- Modify: `src/repository.rs` (`refresh_repository_observed` ~1568, `refresh_repository_claimed` ~1512, `reconcile_disappeared_contexts` ~6563, `rebuild_repository` ~1690-1747, the relationship check reached at ~695-708), `src/repository/read/items.rs` (`check_ticket_relationships` ~2033)
-- Test: library tests next to `refresh_repository_observed`; E-1, E-2, E-7
+- Modify: the callers of `handoff_post_authoritative` (`src/repository.rs` ~1922 `prepare_context`, ~2509, ~2863, ~3376; `src/repository/bridges/repair.rs` ~594; `src/repository/context_release.rs` ~335) and the context-removal paths (release, retirement), `src/repository/local_sync/run.rs` (`index` ~886-907: `persist_context_index` inside its own `owner.transaction`)
+- Test: library test `each_command_indexes_only_its_contexts`
 
 **Interfaces:**
-- Consumes: Tasks 4, 7.
-- Produces: the two-step refresh of the design (step 1 outside the lease: `list_contexts`, `stat_basis`, `check`, `observe_context` for changed, dirty, new or transiently-problematic contexts; step 2 under the lease: re-list, re-stat, store matches with `persist_context_index`, leave moved ones dirty, delete disappeared; `RetryRequired` if any left dirty; `refreshed_at` = step-1 start). The repository-wide indexing row is held from before step 1 to the end. A test hook `set_refresh_step_hook_for_testing(hook: impl FnOnce() + Send + 'static)` fires between the steps (replacing `set_observation_hook_for_testing`'s role).
-- Produces: `fn fresh_relationships(&self, root: &Path) -> Result<Vec<StoredItem>, RepositoryError>` for the relationship check: the same stored ticket rows `check_ticket_relationships` reads today, with the rows of any context whose basis moved replaced by its tickets read from disk (not written to the index).
+- Produces: each command calls `record_owed_contexts` and `index_contexts` with the contexts of the design's command table; `remote add`, `remote select`, `remote remove`, `repo enable` and `repo identity-set` keep a whole-repository refresh (callers ~4391-5627), which still releases the lease before observing.
 
-- [ ] **Step 1: Write failing tests** `a_refresh_observes_only_changed_contexts` (counted), `an_outside_change_between_the_refresh_steps_leaves_the_context_dirty_and_answers_busy`, `a_refresh_runs_no_observation_under_the_lease`, `a_refresh_reconciles_a_removed_worktree`, `the_first_refresh_after_migration_observes_every_context_once`, `a_relationship_check_reads_a_moved_context_from_disk`.
+- [ ] **Step 1: Write the failing table test** `each_command_indexes_only_its_contexts` with one row per local command of the design's table (save, create, slug assign, comment checkpoint, `context prepare`, `context sync-local`, `context resolve-local`, `conflict resolve`, republish, repair, move, release, retire, abandon, folder create, the repository-level commands), asserting the contexts observed (the `set_context_scan_hook` counter) and that other contexts' rows and basis are unchanged. Tasks 13, 15 and 21 add the rows for refresh and poll, syncs, and close and promote.
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement**; `rebuild_repository` composes the new functions and keeps its two observations.
-- [ ] **Step 4: Run** the new tests, E-1, E-2, E-7. Expected: PASS. Commit.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the table test, `a_hand_off_no_operation_owes_is_offered_as_a_refresh`, the `set_observation_hook_for_testing` users in `tests/journal_rejection.rs`, `tests/mutation_bridges/folder.rs`, `tests/mutation_confirmation/abandon.rs`, `tests/mutation_replay/local_sync*.rs`, `tests/read_items/local_sync.rs` and `src/repository/comment_publication_tests.rs`, by name. Expected: PASS. Commit.
 
-### Task 12: Phase 1 close
+### Task 13: The whole-repository refresh
 
 **Files:**
-- Modify: `src/repository.rs` (`first_parent_configuration_entries` ~11204 stops at the first match; the discarded `repository_snapshot` in the hand-off is skipped), `docs/RFC/repository-index-persistence-and-refresh.md`, `docs/RFC/desktop-information-architecture-and-editor.md`, `docs/RFC/cli-contract.md` (the `effects` definition's `discovery` on a write; the `index refresh` and `operation resume` rows)
+- Modify: `src/repository.rs` (`refresh_repository_observed` ~1568, `refresh_repository_claimed` ~1512, `refresh_repository_target` ~1458, `reconcile_disappeared_contexts` ~6563, `rebuild_repository` ~1690-1747), `src/repository/mutation/bind/index.rs` (~138)
+- Test: library tests next to `refresh_repository_observed`; E-1, E-2
 
-- [ ] **Step 1:** Make the two code changes; run `ensure_configuration_path_clean`'s existing tests by name. Write the RFC amendments listed in the design (Phase 1 parts), dated, each naming this ticket.
-- [ ] **Step 2: Measure:** `scripts/measure-writes --runs 3`; record the medians against the baseline and decision 1's targets in the ledger; take one sampled profile of a save (the ticket's method) and record that `latest_commit_touching` and a second observation are absent. If R-6's primary observation exceeds about 300 ms, record it and ask the owner before Phase 2.
-- [ ] **Step 3:** A fresh reviewer reviews the Phase 1 diff against the design and Tables A and B; fix what it finds; add a checkpoint comment with the numbers and the review result. Commit and publish.
+**Interfaces:**
+- Produces: the design's two steps, the repository-wide indexing row held from before step 1 to the end: step 1 outside the lease (`list_contexts`, `stat_basis`, `check`, `observe_context` for changed, dirty, new or transiently-problematic contexts, the primary only when its basis moved); `set_observation_hook_for_testing`; step 2 under the lease (re-list, re-stat, store matches with `persist_context_index`, leave moved or new ones dirty, delete disappeared ones, `persist_retry_problem` for a context left dirty as today); `RetryRequired` if any is left dirty; `refreshed_at` = step-1 start. `rebuild_repository` composes the same functions and keeps its two observations.
+
+- [ ] **Step 1: Write failing tests** `a_refresh_observes_only_changed_contexts` (counted), `a_refresh_of_an_unchanged_repository_diffs_no_commits` and `a_refresh_after_k_new_primary_commits_diffs_k` (the ticket's Acceptance item on commits per refresh, counting `PrimaryActivityMap::advance` and `ItemWalk::examined`), `an_outside_change_between_the_refresh_steps_leaves_the_context_dirty_and_answers_busy`, `a_refresh_runs_no_observation_under_the_lease`, `a_refresh_reconciles_a_removed_worktree`, `the_first_refresh_after_migration_observes_every_context_once`; add the refresh and poll rows to `each_command_indexes_only_its_contexts`.
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, E-1, E-2, and the `set_observation_hook_for_testing` users in `tests/discovery_rebuild.rs`, `tests/read_items.rs` and `tests/read_status.rs`, by name. Expected: PASS. Commit.
+
+### Task 14: The relationship check reads moved contexts from disk
+
+**Files:**
+- Modify: `src/repository/read/graph.rs` (`read_tickets_naming` and the comment targets it reads ~884-891), `src/repository/mutation/bind/ticket.rs` (~441)
+- Test: library tests in `src/repository/read/graph_tests.rs` or next to `read_tickets_naming`
+
+**Interfaces:**
+- Produces: `pub(super) fn moved_contexts(repository: &git2::Repository, root: &Path, stored: &[(ContextKey, Basis)]) -> Vec<ListedContext>` (stat-only basis compare over every context, the primary included), shared with Task 20; `read_tickets_naming` overlays, for each moved context, its tickets and comment targets parsed from disk, without writing the index.
+
+- [ ] **Step 1: Write the failing test** `a_relationship_check_reads_a_moved_context_from_disk` (an outside commit adds a dependency in B's worktree; a save of A that would close the cycle is refused).
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement. Step 4: Run** it and the existing relationship-check tests in `tests/mutation_relationships.rs` that the change reaches (by name, recorded in the ledger). Expected: PASS. Commit.
+
+### Task 15: Phase 1 close
+
+**Files:**
+- Modify: `src/repository.rs` (`first_parent_configuration_entries` ~11204 stops at the first match; the discarded `repository_snapshot` at the end of a hand-off is skipped), `docs/RFC/repository-index-persistence-and-refresh.md`, `docs/RFC/desktop-information-architecture-and-editor.md`, `docs/RFC/cli-contract.md` (the `effects` definition's `discovery` on a write; the `index refresh` and `operation resume` rows), the design (P-1–P-5 applied)
+
+- [ ] **Step 1:** Make the two code changes; run `context_rejects_a_dirty_configuration_path_without_creating_a_context` and `publication_selection_blocks_selected_removal_and_dirty_configuration_path` by name. Write the Phase 1 RFC amendments, dated, naming this ticket.
+- [ ] **Step 2: Measure** with `scripts/measure-writes --build-ref HEAD --runs 3`; record the medians against the baseline and decision 1's targets, the time of one primary observation (R-6's 300 ms) and of the pre-commit safety checks (decision 11's 100 ms). Take sampled profiles of a save, a sync and a close (the ticket's method) and record that `latest_commit_touching` and a second observation are absent. If a threshold is exceeded, set the status to `waiting`, comment, and ask the owner before Phase 2.
+- [ ] **Step 3:** A fresh reviewer reviews the Phase 1 diff against the design, P-1–P-5 and Tables A and B; fix what it finds and have the fixes re-reviewed; add a checkpoint comment with the numbers and the review result. Commit and publish.
 
 ## Phase 2: publishing
 
-### Task 13: A sync indexes what it changed, and no refresh after a push
+### Task 16: A sync indexes what it changed; no refresh after a push
 
 **Files:**
 - Modify: `src/repository/remote/sync.rs` (`synchronization_refresh` ~7081 and its callers ~5916, ~5997, ~6051, ~6817, ~7867; the local-update lease block ~6576-6679), `src/repository/remote/reservation.rs` (`finish_synchronization_index` ~3628), `src/repository/comment_publication.rs` (~392-420)
-- Test: `src/repository/remote/sync_tests.rs`, `src/repository/comment_publication_tests.rs`; E-7
+- Test: `src/repository/remote/sync_tests.rs`, `src/repository/comment_publication_tests.rs`
 
 **Interfaces:**
-- Consumes: Task 9's `index_context` row, Task 10's `index_contexts`.
-- Produces: `fn synchronization_index_hand_off(&self, request: &SynchronizeRemoteRequest, changed: &[ContextKey], outcome: SynchronizationOutcome) -> Result<SynchronizationResult, SynchronizationError>`: indexes the contexts a merge or fast-forward changed inside the local-update lease block; for a push-only or already-current outcome takes the lease briefly and records the hand-off when the context's stored basis equals the current one and it is not dirty, else indexes it. The comment receipt is proved once: `publish_comment_with_config` skips `prove_comment_receipt` when the receipt is already recorded with the same commit.
+- Consumes: Task 10's per-item `refresh` row, Task 11's `index_contexts` and `complete_hand_off_unobserved`.
+- Produces: `fn synchronization_index_hand_off(&self, request: &SynchronizeRemoteRequest, changed: &[ContextKey], outcome: SynchronizationOutcome) -> Result<SynchronizationResult, SynchronizationError>`: a merge or fast-forward indexes the contexts it changed with `index_contexts` after the local-update block; a push-only or already-current outcome calls `complete_hand_off_unobserved`. `publish_comment_with_config` skips `prove_comment_receipt` when the receipt is already recorded with the same commit.
 
-- [ ] **Step 1: Write failing tests** in `sync_tests.rs`: `a_sync_that_merged_main_indexes_only_its_context`, `a_push_only_sync_records_its_hand_off_without_observing`, `a_push_only_sync_indexes_a_context_whose_basis_moved`, `a_crashed_sync_hand_off_blocks_no_other_item` (Table B's sync row); in `comment_publication_tests.rs`: `a_comment_receipt_is_proved_once`.
-- [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests and E-7's sync cases. Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `a_sync_that_merged_main_indexes_only_its_context`, `a_push_only_sync_records_its_hand_off_without_observing`, `a_push_only_sync_indexes_a_context_whose_basis_moved`, `a_crashed_sync_hand_off_blocks_no_other_item`, `a_comment_receipt_is_proved_once`; add the sync rows to `each_command_indexes_only_its_contexts`.
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, the `set_observation_hook_for_testing` users in `src/repository/remote/sync_tests.rs`, and the push-absence and head-and-status tests listed in Task 0's ledger. Expected: PASS. Commit.
 
-### Task 14: One SSH connection per remote call
+### Task 17: One SSH connection per remote call
 
 **Files:**
-- Modify: `src/repository/transport/remote.rs` (`transfer` ~347, `transfer_inner` ~356, `fresh_advertisement` ~120, `fetch_exact` ~133, `push_exact` ~201, `delete_exact` ~221), `src/repository/transport/operation.rs` (`connect_ssh` ~289), `src/repository/transport/callbacks.rs` (`CallbackAttempt` ~12), `src/repository/transport/operation_tests.rs` (`Checkpoint` ~31)
-- Test: `tests/ssh_transport/exact.rs`, `tests/ssh_transport/synchronization.rs`, `tests/remote_synchronization.rs`; E-8
+- Modify: `src/repository/transport/remote.rs` (`transfer` ~347, `transfer_inner` ~356-450, `fresh_advertisement` ~120, `fetch_exact` ~133, `push_exact` ~201, `delete_exact` ~221-263, `download_push_target` ~275-309), `src/repository/transport/operation.rs` (`connect_ssh` ~289-371), `src/repository/transport/callbacks.rs` (`CallbackAttempt` ~12-73), `src/repository/transport/operation_tests.rs` (`Checkpoint` ~31), `src/repository/promotion/run.rs` (~150-170, the delete's caller)
+- Test: `src/repository/transport/callbacks.rs` tests; E-8
 
 **Interfaces:**
-- Produces: a remote call lists and transfers on the connection `connect_ssh` opened: the transfer runs inside its closure and reuses its `CallbackAttempt`, so `key_submissions()` stays 1 per connection and any reconnect inside libgit2 fails closed. `recheck_ssh` and `recheck_trust` still run before each transfer; a failed recheck refuses. `fetch_exact` lists and downloads on one connection. No automatic reconnect on error. `Checkpoint::Reconnected` is replaced by `Checkpoint::TransferStarted` at the point a transfer begins on the open connection; E-8 moves to it.
-- `download_push_target` keeps its own upload-pack remote (sync.rs ~7005-7006 forbids reusing a listing for it).
+- Produces: a remote call lists and transfers on the connection `connect_ssh` opened (the closure already runs over `connection.remote()`, operation.rs ~360-371) and reuses its `CallbackAttempt`, so a connection submits the key once and a reconnect inside libgit2 fails closed. `recheck_ssh` and `recheck_trust` run before each transfer; a failed recheck refuses. `fetch_exact` lists and downloads on one connection. Because `git_remote_push` disconnects when it returns, the post-delete verification listing becomes its own remote call (the delete's caller, promotion/run.rs ~150-170, makes it), and `download_push_target` connects its own `remote_anonymous` explicitly with its own `CallbackAttempt`. No automatic reconnect on error. `Checkpoint::Reconnected` is replaced by `Checkpoint::TransferStarted`.
 
-- [ ] **Step 1: Write failing tests** in `tests/ssh_transport/exact.rs`: `a_listing_and_its_transfer_share_one_connection` (counted with `accepted_sockets()` around one `fetch_exact` and one `push_exact`), and `a_second_key_submission_on_one_connection_fails_closed`.
-- [ ] **Step 2: Run** them by exact name. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests and E-8, each by exact name. Expected: PASS. Commit.
+- [ ] **Step 1: Write the failing unit test** `a_second_key_submission_on_one_connection_fails_closed` on `CallbackAttempt` (no SSH).
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** it and E-8, each by exact name. Expected: PASS. Commit.
 
-### Task 15: Fewer listings and inspections in a sync; the SSH connection-count case
+### Task 18: Fewer listings and inspections; the SSH connection count
 
 **Files:**
-- Modify: `src/repository/remote/sync.rs` (`fetch_and_observe` ~7925-7974: drop the "before" listing, keep "after"; `synchronization_push_observation` ~6953 shares the push connection when nothing local changed since; `inspect_synchronization_local` call sites: merge ~6013 with ~6187, drop ~7934/~7944/~7954 inside the fetch window, keep one before each local update and before the push), `src/repository.rs` (`validate_context_tree` ~9741, cached by tree OID with kind, item, configuration blob and build)
+- Modify: `src/repository/remote/sync.rs` (`fetch_and_observe` ~7925-7974: drop the "before" listing, keep "after"; the pre-push listing and the push run in one `with_synchronization_remote` closure, together with `prepare_synchronization_publication`, the `BeforePush` safe point and the inspection, ~6869-6873, ~6953-7007, ~8060-8088; `inspect_synchronization_local` call sites: merge ~6013 with ~6187, drop ~7934/~7944/~7954 inside the fetch window, keep one before each local update and before the push), `src/repository.rs` (`validate_context_tree` ~9741, cached by tree OID with kind, item, configuration blob and build)
 - Test: `src/repository/remote/sync_tests.rs`; `tests/remote_synchronization.rs` (the one SSH case)
 
-- [ ] **Step 1: Write failing tests**: `a_tree_validation_is_cached_by_tree_kind_item_configuration_and_build` (library); and the SSH case `a_pushing_sync_uses_four_connections_and_a_merging_one_five` in `tests/remote_synchronization.rs`, modelled on `context_first_current_fast_forward_local_ahead` (~386) and `context_divergence(true)` (~706), counting `accepted_sockets()`. It needs SSH because connection reuse is transport behaviour.
-- [ ] **Step 2: Run** them by exact name. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests, `remote_change_during_fetch`, and E-7's sync cases. Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests**: `a_tree_validation_is_cached_by_tree_kind_item_configuration_and_build` (library); the SSH case `a_pushing_sync_uses_four_connections_and_a_merging_one_five` in `tests/remote_synchronization.rs`, modelled on `context_first_current_fast_forward_local_ahead` (~386) and `context_divergence(true)` (~706), counting `w.server.accepted_sockets()`. It needs SSH because connection reuse is transport behaviour.
+- [ ] **Step 2: Run** them by exact name. Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, `remote_change_during_fetch`, the `set_observation_hook_for_testing` users in `tests/remote_synchronization.rs` and `tests/ssh_transport/synchronization.rs`, and the push-absence tests from the ledger, by name. Expected: PASS. Commit.
 
-### Task 16: Phase 2 close
+### Task 19: Phase 2 close
 
-**Files:**
-- Modify: `docs/RFC/git-workflow-and-conflict-recovery.md` (the sync refresh steps; the upload-pack count)
-
-- [ ] **Step 1:** Write the Git RFC amendments.
-- [ ] **Step 2: Measure** with `scripts/measure-writes` (SSH mode); record `item sync` and `comment add` against the 2–4 s target and the connection counts. Profile one `comment add`.
-- [ ] **Step 3:** A fresh reviewer reviews the Phase 2 diff; fix; checkpoint comment. Commit and publish.
+- [ ] **Step 1:** Write the `docs/RFC/git-workflow-and-conflict-recovery.md` amendments (the sync refresh steps; the upload-pack count).
+- [ ] **Step 2: Measure** with `scripts/measure-writes` in SSH mode; record `item sync` and `comment add` against the 2–4 s target and the connection counts; profile a save, a sync and a close.
+- [ ] **Step 3:** A fresh reviewer reviews the Phase 2 diff; fix and re-review; checkpoint comment. Commit and publish.
 
 ## Phase 3: promote and close
 
-### Task 17: Registry migration once per process; audits by use
+### Task 20: Registry migration once per process; audits by use
 
 **Files:**
-- Modify: `src/repository.rs` (registry open ~4251-4274; `RepositoryService` gains the memo), `src/repository/keys/registry.rs` (`list_shared_keys` ~329 and the other key verbs ~143, ~413, ~525, ~594), the other `migrate_registry` callers (`registration_removal.rs` ~332, `bridges/abandon.rs` ~789/~981, `mutation/records.rs` ~922, `context_retirement/execution.rs` ~273, `src/repository.rs` ~3662, ~3688, ~3707, ~3783, ~3854, ~3971, ~4078, ~4098, ~4190, ~4211, ~11347), `src/repository/local_sync/record.rs` (`audit` ~469, `unfinished_context` ~1091, `require_no_pending` ~1104, `refresh_allowed` ~1116), `src/repository/local_sync/image_proof.rs` (`audit` ~237)
+- Modify: `src/repository.rs` (registry open ~4251-4274; `RepositoryService` holds the memo), `src/repository/keys/registry.rs` (`list_shared_keys` ~329 and the key verbs ~143, ~413, ~525, ~594), the other `migrate_registry` callers (`src/repository/registration_removal.rs` ~332, `src/repository/bridges/abandon.rs` ~789/~981, `src/repository/mutation/records.rs` ~922, `src/repository/context_retirement/execution.rs` ~273, `src/repository.rs` ~3662, ~3688, ~3707, ~3783, ~3854, ~3971, ~4078, ~4098, ~4190, ~4211, ~11347), `src/repository/local_sync/record.rs` (`audit` ~469, `unfinished_context` ~1091, `require_no_pending` ~1104, `refresh_allowed` ~1116), `src/repository/local_sync/image_proof.rs` (`audit` ~237), `src/repository/closure/record.rs` (`save_record` ~552)
 - Test: library tests in `src/repository/keys/` and `src/repository/local_sync/`
 
 **Interfaces:**
-- Produces: `fn open_migrated_registry(&self, operation: RepositoryOperation) -> Result<rusqlite::Connection, RepositoryError>` on `RepositoryService`: migrates only when the memo (registry file device and inode, and `PRAGMA schema_version`) differs from the file now; every caller above uses it. `list_shared_keys` takes a read guard. `local_sync::record::audit_schema(db)` (markers, schema SQL, foreign keys, integrity) runs once per memo; `local_sync::record::audit_unfinished(db)` audits every unfinished row (all items) and is what every guard calls; completed rows are audited when a read uses them (`read/status.rs` ~302 audits what it reads). Registry open audits the schema and the unfinished rows (decision 9).
+- Produces: `fn open_migrated_registry(&self, operation: RepositoryOperation) -> Result<rusqlite::Connection, RepositoryError>` on `RepositoryService`: migrates only when the memo (the registry file's device and inode, and `PRAGMA schema_version`) differs from the file now; every caller above uses it. `list_shared_keys` takes a read guard. `local_sync::record::audit_schema(db)` (markers, schema SQL, foreign keys, integrity) runs once per memo; `local_sync::record::audit_unfinished(db)` audits every unfinished row (all items) and is what every guard calls; a completed record is audited when a read uses it (`src/repository/read/status.rs` ~302). Registry open audits the schema and the unfinished rows (decision 9).
 
-- [ ] **Step 1: Write failing tests** `key_listing_runs_no_migration` (a counter in `migrate_registry`), `a_replaced_registry_file_migrates_again`, `a_guard_refuses_a_malformed_unfinished_row_of_another_item`, `registry_open_audits_unfinished_rows_and_not_completed_ones`.
-- [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests and the existing local-sync audit tests by name (`--lib repository::local_sync::record::` filter, exact names from the module). Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `key_listing_after_open_runs_no_migration` (a migration counter; registry open's own migration is excluded), `a_replaced_registry_file_migrates_again`, `a_guard_refuses_a_malformed_unfinished_row_of_another_item`, `registry_open_audits_unfinished_rows_and_not_completed_ones`.
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests and the local-sync audit tests in `src/repository/local_sync/record.rs` by name (listed in the ledger). Expected: PASS. Commit.
 
-### Task 18: Two previews, one index update per exit, one full cleanup check
+### Task 21: Two previews per attempt
 
 **Files:**
-- Modify: `src/repository/promotion/run.rs` (`promote_inner` ~427: reuse the observation from ~492 for `cleanup_only` ~659; ~679 and ~710 read from the integration preview; `child` ~1025 records the child's index debt; every exit: `finish_integrated` ~1136-1160, abandon ~687/~718/~758, interrupted ~656/~675/~702, PrimaryAdvanced ~755, the reconciliation in `run_observed` ~348-408; cleanup prechecks ~1261, ~1340, ~1432), `src/repository/promotion/integrate.rs` (`prepare_integration_for` ~110: no observation when `resume_written` wins), `src/repository/closure/observe.rs` (`preview` ~268, `prepare_observation_at` ~289-300), `src/repository/promotion/observe.rs` (`prepare_for` ~199-215), `src/repository/cleanup.rs` (`remove_context_worktree` ~265-272)
-- Test: `src/repository/closure/run_tests.rs`, `src/repository/promotion/run_tests.rs` (`Fixture::remote()`, `set_scan_hook` counting as `spec4_assert_unleased_scans` ~3371 does)
+- Modify: `src/repository/promotion/run.rs` (`promote_inner` ~427: the observation from ~492 also decides `cleanup_only` ~659; ~679 and ~710 read from the integration preview), `src/repository/promotion/integrate.rs` (`prepare_integration_for` ~110: no observation when `resume_written` wins), `src/repository/closure/observe.rs` (`preview` ~268, `prepare_observation_at` ~289-300), `src/repository/promotion/observe.rs` (`prepare_for` ~199-215)
+- Test: `src/repository/closure/run_tests.rs`, `src/repository/promotion/run_tests.rs` (`Fixture::remote()`)
 
 **Interfaces:**
-- Produces: `fn item_preview_facts(service: &RepositoryService, root: &Path, item: &ItemId) -> Result<PreviewFacts, RepositoryError>` replacing `observe_root` in both previews, with `pub(super) struct PreviewFacts { kind_mismatch: bool, item_path: Option<PathBuf>, other_item_blockers: Vec<RootObservationProblem> }`: the two facts each preview takes today (closure `not_ticket` and `ticket_path`, promotion `not_document` and `document_path`) from the item's own context and the primary branch, and the blockers that depend on other items (duplicate IDs, nonconforming content) from the index after the basis check of `fresh_relationships`. The parent indexes, on every exit, its own contexts and those its children changed (`index_contexts` under the lease).
-- Ruling P-1 (cleanup): one full `precheck_context` under the lease before the remote branch is deleted (~1340), and a head-and-status re-check immediately before worktree removal (~1432), replacing four full checks. The design says one check immediately before removal; it moves earlier because the remote delete comes first and a dirty worktree must stop it. Recorded for the owner in the plan's approval message.
+- Produces (P-5): `fn item_preview_facts(service: &RepositoryService, root: &Path, item: &ItemId) -> Result<PreviewFacts, RepositoryError>` with `pub(super) struct PreviewFacts { kind_mismatch: bool, item_path: Option<PathBuf> }` (closure `not_ticket` and `ticket_path`, promotion `not_document` and `document_path`), from the item's own context observation and the primary's index rows after the primary's basis check (`moved_contexts`), replacing `observe_root` in both previews; a counter hook `set_preview_facts_hook`.
 
-- [ ] **Step 1: Write failing tests**: `a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation` and the same for promotion (counted with `set_scan_hook`); `every_lifecycle_exit_indexes_the_contexts_its_children_changed` (a table over finish, abandon, cancel, a stop at awaiting publication and its later finish, interrupted, primary advanced); `a_dirty_worktree_stops_the_remote_delete`; `a_preview_reads_a_moved_other_item_from_disk`.
-- [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the new tests and the re-run list for the no-new-socket checks (`tests/ticket_closure/journeys.rs` ~222, ~1372; `tests/document_promotion/advanced.rs` ~247, each by exact name). Expected: PASS. Commit.
+- [ ] **Step 1: Write failing tests** `a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation` and the same for promotion (counting `set_preview_facts_hook` and `set_scan_hook` separately), and `a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview`.
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, the five `spec4_assert_unleased_scans` users, and the re-confirmation tests from the ledger. Expected: PASS. Commit.
 
-### Task 19: Phase 3 close and the skills
+### Task 22: One index update per exit; cleanup checks (P-1)
+
+**Files:**
+- Modify: `src/repository/promotion/run.rs` (`child` ~902-1025 records the child's index debt; every exit: `finish_integrated` ~1136-1160, abandon ~687/~718/~758, interrupted ~656/~675/~702, PrimaryAdvanced ~755, the reconciliation in `run_observed` ~348-408; cleanup checks ~1261, ~1340, ~1432), `src/repository/cleanup.rs` (`remove_context_worktree` ~265-272)
+- Test: `src/repository/closure/run_tests.rs`, `src/repository/promotion/run_tests.rs`
+
+**Interfaces:**
+- Produces: on every exit the parent calls `index_contexts` once with its own contexts and those its children changed, and runs no whole-repository refresh. P-1: the full `require_cleanup_clean` check runs under the lease inside `remove_context_worktree`; a head-and-status check runs before the remote delete (~1340); the checks at ~1261 and ~1432 go.
+
+- [ ] **Step 1: Write failing tests** `every_lifecycle_exit_indexes_the_contexts_its_children_changed_once` (a table over finish, abandon, cancel, a stop at awaiting publication and its later finish, interrupted, primary advanced; each asserts exactly one index step and no whole-repository refresh), `a_dirty_worktree_stops_the_remote_delete`, `a_nested_repository_created_during_the_delete_still_stops_the_removal`; add the close and promote rows to `each_command_indexes_only_its_contexts`.
+- [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests and the no-new-socket checks (`tests/ticket_closure/journeys.rs` ~222, ~1372; `tests/document_promotion/advanced.rs` ~247), by name. Expected: PASS. Commit.
+
+### Task 23: Phase 3 close and the skills
 
 **Files:**
 - Modify: `docs/RFC/cli-contract.md` (the C5 known limits and follow-ups this change settles), `skills/manyhands-finding-work/SKILL.md` ("Is what I see current"), `skills/manyhands-polling-and-index/SKILL.md`, `skills/manyhands-recovery/SKILL.md` (a crashed write no longer blocks refresh and poll; `context sync-local` still does)
 - Test: `tests/cli/skills.rs` drift tests
 
-- [ ] **Step 1:** Write the amendments; verify each changed skill claim on this branch's build in a scratch repository.
+- [ ] **Step 1:** Write the amendments. Each skill change says which build has the new behaviour and keeps the old guidance for older builds (as vh-bhepg's skills did). Verify each changed claim with this branch's build in a scratch registry (isolated `HOME`, `MANYHANDS_DATA_DIR`, `GIT_CONFIG_GLOBAL`).
 - [ ] **Step 2: Run** `devenv shell -- cargo test --all-features --locked --test cli skills::`. Expected: PASS.
-- [ ] **Step 3: Measure** all commands with `scripts/measure-writes`; record against every target; profile a close and record that `image_proof::audit` and the repeated previews are absent.
-- [ ] **Step 4:** A fresh reviewer reviews the Phase 3 diff; fix; checkpoint comment with the full before/after table. Commit and publish.
+- [ ] **Step 3: Measure** every command with `scripts/measure-writes`; record against every target; profile a save, a sync, a promote and a close and record that `image_proof::audit`, `latest_commit_touching` and repeated previews are absent.
+- [ ] **Step 4:** A fresh reviewer reviews the Phase 3 diff; fix and re-review; checkpoint comment with the full before/after table. Commit and publish.
 
-### Task 20: Review-ready
+### Task 24: Review-ready
 
 - [ ] **Step 1:** `git fetch origin && git merge origin/main` if main moved; `git merge-tree --write-tree HEAD origin/main` is clean.
 - [ ] **Step 2: Static gates:** `devenv shell -- cargo check --all-features --locked`; `devenv shell -- cargo fmt --check`; `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`. Expected: clean.
-- [ ] **Step 3: Fast tier** exactly as AGENTS.md lists it (with `-- --skip repository::local_sync::`), then `--lib repository::local_sync::`. Expected: PASS.
+- [ ] **Step 3: Fast tier** exactly as AGENTS.md lists it (ending `-- --skip repository::local_sync::`), then `--lib repository::local_sync::`. Expected: PASS.
 - [ ] **Step 4: SSH tier:** every SSH-harness target (`ssh_fixture`, `cli_remote`, `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `mutation_remote`, `comment_publication`, `remote_polling`, `document_promotion`, `ticket_closure`), each as `cargo test --all-features --locked --test <target>`. Expected: PASS. Record the times.
-- [ ] **Step 5:** A fresh whole-branch reviewer against the design, Tables A and B, and the Acceptance; fix and re-review the fixes.
-- [ ] **Step 6:** Set the ticket's status to `review_ready`; add the review-ready comment (gates, tiers, measurements against targets, review result, the one-way migration note for the merge). Ask the owner whether to open a PR.
-- [ ] **Step 7:** After the owner's approval: ask which status the ticket ends with, save it, prepare `ticket close`, show the preview and wait; confirm only after the owner's OK (it merges into main and publishes). Native CI runs after merge, by the owner's dispatch.
+- [ ] **Step 5:** A fresh whole-branch reviewer against the design (with P-1–P-5), Tables A and B and the ticket's Acceptance; fix and re-review the fixes.
+- [ ] **Step 6:** Set the status to `review_ready`; add the review-ready comment (gates, tiers, measurements against targets, review result, and for the merge note: the registry migrates one-way; native CI should watch connection reuse on Windows). Ask the owner whether to open a PR.
+- [ ] **Step 7:** After the owner's approval: ask which status the ticket ends with and save it; prepare `ticket close`, show the preview and wait; confirm only after the owner's OK, with the key loaded in ssh-agent (AGENTS.md). Native CI runs after merge on the owner's dispatch.
 
 ## Plan self-review
 
 | Design item | Task |
 | --- | --- |
-| Decision 1 targets, Measurement | 1, 12, 16, 19 |
-| Decisions 2–3, Goals 1–2, Phase 1 table | 4, 7, 10, 11 |
-| Decision 4, Goal 3, R-1, R-2 | 3 |
-| Table A, R-4 | 2, 5, 6 |
-| Table B, R-3, decision 10, decision 14 | 8, 9, 13 |
-| Freshness on read, decision 8 | 7 |
-| Reads that decide on other items, decision 11 | 11, 18 |
-| Crash and retry, R-7, decision 12 | 10 |
-| Phase 2, Goal 4 | 13, 14, 15 |
-| Phase 3, Goals 5–6, decision 9, R-5, R-6 | 17, 18 |
-| Document amendments | 12, 16, 19 |
-| Risks: one-way migration | Global Constraints, 2, 20 |
-| Acceptance (ticket) | 3 (activity), 11 (refresh counts), 12/16/19 (profiles, numbers) |
+| Decision 1 targets, Measurement | 1, 15, 19, 23 |
+| Decisions 2–3, Goals 1–2, the command table | 5, 7, 11, 12, 13, 16, 22 |
+| Decision 4, Goal 3, R-1, R-2 | 4, 7 |
+| Table A, R-4 | 2, 3, 6, 7 |
+| Table B, R-3, decisions 10 and 14 | 3, 10, 11, 16 |
+| Freshness on read, decision 8, P-2 | 8, 9 |
+| Reads that decide on other items, decision 11 | 14, 15 (measured), 21 |
+| Crash and retry, R-7, decision 12 | 11, 22 |
+| Phase 2, Goal 4, P-4 | 10, 16, 17, 18 |
+| Phase 3, Goals 5–6, decision 9, R-5, R-6, P-1, P-5 | 20, 21, 22; R-6 measured in 15 |
+| P-3 | 11, 13 |
+| Document amendments | 15, 19, 23 |
+| Risks: one-way migration | Global Constraints, 1, 2, 23, 24 |
+| Ticket Acceptance: measurements | 1, 15, 19, 23 |
+| Ticket Acceptance: activity unchanged | 4 |
+| Ticket Acceptance: commits or diffs per refresh | 13 |
+| Ticket Acceptance: profiles | 15, 19, 23 |
+| Ticket Acceptance: recovery and index results (amended, saved in `26e3a01c` and `f1c1c6f3`) | 3, 10, 11 |
