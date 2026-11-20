@@ -94,6 +94,27 @@ Found by grepping the tests for `require_no_pending_local`, `blocking_debt`, `Lo
 
 Matched by the grep but not a refusal or wait behind a pending row: the listings in `tests/read_status.rs`, `tests/read_contract.rs`, `tests/read_repository.rs`, `tests/read_boundary.rs`, `tests/cli/admin.rs` and the journal lookups in `tests/mutation_replay.rs` (`insert_local`, `insert_remote_index_pending`); abandon and registration-removal evidence (`tests/mutation_confirmation/abandon.rs`, `src/repository/registration_removal_tests.rs`, `tests/mutation_confirmation.rs::repo_remove_missing_root_preserves_another_operations_recovery_and_releases_its_own_request`); and the `index_pending` outcome and replay tests of a call's own operation (`tests/mutation_remote/c5_*.rs`, `tests/recovery_foundation_gate.rs::*index_pending*`, `tests/remote_synchronization.rs` index-pending cases, `src/repository/remote/sync_tests.rs` and `reservation_tests.rs` replay cases, the local-sync `index_pending` state in `src/repository/local_sync/*_tests.rs`), which E-10 and Task 16 cover where the hand-off row's target matters.
 
+## Baseline (Task 1)
+
+`scripts/measure-writes` at `ad3527dd` (release build), scratch replica of this repository (65 manyhands branches, 61 materialized worktrees), bare remote over SSH on 127.0.0.1, 3 runs. Medians in seconds:
+
+| Command | Median | Runs |
+| --- | --- | --- |
+| ticket save | 13.9 | 13.9, 13.7, 14.1 |
+| document save | 14.1 | 14.8, 13.7, 14.1 |
+| ticket create | 14.2 | 14.2, 14.0, 14.5 |
+| item sync | 20.9 | 18.3, 20.9, 21.5 |
+| comment add | 35.2 | 35.2, 34.6, 36.0 |
+| comment add (local checkpoint) | 14.4 | 14.4, 14.4, 15.0 |
+| document promote --prepare | 7.0 | 7.2, 7.0, 7.2 |
+| document promote --confirm | 94.3 | 92.8, 94.3, 96.1 |
+| ticket close --prepare | 7.1 | 6.9, 7.1, 7.4 |
+| ticket close --confirm | 94.9 | 93.0, 94.9, 98.5 |
+| index refresh | 14.0 | 13.6, 14.0, 14.4 |
+| poll once | 17.2 | 16.9, 17.2, 17.6 |
+
+The owner's everyday numbers (36 s saves, 270 s closes) are the debug build against the real remote; these are the release build against localhost, so later phases compare against this table.
+
 ## Task log
 
 Task 0: started.
