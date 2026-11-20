@@ -247,7 +247,15 @@ fn refreshed_at_is_set_only_when_a_refresh_completes() {
         RefreshOutcome::RetryRequired { .. }
     ));
     assert_eq!(refreshed_at(data), [Some(17)]);
-    assert_eq!(refresh_required(data), [true]);
+    // The raced context, the primary, is marked dirty.
+    let primary_dirty: bool = index(data)
+        .query_row(
+            "SELECT dirty FROM contexts WHERE item_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(primary_dirty);
     assert_git_transport_uninitialized();
 }
 

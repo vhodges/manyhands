@@ -183,6 +183,26 @@ fn index_status_of_an_interrupted_refresh_is_stale_and_says_why() {
     let status = enabled.service.index_status(&repo).unwrap();
 
     assert_eq!(status.state, IndexStatusState::Stale);
+    // Stale from the context the refresh found changing, which it marked
+    // dirty, and not from a mark on the repository as a whole.
+    let (behind, dirty): (bool, Vec<String>) = {
+        let index = items::index(enabled.data_directory.path());
+        let behind = index
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let dirty = index
+            .prepare("SELECT worktree_path FROM contexts WHERE dirty = 1")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (behind, dirty)
+    };
+    assert!(!behind);
+    assert_eq!(dirty, [repo.root().to_str().unwrap()]);
     assert!(status.refreshed_at.is_some());
     assert_eq!(status.problem_count, Some(status.problems.len() as u64));
     assert!(

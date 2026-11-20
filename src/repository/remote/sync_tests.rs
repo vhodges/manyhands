@@ -2331,17 +2331,19 @@ fn review_resolution_durably_requests_refresh() {
         &base.replace("base", "incoming"),
     )]);
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    db.execute("UPDATE repositories SET refresh_required=0", [])
+    db.execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     assert!(matches!(
         resolve_fixture(root.path(), &service, operation, &[base]),
         ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
     ));
+    // The primary resolved its synchronization: its context is marked.
     assert!(
-        db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-            .get::<_, bool>(
-            0
-        ))
+        db.query_row(
+            "SELECT dirty FROM contexts WHERE item_id IS NULL",
+            [],
+            |row| row.get::<_, bool>(0)
+        )
         .unwrap()
     );
 }
@@ -2578,10 +2580,18 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
             None,
         );
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-        db.execute("UPDATE repositories SET refresh_required=0", [])
+        db.execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
             .unwrap();
+        let primary_dirty = || {
+            db.query_row(
+                "SELECT dirty FROM contexts WHERE item_id IS NULL",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
         db.execute_batch(if fault == "refresh" {
-            "CREATE TRIGGER review_fault BEFORE UPDATE OF refresh_required ON repositories WHEN NEW.refresh_required=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
+            "CREATE TRIGGER review_fault BEFORE UPDATE OF dirty ON contexts WHEN NEW.dirty=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         } else {
             "CREATE TRIGGER review_fault BEFORE UPDATE OF phase ON remote_operation_records WHEN OLD.phase='reconciling' AND NEW.phase='interrupted' BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         }).unwrap();
@@ -2610,13 +2620,7 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
                 .unwrap(),
                 "candidate_prepared"
             );
-            assert!(
-                !db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-                    .get::<_, bool>(
-                    0
-                ))
-                .unwrap()
-            );
+            assert!(!primary_dirty());
         } else {
             assert!(!repository.path().join("index.lock").exists());
             assert_eq!(
@@ -2641,13 +2645,7 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
                 fs::read(repository.path().join("logs/refs/heads/main")).unwrap()
             )
         );
-        assert!(
-            db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-                .get::<_, bool>(
-                0
-            ))
-            .unwrap()
-        );
+        assert!(primary_dirty());
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let target = RemoteOperationTarget::for_primary_synchronization(&plan);
         let RemoteReservationOutcome::Reserved(owner) = restarted
