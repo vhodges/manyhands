@@ -20,7 +20,7 @@ use super::{
     MAX_DOCUMENT_DIRECTORY_ENTRIES, MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT,
     RegistryConnectionPhase, RepositoryError,
     activity::{PrimaryActivityMap, item_commit_activity},
-    basis::{Basis, Checkout, Recording},
+    basis::{Basis, Checkout, Entry, Listing, Recording},
 };
 
 #[derive(Debug)]
@@ -518,7 +518,7 @@ fn list_item_contexts(
     let base = root.join(".manyhands/worktrees");
     // The base is no context's own source, so what listing it stats is not
     // kept.
-    let recording = &mut Recording::stat_only(root);
+    let recording = &mut Recording::stat_only(root, None);
     if !directory_exists(&base, problems, recording) {
         return Vec::new();
     }
@@ -526,7 +526,7 @@ fn list_item_contexts(
     let mut contexts = Vec::new();
     for entry in read_managed_directory(&base, &mut entries, problems, recording) {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+        let Some(file_type) = entry.file_type() else {
             problems.push(context_problem(
                 path,
                 "the worktree entry type cannot be read",
@@ -552,11 +552,26 @@ fn list_item_contexts(
 }
 
 /// The basis of a context as it is now, taken by stat alone: the walk its
-/// observation makes, listing the same directories and stat'ing the same
-/// files, reading none of them.
-pub(super) fn stat_basis(repository: &Repository, root: &Path, listed: &ListedContext) -> Basis {
+/// observation makes, stat'ing the same files and reading none of them.
+///
+/// With no stored basis it lists every directory the observation lists.
+/// Given the basis stored for the context and the time it was indexed at
+/// (`indexed_at_ns`, as `check` takes it), it lists again only a directory
+/// whose stat moved since, or that was modified within the racy window of
+/// that time, and takes the stored entries of every other one: it goes into
+/// a subdirectory that has become one the walk uses and leaves one that went.
+pub(super) fn stat_basis(
+    repository: &Repository,
+    root: &Path,
+    listed: &ListedContext,
+    stored: Option<&Basis>,
+    indexed_at_ns: i64,
+) -> Basis {
     let checkout = context_checkout(repository, root, listed);
-    let mut recording = Recording::stat_only(&recorded_root(listed));
+    let mut recording = Recording::stat_only(
+        &recorded_root(listed),
+        stored.map(|stored| (stored, indexed_at_ns)),
+    );
     read_context(repository, root, listed, &mut recording, None);
     recording.finish(checkout, None)
 }
@@ -564,7 +579,9 @@ pub(super) fn stat_basis(repository: &Repository, root: &Path, listed: &ListedCo
 /// Observes one context: stat, read and parse, stat again. When the second
 /// stat differs from the first (an editor or Git wrote while it read), it
 /// observes once more, and when that differs too, the observation it gives
-/// is `left_dirty`.
+/// is `left_dirty`. The second stat is `stat_basis` against what the read
+/// recorded, so a write the walk passes over, such as a file saved in
+/// `src/`, is no difference.
 ///
 /// The primary's items take their commit from `activity`, brought to the
 /// primary's head. An item context does not use it.
@@ -590,8 +607,13 @@ pub(super) fn observe_context(
         #[cfg(test)]
         context_scan_checkpoint(&listed.worktree);
         let basis = recording.finish(checkout, observation.basis.item_commit);
-        let moved = basis
-            .differs(&basis.restat(&recorded_root, context_checkout(repository, root, listed)));
+        let moved = basis.differs(&stat_basis(
+            repository,
+            root,
+            listed,
+            Some(&basis),
+            started_at_ns,
+        ));
         observation.basis = basis;
         observation.started_at_ns = started_at_ns;
         if !moved || read_again {
@@ -1498,7 +1520,8 @@ fn collect_managed_out_of_path_sources(
         } = read_marker_directory(&directory, &mut entries, problems, recording);
         for entry in directory_entries {
             let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
+            let Some(file_type) = entry.file_type() else {
+                recording.keep(&entry);
                 problems.push(source_problem(
                     path,
                     "the directory entry type cannot be read",
@@ -1512,6 +1535,7 @@ fn collect_managed_out_of_path_sources(
                 if is_excluded_directory(&path) {
                     continue;
                 }
+                recording.keep(&entry);
                 if depth >= MAX_DOCUMENT_DIRECTORY_DEPTH {
                     problems.push(source_problem(
                         path,
@@ -1520,11 +1544,11 @@ fn collect_managed_out_of_path_sources(
                 } else {
                     directories.push((path, depth + 1));
                 }
-            } else if file_type.is_file()
-                && path.extension() == Some(OsStr::new("md"))
-                && file_declares_managed_marker(&path, recording)
-            {
-                collect_source(root, &path, sources, problems, recording);
+            } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+                recording.keep(&entry);
+                if file_declares_managed_marker(&path, recording) {
+                    collect_source(root, &path, sources, problems, recording);
+                }
             }
         }
         if overflowed {
@@ -1636,7 +1660,8 @@ fn collect_documents(
         }
         for entry in directory_entries {
             let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
+            let Some(file_type) = entry.file_type() else {
+                recording.keep(&entry);
                 problems.push(source_problem(
                     path,
                     "the directory entry type cannot be read",
@@ -1644,6 +1669,7 @@ fn collect_documents(
                 continue;
             };
             if file_type.is_symlink() {
+                recording.keep(&entry);
                 problems.push(source_problem(
                     path,
                     "symbolic links are not canonical sources",
@@ -1652,6 +1678,7 @@ fn collect_documents(
                 if is_excluded_directory(&path) {
                     continue;
                 }
+                recording.keep(&entry);
                 if depth >= MAX_DOCUMENT_DIRECTORY_DEPTH {
                     problems.push(source_problem(
                         path,
@@ -1661,6 +1688,7 @@ fn collect_documents(
                     directories.push((path, depth + 1));
                 }
             } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+                recording.keep(&entry);
                 collect_source(root, &path, sources, problems, recording);
             }
         }
@@ -1684,7 +1712,7 @@ pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
     let docs = root.join("docs");
     let mut problems = Vec::new();
     // Counting is no observation: what it stats is not kept.
-    let recording = &mut Recording::stat_only(root);
+    let recording = &mut Recording::stat_only(root, None);
     if !directory_exists(&docs, &mut problems, recording) {
         return Some(0);
     }
@@ -1699,7 +1727,7 @@ pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
             let path = entry.path();
             let goes_into = entry
                 .file_type()
-                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                .is_some_and(|kind| kind.is_dir() && !kind.is_symlink())
                 && !is_excluded_directory(&path)
                 && depth < MAX_DOCUMENT_DIRECTORY_DEPTH;
             if goes_into {
@@ -1737,7 +1765,8 @@ fn collect_tickets(
     let mut entries = 0;
     for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+        let Some(file_type) = entry.file_type() else {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "the directory entry type cannot be read",
@@ -1745,11 +1774,13 @@ fn collect_tickets(
             continue;
         };
         if file_type.is_symlink() {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
+            recording.keep(&entry);
             collect_source(root, &path.join("ticket.md"), sources, problems, recording);
         }
     }
@@ -1768,7 +1799,8 @@ fn collect_comments(
     let mut entries = 0;
     for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+        let Some(file_type) = entry.file_type() else {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "the directory entry type cannot be read",
@@ -1776,11 +1808,13 @@ fn collect_comments(
             continue;
         };
         if file_type.is_symlink() {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
+            recording.keep(&entry);
             collect_comment_directory(root, &path, &mut entries, sources, problems, recording);
         }
     }
@@ -1796,7 +1830,8 @@ fn collect_comment_directory(
 ) {
     for entry in read_managed_directory(directory, entries, problems, recording) {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+        let Some(file_type) = entry.file_type() else {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "the directory entry type cannot be read",
@@ -1804,11 +1839,13 @@ fn collect_comment_directory(
             continue;
         };
         if file_type.is_symlink() {
+            recording.keep(&entry);
             problems.push(source_problem(
                 path,
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+            recording.keep(&entry);
             collect_source(root, &path, sources, problems, recording);
         }
     }
@@ -1823,9 +1860,17 @@ fn read_managed_directory(
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
     recording: &mut Recording,
-) -> Vec<fs::DirEntry> {
-    let mut directory = match recording.list(path) {
-        Ok(directory) => directory,
+) -> Vec<Entry> {
+    let budget = MAX_MANAGED_DIRECTORY_ENTRIES.saturating_sub(*entries);
+    let mut directory = match recording.list(path, budget) {
+        Ok(Listing::Read(directory)) => directory,
+        Ok(Listing::Carried {
+            entries: carried,
+            count,
+        }) => {
+            *entries += count;
+            return carried;
+        }
         Err(error) => {
             problems.push(source_problem(
                 path,
@@ -1835,10 +1880,14 @@ fn read_managed_directory(
         }
     };
     let mut collected = Vec::new();
+    let mut counted = 0;
+    let mut ended = true;
+    let mut empty = true;
     loop {
         let Some(entry) = directory.next() else {
             break;
         };
+        empty = false;
         if *entries >= MAX_MANAGED_DIRECTORY_ENTRIES {
             problems.push(source_problem(
                 path,
@@ -1846,18 +1895,24 @@ fn read_managed_directory(
                     "the managed directory exceeds the bounded canonical source traversal limit; remove entries so it contains at most {MAX_MANAGED_DIRECTORY_ENTRIES} entries"
                 ),
             ));
+            ended = false;
             break;
         }
         *entries += 1;
+        counted += 1;
         match entry {
-            Ok(entry) => collected.push(entry),
-            Err(error) => problems.push(source_problem(
-                path,
-                format!("a directory entry cannot be read: {error}"),
-            )),
+            Ok(entry) => collected.push(Entry::of(&entry)),
+            Err(error) => {
+                ended = false;
+                problems.push(source_problem(
+                    path,
+                    format!("a directory entry cannot be read: {error}"),
+                ));
+            }
         }
     }
-    collected.sort_by_key(|entry| entry.file_name());
+    collected.sort_by(|left, right| left.file_name().cmp(right.file_name()));
+    recording.listed(path, counted, ended, empty);
     collected
 }
 
@@ -1895,8 +1950,9 @@ fn directory_exists(
 
 /// What listing one directory of a bounded walk gave.
 struct DirectoryListing {
-    /// The entries that were read, in name order.
-    entries: Vec<fs::DirEntry>,
+    /// The entries that were read, in name order. For a listing carried
+    /// forward from a stored basis, only those the walk used.
+    entries: Vec<Entry>,
     /// The walk's limit on entries was met in this directory: the walk
     /// ends here.
     overflowed: bool,
@@ -1911,8 +1967,22 @@ fn read_document_directory(
     problems: &mut Vec<RootObservationProblem>,
     recording: &mut Recording,
 ) -> DirectoryListing {
-    let mut directory = match recording.list(path) {
-        Ok(directory) => directory,
+    let budget = MAX_DOCUMENT_DIRECTORY_ENTRIES.saturating_sub(*entries);
+    let mut directory = match recording.list(path, budget) {
+        Ok(Listing::Read(directory)) => directory,
+        Ok(Listing::Carried {
+            entries: carried,
+            count,
+        }) => {
+            *entries += count;
+            return DirectoryListing {
+                // A listing carried forward ended, so it held nothing
+                // exactly when it counted nothing.
+                empty: Some(count == 0),
+                entries: carried,
+                overflowed: false,
+            };
+        }
         Err(error) => {
             problems.push(source_problem(
                 path,
@@ -1927,6 +1997,8 @@ fn read_document_directory(
     };
     let mut collected = Vec::new();
     let mut overflowed = false;
+    let mut counted = 0;
+    let mut ended = true;
     // An entry that could not be read, or that met the limit, is an
     // entry all the same.
     let mut empty = true;
@@ -1941,18 +2013,24 @@ fn read_document_directory(
                 "the docs directory exceeds the bounded canonical source traversal limit",
             ));
             overflowed = true;
+            ended = false;
             break;
         }
         *entries += 1;
+        counted += 1;
         match entry {
-            Ok(entry) => collected.push(entry),
-            Err(error) => problems.push(source_problem(
-                path,
-                format!("a directory entry cannot be read: {error}"),
-            )),
+            Ok(entry) => collected.push(Entry::of(&entry)),
+            Err(error) => {
+                ended = false;
+                problems.push(source_problem(
+                    path,
+                    format!("a directory entry cannot be read: {error}"),
+                ));
+            }
         }
     }
-    collected.sort_by_key(|entry| entry.file_name());
+    collected.sort_by(|left, right| left.file_name().cmp(right.file_name()));
+    recording.listed(path, counted, ended, empty);
     DirectoryListing {
         entries: collected,
         overflowed,

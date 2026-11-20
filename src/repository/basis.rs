@@ -3,12 +3,14 @@
 //!
 //! A basis holds the context's head, the branch its HEAD names, where its
 //! worktree is registered and the configuration blob of its head, then the
-//! stat of every file the observation read and every directory it listed or
-//! looked for. An observation records the content hash of each file as it
-//! read it; a basis taken by stat alone has none.
+//! stat of every file the observation read and of every directory it listed
+//! or looked at, with the entries of each listed directory that the
+//! observation's walk uses. An observation records the content hash of each
+//! file as it read it; a basis taken by stat alone has none.
 
 use std::{
     collections::BTreeMap,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
     time::SystemTime,
@@ -20,9 +22,9 @@ use time::OffsetDateTime;
 
 use super::activity::CommitActivity;
 
-/// How long after its modification a file's stat alone is not trusted: on a
-/// filesystem with coarse timestamps a file can change again within the same
-/// tick without its stat moving.
+/// How long after its modification an entry's stat alone is not trusted: on
+/// a filesystem with coarse timestamps a file or directory can change again
+/// within the same tick without its stat moving.
 pub(super) const RACY_WINDOW_NS: i64 = 2_000_000_000;
 
 /// The version `encode` writes and the only one `decode` reads.
@@ -58,12 +60,136 @@ pub(super) struct BasisFile {
     pub(super) hash: Option<Oid>,
 }
 
+/// A directory the observation listed or looked at. Its stat says whether
+/// a basis taken later must list it again; what is compared is its listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BasisDir {
     pub(super) path: PathBuf,
     pub(super) inode: Option<u64>,
     pub(super) ctime_ns: Option<i64>,
     pub(super) mtime_ns: i64,
+    /// `None` for a directory only looked at, not listed.
+    pub(super) listing: Option<BasisListing>,
+}
+
+/// What listing a directory gave the walk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BasisListing {
+    /// The entries the walk uses, in name order: each subdirectory it goes
+    /// into, each file it stats or reads, and each entry it reports a
+    /// problem for. An entry it passes over is not here.
+    pub(super) entries: Vec<BasisEntry>,
+    /// How many entries the listing counted against the walk's limit, every
+    /// entry passed over included. `None` when the listing did not end: it
+    /// met the limit or could not read an entry.
+    pub(super) count: Option<u64>,
+    /// Whether the directory held no entry at all.
+    pub(super) empty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BasisEntry {
+    pub(super) name: OsString,
+    /// `None` when its type could not be read.
+    pub(super) kind: Option<EntryKind>,
+}
+
+/// The type of a directory entry, a link not followed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EntryKind {
+    Dir,
+    File,
+    Symlink,
+    Other,
+}
+
+impl EntryKind {
+    pub(super) fn is_dir(self) -> bool {
+        self == Self::Dir
+    }
+
+    pub(super) fn is_file(self) -> bool {
+        self == Self::File
+    }
+
+    pub(super) fn is_symlink(self) -> bool {
+        self == Self::Symlink
+    }
+
+    fn of(file_type: fs::FileType) -> Self {
+        if file_type.is_symlink() {
+            Self::Symlink
+        } else if file_type.is_dir() {
+            Self::Dir
+        } else if file_type.is_file() {
+            Self::File
+        } else {
+            Self::Other
+        }
+    }
+
+    fn code(kind: Option<Self>) -> &'static str {
+        match kind {
+            Some(Self::Dir) => "d",
+            Some(Self::File) => "f",
+            Some(Self::Symlink) => "l",
+            Some(Self::Other) => "o",
+            None => "?",
+        }
+    }
+
+    /// `Some(None)` for an entry whose type could not be read, `None` for a
+    /// code `code` does not write.
+    fn from_code(code: &str) -> Option<Option<Self>> {
+        match code {
+            "d" => Some(Some(Self::Dir)),
+            "f" => Some(Some(Self::File)),
+            "l" => Some(Some(Self::Symlink)),
+            "o" => Some(Some(Self::Other)),
+            "?" => Some(None),
+            _ => None,
+        }
+    }
+}
+
+/// An entry of a directory, as a walk lists it.
+pub(super) struct Entry {
+    path: PathBuf,
+    name: OsString,
+    kind: Option<EntryKind>,
+}
+
+impl Entry {
+    pub(super) fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    pub(super) fn file_name(&self) -> &OsStr {
+        &self.name
+    }
+
+    /// `None` when its type could not be read.
+    pub(super) fn file_type(&self) -> Option<EntryKind> {
+        self.kind
+    }
+
+    pub(super) fn of(entry: &fs::DirEntry) -> Self {
+        Self {
+            path: entry.path(),
+            name: entry.file_name(),
+            kind: entry.file_type().ok().map(EntryKind::of),
+        }
+    }
+}
+
+/// What `Recording::list` gives for a directory.
+pub(super) enum Listing {
+    /// The directory, listed now.
+    Read(fs::ReadDir),
+    /// A directory whose stat has not moved since the stored basis listed
+    /// it: the entries the walk used then, in name order, and how many
+    /// entries the listing counted.
+    Carried { entries: Vec<Entry>, count: usize },
 }
 
 /// The Git half of a basis: what the context's checkout is.
@@ -80,54 +206,33 @@ pub(super) struct Checkout {
 #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) enum BasisCheck {
     Same,
-    /// The stats are the same, but these files were modified too close to
-    /// the indexed time for their stat to be trusted. Each is the same file
-    /// when its content still has the stored hash (`settles`).
+    /// Nothing differs, but these files were modified too close to the
+    /// indexed time for their stat to be trusted. Each is the same file when
+    /// its content still has the stored hash (`settles`).
     Racy(Vec<PathBuf>),
     Moved,
 }
 
 impl Basis {
-    /// The same files and directories stat'ed again under `root`, with
-    /// `checkout` for the Git half: what an observation compares with its
-    /// basis to tell whether anything moved while it read. An entry that is
-    /// gone, or is no longer of its kind, is left out.
-    pub(super) fn restat(&self, root: &Path, checkout: Checkout) -> Self {
-        let files = self
-            .files
-            .iter()
-            .filter_map(|file| {
-                let metadata = fs::symlink_metadata(root.join(&file.path)).ok()?;
-                (!metadata.is_dir()).then(|| BasisFile::of(file.path.clone(), &metadata))
-            })
-            .collect();
-        let dirs = self
-            .dirs
-            .iter()
-            .filter_map(|dir| {
-                let metadata = fs::symlink_metadata(root.join(&dir.path)).ok()?;
-                metadata
-                    .is_dir()
-                    .then(|| BasisDir::of(dir.path.clone(), &metadata))
-            })
-            .collect();
-        Self::new(checkout, None, files, dirs)
-    }
-
     /// Whether `other` differs from this basis in anything a check compares:
-    /// the Git half, which files and directories there are, or the stat of
-    /// one. Hashes and the item commit are not compared.
+    /// the Git half, which files and directories there are, the stat of a
+    /// file, or the listing of a directory. A directory's own stat is not
+    /// compared, nor are hashes and the item commit.
     pub(super) fn differs(&self, other: &Self) -> bool {
         self.head != other.head
             || self.branch != other.branch
             || self.worktree != other.worktree
             || self.config_blob != other.config_blob
-            || self.dirs != other.dirs
             || !self
                 .files
                 .iter()
                 .map(BasisFile::stat)
                 .eq(other.files.iter().map(BasisFile::stat))
+            || !self
+                .dirs
+                .iter()
+                .map(BasisDir::shape)
+                .eq(other.dirs.iter().map(BasisDir::shape))
     }
 
     /// The stored text of the basis.
@@ -137,12 +242,12 @@ impl Basis {
     /// context is observed each time.
     #[cfg_attr(not(test), allow(dead_code))] // Stored by the per-context indexing that follows.
     pub(super) fn encode(&self) -> String {
-        let text = |path: &Path| path.to_string_lossy().into_owned();
+        let text = |path: &OsStr| path.to_string_lossy().into_owned();
         let stored = StoredBasis {
             version: BASIS_VERSION,
             head: self.head.map(|oid| oid.to_string()),
             branch: self.branch.clone(),
-            worktree: text(&self.worktree),
+            worktree: text(self.worktree.as_os_str()),
             config_blob: self.config_blob.map(|oid| oid.to_string()),
             item_commit: self.item_commit.map(|commit| {
                 (
@@ -156,7 +261,7 @@ impl Basis {
                 .iter()
                 .map(|file| {
                     (
-                        text(&file.path),
+                        text(file.path.as_os_str()),
                         file.size,
                         file.inode,
                         file.ctime_ns,
@@ -168,7 +273,27 @@ impl Basis {
             dirs: self
                 .dirs
                 .iter()
-                .map(|dir| (text(&dir.path), dir.inode, dir.ctime_ns, dir.mtime_ns))
+                .map(|dir| {
+                    (
+                        text(dir.path.as_os_str()),
+                        dir.inode,
+                        dir.ctime_ns,
+                        dir.mtime_ns,
+                        dir.listing.as_ref().map(|listing| {
+                            (
+                                listing
+                                    .entries
+                                    .iter()
+                                    .map(|entry| {
+                                        (text(&entry.name), EntryKind::code(entry.kind).to_owned())
+                                    })
+                                    .collect(),
+                                listing.count,
+                                listing.empty,
+                            )
+                        }),
+                    )
+                })
                 .collect(),
         };
         // Strings and numbers only: serializing them cannot fail. Were it to,
@@ -209,13 +334,32 @@ impl Basis {
         let dirs = stored
             .dirs
             .into_iter()
-            .map(|(path, inode, ctime_ns, mtime_ns)| BasisDir {
-                path: PathBuf::from(path),
-                inode,
-                ctime_ns,
-                mtime_ns,
+            .map(|(path, inode, ctime_ns, mtime_ns, listing)| {
+                let listing = match listing {
+                    Some((entries, count, empty)) => Some(BasisListing {
+                        entries: entries
+                            .into_iter()
+                            .map(|(name, code)| {
+                                Some(BasisEntry {
+                                    name: OsString::from(name),
+                                    kind: EntryKind::from_code(&code)?,
+                                })
+                            })
+                            .collect::<Option<Vec<_>>>()?,
+                        count,
+                        empty,
+                    }),
+                    None => None,
+                };
+                Some(BasisDir {
+                    path: PathBuf::from(path),
+                    inode,
+                    ctime_ns,
+                    mtime_ns,
+                    listing,
+                })
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
         Some(Self {
             head: stored_optional_oid(stored.head)?,
             branch: stored.branch,
@@ -226,32 +370,16 @@ impl Basis {
             dirs,
         })
     }
-
-    fn new(
-        checkout: Checkout,
-        item_commit: Option<CommitActivity>,
-        files: Vec<BasisFile>,
-        dirs: Vec<BasisDir>,
-    ) -> Self {
-        Self {
-            head: checkout.head,
-            branch: checkout.branch,
-            worktree: checkout.worktree,
-            config_blob: checkout.config_blob,
-            item_commit,
-            files,
-            dirs,
-        }
-    }
 }
 
 /// Compares the basis stored for a context, indexed at `indexed_at_ns`,
 /// with the one it has now.
 ///
-/// A file not modified at least `RACY_WINDOW_NS` before the indexed time is
-/// racy even when its stat is the same. A directory is never racy: a basis
-/// taken by `stat_basis` lists it again, so an entry it has gained or lost
-/// since is in the current basis.
+/// A directory whose listing gives the walk the same entries is the same,
+/// whatever its stat: an entry the walk passes over, such as an editor's
+/// swap file, is no change. A file not modified at least `RACY_WINDOW_NS`
+/// before the indexed time is racy even when its stat is the same. A
+/// directory is never racy here: `stat_basis` lists such a directory again.
 #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) fn check(stored: &Basis, current: &Basis, indexed_at_ns: i64) -> BasisCheck {
     if stored.differs(current) {
@@ -289,64 +417,146 @@ pub(super) fn settles(stored: &Basis, worktree: &Path, racy: &[PathBuf]) -> bool
     })
 }
 
+#[cfg(test)]
+thread_local! { static LISTED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+/// The directories this thread's recordings have listed since the last
+/// call, in the order they were listed.
+#[cfg(test)]
+pub(super) fn take_listed() -> Vec<PathBuf> {
+    LISTED.with(|listed| std::mem::take(&mut *listed.borrow_mut()))
+}
+
 /// The files and directories an observation of one context reads, each
 /// stat'ed before it is read, gathered into the context's basis.
 ///
 /// A recording that reads also hashes each file as it is read. One that is
 /// stat only reads nothing: a walk that uses it lists the same directories
 /// and stats the same files as the observation, which is how a basis is
-/// taken by stat alone.
-pub(super) struct Recording {
+/// taken by stat alone. Given a stored basis, it lists again only a
+/// directory whose stat moved, or was modified within `RACY_WINDOW_NS` of
+/// the stored basis's indexed time, and gives the walk the stored entries of
+/// every other one.
+pub(super) struct Recording<'stored> {
     root: PathBuf,
     reads: bool,
+    stored: Option<(&'stored Basis, i64)>,
     files: BTreeMap<PathBuf, BasisFile>,
     dirs: BTreeMap<PathBuf, BasisDir>,
 }
 
-impl Recording {
+impl<'stored> Recording<'stored> {
     /// A recording of an observation of the worktree at `root`.
     pub(super) fn reading(root: &Path) -> Self {
-        Self::new(root, true)
+        Self::new(root, true, None)
     }
 
-    /// A recording that reads no file, for the worktree at `root`.
-    pub(super) fn stat_only(root: &Path) -> Self {
-        Self::new(root, false)
+    /// A recording that reads no file, for the worktree at `root`, that
+    /// carries forward what `stored`, indexed at the time it is given with,
+    /// listed of a directory that has not moved since.
+    pub(super) fn stat_only(root: &Path, stored: Option<(&'stored Basis, i64)>) -> Self {
+        Self::new(root, false, stored)
     }
 
-    fn new(root: &Path, reads: bool) -> Self {
+    fn new(root: &Path, reads: bool, stored: Option<(&'stored Basis, i64)>) -> Self {
         Self {
             root: root.to_owned(),
             reads,
+            stored,
             files: BTreeMap::new(),
             dirs: BTreeMap::new(),
         }
     }
 
-    /// `fs::symlink_metadata`, recording what is at `path`: the file or
-    /// directory, or, when there is nothing, the directory above it, whose
-    /// stat moves when something appears there. The first stat of a path is
-    /// the one recorded.
+    /// `fs::symlink_metadata`, recording the file or directory at `path`.
+    /// The first stat of a path is the one recorded.
     pub(super) fn stat(&mut self, path: &Path) -> io::Result<fs::Metadata> {
         let metadata = fs::symlink_metadata(path);
-        match &metadata {
-            Ok(metadata) => self.record(path, metadata),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if let Some(parent) = path.parent()
-                    && let Ok(above) = fs::symlink_metadata(parent)
-                {
-                    self.record(parent, &above);
-                }
-            }
-            Err(_) => {}
+        if let Ok(metadata) = &metadata {
+            self.record(path, metadata);
         }
         metadata
     }
 
-    /// `fs::read_dir`, with the directory's stat recorded first.
-    pub(super) fn list(&mut self, path: &Path) -> io::Result<fs::ReadDir> {
-        let _ = self.stat(path);
-        fs::read_dir(path)
+    /// Lists a directory, its stat recorded first, for a walk that has
+    /// `budget` entries left before its limit. A directory a stored basis
+    /// listed whole, whose stat has not moved since, which was not modified
+    /// within the racy window, and whose entries fit the budget, is carried
+    /// forward. Once a listing read now is done, the walk says what it
+    /// counted (`listed`); for either kind, it keeps the entries it uses
+    /// (`keep`).
+    pub(super) fn list(&mut self, path: &Path, budget: usize) -> io::Result<Listing> {
+        let metadata = self.stat(path).ok();
+        let relative = self.relative(path);
+        if let Some(carried) = metadata.and_then(|metadata| self.carried(&relative, &metadata)) {
+            let count = carried.count.unwrap_or(u64::MAX);
+            if let Ok(count) = usize::try_from(count)
+                && count <= budget
+            {
+                let entries = carried
+                    .entries
+                    .iter()
+                    .map(|entry| Entry {
+                        path: path.join(&entry.name),
+                        name: entry.name.clone(),
+                        kind: entry.kind,
+                    })
+                    .collect();
+                self.start_listing(
+                    &relative,
+                    BasisListing {
+                        entries: Vec::new(),
+                        count: carried.count,
+                        empty: carried.empty,
+                    },
+                );
+                return Ok(Listing::Carried { entries, count });
+            }
+        }
+        let directory = fs::read_dir(path)?;
+        #[cfg(test)]
+        LISTED.with(|listed| listed.borrow_mut().push(path.to_owned()));
+        self.start_listing(
+            &relative,
+            BasisListing {
+                entries: Vec::new(),
+                count: None,
+                empty: false,
+            },
+        );
+        Ok(Listing::Read(directory))
+    }
+
+    /// Says what a listing read now counted: how many entries, whether it
+    /// ended, and whether the directory held none.
+    pub(super) fn listed(&mut self, path: &Path, count: usize, ended: bool, empty: bool) {
+        let relative = self.relative(path);
+        if let Some(listing) = self
+            .dirs
+            .get_mut(&relative)
+            .and_then(|dir| dir.listing.as_mut())
+        {
+            listing.count = ended.then(|| u64::try_from(count).unwrap_or(u64::MAX));
+            listing.empty = empty;
+        }
+    }
+
+    /// Keeps an entry of a listed directory as one the walk uses.
+    pub(super) fn keep(&mut self, entry: &Entry) {
+        let Some(directory) = entry.path.parent() else {
+            return;
+        };
+        let relative = self.relative(directory);
+        if let Some(listing) = self
+            .dirs
+            .get_mut(&relative)
+            .and_then(|dir| dir.listing.as_mut())
+        {
+            listing.entries.push(BasisEntry {
+                name: entry.name.clone(),
+                kind: entry.kind,
+            });
+        }
     }
 
     /// `fs::read_to_string` of a file the observation parses, with its stat
@@ -371,12 +581,36 @@ impl Recording {
 
     /// The basis of what was recorded, with `checkout` for its Git half.
     pub(super) fn finish(self, checkout: Checkout, item_commit: Option<CommitActivity>) -> Basis {
-        Basis::new(
-            checkout,
+        Basis {
+            head: checkout.head,
+            branch: checkout.branch,
+            worktree: checkout.worktree,
+            config_blob: checkout.config_blob,
             item_commit,
-            self.files.into_values().collect(),
-            self.dirs.into_values().collect(),
-        )
+            files: self.files.into_values().collect(),
+            dirs: self.dirs.into_values().collect(),
+        }
+    }
+
+    /// The stored listing of a directory that can be carried forward.
+    fn carried(&self, relative: &Path, metadata: &fs::Metadata) -> Option<&'stored BasisListing> {
+        let (stored, indexed_at_ns) = self.stored?;
+        let dir = &stored.dirs[stored
+            .dirs
+            .binary_search_by(|dir| dir.path.as_path().cmp(relative))
+            .ok()?];
+        let listing = dir.listing.as_ref()?;
+        let (inode, ctime_ns, mtime_ns) = stat_times(metadata);
+        let unmoved = metadata.is_dir()
+            && (inode, ctime_ns, mtime_ns) == (dir.inode, dir.ctime_ns, dir.mtime_ns)
+            && dir.mtime_ns <= indexed_at_ns.saturating_sub(RACY_WINDOW_NS);
+        (unmoved && listing.count.is_some()).then_some(listing)
+    }
+
+    fn start_listing(&mut self, relative: &Path, listing: BasisListing) {
+        if let Some(dir) = self.dirs.get_mut(relative) {
+            dir.listing = Some(listing);
+        }
     }
 
     fn read_with<T>(
@@ -443,6 +677,22 @@ impl BasisFile {
 }
 
 impl BasisDir {
+    /// The directory's path and what a check compares of its listing: the
+    /// entries the walk used, whether it held nothing, and whether the
+    /// listing ended.
+    fn shape(&self) -> (&Path, Option<ListingShape<'_>>) {
+        (
+            &self.path,
+            self.listing.as_ref().map(|listing| {
+                (
+                    listing.entries.as_slice(),
+                    listing.empty,
+                    listing.count.is_some(),
+                )
+            }),
+        )
+    }
+
     fn of(path: PathBuf, metadata: &fs::Metadata) -> Self {
         let (inode, ctime_ns, mtime_ns) = stat_times(metadata);
         Self {
@@ -450,6 +700,7 @@ impl BasisDir {
             inode,
             ctime_ns,
             mtime_ns,
+            listing: None,
         }
     }
 }
@@ -499,12 +750,21 @@ fn stored_optional_oid(text: Option<String>) -> Option<Option<Oid>> {
     }
 }
 
+/// What a check compares of a listing: its entries, whether the directory
+/// held nothing, and whether the listing ended.
+type ListingShape<'listing> = (&'listing [BasisEntry], bool, bool);
+
 /// A stored file: its path, size, inode, change and modification times,
 /// and hash.
 type StoredFile = (String, u64, Option<u64>, Option<i64>, i64, Option<String>);
 
-/// A stored directory: its path, inode, change and modification times.
-type StoredDir = (String, Option<u64>, Option<i64>, i64);
+/// A stored listing: each entry's name and type code, the count and whether
+/// the directory was empty.
+type StoredListing = (Vec<(String, String)>, Option<u64>, bool);
+
+/// A stored directory: its path, inode, change and modification times, and
+/// listing.
+type StoredDir = (String, Option<u64>, Option<i64>, i64, Option<StoredListing>);
 
 /// The stored form of a basis. The files and directories are tuples, to keep
 /// the text of the primary's basis, which names every directory and file it
@@ -557,6 +817,10 @@ mod tests {
         ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAW/01ARZ3NDEKTSV4RRFFQ69G5FAY.md";
     const NEW_TICKET_COMMENT: &str =
         ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAW/01ARZ3NDEKTSV4RRFFQ69G5FAZ.md";
+    /// Files no Manyhands walk reads, in directories the managed-marker walk
+    /// lists.
+    const SOURCE: &str = "src/code.rs";
+    const NESTED_SOURCE: &str = "src/nested/lib.rs";
 
     fn write(root: &Path, relative: &str, content: &str) {
         let path = root.join(relative);
@@ -584,8 +848,9 @@ mod tests {
         ticket: PathBuf,
     }
 
-    /// A primary that holds a document with a comment, and the worktree of a
-    /// ticket that holds the ticket with a comment, all committed.
+    /// A primary that holds a document with a comment, all committed, and
+    /// source files that are not; and the worktree of a ticket that holds the
+    /// ticket with a comment, committed.
     struct Fixture {
         _directory: tempfile::TempDir,
         repository: Repository,
@@ -614,6 +879,8 @@ mod tests {
             for (path, timestamp) in [(CONFIG, 10), (DOCUMENT, 20), (DOCUMENT_COMMENT, 30)] {
                 checkpoint(&repository, Path::new(path), timestamp);
             }
+            write(&root, SOURCE, "fn main() {}\n");
+            write(&root, NESTED_SOURCE, "pub fn nested() {}\n");
             let ticket = active_worktree_at(&repository, &root, "ticket", TICKET_ID, TICKET_ID);
             let linked = Repository::open(&ticket).unwrap();
             write(
@@ -656,8 +923,21 @@ mod tests {
             )
         }
 
+        /// A basis taken by stat alone, every directory listed.
         fn stat(&self, listed: &ListedContext) -> Basis {
-            stat_basis(&self.repository, &self.worktrees.root, listed)
+            stat_basis(&self.repository, &self.worktrees.root, listed, None, 0)
+        }
+
+        /// A basis taken by stat alone, from `stored` indexed at
+        /// `indexed_at_ns`.
+        fn stat_since(&self, listed: &ListedContext, stored: &Basis, indexed_at_ns: i64) -> Basis {
+            stat_basis(
+                &self.repository,
+                &self.worktrees.root,
+                listed,
+                Some(stored),
+                indexed_at_ns,
+            )
         }
     }
 
@@ -728,6 +1008,26 @@ mod tests {
         );
     }
 
+    /// Saves a source file as many editors save: written beside it, then
+    /// renamed over it.
+    fn save_source_by_rename(worktrees: &Worktrees) {
+        let saved = worktrees.root.join("src/.code.rs.tmp");
+        fs::write(&saved, "fn main() { saved(); }\n").unwrap();
+        fs::rename(&saved, worktrees.root.join(SOURCE)).unwrap();
+    }
+
+    fn add_swap_file(worktrees: &Worktrees) {
+        write(&worktrees.root, "docs/.document.md.swp", "swap\n");
+    }
+
+    fn add_subdirectory(worktrees: &Worktrees) {
+        fs::create_dir(worktrees.root.join("src/new")).unwrap();
+    }
+
+    fn add_markdown_file(worktrees: &Worktrees) {
+        write(&worktrees.root, "src/notes.md", "# Notes\n");
+    }
+
     fn unchanged(_: &Worktrees) {}
 
     /// What a row's change shows.
@@ -738,8 +1038,16 @@ mod tests {
         LeftDirty,
         /// Made the first time only: it is read again, and that read stands.
         ReadAgain,
+        /// Made each time the context has been read, to an entry the walk
+        /// passes over: it is not read again.
+        NotReadAgain,
         /// Made after the observation: a basis taken by stat moved.
         Moved,
+        /// Made after the observation, to an entry the walk passes over: a
+        /// basis taken by stat is the same, and one taken from the stored
+        /// basis lists again only these directories, carrying forward the
+        /// listing of every other one, its subdirectories included.
+        Same(&'static [&'static str]),
         /// Made after the observation, within a tick of a coarse
         /// filesystem: the stat it gives is the one before, so the file is
         /// racy, and its hash shows the change.
@@ -803,6 +1111,36 @@ mod tests {
                 unchanged,
                 Shows::SettledOnce,
             ),
+            (
+                "a source file saved by rename during the read",
+                Of::Primary,
+                save_source_by_rename,
+                Shows::NotReadAgain,
+            ),
+            (
+                "a source file saved by rename",
+                Of::Primary,
+                save_source_by_rename,
+                Shows::Same(&["src"]),
+            ),
+            (
+                "an editor's swap file beside the document",
+                Of::Primary,
+                add_swap_file,
+                Shows::Same(&["docs"]),
+            ),
+            (
+                "a new subdirectory in a walked directory",
+                Of::Primary,
+                add_subdirectory,
+                Shows::Moved,
+            ),
+            (
+                "a new Markdown file in a walked directory",
+                Of::Primary,
+                add_markdown_file,
+                Shows::Moved,
+            ),
         ];
         #[cfg(unix)]
         rows.push((
@@ -816,20 +1154,24 @@ mod tests {
             let fixture = Fixture::new();
             let listed = fixture.listed(of);
 
-            if matches!(shows, Shows::LeftDirty | Shows::ReadAgain) {
+            if matches!(
+                shows,
+                Shows::LeftDirty | Shows::ReadAgain | Shows::NotReadAgain
+            ) {
                 let reads = Rc::new(Cell::new(0));
                 let counted = reads.clone();
                 let worktrees = fixture.worktrees.clone();
                 set_context_scan_hook(listed.worktree.clone(), move || {
                     counted.set(counted.get() + 1);
-                    if shows == Shows::LeftDirty || counted.get() == 1 {
+                    if shows != Shows::ReadAgain || counted.get() == 1 {
                         change(&worktrees);
                     }
                 });
                 let observation = fixture.observe(&listed);
                 clear_scan_hook(&listed.worktree);
 
-                assert_eq!(reads.get(), 2, "{row}: read again");
+                let expected_reads = if shows == Shows::NotReadAgain { 1 } else { 2 };
+                assert_eq!(reads.get(), expected_reads, "{row}: reads");
                 assert_eq!(observation.left_dirty, shows == Shows::LeftDirty, "{row}");
                 if shows == Shows::ReadAgain {
                     assert!(
@@ -870,13 +1212,48 @@ mod tests {
                 BasisCheck::Same,
                 "{row}: before the change"
             );
+            take_listed();
+            assert_eq!(
+                check(
+                    &stored,
+                    &fixture.stat_since(&listed, &stored, clean_at),
+                    clean_at
+                ),
+                BasisCheck::Same,
+                "{row}: before the change, from the stored basis"
+            );
+            assert_eq!(take_listed(), Vec::<PathBuf>::new(), "{row}: listed again");
 
             change(&fixture.worktrees);
 
             let now = fixture.stat(&listed);
+            take_listed();
+            let since = fixture.stat_since(&listed, &stored, clean_at);
+            let listed_again = take_listed();
             match shows {
                 Shows::Moved => {
                     assert_eq!(check(&stored, &now, clean_at), BasisCheck::Moved, "{row}");
+                    assert_eq!(
+                        check(&stored, &since, clean_at),
+                        BasisCheck::Moved,
+                        "{row}: from the stored basis"
+                    );
+                }
+                Shows::Same(directories) => {
+                    assert_eq!(check(&stored, &now, clean_at), BasisCheck::Same, "{row}");
+                    assert_eq!(
+                        check(&stored, &since, clean_at),
+                        BasisCheck::Same,
+                        "{row}: from the stored basis"
+                    );
+                    assert_eq!(
+                        listed_again,
+                        directories
+                            .iter()
+                            .map(|directory| listed.worktree.join(directory))
+                            .collect::<Vec<_>>(),
+                        "{row}: listed again"
+                    );
                 }
                 Shows::Racy => {
                     let BasisCheck::Racy(racy) = check(&stored, &before, written_at.unwrap())
@@ -910,7 +1287,7 @@ mod tests {
                         "{row}: not racy again"
                     );
                 }
-                Shows::LeftDirty | Shows::ReadAgain => unreachable!(),
+                Shows::LeftDirty | Shows::ReadAgain | Shows::NotReadAgain => unreachable!(),
             }
         }
     }
@@ -942,12 +1319,41 @@ mod tests {
                     inode: None,
                     ctime_ns: None,
                     mtime_ns: 5,
+                    listing: None,
                 },
                 BasisDir {
                     path: PathBuf::from(".manyhands/tickets"),
                     inode: Some(8),
                     ctime_ns: Some(6),
                     mtime_ns: 6,
+                    listing: Some(BasisListing {
+                        entries: [
+                            ("01ARZ3NDEKTSV4RRFFQ69G5FAW", Some(EntryKind::Dir)),
+                            ("device", Some(EntryKind::Other)),
+                            ("link", Some(EntryKind::Symlink)),
+                            ("unreadable", None),
+                            ("x.md", Some(EntryKind::File)),
+                        ]
+                        .into_iter()
+                        .map(|(name, kind)| BasisEntry {
+                            name: OsString::from(name),
+                            kind,
+                        })
+                        .collect(),
+                        count: Some(9),
+                        empty: false,
+                    }),
+                },
+                BasisDir {
+                    path: PathBuf::from("docs"),
+                    inode: Some(9),
+                    ctime_ns: Some(7),
+                    mtime_ns: 7,
+                    listing: Some(BasisListing {
+                        entries: Vec::new(),
+                        count: None,
+                        empty: true,
+                    }),
                 },
             ],
         };
@@ -961,8 +1367,10 @@ mod tests {
         let short_head = encoded.replacen(&oid(1).to_string(), "0101", 1);
         let uppercase_hash = encoded.replacen(&oid(4).to_string(), &"0A".repeat(20), 1);
         let commit_out_of_range = encoded.replacen(",30,-2]", &format!(",{},-2]", i64::MAX), 1);
+        let unknown_kind = encoded.replacen("[\"link\",\"l\"]", "[\"link\",\"x\"]", 1);
         for (row, text) in [
-            ("another version", other_version.as_str()),
+            ("an entry of a type no basis names", unknown_kind.as_str()),
+            ("another version", &other_version),
             ("a short object ID", &short_head),
             ("an object ID not written in lowercase", &uppercase_hash),
             ("a commit time out of range", &commit_out_of_range),
