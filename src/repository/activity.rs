@@ -3,7 +3,6 @@
 //! An item context finds its commit with a short walk restricted to the
 //! item's own paths. The primary keeps the newest commit of every path in one
 //! map, advanced over the commits added since it was last built.
-#![cfg_attr(not(test), allow(dead_code))] // Consumed by the per-context indexing that follows.
 
 use std::{
     collections::BTreeMap,
@@ -14,7 +13,10 @@ use git2::{Commit, Diff, DiffOptions, Oid, Repository};
 use rusqlite::{OptionalExtension, Transaction, params};
 use time::OffsetDateTime;
 
-use super::{RepositoryError, discovery::MAX_ACTIVITY_HISTORY_COMMITS};
+use super::RepositoryError;
+
+/// How many first-parent commits an item walk looks back.
+pub(super) const MAX_ACTIVITY_HISTORY_COMMITS: usize = 1024;
 
 /// A commit that touched a path, and where it sits on the first-parent chain.
 /// A larger ordinal is a newer commit on the same chain.
@@ -109,6 +111,7 @@ impl PrimaryActivityMap {
     /// The map stored for a registration: the entries of `primary_activity`
     /// and the base its primary context records. An entry that cannot be read
     /// discards the map, which the next `advance` rebuilds.
+    #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
     pub(super) fn load(tx: &Transaction<'_>, repository_id: i64) -> Result<Self, RepositoryError> {
         let base = tx
             .query_row(
@@ -154,8 +157,10 @@ impl PrimaryActivityMap {
     }
 
     /// Replaces the stored entries and the base of the registration's primary
-    /// context. Without a primary context the entries are stored and the base
-    /// is not, so the map read back has no base and rebuilds.
+    /// context, the one `load` reads it from. Without a primary context the
+    /// entries are stored and the base is not, so the map read back has no
+    /// base and rebuilds.
+    #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
     pub(super) fn store(
         &self,
         tx: &Transaction<'_>,
@@ -188,7 +193,9 @@ impl PrimaryActivityMap {
                 .map_err(RepositoryError::sqlite)?;
         }
         tx.execute(
-            "UPDATE contexts SET activity_base = ?2 WHERE repository_id = ?1 AND kind = 'primary'",
+            "UPDATE contexts SET activity_base = ?2
+             WHERE id = (SELECT id FROM contexts
+                         WHERE repository_id = ?1 AND kind = 'primary' ORDER BY id LIMIT 1)",
             params![repository_id, self.base.map(|base| base.to_string())],
         )
         .map_err(RepositoryError::sqlite)?;
@@ -322,9 +329,8 @@ mod tests {
     use crate::repository::{
         DiscoveryActivitySource,
         discovery::{
-            ActivityHistory, MAX_ACTIVITY_HISTORY_COMMITS, activity_with_uncommitted,
-            commit_touches_paths, first_parent_commits, latest_commit_touching, migrate_registry,
-            observe_activity, open_registry,
+            ActivityHistory, activity_with_uncommitted, commit_touches_paths, first_parent_commits,
+            latest_commit_touching, migrate_registry, observe_activity, open_registry,
         },
         git_fixtures::{active_worktree_at, checkpoint, checkpoint_reference, repository_on_main},
     };

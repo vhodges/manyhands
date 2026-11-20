@@ -3374,16 +3374,21 @@ fn spec4_assert_unleased_scans(f: &Fixture) -> Rc<std::cell::Cell<usize>> {
         f.root.path().to_owned(),
         f.root.path().join(".manyhands/worktrees").join(ITEM),
     ] {
-        let data = f.data.path().to_owned();
-        let checked = root.clone();
-        let count = count.clone();
-        discovery::set_scan_hook(root, move || {
-            assert!(
-                coordination::leases_are_free(&data, &checked),
-                "actual filesystem discovery entry must not run under the common lease"
-            );
-            count.set(count.get() + 1);
-        });
+        // Counts `observe_root` scans and `observe_context` scans alike.
+        let scan = || {
+            let data = f.data.path().to_owned();
+            let checked = root.clone();
+            let count = count.clone();
+            move || {
+                assert!(
+                    coordination::leases_are_free(&data, &checked),
+                    "actual filesystem discovery entry must not run under the common lease"
+                );
+                count.set(count.get() + 1);
+            }
+        };
+        discovery::set_scan_hook(root.clone(), scan());
+        discovery::set_context_scan_hook(root.clone(), scan());
     }
     count
 }

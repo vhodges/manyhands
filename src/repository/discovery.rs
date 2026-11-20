@@ -13,13 +13,15 @@ use time::OffsetDateTime;
 
 use crate::canonical;
 
+#[cfg(test)]
+use super::activity::MAX_ACTIVITY_HISTORY_COMMITS;
 use super::{
     AuthoringKind, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH,
     MAX_DOCUMENT_DIRECTORY_ENTRIES, MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT,
-    RegistryConnectionPhase, RepositoryError, activity::item_commit_activity,
+    RegistryConnectionPhase, RepositoryError,
+    activity::{PrimaryActivityMap, item_commit_activity},
+    basis::{Basis, Checkout, Recording},
 };
-
-pub(super) const MAX_ACTIVITY_HISTORY_COMMITS: usize = 1024;
 
 #[derive(Debug)]
 pub(super) enum RootConfiguration {
@@ -50,13 +52,11 @@ pub(super) struct RootContextObservation {
 /// A key is stored as text: `primary`, or the item's ULID, which can never be
 /// read as `primary`.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) enum ContextKey {
     Primary,
     Item(canonical::ItemId),
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 impl ContextKey {
     /// The stored text of the key.
     pub(super) fn encode(&self) -> String {
@@ -134,6 +134,60 @@ pub(super) struct ActiveContextObservation {
     pub(super) validation: canonical::ValidatedContext,
     pub(super) items: Vec<ObservedItem>,
     pub(super) problems: Vec<RootObservationProblem>,
+}
+
+/// A context as listing the repository finds it: the primary checkout, or a
+/// directory under `.manyhands/worktrees/` named by an item's ULID, whether
+/// or not it holds a valid item context.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ListedContext {
+    pub(super) key: ContextKey,
+    pub(super) worktree: PathBuf,
+}
+
+impl ListedContext {
+    pub(super) fn primary(root: &Path) -> Self {
+        Self {
+            key: ContextKey::Primary,
+            worktree: root.to_owned(),
+        }
+    }
+}
+
+/// One context observed from its own sources alone.
+///
+/// `basis` is what the observation depended on, and `started_at_ns` when
+/// the attempt it holds began, which becomes the context's indexed time.
+/// `left_dirty` says the context changed while it was read, on the attempt
+/// that read it again as well: nothing of it is to be stored. `valid` is
+/// false for an item worktree that is not a valid item context; its one
+/// problem says why, and it has no sources, validation or items.
+#[derive(Debug)]
+pub(super) struct ContextObservation {
+    /// The primary's configuration; `None` for an item context.
+    pub(super) configuration: Option<ObservedConfiguration>,
+    pub(super) context: RootContextObservation,
+    pub(super) head: RootHeadObservation,
+    pub(super) sources: Vec<(PathBuf, String)>,
+    pub(super) validation: canonical::ValidatedContext,
+    /// For the primary, every item it holds, an item that an active context
+    /// presents instead included.
+    pub(super) items: Vec<ObservedItem>,
+    /// The primary's folders; empty for an item context.
+    pub(super) folders: Vec<ObservedFolder>,
+    pub(super) problems: Vec<RootObservationProblem>,
+    pub(super) basis: Basis,
+    pub(super) started_at_ns: i64,
+    pub(super) valid: bool,
+    pub(super) left_dirty: bool,
+}
+
+/// The primary's configuration as its observation read it.
+#[derive(Debug)]
+pub(super) struct ObservedConfiguration {
+    pub(super) configuration: RootConfiguration,
+    pub(super) source: Option<Vec<u8>>,
+    pub(super) blob_oid: Option<git2::Oid>,
 }
 
 #[derive(Debug)]
@@ -334,12 +388,22 @@ type ScanHook = Box<dyn FnMut()>;
 #[cfg(test)]
 thread_local! { static SCAN_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf,ScanHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
 #[cfg(test)]
+thread_local! { static CONTEXT_SCAN_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf,ScanHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
+#[cfg(test)]
 pub(super) fn set_scan_hook(root: PathBuf, hook: impl FnMut() + 'static) {
     SCAN_HOOKS.with(|h| h.borrow_mut().insert(root, Box::new(hook)));
 }
+/// Runs `hook` each time `observe_context` has read the context whose
+/// worktree is `worktree`, before it stats what it read again.
+#[cfg(test)]
+pub(super) fn set_context_scan_hook(worktree: PathBuf, hook: impl FnMut() + 'static) {
+    CONTEXT_SCAN_HOOKS.with(|h| h.borrow_mut().insert(worktree, Box::new(hook)));
+}
+/// Removes the scan hook and the context scan hook set for `root`.
 #[cfg(test)]
 pub(super) fn clear_scan_hook(root: &Path) {
     SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
+    CONTEXT_SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
 }
 #[cfg(test)]
 pub(super) fn scan_checkpoint(root: &Path) {
@@ -349,12 +413,270 @@ pub(super) fn scan_checkpoint(root: &Path) {
         SCAN_HOOKS.with(|h| h.borrow_mut().insert(root.into(), hook));
     }
 }
+#[cfg(test)]
+fn context_scan_checkpoint(worktree: &Path) {
+    let hook = CONTEXT_SCAN_HOOKS.with(|h| h.borrow_mut().remove(worktree));
+    if let Some(mut hook) = hook {
+        hook();
+        CONTEXT_SCAN_HOOKS.with(|h| h.borrow_mut().insert(worktree.into(), hook));
+    }
+}
+/// The primary and its valid item contexts, each observed on its own, with
+/// the primary not listing an item that an active context holds, nor its
+/// problems inside that item's directories.
+///
+/// An item worktree that is not a valid item context is not among
+/// `active_contexts`: its problem is the primary's. A primary whose
+/// configuration is not valid has no item contexts.
 pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
     #[cfg(test)]
     scan_checkpoint(root);
+    // No map is stored for the primary yet, so one is built with one walk of
+    // its history.
+    let mut activity = PrimaryActivityMap::default();
+    let ContextObservation {
+        configuration,
+        context,
+        head,
+        sources,
+        mut validation,
+        mut items,
+        folders,
+        mut problems,
+        ..
+    } = observe_context(
+        repository,
+        root,
+        &ListedContext::primary(root),
+        &mut activity,
+    );
+    let ObservedConfiguration {
+        configuration,
+        source: configuration_source,
+        blob_oid: configuration_blob_oid,
+    } = configuration.expect("the primary's observation reads its configuration");
+    let active_contexts = match configuration {
+        RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
+        RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
+    };
+    leave_active_items_to_their_contexts(
+        root,
+        &active_contexts,
+        &mut items,
+        &mut validation.problems,
+        &mut problems,
+    );
+
+    RootObservation {
+        configuration_blob_oid,
+        configuration,
+        configuration_source,
+        context,
+        head,
+        sources,
+        validation,
+        items,
+        folders,
+        problems,
+        active_contexts,
+    }
+}
+
+/// The contexts of the repository at `root`: the primary, then each
+/// directory under `.manyhands/worktrees/` named by an item's ULID, in name
+/// order, whether or not it holds a valid item context. A directory named
+/// otherwise is not a context.
+///
+/// `Err` when the worktree base cannot be listed whole: it is a link or not
+/// a directory, it cannot be read, it holds more entries than a listing
+/// reads, or the type of an entry cannot be read. With the listing
+/// incomplete, no context can be taken to have gone. The problem is the
+/// first the root's observation reports for the listing.
+///
+/// Git is not asked: a context is listed by its directory, so a worktree
+/// removed outside Manyhands is not listed, whatever Git still registers.
+pub(super) fn list_contexts(
+    _repository: &Repository,
+    root: &Path,
+) -> Result<Vec<ListedContext>, RootObservationProblem> {
     let mut problems = Vec::new();
-    let configuration = observe_configuration(root, &mut problems);
-    let configuration_source = fs::read(root.join(canonical::CONFIG_PATH)).ok();
+    let items = list_item_contexts(root, &mut problems);
+    match problems.into_iter().next() {
+        Some(problem) => Err(problem),
+        None => Ok(std::iter::once(ListedContext::primary(root))
+            .chain(items)
+            .collect()),
+    }
+}
+
+/// The item contexts `list_contexts` lists, with the problems listing them
+/// meets reported as the root's observation reports them.
+fn list_item_contexts(
+    root: &Path,
+    problems: &mut Vec<RootObservationProblem>,
+) -> Vec<ListedContext> {
+    let base = root.join(".manyhands/worktrees");
+    // The base is no context's own source, so what listing it stats is not
+    // kept.
+    let recording = &mut Recording::stat_only(root);
+    if !directory_exists(&base, problems, recording) {
+        return Vec::new();
+    }
+    let mut entries = 0;
+    let mut contexts = Vec::new();
+    for entry in read_managed_directory(&base, &mut entries, problems, recording) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            problems.push(context_problem(
+                path,
+                "the worktree entry type cannot be read",
+            ));
+            continue;
+        };
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let Some(item_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<canonical::ItemId>().ok())
+        else {
+            continue;
+        };
+        contexts.push(ListedContext {
+            key: ContextKey::Item(item_id),
+            worktree: path,
+        });
+    }
+    contexts
+}
+
+/// The basis of a context as it is now, taken by stat alone: the walk its
+/// observation makes, listing the same directories and stat'ing the same
+/// files, reading none of them.
+pub(super) fn stat_basis(repository: &Repository, root: &Path, listed: &ListedContext) -> Basis {
+    let checkout = context_checkout(repository, root, listed);
+    let mut recording = Recording::stat_only(&recorded_root(listed));
+    read_context(repository, root, listed, &mut recording, None);
+    recording.finish(checkout, None)
+}
+
+/// Observes one context: stat, read and parse, stat again. When the second
+/// stat differs from the first (an editor or Git wrote while it read), it
+/// observes once more, and when that differs too, the observation it gives
+/// is `left_dirty`.
+///
+/// The primary's items take their commit from `activity`, brought to the
+/// primary's head. An item context does not use it.
+pub(super) fn observe_context(
+    repository: &Repository,
+    root: &Path,
+    listed: &ListedContext,
+    activity: &mut PrimaryActivityMap,
+) -> ContextObservation {
+    let recorded_root = recorded_root(listed);
+    let mut read_again = false;
+    loop {
+        let started_at_ns = now_ns();
+        let checkout = context_checkout(repository, root, listed);
+        let mut recording = Recording::reading(&recorded_root);
+        let mut observation = read_context(
+            repository,
+            root,
+            listed,
+            &mut recording,
+            Some(&mut *activity),
+        );
+        #[cfg(test)]
+        context_scan_checkpoint(&listed.worktree);
+        let basis = recording.finish(checkout, observation.basis.item_commit);
+        let moved = basis
+            .differs(&basis.restat(&recorded_root, context_checkout(repository, root, listed)));
+        observation.basis = basis;
+        observation.started_at_ns = started_at_ns;
+        if !moved || read_again {
+            observation.left_dirty = moved;
+            return observation;
+        }
+        read_again = true;
+    }
+}
+
+/// Where the paths of a context's basis are relative to: the worktree as
+/// its observation reads it.
+fn recorded_root(listed: &ListedContext) -> PathBuf {
+    match listed.key {
+        ContextKey::Primary => listed.worktree.clone(),
+        ContextKey::Item(_) => listed
+            .worktree
+            .canonicalize()
+            .unwrap_or_else(|_| listed.worktree.clone()),
+    }
+}
+
+/// The Git half of a context's basis.
+fn context_checkout(repository: &Repository, root: &Path, listed: &ListedContext) -> Checkout {
+    let checkout = |repository: &Repository, worktree: PathBuf| {
+        let head = observe_head(repository, &mut Vec::new());
+        Checkout {
+            head: head.oid,
+            branch: head.branch,
+            worktree,
+            config_blob: head_configuration_blob(repository),
+        }
+    };
+    match &listed.key {
+        ContextKey::Primary => checkout(repository, root.to_owned()),
+        ContextKey::Item(item_id) => {
+            let worktree = repository
+                .find_worktree(&item_id.to_string())
+                .map(|worktree| worktree.path().to_owned())
+                .unwrap_or_default();
+            match Repository::open(&listed.worktree) {
+                Ok(item) => checkout(&item, worktree),
+                Err(_) => Checkout {
+                    head: None,
+                    branch: None,
+                    worktree,
+                    config_blob: None,
+                },
+            }
+        }
+    }
+}
+
+fn now_ns() -> i64 {
+    i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap_or(i64::MAX)
+}
+
+/// One read of a context, recording into `recording` what it lists and
+/// reads. With a recording that reads nothing, only the walk matters.
+fn read_context(
+    repository: &Repository,
+    root: &Path,
+    listed: &ListedContext,
+    recording: &mut Recording,
+    activity: Option<&mut PrimaryActivityMap>,
+) -> ContextObservation {
+    match &listed.key {
+        ContextKey::Primary => read_primary(repository, root, recording, activity),
+        ContextKey::Item(item_id) => {
+            read_item_context(repository, item_id, &listed.worktree, recording)
+        }
+    }
+}
+
+fn read_primary(
+    repository: &Repository,
+    root: &Path,
+    recording: &mut Recording,
+    activity: Option<&mut PrimaryActivityMap>,
+) -> ContextObservation {
+    let mut problems = Vec::new();
+    let configuration = observe_configuration(root, &mut problems, recording);
+    let configuration_source = recording
+        .read(&root.join(canonical::CONFIG_PATH))
+        .and_then(Result::ok);
     let head = observe_head(repository, &mut problems);
     let kind = match (&configuration, &head.branch) {
         (RootConfiguration::Valid(configuration), Some(branch))
@@ -383,31 +705,26 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
     };
     let mut sources = Vec::new();
     let mut folders = Vec::new();
-    collect_root_sources(root, &mut sources, &mut folders, &mut problems);
-    let mut validation = canonical::validate_context(sources.clone());
-    let mut items = observe_items(
-        repository,
-        root,
-        ActivityHistory::Checkout,
-        &sources,
-        &validation,
-    );
-    let active_contexts = match configuration {
-        RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
-        RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
+    collect_recorded_root_sources(root, &mut sources, &mut folders, &mut problems, recording);
+    let validation = canonical::validate_context(sources.clone());
+    let history = match (head.oid, activity) {
+        (Some(head), Some(activity)) => match activity.advance(repository, head) {
+            Ok(_) => ActivityHistory::Primary(activity),
+            // The map cannot be brought to the head (a commit time out of
+            // range, a parent object missing): each item walks from the head
+            // instead, as an item context does.
+            Err(_) => ActivityHistory::Item(Some(head)),
+        },
+        (head, _) => ActivityHistory::Item(head),
     };
-    leave_active_items_to_their_contexts(
-        root,
-        &active_contexts,
-        &mut items,
-        &mut validation.problems,
-        &mut problems,
-    );
+    let items = observe_items(repository, root, history, &sources, &validation);
 
-    RootObservation {
-        configuration_blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
-        configuration,
-        configuration_source,
+    ContextObservation {
+        configuration: Some(ObservedConfiguration {
+            blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
+            configuration,
+            source: configuration_source,
+        }),
         context: RootContextObservation {
             kind,
             branch: head.branch.clone(),
@@ -420,160 +737,211 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         items,
         folders,
         problems,
-        active_contexts,
+        basis: Basis::default(),
+        started_at_ns: 0,
+        valid: true,
+        left_dirty: false,
     }
 }
 
-fn configuration_blob_oid(
-    repository: &Repository,
-    live_source: Option<&[u8]>,
-) -> Option<git2::Oid> {
-    let entry = repository
+/// The blob of the configuration file in the tree of the repository's head,
+/// when it is a regular file there.
+fn head_configuration_blob(repository: &Repository) -> Option<git2::Oid> {
+    repository
         .head()
         .ok()?
         .peel_to_tree()
         .ok()?
         .get_path(Path::new(canonical::CONFIG_PATH))
         .ok()
-        .filter(|entry| entry.filemode() == 0o100644)?;
-    let blob = repository.find_blob(entry.id()).ok()?;
-    (live_source == Some(blob.content())).then_some(entry.id())
+        .filter(|entry| entry.filemode() == 0o100644)
+        .map(|entry| entry.id())
 }
 
+fn configuration_blob_oid(
+    repository: &Repository,
+    live_source: Option<&[u8]>,
+) -> Option<git2::Oid> {
+    let id = head_configuration_blob(repository)?;
+    let blob = repository.find_blob(id).ok()?;
+    (live_source == Some(blob.content())).then_some(id)
+}
+
+/// The item context whose worktree is `worktree`, the directory named for
+/// `item_id` under the worktree base: valid only when the repository root
+/// registers it there and it has checked out that item's authoring branch,
+/// which holds the item.
+fn read_item_context(
+    root_repository: &Repository,
+    item_id: &canonical::ItemId,
+    worktree: &Path,
+    recording: &mut Recording,
+) -> ContextObservation {
+    let invalid = |head: RootHeadObservation, message: &str| ContextObservation {
+        configuration: None,
+        context: RootContextObservation {
+            kind: DiscoveryContextKind::Invalid,
+            branch: head.branch.clone(),
+            worktree: worktree.to_owned(),
+            item_id: Some(item_id.clone()),
+        },
+        head,
+        sources: Vec::new(),
+        validation: canonical::ValidatedContext {
+            items: Vec::new(),
+            problems: Vec::new(),
+        },
+        items: Vec::new(),
+        folders: Vec::new(),
+        problems: vec![context_problem(worktree, message)],
+        basis: Basis::default(),
+        started_at_ns: 0,
+        valid: false,
+        left_dirty: false,
+    };
+    let unobserved = || RootHeadObservation {
+        branch: None,
+        oid: None,
+    };
+    let Ok(expected_path) = worktree.canonicalize() else {
+        return invalid(
+            unobserved(),
+            "the deterministic worktree path cannot be canonicalized",
+        );
+    };
+    let Ok(registered_worktree) = root_repository.find_worktree(&item_id.to_string()) else {
+        return invalid(
+            unobserved(),
+            "the worktree is not registered by the repository root",
+        );
+    };
+    let Ok(registered_path) = registered_worktree.path().canonicalize() else {
+        return invalid(
+            unobserved(),
+            "the registered worktree path cannot be canonicalized",
+        );
+    };
+    if registered_path != expected_path {
+        return invalid(
+            unobserved(),
+            "the registered worktree path does not match the deterministic path",
+        );
+    }
+    let Ok(repository) = Repository::open(&registered_path) else {
+        return invalid(
+            unobserved(),
+            "the registered worktree repository cannot be opened",
+        );
+    };
+    if repository
+        .workdir()
+        .and_then(|workdir| workdir.canonicalize().ok())
+        .as_deref()
+        != Some(expected_path.as_path())
+    {
+        return invalid(
+            unobserved(),
+            "the registered worktree has an unexpected canonical workdir",
+        );
+    }
+    let mut context_problems = Vec::new();
+    let head = observe_head(&repository, &mut context_problems);
+    let Some((kind, branch_id)) = head.branch.as_deref().and_then(parse_authoring_branch) else {
+        return invalid(
+            head,
+            "the worktree does not have a conforming authoring branch",
+        );
+    };
+    if branch_id != *item_id {
+        return invalid(
+            head,
+            "the worktree path does not match its checked-out authoring branch",
+        );
+    }
+    let mut sources = Vec::new();
+    collect_authoring_item_sources(
+        &expected_path,
+        kind,
+        item_id,
+        &mut sources,
+        &mut context_problems,
+        recording,
+    );
+    let validation = canonical::validate_context(sources.clone());
+    if !validation
+        .items
+        .iter()
+        .any(|item| authoring_item_matches(item, kind, item_id))
+    {
+        return invalid(
+            head,
+            "the authoring branch's identified item is missing or invalid",
+        );
+    }
+    let items = observe_items(
+        &repository,
+        &expected_path,
+        ActivityHistory::Item(head.oid),
+        &sources,
+        &validation,
+    );
+    let item_commit = head.oid.zip(items.first()).and_then(|(head, item)| {
+        let mut owned_paths = vec![item.path.clone()];
+        collect_comment_paths(&item.comments, &mut owned_paths);
+        item_commit_activity(&repository, head, &owned_paths)
+            .ok()?
+            .found
+    });
+    ContextObservation {
+        configuration: None,
+        context: RootContextObservation {
+            kind: DiscoveryContextKind::Active,
+            branch: head.branch.clone(),
+            worktree: expected_path,
+            item_id: Some(item_id.clone()),
+        },
+        head,
+        sources,
+        validation,
+        items,
+        folders: Vec::new(),
+        problems: context_problems,
+        basis: Basis {
+            item_commit,
+            ..Basis::default()
+        },
+        started_at_ns: 0,
+        valid: true,
+        left_dirty: false,
+    }
+}
+
+/// The valid item contexts, in branch order. The problem of a worktree that
+/// is not one is the primary's.
 fn observe_active_contexts(
     root_repository: &Repository,
     root: &Path,
     problems: &mut Vec<RootObservationProblem>,
 ) -> Vec<ActiveContextObservation> {
-    let base = root.join(".manyhands/worktrees");
-    if !directory_exists(&base, problems) {
-        return Vec::new();
-    }
-    let mut entries = 0;
     let mut contexts = Vec::new();
-    for entry in read_managed_directory(&base, &mut entries, problems) {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            problems.push(context_problem(
-                path,
-                "the worktree entry type cannot be read",
-            ));
-            continue;
-        };
-        if file_type.is_symlink() || !file_type.is_dir() {
-            continue;
-        }
-        let Some(path_id) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<canonical::ItemId>().ok())
-        else {
-            continue;
-        };
-        let expected_path = root.join(".manyhands/worktrees").join(path_id.to_string());
-        let Ok(expected_path) = expected_path.canonicalize() else {
-            problems.push(context_problem(
-                path,
-                "the deterministic worktree path cannot be canonicalized",
-            ));
-            continue;
-        };
-        let Ok(registered_worktree) = root_repository.find_worktree(&path_id.to_string()) else {
-            problems.push(context_problem(
-                path,
-                "the worktree is not registered by the repository root",
-            ));
-            continue;
-        };
-        let Ok(registered_path) = registered_worktree.path().canonicalize() else {
-            problems.push(context_problem(
-                path,
-                "the registered worktree path cannot be canonicalized",
-            ));
-            continue;
-        };
-        if registered_path != expected_path {
-            problems.push(context_problem(
-                path,
-                "the registered worktree path does not match the deterministic path",
-            ));
-            continue;
-        }
-        let Ok(repository) = Repository::open(&registered_path) else {
-            problems.push(context_problem(
-                path,
-                "the registered worktree repository cannot be opened",
-            ));
-            continue;
-        };
-        if repository
-            .workdir()
-            .and_then(|workdir| workdir.canonicalize().ok())
-            .as_deref()
-            != Some(expected_path.as_path())
-        {
-            problems.push(context_problem(
-                path,
-                "the registered worktree has an unexpected canonical workdir",
-            ));
-            continue;
-        }
-        let mut context_problems = Vec::new();
-        let head = observe_head(&repository, &mut context_problems);
-        let Some((kind, branch_id)) = head.branch.as_deref().and_then(parse_authoring_branch)
-        else {
-            problems.push(context_problem(
-                path,
-                "the worktree does not have a conforming authoring branch",
-            ));
-            continue;
-        };
-        if branch_id != path_id {
-            problems.push(context_problem(
-                path,
-                "the worktree path does not match its checked-out authoring branch",
-            ));
-            continue;
-        }
-        let mut sources = Vec::new();
-        collect_authoring_item_sources(
-            &expected_path,
-            kind,
-            &path_id,
-            &mut sources,
-            &mut context_problems,
+    for listed in list_item_contexts(root, problems) {
+        let observation = observe_context(
+            root_repository,
+            root,
+            &listed,
+            &mut PrimaryActivityMap::default(),
         );
-        let validation = canonical::validate_context(sources.clone());
-        if !validation
-            .items
-            .iter()
-            .any(|item| authoring_item_matches(item, kind, &path_id))
-        {
-            problems.push(context_problem(
-                path,
-                "the authoring branch's identified item is missing or invalid",
-            ));
+        if !observation.valid {
+            problems.extend(observation.problems);
             continue;
         }
-        let items = observe_items(
-            &repository,
-            &expected_path,
-            ActivityHistory::Item(head.oid),
-            &sources,
-            &validation,
-        );
         contexts.push(ActiveContextObservation {
-            context: RootContextObservation {
-                kind: DiscoveryContextKind::Active,
-                branch: head.branch.clone(),
-                worktree: expected_path,
-                item_id: Some(path_id),
-            },
-            head,
-            sources,
-            validation,
-            items,
-            problems: context_problems,
+            context: observation.context,
+            head: observation.head,
+            sources: observation.sources,
+            validation: observation.validation,
+            items: observation.items,
+            problems: observation.problems,
         });
     }
     contexts.sort_by(|left, right| left.context.branch.cmp(&right.context.branch));
@@ -583,7 +951,7 @@ fn observe_active_contexts(
 fn observe_items(
     repository: &Repository,
     root: &Path,
-    history: ActivityHistory,
+    history: ActivityHistory<'_>,
     sources: &[(PathBuf, String)],
     validation: &canonical::ValidatedContext,
 ) -> Vec<ObservedItem> {
@@ -715,9 +1083,14 @@ fn collect_comment_paths(comments: &[ObservedCommentThread], paths: &mut Vec<Pat
 
 /// Where an observation reads the commit part of an item's activity from.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum ActivityHistory {
-    /// The first-parent history of the checkout's HEAD, one diff per commit.
+pub(super) enum ActivityHistory<'map> {
+    /// The first-parent history of the checkout's HEAD, one diff per commit,
+    /// as the primary read it before it kept a map: the oracle the activity
+    /// tests compare with.
+    #[cfg(test)]
     Checkout,
+    /// The primary, through its map brought to its head.
+    Primary(&'map PrimaryActivityMap),
     /// An item context at this head: a first-parent walk restricted to the
     /// item's own paths.
     Item(Option<git2::Oid>),
@@ -726,11 +1099,13 @@ pub(super) enum ActivityHistory {
 pub(super) fn observe_activity(
     repository: &Repository,
     root: &Path,
-    history: ActivityHistory,
+    history: ActivityHistory<'_>,
     paths: &[PathBuf],
 ) -> Option<(OffsetDateTime, super::DiscoveryActivitySource)> {
     let commit = match history {
+        #[cfg(test)]
         ActivityHistory::Checkout => latest_commit_touching(repository, paths),
+        ActivityHistory::Primary(map) => map.newest_over(paths).map(|found| found.at),
         ActivityHistory::Item(head) => head
             .and_then(|head| item_commit_activity(repository, head, paths).ok()?.found)
             .map(|found| found.at),
@@ -769,6 +1144,7 @@ pub(super) fn activity_with_uncommitted(
     }
 }
 
+#[cfg(test)]
 pub(super) fn latest_commit_touching(
     repository: &Repository,
     paths: &[PathBuf],
@@ -779,6 +1155,7 @@ pub(super) fn latest_commit_touching(
         .and_then(|commit| OffsetDateTime::from_unix_timestamp(commit.time().seconds()).ok())
 }
 
+#[cfg(test)]
 pub(super) fn first_parent_commits<'repository>(
     repository: &'repository Repository,
     maximum: usize,
@@ -798,6 +1175,7 @@ pub(super) fn first_parent_commits<'repository>(
     commits
 }
 
+#[cfg(test)]
 pub(super) fn commit_touches_paths(
     repository: &Repository,
     commit: &git2::Commit<'_>,
@@ -903,10 +1281,11 @@ pub(crate) fn authoring_item_matches(
 fn observe_configuration(
     root: &Path,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) -> RootConfiguration {
     let path = root.join(canonical::CONFIG_PATH);
     let parent = root.join(".manyhands");
-    match fs::symlink_metadata(&parent) {
+    match recording.stat(&parent) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
         Ok(_) => return invalid_configuration(problems, "the configuration directory is unsafe"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -919,7 +1298,7 @@ fn observe_configuration(
             );
         }
     }
-    match fs::symlink_metadata(&path) {
+    match recording.stat(&path) {
         Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {}
         Ok(_) => return invalid_configuration(problems, "the configuration file is unsafe"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -932,7 +1311,11 @@ fn observe_configuration(
             );
         }
     }
-    match fs::read_to_string(&path) {
+    // A walk that reads nothing has no configuration to tell.
+    let Some(read) = recording.read_to_string(&path) else {
+        return RootConfiguration::Missing;
+    };
+    match read {
         Ok(source) => match canonical::parse_repository_config(&source) {
             Ok(configuration) => RootConfiguration::Valid(configuration),
             Err(problem) => invalid_configuration_problem(problems, problem),
@@ -1017,14 +1400,21 @@ fn collect_authoring_item_sources(
     item_id: &canonical::ItemId,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
     match kind {
         crate::repository::AuthoringKind::Ticket => {
             let directory = root.join(item_ticket_directory(item_id));
-            if directory_exists(&root.join(".manyhands/tickets"), problems)
-                && directory_exists(&directory, problems)
+            if directory_exists(&root.join(".manyhands/tickets"), problems, recording)
+                && directory_exists(&directory, problems, recording)
             {
-                collect_source(root, &directory.join("ticket.md"), sources, problems);
+                collect_source(
+                    root,
+                    &directory.join("ticket.md"),
+                    sources,
+                    problems,
+                    recording,
+                );
             }
         }
         crate::repository::AuthoringKind::Document => {
@@ -1037,7 +1427,13 @@ fn collect_authoring_item_sources(
             // bounded by the whole-tree limits: a document beyond them is not
             // found, and the context is rejected as missing its item.
             let mut documents = Vec::new();
-            collect_documents(root, &mut documents, &mut Vec::new(), &mut Vec::new());
+            collect_documents(
+                root,
+                &mut documents,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                recording,
+            );
             documents.retain(|(path, source)| {
                 canonical::parse_item(path, source)
                     .is_ok_and(|item| canonical_item_id(&item) == item_id)
@@ -1046,25 +1442,43 @@ fn collect_authoring_item_sources(
         }
     }
     let directory = root.join(item_comment_directory(item_id));
-    if directory_exists(&root.join(".manyhands/comments"), problems)
-        && directory_exists(&directory, problems)
+    if directory_exists(&root.join(".manyhands/comments"), problems, recording)
+        && directory_exists(&directory, problems, recording)
     {
         let mut entries = 0;
-        collect_comment_directory(root, &directory, &mut entries, sources, problems);
+        collect_comment_directory(root, &directory, &mut entries, sources, problems, recording);
     }
     sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
+/// `collect_recorded_root_sources`, with what it reads recorded nowhere.
+#[cfg(test)]
 fn collect_root_sources(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
-    collect_documents(root, sources, folders, problems);
-    collect_tickets(root, sources, problems);
-    collect_comments(root, sources, problems);
-    collect_managed_out_of_path_sources(root, sources, problems);
+    collect_recorded_root_sources(
+        root,
+        sources,
+        folders,
+        problems,
+        &mut Recording::reading(root),
+    );
+}
+
+fn collect_recorded_root_sources(
+    root: &Path,
+    sources: &mut Vec<(PathBuf, String)>,
+    folders: &mut Vec<ObservedFolder>,
+    problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
+) {
+    collect_documents(root, sources, folders, problems, recording);
+    collect_tickets(root, sources, problems, recording);
+    collect_comments(root, sources, problems, recording);
+    collect_managed_out_of_path_sources(root, sources, problems, recording);
     sources.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
@@ -1072,6 +1486,7 @@ fn collect_managed_out_of_path_sources(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
     let mut directories = vec![(root.to_owned(), 0)];
     let mut entries = 0;
@@ -1080,7 +1495,7 @@ fn collect_managed_out_of_path_sources(
             entries: directory_entries,
             overflowed,
             empty: _,
-        } = read_marker_directory(&directory, &mut entries, problems);
+        } = read_marker_directory(&directory, &mut entries, problems, recording);
         for entry in directory_entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
@@ -1107,9 +1522,9 @@ fn collect_managed_out_of_path_sources(
                 }
             } else if file_type.is_file()
                 && path.extension() == Some(OsStr::new("md"))
-                && file_declares_managed_marker(&path)
+                && file_declares_managed_marker(&path, recording)
             {
-                collect_source(root, &path, sources, problems);
+                collect_source(root, &path, sources, problems, recording);
             }
         }
         if overflowed {
@@ -1125,8 +1540,8 @@ fn is_canonical_source_directory(root: &Path, path: &Path) -> bool {
         || path == root.join(".manyhands/worktrees")
 }
 
-fn file_declares_managed_marker(path: &Path) -> bool {
-    let Ok(source) = fs::read_to_string(path) else {
+fn file_declares_managed_marker(path: &Path, recording: &mut Recording) -> bool {
+    let Some(Ok(source)) = recording.read_to_string(path) else {
         return false;
     };
     let content_start = if source.starts_with("---\n") {
@@ -1177,9 +1592,10 @@ fn collect_documents(
     sources: &mut Vec<(PathBuf, String)>,
     folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
     let docs = root.join("docs");
-    if !directory_exists(&docs, problems) {
+    if !directory_exists(&docs, problems, recording) {
         return;
     }
     let mut directories = vec![(docs.clone(), 0)];
@@ -1189,7 +1605,7 @@ fn collect_documents(
             entries: directory_entries,
             overflowed,
             empty,
-        } = read_document_directory(&directory, &mut entries, problems);
+        } = read_document_directory(&directory, &mut entries, problems, recording);
         // `docs` itself is no folder under `docs/`.
         if depth > 0 {
             match folder_path(root, &directory) {
@@ -1245,7 +1661,7 @@ fn collect_documents(
                     directories.push((path, depth + 1));
                 }
             } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
-                collect_source(root, &path, sources, problems);
+                collect_source(root, &path, sources, problems, recording);
             }
         }
         if overflowed {
@@ -1267,13 +1683,15 @@ fn collect_documents(
 pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
     let docs = root.join("docs");
     let mut problems = Vec::new();
-    if !directory_exists(&docs, &mut problems) {
+    // Counting is no observation: what it stats is not kept.
+    let recording = &mut Recording::stat_only(root);
+    if !directory_exists(&docs, &mut problems, recording) {
         return Some(0);
     }
     let mut directories = vec![(docs, 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
-        let listing = read_document_directory(&directory, &mut entries, &mut problems);
+        let listing = read_document_directory(&directory, &mut entries, &mut problems, recording);
         if listing.overflowed {
             return None;
         }
@@ -1310,13 +1728,14 @@ fn collect_tickets(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
     let directory = root.join(".manyhands/tickets");
-    if !directory_exists(&directory, problems) {
+    if !directory_exists(&directory, problems, recording) {
         return;
     }
     let mut entries = 0;
-    for entry in read_managed_directory(&directory, &mut entries, problems) {
+    for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             problems.push(source_problem(
@@ -1331,7 +1750,7 @@ fn collect_tickets(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
-            collect_source(root, &path.join("ticket.md"), sources, problems);
+            collect_source(root, &path.join("ticket.md"), sources, problems, recording);
         }
     }
 }
@@ -1340,13 +1759,14 @@ fn collect_comments(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
     let directory = root.join(".manyhands/comments");
-    if !directory_exists(&directory, problems) {
+    if !directory_exists(&directory, problems, recording) {
         return;
     }
     let mut entries = 0;
-    for entry in read_managed_directory(&directory, &mut entries, problems) {
+    for entry in read_managed_directory(&directory, &mut entries, problems, recording) {
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             problems.push(source_problem(
@@ -1361,7 +1781,7 @@ fn collect_comments(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
-            collect_comment_directory(root, &path, &mut entries, sources, problems);
+            collect_comment_directory(root, &path, &mut entries, sources, problems, recording);
         }
     }
 }
@@ -1372,8 +1792,9 @@ fn collect_comment_directory(
     entries: &mut usize,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
-    for entry in read_managed_directory(directory, entries, problems) {
+    for entry in read_managed_directory(directory, entries, problems, recording) {
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             problems.push(source_problem(
@@ -1388,7 +1809,7 @@ fn collect_comment_directory(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
-            collect_source(root, &path, sources, problems);
+            collect_source(root, &path, sources, problems, recording);
         }
     }
 }
@@ -1401,8 +1822,9 @@ fn read_managed_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) -> Vec<fs::DirEntry> {
-    let mut directory = match fs::read_dir(path) {
+    let mut directory = match recording.list(path) {
         Ok(directory) => directory,
         Err(error) => {
             problems.push(source_problem(
@@ -1439,8 +1861,12 @@ fn read_managed_directory(
     collected
 }
 
-fn directory_exists(path: &Path, problems: &mut Vec<RootObservationProblem>) -> bool {
-    match fs::symlink_metadata(path) {
+fn directory_exists(
+    path: &Path,
+    problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
+) -> bool {
+    match recording.stat(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             problems.push(source_problem(
                 path,
@@ -1483,8 +1909,9 @@ fn read_document_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) -> DirectoryListing {
-    let mut directory = match fs::read_dir(path) {
+    let mut directory = match recording.list(path) {
         Ok(directory) => directory,
         Err(error) => {
             problems.push(source_problem(
@@ -1537,8 +1964,9 @@ fn read_marker_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) -> DirectoryListing {
-    read_document_directory(path, entries, problems)
+    read_document_directory(path, entries, problems, recording)
 }
 
 fn collect_source(
@@ -1546,8 +1974,9 @@ fn collect_source(
     path: &Path,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
+    recording: &mut Recording,
 ) {
-    match fs::symlink_metadata(path) {
+    match recording.stat(path) {
         Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {}
         Ok(_) => {
             problems.push(source_problem(
@@ -1578,12 +2007,14 @@ fn collect_source(
             return;
         }
     };
-    match fs::read_to_string(path) {
-        Ok(source) => sources.push((relative, source)),
-        Err(error) => problems.push(source_problem(
+    // A walk that reads nothing has stat'ed the source, which is all it is for.
+    match recording.read_to_string(path) {
+        Some(Ok(source)) => sources.push((relative, source)),
+        Some(Err(error)) => problems.push(source_problem(
             path,
             format!("the canonical source cannot be read as UTF-8: {error}"),
         )),
+        None => {}
     }
 }
 
@@ -2927,6 +3358,51 @@ mod tests {
     }
 
     #[test]
+    fn a_primary_whose_map_cannot_advance_takes_each_items_commit_from_its_walk() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let document = directory.path().join("docs/document.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, document_source()).unwrap();
+        let parent = checkpoint(&repository, Path::new("docs/document.md"), 10);
+        // A commit time no date can hold, written as another tool could write
+        // it: Git's own interface keeps only 32 bits of a time it is given.
+        let tree = repository.find_commit(parent).unwrap().tree_id();
+        let signature = "Test <test@example.invalid> 99999999999999 +0000";
+        let head = repository
+            .odb()
+            .unwrap()
+            .write(
+                git2::ObjectType::Commit,
+                format!(
+                    "tree {tree}\nparent {parent}\nauthor {signature}\ncommitter {signature}\n\nFar future\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        repository
+            .reference("refs/heads/main", head, true, "far future")
+            .unwrap();
+        assert!(
+            PrimaryActivityMap::default()
+                .advance(&repository, head)
+                .is_err()
+        );
+
+        let observation = observe_root(&repository, directory.path());
+        let item = observed_document(&observation);
+
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(10).unwrap()
+        );
+        assert_eq!(item.activity_source, DiscoveryActivitySource::GitCommit);
+    }
+
+    #[test]
     fn first_parent_history_respects_the_requested_inspection_bound() {
         let (_directory, repository) = repository_on_main();
         checkpoint(&repository, Path::new("fixture.txt"), 1);
@@ -3609,6 +4085,192 @@ mod tests {
             problem,
             RootObservationProblem::Context { path, .. } if path == &path_mismatch
         )));
+    }
+
+    #[test]
+    fn an_invalid_worktree_is_observed_as_its_own_invalid_context() {
+        const DOCUMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        /// A row's name, how it makes the worktree invalid, and the problem.
+        type Row = (&'static str, fn(&Repository, &Path), &'static str);
+        let rows: [Row; 4] = [
+            (
+                "a nonconforming branch",
+                |repository, root| {
+                    let worktree = active_worktree(repository, root, "document", DOCUMENT_ID);
+                    fs::create_dir_all(worktree.join("docs")).unwrap();
+                    fs::write(worktree.join("docs/document.md"), document_source()).unwrap();
+                    let linked = Repository::open(&worktree).unwrap();
+                    let head = linked.head().unwrap().peel_to_commit().unwrap();
+                    linked.branch("other", &head, false).unwrap();
+                    linked.set_head("refs/heads/other").unwrap();
+                },
+                "the worktree does not have a conforming authoring branch",
+            ),
+            (
+                "a branch naming another item",
+                |repository, root| {
+                    active_worktree_at(
+                        repository,
+                        root,
+                        "ticket",
+                        "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+                        DOCUMENT_ID,
+                    );
+                },
+                "the worktree path does not match its checked-out authoring branch",
+            ),
+            (
+                "a directory the repository does not register",
+                |_, root| {
+                    fs::create_dir_all(root.join(".manyhands/worktrees").join(DOCUMENT_ID))
+                        .unwrap();
+                },
+                "the worktree is not registered by the repository root",
+            ),
+            (
+                "an authoring branch without its item",
+                |repository, root| {
+                    active_worktree(repository, root, "document", DOCUMENT_ID);
+                },
+                "the authoring branch's identified item is missing or invalid",
+            ),
+        ];
+
+        for (row, invalidate, message) in rows {
+            let (directory, repository) = repository_on_main();
+            let root = directory.path();
+            write_config(root, "format_version = 1\nprimary_branch = \"main\"\n");
+            fs::create_dir_all(root.join(".manyhands/worktrees/not-a-ulid")).unwrap();
+            invalidate(&repository, root);
+            let worktree = root.join(".manyhands/worktrees").join(DOCUMENT_ID);
+            let is_its_problem = |problem: &RootObservationProblem| {
+                matches!(
+                    problem,
+                    RootObservationProblem::Context { path, message: found }
+                        if path == &worktree && found == message
+                )
+            };
+
+            let listed = list_contexts(&repository, root).unwrap();
+            assert_eq!(
+                listed,
+                [
+                    ListedContext::primary(root),
+                    ListedContext {
+                        key: ContextKey::Item(DOCUMENT_ID.parse().unwrap()),
+                        worktree: worktree.clone(),
+                    },
+                ],
+                "{row}"
+            );
+            let observation = observe_context(
+                &repository,
+                root,
+                &listed[1],
+                &mut PrimaryActivityMap::default(),
+            );
+
+            assert!(!observation.valid, "{row}");
+            assert!(!observation.left_dirty, "{row}");
+            assert_eq!(
+                observation.context.kind,
+                DiscoveryContextKind::Invalid,
+                "{row}"
+            );
+            assert_eq!(
+                observation.context.item_id,
+                Some(DOCUMENT_ID.parse().unwrap()),
+                "{row}"
+            );
+            assert_eq!(observation.context.worktree, worktree, "{row}");
+            assert!(observation.sources.is_empty(), "{row}");
+            assert!(observation.validation.items.is_empty(), "{row}");
+            assert!(observation.items.is_empty(), "{row}");
+            assert!(
+                matches!(observation.problems.as_slice(), [problem] if is_its_problem(problem)),
+                "{row}: {:?}",
+                observation.problems
+            );
+            // The root's observation keeps it where it has always been: a
+            // problem of the primary's.
+            let root_observation = observe_root(&repository, root);
+            assert!(root_observation.active_contexts.is_empty(), "{row}");
+            assert!(
+                root_observation.problems.iter().any(is_its_problem),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_primary_observation_does_not_depend_on_active_contexts() {
+        let (directory, repository) = repository_on_main();
+        let root = directory.path();
+        write_config(root, "format_version = 1\nprimary_branch = \"main\"\n");
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/document.md"), document_source()).unwrap();
+        checkpoint(&repository, Path::new("docs/document.md"), 10);
+        let comment = root
+            .join(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01ARZ3NDEKTSV4RRFFQ69G5FAX.md");
+        fs::create_dir_all(comment.parent().unwrap()).unwrap();
+        fs::write(&comment, comment_source()).unwrap();
+        // Made once, with the first item context: making it changes
+        // `.manyhands/`, which the primary lists for managed files.
+        fs::create_dir_all(root.join(".manyhands/worktrees")).unwrap();
+        let primary = ListedContext::primary(root);
+        let observe = || {
+            let mut observation = observe_context(
+                &repository,
+                root,
+                &primary,
+                &mut PrimaryActivityMap::default(),
+            );
+            assert!(!observation.left_dirty);
+            observation.started_at_ns = 0;
+            observation
+        };
+        let alone = observe();
+        assert!(
+            alone
+                .items
+                .iter()
+                .any(|item| item.id.to_string() == "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        );
+        let alone = format!("{alone:?}");
+
+        let worktree = active_worktree(&repository, root, "document", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        fs::create_dir_all(worktree.join("docs")).unwrap();
+        fs::write(
+            worktree.join("docs/document.md"),
+            format!("{}edited in its own context\n", document_source()),
+        )
+        .unwrap();
+        assert_eq!(observe_root(&repository, root).active_contexts.len(), 1);
+        assert_eq!(
+            format!("{:?}", observe()),
+            alone,
+            "with an active context for its document"
+        );
+
+        {
+            let linked = Repository::open(&worktree).unwrap();
+            let head = linked.head().unwrap().peel_to_commit().unwrap();
+            linked.branch("other", &head, false).unwrap();
+            linked.set_head("refs/heads/other").unwrap();
+        }
+        assert!(observe_root(&repository, root).active_contexts.is_empty());
+        assert_eq!(
+            format!("{:?}", observe()),
+            alone,
+            "with that context invalid"
+        );
+
+        fs::remove_dir_all(&worktree).unwrap();
+        assert_eq!(
+            format!("{:?}", observe()),
+            alone,
+            "with that context removed"
+        );
     }
 
     #[test]
