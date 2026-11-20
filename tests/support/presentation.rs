@@ -470,6 +470,10 @@ fn edited_ticket() -> (TestRepository, EnabledRepository) {
             &comment_path(EDITED, COMMITTED_COMMENT),
         ],
     );
+    // The primary's commit is made outside Manyhands: a refresh indexes it,
+    // so the world does not rest on `context prepare` refreshing the whole
+    // repository (after Task 10 it indexes only the context it makes).
+    refresh_completely(&enabled.service, &root);
     prepare_edit(&enabled.service, &root, AuthoringKind::Ticket, EDITED);
     (fixture, enabled)
 }

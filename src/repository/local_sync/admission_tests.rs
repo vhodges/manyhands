@@ -445,6 +445,14 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
     for (row, own) in [
         ("R1/R2 mid-write", true),
         ("R1/R2 mid-write", false),
+        (
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
+            true,
+        ),
+        (
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
+            false,
+        ),
         ("R3 owes only its hand-off (authoritative_observed)", true),
         ("R3 owes only its hand-off (authoritative_observed)", false),
         ("R3 owes only its hand-off (indexing)", true),
@@ -491,6 +499,11 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
                 "authoring_destination_observed",
                 Some("authoring_destination_observed"),
             ),
+            // Its state not yet advanced: owing by the design's definition,
+            // mid-write by today's `owes_only_its_hand_off`.
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)" => {
+                owing("authoring_checkpoint_observed")
+            }
             "R3 owes only its hand-off (authoritative_observed)" => owing("authoritative_observed"),
             "R3 owes only its hand-off (indexing)" => owing("indexing"),
             "R3 owes only its hand-off (index_invalidated)" => owing("index_invalidated"),

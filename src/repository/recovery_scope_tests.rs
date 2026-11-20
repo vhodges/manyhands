@@ -810,10 +810,16 @@ fn owing(item: &'static str, state: &'static str) -> Seed {
     }
 }
 
-/// The states of a row that owes only its hand-off: a committed write
-/// before indexing, a claim by an index owner (live or crashed), a fence,
-/// and what a hand-off that did not bring the index up to date leaves.
-const OWING_STATES: [&str; 4] = [
+/// The states of a row that owes only its hand-off, its commit observed:
+/// a committed write whose state has not advanced yet (state and step
+/// `authoring_checkpoint_observed`, which a crash between the checkpoint and
+/// the hand-off leaves; today's `owes_only_its_hand_off` calls it mid-write,
+/// the design's definition makes it owing, to be confirmed at the
+/// checkpoint), the hand-off begun before indexing, a claim by an index
+/// owner (live or crashed), a fence, and what a hand-off that did not bring
+/// the index up to date leaves.
+const OWING_STATES: [&str; 5] = [
+    "authoring_checkpoint_observed",
     "authoritative_observed",
     "indexing",
     "index_invalidated",

@@ -5847,6 +5847,17 @@ fn table_b_a_poll_s_guard_behind_each_pending_row() {
             true,
         ),
         (
+            // Its state not yet advanced: owing by the design's definition,
+            // mid-write by today's `owes_only_its_hand_off`.
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
+            "save_ticket",
+            ticket.clone(),
+            Some(X),
+            "authoring_checkpoint_observed",
+            Some("authoring_checkpoint_observed"),
+            false,
+        ),
+        (
             "R3 owes only its hand-off (authoritative_observed)",
             "save_ticket",
             ticket.clone(),

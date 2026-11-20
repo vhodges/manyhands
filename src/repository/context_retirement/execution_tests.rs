@@ -1743,6 +1743,10 @@ impl TableBRow {
         vec![
             Self::Nothing,
             Self::MidWrite,
+            // A committed write whose state has not advanced yet: owing by
+            // the design's definition (today's `owes_only_its_hand_off`
+            // calls it mid-write).
+            Self::Owing("authoring_checkpoint_observed"),
             Self::Owing("authoritative_observed"),
             Self::Owing("indexing"),
             Self::Owing("index_invalidated"),

@@ -4868,7 +4868,9 @@ enum TableBRow {
     /// R1/R2: a save of X stopped before its commit was observed.
     MidWrite,
     /// R3: a save of X whose commit is observed, owing only its hand-off in
-    /// the state.
+    /// the state: `authoring_checkpoint_observed` (its state not yet advanced,
+    /// which today's `owes_only_its_hand_off` calls mid-write; the design's
+    /// definition makes it owing), or a hand-off state.
     Owing(&'static str),
     /// R4: a synchronization of X whose push landed and was classified (its
     /// remote row completed with `index_pending`), and its index hand-off
@@ -4894,6 +4896,7 @@ fn table_b_rows() -> Vec<TableBRow> {
     use TableBRow::*;
     vec![
         MidWrite,
+        Owing("authoring_checkpoint_observed"),
         Owing("authoritative_observed"),
         Owing("indexing"),
         Owing("index_invalidated"),
