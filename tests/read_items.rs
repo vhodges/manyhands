@@ -1459,10 +1459,7 @@ fn only_a_conformity_problem_at_an_item_path_with_no_item_makes_an_entry() {
         stored,
         [
             (None, "branch".to_owned()),
-            (
-                Some(format!(".manyhands/worktrees/{DOCUMENT_B}")),
-                "context".to_owned()
-            ),
+            (Some(String::new()), "context".to_owned()),
             (Some("notes/stray.md".to_owned()), "invalid-path".to_owned()),
             (
                 Some(format!(".manyhands/comments/{DOCUMENT_A}/{TICKET_D}.md")),

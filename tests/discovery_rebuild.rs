@@ -3987,7 +3987,7 @@ fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
                 && problem.context.as_deref() == Some(root.as_path())
                 && problem.path.as_deref() == Some(Path::new(&path)))
     );
-    assert_stored_diagnostic(&shared.enabled.service, &root, "context", &path);
+    assert_stored_diagnostic(&shared.enabled.service, &own, "context", "");
     let rows_before = stored_diagnostics(&shared.enabled.service);
     assert_eq!(
         shared
