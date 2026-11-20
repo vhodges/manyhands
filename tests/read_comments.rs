@@ -1440,3 +1440,198 @@ fn a_comment_without_created_by_has_no_author_and_a_list_there_is_an_invalid_fie
     let serialized = serde_json::to_string(&list).unwrap();
     assert!(!serialized.contains("created_by"), "{serialized}");
 }
+
+// ---------------------------------------------------------------------
+// Table A of the fast-writes design: which copy of an item the comment
+// reads present once each context's rows come only from that context.
+// The worlds are in `support::presentation`. Table A's row on
+// relationships and short codes has no row here: no comment read resolves
+// a dependency, a parent or a short code.
+// ---------------------------------------------------------------------
+
+use std::path::PathBuf;
+
+use support::presentation::{
+    self, COMMITTED_COMMENT, EDITED, EDITED_DOCUMENT, NEW_COMMENT, NEW_TICKET, Needs, PRIMARY_ONLY,
+    Row, WORKTREE_COMMENT, World,
+};
+
+/// The context a comment list was read from: its kind and worktree.
+fn read_from(list: &CommentListDto) -> (ItemContextKind, PathBuf) {
+    (list.context.kind, PathBuf::from(&list.context.worktree))
+}
+
+/// The comments of the ticket only the primary holds, beside items held in
+/// two contexts.
+fn an_item_only_on_the_primary_is_presented_from_it() {
+    let world = presentation::first_edits();
+    let list = comments(world.service(), &world.repo, PRIMARY_ONLY);
+    assert_eq!(
+        read_from(&list),
+        (ItemContextKind::Primary, world.root.clone())
+    );
+    assert_eq!(ids(&list.items), [Some(COMMITTED_COMMENT)]);
+    assert_eq!(list.index.state, IndexState::Current);
+    assert!(list.complete);
+}
+
+/// The comments of a ticket and of a document whose primary copy and
+/// worktree copy the index both holds: the worktree's only, without the
+/// comment and the file that is not a comment that only the primary has.
+fn a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale() {
+    let world = presentation::first_edits();
+    for (id, expected) in [
+        (EDITED, vec![Some(WORKTREE_COMMENT)]),
+        (EDITED_DOCUMENT, Vec::new()),
+    ] {
+        let list = comments(world.service(), &world.repo, id);
+        assert_eq!(
+            read_from(&list),
+            (ItemContextKind::Active, world.worktree(id)),
+            "{id}"
+        );
+        assert_eq!(ids(&list.items), expected, "{id}");
+        assert_eq!(list.index.state, IndexState::Current, "{id}");
+        assert!(list.complete, "{id}");
+    }
+}
+
+/// The edited ticket's comments, from its primary copy.
+fn assert_read_from_the_primary(world: &World) {
+    let list = comments(world.service(), &world.repo, EDITED);
+    assert_eq!(
+        read_from(&list),
+        (ItemContextKind::Primary, world.root.clone())
+    );
+    assert_eq!(ids(&list.items), [Some(COMMITTED_COMMENT)]);
+    assert_eq!(list.index.state, IndexState::Current);
+    assert!(list.complete);
+}
+
+fn a_released_worktree_presents_the_primary_copy_again() {
+    assert_read_from_the_primary(&presentation::released());
+}
+
+fn a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again() {
+    assert_read_from_the_primary(&presentation::rows_deleted());
+}
+
+fn a_worktree_removed_outside_presents_the_primary_copy_again() {
+    assert_read_from_the_primary(&presentation::removed_outside());
+}
+
+fn an_invalid_worktree_stored_as_its_own_context_presents_the_primary_copy() {
+    assert_read_from_the_primary(&presentation::invalid_worktree(true));
+}
+
+fn an_invalid_worktree_as_the_refresh_stores_it_presents_the_primary_copy() {
+    assert_read_from_the_primary(&presentation::invalid_worktree(false));
+}
+
+/// The comments of a ticket only its worktree holds.
+fn an_item_only_in_a_worktree_is_presented_from_it() {
+    let world = presentation::new_items_in_worktrees();
+    let list = comments(world.service(), &world.repo, NEW_TICKET);
+    assert_eq!(
+        read_from(&list),
+        (ItemContextKind::Active, world.worktree(NEW_TICKET))
+    );
+    assert_eq!(ids(&list.items), [Some(NEW_COMMENT)]);
+    assert_eq!(list.index.state, IndexState::Current);
+}
+
+/// No item worktree is a context comments are read from: the edited
+/// ticket's are its primary copy's, and the new ticket is not found.
+fn assert_no_item_context_is_presented(world: &World) {
+    let list = comments(world.service(), &world.repo, EDITED);
+    assert_eq!(
+        read_from(&list),
+        (ItemContextKind::Unverified, world.root.clone())
+    );
+    assert_eq!(ids(&list.items), [Some(COMMITTED_COMMENT)]);
+    assert_eq!(
+        world
+            .service()
+            .list_comments(&world.repo, &item_id(NEW_TICKET))
+            .unwrap_err()
+            .code(),
+        ResultCode::ItemNotFound
+    );
+}
+
+fn an_invalid_configuration_with_stored_item_contexts_presents_none() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(true));
+}
+
+fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(false));
+}
+
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn presentation_across_contexts() {
+    presentation::run(&[
+        Row {
+            table_a: "an_item_only_on_the_primary_is_presented_from_it",
+            case: "beside first edits of other items",
+            needs: Needs::Readers,
+            check: an_item_only_on_the_primary_is_presented_from_it,
+        },
+        Row {
+            table_a: "a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale",
+            case: "a ticket and a document edited in their worktrees",
+            needs: Needs::Readers,
+            check: a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "released by context release",
+            needs: Needs::Readers,
+            check: a_released_worktree_presents_the_primary_copy_again,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "removed, and its rows deleted without indexing the primary again",
+            needs: Needs::Task7Storage,
+            check: a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "deleted outside Manyhands, then refreshed",
+            needs: Needs::Readers,
+            check: a_worktree_removed_outside_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "stored as an invalid context",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_stored_as_its_own_context_presents_the_primary_copy,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_as_the_refresh_stores_it_presents_the_primary_copy,
+        },
+        Row {
+            table_a: "an_item_only_in_a_worktree_is_presented_from_it",
+            case: "a ticket created in its worktree, with a comment there",
+            needs: Needs::Readers,
+            check: an_item_only_in_a_worktree_is_presented_from_it,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "each valid worktree stored from its own observation",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_with_stored_item_contexts_presents_none,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts,
+        },
+    ]);
+    assert_git_transport_uninitialized();
+}

@@ -1925,3 +1925,291 @@ fn an_abandoned_refused_parent_lists_no_resume() {
     }
     assert_git_transport_uninitialized();
 }
+
+// ---------------------------------------------------------------------
+// Table A of the fast-writes design: which copy of an item the status
+// reads present once each context's rows come only from that context.
+// The worlds are in `support::presentation`. Table A's row on
+// relationships and short codes has no row here: no status read resolves
+// a dependency, a parent or a short code.
+// ---------------------------------------------------------------------
+
+use manyhands::repository::ConfigurationState;
+use rusqlite::OptionalExtension;
+use support::presentation::{
+    self, BROKEN_ON_PRIMARY, EDITED, EDITED_DOCUMENT, Needs, Row, World, worktree_relative,
+};
+
+/// Each problem `index status` lists, as where it is presented: its code,
+/// its path and its worktree.
+fn listed_problems(
+    status: &manyhands::repository::IndexStatusDto,
+) -> Vec<(ProblemCode, Option<&str>, Option<&str>)> {
+    status
+        .problems
+        .iter()
+        .map(|problem| {
+            (
+                problem.code,
+                problem.path.as_deref(),
+                problem.worktree.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// `index status` of a repository whose items are held in two contexts,
+/// beside one only the primary holds: current, and each item counted once.
+fn an_item_only_on_the_primary_is_presented_from_it() {
+    let world = presentation::first_edits();
+    let status = world.service().index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    // Three items edited in worktrees and the one only on the primary.
+    assert_eq!(status.item_count, Some(4));
+}
+
+/// `index status`, the repository list's problem count and the remote
+/// snapshot: what only the primary has under the edited items' directories
+/// is no problem anyone is shown, and the snapshot holds each item once,
+/// from its worktree.
+fn a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale() {
+    let world = presentation::first_edits();
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(listed_problems(&status), []);
+    assert_eq!(status.problem_count, Some(0));
+    assert_eq!(status.state, IndexStatusState::Current);
+    // The primary and the three worktrees.
+    assert_eq!(status.context_count, Some(4));
+    let listed = service.list_repositories().unwrap();
+    assert_eq!(listed.items[0].problem_count, 0);
+
+    let snapshot = service.repository_snapshot(&world.root).unwrap();
+    for id in [EDITED, BROKEN_ON_PRIMARY, EDITED_DOCUMENT] {
+        let copies: Vec<_> = snapshot
+            .items
+            .iter()
+            .filter(|item| item.id.to_string() == id)
+            .map(|item| item.context.clone())
+            .collect();
+        assert_eq!(copies, [world.worktree(id)], "{id}");
+    }
+    service.remote_snapshot(&world.root).unwrap();
+}
+
+/// `index status` and the repository list once only the primary context
+/// is left: one context, the one item, no problem.
+fn assert_only_the_primary_is_left(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(1));
+    assert_eq!(status.item_count, Some(1));
+    assert_eq!(listed_problems(&status), []);
+    assert_eq!(
+        service.list_repositories().unwrap().items[0].problem_count,
+        0
+    );
+}
+
+fn a_released_worktree_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::released());
+}
+
+fn a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::rows_deleted());
+}
+
+fn a_worktree_removed_outside_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::removed_outside());
+}
+
+/// `index status`, the repository list, `repo inspect` and the remote
+/// snapshot of a repository whose edited ticket's worktree an outside
+/// `git checkout` made invalid. Its problem is presented where it is
+/// today: one problem about the worktree, at its path, in the primary
+/// context. The invalid worktree is counted as no context, as it is today.
+fn assert_the_invalid_worktree_is_presented_as_today(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    let root = world.root_text();
+    let worktree = worktree_relative(EDITED);
+    assert_eq!(
+        listed_problems(&status),
+        [(
+            ProblemCode::ContextProblem,
+            Some(worktree.as_str()),
+            Some(root.as_str())
+        )]
+    );
+    assert_eq!(status.problem_count, Some(1));
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.item_count, Some(1));
+    assert_eq!(status.context_count, Some(1));
+    assert_eq!(
+        service.list_repositories().unwrap().items[0].problem_count,
+        1
+    );
+    let inspected = service.inspect_repository(&world.root).unwrap();
+    assert_eq!(inspected.configuration.state, ConfigurationState::Valid);
+    assert!(
+        inspected.configuration.problems.is_empty(),
+        "{:?}",
+        inspected.configuration.problems
+    );
+    service.remote_snapshot(&world.root).unwrap();
+}
+
+fn an_invalid_worktree_stored_as_its_own_context_presents_its_problems_as_today() {
+    assert_the_invalid_worktree_is_presented_as_today(&presentation::invalid_worktree(true));
+}
+
+/// As above, and the refresh stored the worktree as its own context, kind
+/// `invalid`, with its problem.
+fn an_invalid_worktree_is_stored_as_its_own_context_with_its_problems() {
+    let world = presentation::invalid_worktree(false);
+    assert_the_invalid_worktree_is_presented_as_today(&world);
+    let index = world.index();
+    let stored: Option<(i64, String, Option<String>)> = index
+        .query_row(
+            "SELECT id, kind, item_id FROM contexts WHERE worktree_path = ?1",
+            [world.worktree_text(EDITED)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .unwrap();
+    let Some((context, kind, item)) = stored else {
+        panic!("no context is stored for the invalid worktree");
+    };
+    assert_eq!((kind.as_str(), item.as_deref()), ("invalid", Some(EDITED)));
+    let problems: i64 = index
+        .query_row(
+            "SELECT COUNT(*) FROM problems WHERE context_id = ?1 AND code = 'context'",
+            [context],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        problems, 1,
+        "the worktree's problem is the invalid context's"
+    );
+}
+
+/// `index status` of a ticket and a document only their worktrees hold.
+fn an_item_only_in_a_worktree_is_presented_from_it() {
+    let world = presentation::new_items_in_worktrees();
+    let status = world.service().index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(3));
+    assert_eq!(status.item_count, Some(2));
+    assert_eq!(listed_problems(&status), []);
+}
+
+/// `index status`, the repository list and `repo inspect` of a repository
+/// whose configuration is invalid: no item worktree is counted as a
+/// context or for its item, and the problems are the configuration's.
+fn assert_no_item_context_is_presented(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(status.context_count, Some(1));
+    // The edited ticket's primary copy; the new ticket is not presented.
+    assert_eq!(status.item_count, Some(1));
+    assert!(
+        !status.problems.is_empty()
+            && status
+                .problems
+                .iter()
+                .all(|problem| problem.code == ProblemCode::MalformedConfiguration),
+        "{:?}",
+        status.problems
+    );
+    let listed = &service.list_repositories().unwrap().items[0];
+    assert_eq!(listed.configuration.state, ConfigurationState::Invalid);
+    assert_eq!(Some(listed.problem_count), status.problem_count);
+    assert_eq!(
+        service
+            .inspect_repository(&world.root)
+            .unwrap()
+            .configuration
+            .state,
+        ConfigurationState::Invalid
+    );
+}
+
+fn an_invalid_configuration_with_stored_item_contexts_presents_none() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(true));
+}
+
+fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(false));
+}
+
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn presentation_across_contexts() {
+    presentation::run(&[
+        Row {
+            table_a: "an_item_only_on_the_primary_is_presented_from_it",
+            case: "beside first edits of other items",
+            needs: Needs::Readers,
+            check: an_item_only_on_the_primary_is_presented_from_it,
+        },
+        Row {
+            table_a: "a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale",
+            case: "a ticket and a document edited in their worktrees, and a ticket broken on the primary",
+            needs: Needs::Readers,
+            check: a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "released by context release",
+            needs: Needs::Readers,
+            check: a_released_worktree_presents_the_primary_copy_again,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "removed, and its rows deleted without indexing the primary again",
+            needs: Needs::Task7Storage,
+            check: a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "deleted outside Manyhands, then refreshed",
+            needs: Needs::Readers,
+            check: a_worktree_removed_outside_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "stored as an invalid context",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_stored_as_its_own_context_presents_its_problems_as_today,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "as the refresh stores it, which is as an invalid context",
+            needs: Needs::Task7Storage,
+            check: an_invalid_worktree_is_stored_as_its_own_context_with_its_problems,
+        },
+        Row {
+            table_a: "an_item_only_in_a_worktree_is_presented_from_it",
+            case: "a ticket and a document created in their worktrees",
+            needs: Needs::Readers,
+            check: an_item_only_in_a_worktree_is_presented_from_it,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "each valid worktree stored from its own observation",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_with_stored_item_contexts_presents_none,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts,
+        },
+    ]);
+    assert_git_transport_uninitialized();
+}

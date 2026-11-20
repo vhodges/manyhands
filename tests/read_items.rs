@@ -5223,3 +5223,414 @@ fn the_folder_list_of_a_registration_that_is_gone_or_degraded_fails_as_every_lis
     );
     assert_git_transport_uninitialized();
 }
+
+// ---------------------------------------------------------------------
+// Table A of the fast-writes design: which copy of an item the reads
+// present once each context's rows come only from that context. The
+// worlds are in `support::presentation`.
+// ---------------------------------------------------------------------
+
+use manyhands::repository::DependencyDirection;
+use support::items::SHARED_SLUG;
+use support::presentation::{
+    self, BROKEN_ON_PRIMARY, DEPENDENT, EDITED, EDITED_DOCUMENT, NEW_DOCUMENT, NEW_DOCUMENT_PATH,
+    NEW_SLUG, NEW_TICKET, NEW_TICKET_TITLE, Needs, OLD_SLUG, PRIMARY_ONLY, PRIMARY_ONLY_TITLE,
+    PRIMARY_TITLE, RELATIONSHIP_PARENT, Row, SLUG_HOLDER, WORKTREE_DEPENDENCY, WORKTREE_TITLE,
+    World,
+};
+
+/// The copy an entry or a complete read presents: its context's kind and
+/// worktree, and its title.
+fn presented(item: &ItemDto) -> (ItemContextKind, PathBuf, Option<&str>) {
+    (
+        item.context.kind,
+        PathBuf::from(&item.context.worktree),
+        item.title.as_deref(),
+    )
+}
+
+fn line_ids(lines: &[manyhands::repository::DependencyTreeNodeDto]) -> Vec<&str> {
+    lines.iter().map(|line| line.id.as_str()).collect()
+}
+
+/// Lists, `show`, `find` and the dependency and readiness reads, for the
+/// ticket only the primary holds, beside items held in two contexts.
+fn an_item_only_on_the_primary_is_presented_from_it() {
+    let world = presentation::first_edits();
+    let (service, repo) = (world.service(), &world.repo);
+    let primary = (
+        ItemContextKind::Primary,
+        world.root.clone(),
+        Some(PRIMARY_ONLY_TITLE),
+    );
+
+    let tickets = all_tickets(service, repo);
+    let listed = ticket(&tickets, PRIMARY_ONLY);
+    assert_eq!(presented(listed), primary);
+    assert_eq!(tickets.index.state, IndexState::Current, "ticket list");
+    assert_eq!(listed.index.state, IndexState::Current, "list entry");
+    let shown = service.show_item(repo, &item_id(PRIMARY_ONLY)).unwrap();
+    assert_eq!(presented(&shown), primary);
+    assert_eq!(shown.index.state, IndexState::Current, "show");
+    let found = service.find_tickets_by_slug(repo, SHARED_SLUG).unwrap();
+    assert_eq!(ids(&found), [Some(PRIMARY_ONLY)]);
+    assert_eq!(found.index.state, IndexState::Current, "find");
+    let tree = service
+        .ticket_dependencies(
+            repo,
+            &item_id(PRIMARY_ONLY),
+            DependencyDirection::Down,
+            None,
+        )
+        .unwrap();
+    assert_eq!(line_ids(&tree.dependencies), [EDITED]);
+    assert_eq!(tree.index.state, IndexState::Current, "dependencies");
+    let ready = service
+        .ticket_readiness(repo, &TicketFilter::default())
+        .unwrap();
+    assert_eq!(ready.index.state, IndexState::Current, "readiness");
+}
+
+/// Lists, `show` by ID and by path, and the dependency read, for items
+/// whose primary copy and worktree copy the index both holds.
+fn a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale() {
+    let world = presentation::first_edits();
+    let (service, repo) = (world.service(), &world.repo);
+    let from_worktree =
+        |id: &str, title| (ItemContextKind::Active, world.worktree(id), Some(title));
+
+    let tickets = all_tickets(service, repo);
+    // Each ticket once, and no entry for the primary's copy that no longer
+    // parses.
+    let mut listed = ids(&tickets);
+    listed.sort();
+    assert_eq!(
+        listed,
+        [Some(EDITED), Some(PRIMARY_ONLY), Some(BROKEN_ON_PRIMARY)]
+    );
+    assert_eq!(
+        presented(ticket(&tickets, EDITED)),
+        from_worktree(EDITED, WORKTREE_TITLE)
+    );
+    assert_eq!(
+        presented(ticket(&tickets, BROKEN_ON_PRIMARY)).0,
+        ItemContextKind::Active
+    );
+    assert_eq!(tickets.index.state, IndexState::Current, "ticket list");
+    let documents = service.list_documents(repo).unwrap();
+    assert_eq!(ids(&documents), [Some(EDITED_DOCUMENT)]);
+    assert_eq!(
+        presented(&documents.items[0]),
+        from_worktree(EDITED_DOCUMENT, WORKTREE_TITLE)
+    );
+    assert_eq!(documents.index.state, IndexState::Current, "document list");
+
+    for (id, path) in [
+        (EDITED, ticket_path(EDITED)),
+        (
+            EDITED_DOCUMENT,
+            presentation::EDITED_DOCUMENT_PATH.to_owned(),
+        ),
+    ] {
+        let shown = service.show_item(repo, &item_id(id)).unwrap();
+        assert_eq!(presented(&shown), from_worktree(id, WORKTREE_TITLE));
+        assert_eq!(
+            shown.source,
+            Some(fs::read_to_string(world.worktree(id).join(&path)).unwrap())
+        );
+        assert_eq!(shown.index.state, IndexState::Current, "show {id}");
+        // Read by path in its worktree, it is what `show` reads.
+        assert!(
+            service
+                .show_path(repo, Some(&world.worktree(id)), Path::new(&path))
+                .unwrap()
+                == shown,
+            "show by path {id}"
+        );
+    }
+    let broken = service
+        .show_item(repo, &item_id(BROKEN_ON_PRIMARY))
+        .unwrap();
+    assert_eq!(broken.context.kind, ItemContextKind::Active);
+    assert_eq!(broken.index.state, IndexState::Current, "show broken");
+
+    let tree = service
+        .ticket_dependencies(repo, &item_id(EDITED), DependencyDirection::Up, None)
+        .unwrap();
+    assert_eq!(tree.ticket.title.as_deref(), Some(WORKTREE_TITLE));
+    assert_eq!(line_ids(&tree.dependents), [PRIMARY_ONLY]);
+    assert_eq!(tree.index.state, IndexState::Current, "dependencies");
+}
+
+/// Lists, `show` by ID and by path, and the dependency read, for the
+/// edited ticket once only its primary copy is to be presented.
+fn assert_presented_from_the_primary(world: &World) {
+    let (service, repo) = (world.service(), &world.repo);
+    let primary = (
+        ItemContextKind::Primary,
+        world.root.clone(),
+        Some(PRIMARY_TITLE),
+    );
+
+    let tickets = all_tickets(service, repo);
+    assert_eq!(ids(&tickets), [Some(EDITED)]);
+    assert_eq!(presented(&tickets.items[0]), primary);
+    assert_eq!(tickets.index.state, IndexState::Current, "ticket list");
+    assert!(tickets.complete);
+    let shown = service.show_item(repo, &item_id(EDITED)).unwrap();
+    assert_eq!(presented(&shown), primary);
+    assert_eq!(
+        shown.source,
+        Some(fs::read_to_string(world.root.join(ticket_path(EDITED))).unwrap())
+    );
+    assert_eq!(shown.index.state, IndexState::Current, "show");
+    // The worktree is no item context to read in.
+    assert_eq!(
+        service
+            .show_path(
+                repo,
+                Some(&world.worktree(EDITED)),
+                Path::new(&ticket_path(EDITED))
+            )
+            .unwrap_err()
+            .code(),
+        ResultCode::InvalidPath
+    );
+    let tree = service
+        .ticket_dependencies(repo, &item_id(EDITED), DependencyDirection::Both, None)
+        .unwrap();
+    assert_eq!(tree.index.state, IndexState::Current, "dependencies");
+}
+
+fn a_released_worktree_presents_the_primary_copy_again() {
+    assert_presented_from_the_primary(&presentation::released());
+}
+
+fn a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again() {
+    assert_presented_from_the_primary(&presentation::rows_deleted());
+}
+
+fn a_worktree_removed_outside_presents_the_primary_copy_again() {
+    assert_presented_from_the_primary(&presentation::removed_outside());
+}
+
+fn an_invalid_worktree_stored_as_its_own_context_presents_the_primary_copy() {
+    assert_presented_from_the_primary(&presentation::invalid_worktree(true));
+}
+
+fn an_invalid_worktree_as_the_refresh_stores_it_presents_the_primary_copy() {
+    assert_presented_from_the_primary(&presentation::invalid_worktree(false));
+}
+
+/// Lists and `show`, for a ticket and a document only their worktrees
+/// hold.
+fn an_item_only_in_a_worktree_is_presented_from_it() {
+    let world = presentation::new_items_in_worktrees();
+    let (service, repo) = (world.service(), &world.repo);
+    let document_title = format!("Draft of {NEW_DOCUMENT_PATH}");
+
+    let tickets = all_tickets(service, repo);
+    assert_eq!(ids(&tickets), [Some(NEW_TICKET)]);
+    let documents = service.list_documents(repo).unwrap();
+    assert_eq!(ids(&documents), [Some(NEW_DOCUMENT)]);
+    for (id, title, listed) in [
+        (NEW_TICKET, NEW_TICKET_TITLE, &tickets.items[0]),
+        (NEW_DOCUMENT, document_title.as_str(), &documents.items[0]),
+    ] {
+        let expected = (ItemContextKind::Active, world.worktree(id), Some(title));
+        assert_eq!(presented(listed), expected);
+        let shown = service.show_item(repo, &item_id(id)).unwrap();
+        assert_eq!(presented(&shown), expected);
+    }
+}
+
+/// Lists and `show` by ID and by path: no item worktree is a context any
+/// read presents, so the edited ticket is its primary copy and the new
+/// ticket is not found.
+fn assert_no_item_context_is_presented(world: &World) {
+    let (service, repo) = (world.service(), &world.repo);
+    let primary = (
+        ItemContextKind::Unverified,
+        world.root.clone(),
+        Some(PRIMARY_TITLE),
+    );
+
+    let tickets = all_tickets(service, repo);
+    assert_eq!(ids(&tickets), [Some(EDITED)]);
+    assert_eq!(presented(&tickets.items[0]), primary);
+    let shown = service.show_item(repo, &item_id(EDITED)).unwrap();
+    assert_eq!(presented(&shown), primary);
+    assert_eq!(
+        service
+            .show_item(repo, &item_id(NEW_TICKET))
+            .unwrap_err()
+            .code(),
+        ResultCode::ItemNotFound
+    );
+    assert_eq!(
+        service
+            .show_path(
+                repo,
+                Some(&world.worktree(EDITED)),
+                Path::new(&ticket_path(EDITED))
+            )
+            .unwrap_err()
+            .code(),
+        ResultCode::InvalidPath
+    );
+}
+
+fn an_invalid_configuration_with_stored_item_contexts_presents_none() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(true));
+}
+
+fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(false));
+}
+
+/// `find`, the slug filter, children, dependencies both ways, cycles, the
+/// plan, the critical path, the list and `show`: only the edited ticket's
+/// worktree copy relates it to anything.
+fn relationships_and_short_codes_come_from_presented_copies_only() {
+    let world = presentation::relationships();
+    let (service, repo) = (world.service(), &world.repo);
+    let current = |index: &manyhands::repository::IndexStateDto, read: &str| {
+        assert_eq!(index.state, IndexState::Current, "{read}");
+    };
+
+    // The hidden copy's short code is no second match for the ticket that
+    // also has it.
+    let old = service.find_tickets_by_slug(repo, OLD_SLUG).unwrap();
+    assert_eq!(ids(&old), [Some(SLUG_HOLDER)]);
+    current(&old.index, "find the old short code");
+    let new = service.find_tickets_by_slug(repo, NEW_SLUG).unwrap();
+    assert_eq!(ids(&new), [Some(EDITED)]);
+    assert_eq!(new.items[0].context.kind, ItemContextKind::Active);
+    let filtered = service
+        .list_tickets(
+            repo,
+            &TicketFilter {
+                slug: Some(OLD_SLUG.to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(ids(&filtered), [Some(SLUG_HOLDER)]);
+    current(&filtered.index, "slug filter");
+
+    // Its parent and its dependency contribute no edge.
+    let children = service
+        .ticket_children(repo, &item_id(RELATIONSHIP_PARENT))
+        .unwrap();
+    assert!(children.items.is_empty(), "{children:?}");
+    current(&children.index, "children");
+    let tree = service
+        .ticket_dependencies(repo, &item_id(EDITED), DependencyDirection::Both, None)
+        .unwrap();
+    assert_eq!(line_ids(&tree.dependencies), [WORKTREE_DEPENDENCY]);
+    assert_eq!(line_ids(&tree.dependents), [DEPENDENT]);
+    current(&tree.index, "dependencies");
+    let upward = service
+        .ticket_dependencies(repo, &item_id(DEPENDENT), DependencyDirection::Up, None)
+        .unwrap();
+    assert!(upward.dependents.is_empty(), "{upward:?}");
+    let cycles = service.ticket_cycles(repo).unwrap();
+    assert!(cycles.items.is_empty(), "{cycles:?}");
+    current(&cycles.index, "cycles");
+    let plan = service.ticket_plan(repo, &TicketFilter::default()).unwrap();
+    assert!(plan.unplannable.is_empty(), "{plan:?}");
+    current(&plan.index, "plan");
+    let path = service.ticket_critical_path(repo).unwrap();
+    assert_eq!(
+        ids(&path),
+        [Some(WORKTREE_DEPENDENCY), Some(EDITED), Some(DEPENDENT)]
+    );
+    current(&path.index, "critical path");
+
+    let listed = all_tickets(service, repo);
+    let shown = service.show_item(repo, &item_id(EDITED)).unwrap();
+    for item in [ticket(&listed, EDITED), &shown] {
+        assert_eq!(item.slug.as_deref(), Some(NEW_SLUG));
+        assert_eq!(item.parent, None);
+        assert_eq!(
+            item.deps,
+            [dependency(WORKTREE_DEPENDENCY, DependencyState::Open)]
+        );
+        current(&item.index, "list and show");
+    }
+}
+
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn presentation_across_contexts() {
+    presentation::run(&[
+        Row {
+            table_a: "an_item_only_on_the_primary_is_presented_from_it",
+            case: "beside first edits of other items",
+            needs: Needs::Readers,
+            check: an_item_only_on_the_primary_is_presented_from_it,
+        },
+        Row {
+            table_a: "a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale",
+            case: "a ticket and a document edited in their worktrees, and a ticket broken on the primary",
+            needs: Needs::Readers,
+            check: a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "released by context release",
+            needs: Needs::Readers,
+            check: a_released_worktree_presents_the_primary_copy_again,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "removed, and its rows deleted without indexing the primary again",
+            needs: Needs::Task7Storage,
+            check: a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "deleted outside Manyhands, then refreshed",
+            needs: Needs::Readers,
+            check: a_worktree_removed_outside_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "stored as an invalid context",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_stored_as_its_own_context_presents_the_primary_copy,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_as_the_refresh_stores_it_presents_the_primary_copy,
+        },
+        Row {
+            table_a: "an_item_only_in_a_worktree_is_presented_from_it",
+            case: "a ticket and a document created in their worktrees",
+            needs: Needs::Readers,
+            check: an_item_only_in_a_worktree_is_presented_from_it,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "each valid worktree stored from its own observation",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_with_stored_item_contexts_presents_none,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts,
+        },
+        Row {
+            table_a: "relationships_and_short_codes_come_from_presented_copies_only",
+            case: "two copies of one ticket with other edges and short codes",
+            needs: Needs::Readers,
+            check: relationships_and_short_codes_come_from_presented_copies_only,
+        },
+    ]);
+    assert_git_transport_uninitialized();
+}
