@@ -27,7 +27,8 @@ use crate::{
     canonical::{self, ItemId},
     repository::{
         DirtyContexts, GuardedFile, RepositoryOperation, RepositoryService,
-        discovery::UnknownMetadata, mutation::absent_token,
+        discovery::{ContextKey, UnknownMetadata},
+        mutation::absent_token,
     },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
@@ -1619,21 +1620,82 @@ fn item_path_is_missing(error: &io::Error) -> bool {
     }
 }
 
+/// Nanoseconds in the second a file's modification time and the
+/// repository's `refreshed_at` are kept in.
+const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
+
 impl ItemFile {
-    /// Whether the file was modified in a later second than the one the
-    /// last completed refresh began observing in.
+    /// Whether the file was modified in a later second than the one its
+    /// context's observation began in (`indexed_at_ns`, in nanoseconds), or,
+    /// for a context stored with no such time, than the one the last
+    /// completed refresh began observing in (`refreshed_at`).
     ///
-    /// That time is taken before the refresh looks at anything, so a file
-    /// changed while a refresh runs is newer. This still misses a change
-    /// made in the same second the refresh began, a change that keeps or
+    /// That time is taken before the observation looks at anything, so a
+    /// file changed while it runs is newer. This still misses a change
+    /// made in the same second the observation began, a change that keeps or
     /// sets back the file's modification time, and any change where the
     /// platform reports no time; and a file whose time is in the future
     /// reads as newer until that time passes. A change to metadata the
     /// index stores is seen separately, by comparing it.
-    pub(super) fn newer_than(&self, refreshed_at: Option<i64>) -> bool {
+    pub(super) fn newer_than(&self, indexed_at_ns: Option<i64>, refreshed_at: Option<i64>) -> bool {
         self.modified
-            .zip(refreshed_at)
-            .is_some_and(|(modified, refreshed)| modified > refreshed)
+            .zip(
+                indexed_at_ns
+                    .map(|indexed| indexed.div_euclid(NANOSECONDS_PER_SECOND))
+                    .or(refreshed_at),
+            )
+            .is_some_and(|(modified, indexed)| modified > indexed)
+    }
+}
+
+/// How the index stands with one context: when it was last indexed, and
+/// whether it is owed an indexing.
+///
+/// A read judges a file of the context against this, not against when the
+/// repository was last refreshed as a whole. A write indexes the contexts it
+/// changed and leaves the repository's refresh time where it was, so a file
+/// the write did not touch must not read as changed for it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ContextFreshness {
+    /// When the context's observation began, in nanoseconds; none for a row
+    /// an older build stored.
+    indexed_at: Option<i64>,
+    dirty: bool,
+}
+
+impl ContextFreshness {
+    /// What the index holds of the context whose worktree is `worktree`.
+    /// The root with no row of its own is the primary, which no observation
+    /// has stored a time for.
+    pub(super) fn read(
+        connection: &Connection,
+        repo: &ResolvedRepository,
+        worktree: &str,
+    ) -> Result<Self, ReadError> {
+        let (indexed_at, item_id): (Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT indexed_at, item_id FROM contexts
+                  WHERE repository_id = ?1 AND worktree_path = ?2",
+                rusqlite::params![repo.registration_id(), worktree],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .unwrap_or_default();
+        let owed = DirtyContexts::read(connection, repo.registration_id())?;
+        let dirty = match item_id.as_deref().map(str::parse::<ItemId>) {
+            None => owed.any_of(&[ContextKey::Primary]),
+            Some(Ok(id)) => owed.any_of(&[ContextKey::Item(id)]),
+            // A key no context can have: nothing says what is owed it.
+            Some(Err(_)) => true,
+        };
+        Ok(Self { indexed_at, dirty })
+    }
+
+    /// Whether the index may not hold `file` of this context as it is: the
+    /// context is dirty or owed an indexing, or the file is newer than its
+    /// indexing (see `ItemFile::newer_than`).
+    pub(super) fn is_behind(&self, file: &ItemFile, refreshed_at: Option<i64>) -> bool {
+        self.dirty || file.newer_than(self.indexed_at, refreshed_at)
     }
 }
 
@@ -2038,7 +2100,8 @@ impl RepositoryService {
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
-            let newer = file.newer_than(refreshed_at);
+            let freshness = ContextFreshness::read(connection, repo, &row.context.worktree)?;
+            let newer = freshness.is_behind(&file, refreshed_at);
             let read = ReadSource::of(file.bytes, &row.path);
             let rows = effective_rows(repo, &stored).0;
             let comments = comment_targets(connection, repo, &rows, &read)?;
@@ -2131,7 +2194,8 @@ impl RepositoryService {
                 ItemFileRead::NotAFile => return Err(ReadError::invalid_path()),
             };
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
-            let newer = file.newer_than(refreshed_at);
+            let freshness = ContextFreshness::read(connection, repo, &context.worktree)?;
+            let newer = freshness.is_behind(&file, refreshed_at);
             let stored = stored_items(connection, repo)?;
             let read = ReadSource::of(file.bytes, path);
             let rows = effective_rows(repo, &stored).0;
@@ -2485,3 +2549,7 @@ fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
 #[cfg(test)]
 #[path = "items_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "freshness_tests.rs"]
+mod freshness_tests;

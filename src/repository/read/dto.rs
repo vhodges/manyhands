@@ -565,8 +565,8 @@ pub struct ItemContextDto {
 ///
 /// `context` is the item's effective copy, which every comment was read
 /// from. `index` is `stale` when the item's file or a comment's is newer
-/// than the last refresh, or the comments are no longer what the index
-/// stored.
+/// than the last indexing of that context, or the context is owed one, or
+/// the comments are no longer what the index stored.
 ///
 /// The index says which files there are, so a comment added since the
 /// last refresh is not listed until the indexer has seen it. `complete` is
