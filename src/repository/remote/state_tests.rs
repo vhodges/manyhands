@@ -4698,7 +4698,6 @@ fn polling_defaults_are_rebuilt_once_the_marker_is_retired() {
 /// as a problem about a working tree is stored relative to it); and on no
 /// branch, a detached head, with a problem that has no path.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn an_invalid_context_row_does_not_refuse_poll_remote_snapshot_or_history_reads() {
     for (branch, problem_path) in [(Some("scratch"), Some("")), (None, None)] {
         let case = format!("branch {branch:?}, problem path {problem_path:?}");

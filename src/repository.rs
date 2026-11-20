@@ -7093,11 +7093,13 @@ fn read_repository_snapshot(
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(|error| snapshot_index_error_source(root, error))?;
+    let item_contexts = read::presents_item_contexts(connection, *repository_id)
+        .map_err(|error| snapshot_index_error_source(root, error))?;
     let contexts = contexts
         .into_iter()
-        .map(|(id, kind, branch, worktree, item_id, head_oid)| {
+        .map(|(id, stored_kind, branch, worktree, item_id, head_oid)| {
             let worktree = stored_absolute_path(&worktree, root)?;
-            let kind = stored_context_kind(&kind, root)?;
+            let kind = stored_context_kind(&stored_kind, root)?;
             let item_id = item_id
                 .as_deref()
                 .map(|value| stored_item_id(value, root))
@@ -7105,6 +7107,7 @@ fn read_repository_snapshot(
             stored_context_fields(kind, branch.as_deref(), item_id.as_ref(), &worktree, root)?;
             Ok((
                 id,
+                read::presents_context(&stored_kind, item_contexts),
                 DiscoveredContext {
                     kind,
                     branch,
@@ -7156,7 +7159,7 @@ fn read_repository_snapshot(
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(|error| snapshot_index_error_source(root, error))?;
-    let items = items
+    let mut items = items
         .into_iter()
         .map(
             |(
@@ -7204,7 +7207,7 @@ fn read_repository_snapshot(
         )
         .collect::<Result<Vec<_>, _>>()?;
     let mut item_ids = BTreeSet::new();
-    for (_, context) in &contexts {
+    for (_, _, context) in &contexts {
         if context.kind == DiscoveryContextKind::Active {
             let (branch_kind, branch_item_id) = stored_authoring_branch(
                 context
@@ -7225,6 +7228,27 @@ fn read_repository_snapshot(
             }
         }
     }
+    // What the reads present (Table A of the fast-writes design): nothing in
+    // a context they do not present, and of an item the primary holds and
+    // its own worktree's item context holds too, the worktree's copy alone,
+    // without the primary's copy or its comments. Any other item the index
+    // holds twice is not what a store writes.
+    let presented: BTreeSet<&Path> = contexts
+        .iter()
+        .filter(|(_, presented, _)| *presented)
+        .map(|(_, _, context)| context.worktree.as_path())
+        .collect();
+    let in_own_worktree: BTreeSet<canonical::ItemId> = contexts
+        .iter()
+        .filter(|(_, presented, context)| {
+            *presented && context.kind == DiscoveryContextKind::Active
+        })
+        .filter_map(|(_, _, context)| context.item_id.clone())
+        .collect();
+    items.retain(|item| {
+        presented.contains(item.context.as_path())
+            && !(item.context == root && in_own_worktree.contains(&item.id))
+    });
     for item in &items {
         if !item_ids.insert(item.id.clone()) || !insert_comment_ids(&item.comments, &mut item_ids) {
             return Err(snapshot_index_error(
@@ -7236,33 +7260,102 @@ fn read_repository_snapshot(
 
     let problems = connection
         .prepare(
-            "SELECT contexts.worktree_path, problems.path, problems.code, problems.guidance, problems.observed_at
+            "SELECT problems.context_id, contexts.worktree_path, problems.path, problems.code,
+                    problems.guidance, problems.observed_at, problems.id
              FROM problems LEFT JOIN contexts ON contexts.id = problems.context_id
-             WHERE problems.repository_id = ?1
-             ORDER BY problems.observed_at ASC, contexts.worktree_path ASC, problems.path ASC,
-                      problems.code ASC, problems.guidance ASC, problems.id ASC",
+             WHERE problems.repository_id = ?1",
         )
         .and_then(|mut statement| {
-            statement.query_map([*repository_id], |row| {
-                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?))
-            })?.collect::<Result<Vec<_>, _>>()
+            statement
+                .query_map([*repository_id], |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
         })
-        .map_err(|error| snapshot_index_error_source(root, error))?
+        .map_err(|error| snapshot_index_error_source(root, error))?;
+    let mut presented_problems = Vec::new();
+    for (context_id, context, path, code, guidance, observed_at, id) in problems {
+        let stored = context_id.and_then(|context_id| {
+            contexts
+                .iter()
+                .find(|(row, _, _)| *row == context_id)
+                .map(|(_, presented, context)| (*presented, context))
+        });
+        // Each is presented where `index status` lists it.
+        let (context, path) = match stored {
+            Some((_, context)) if context.kind == DiscoveryContextKind::Invalid => {
+                let item = context
+                    .item_id
+                    .as_ref()
+                    .expect("validated invalid context item");
+                (
+                    Some(root_path.to_owned()),
+                    Some(read::invalid_context_problem_path(
+                        &format!(".manyhands/worktrees/{item}"),
+                        path.as_deref(),
+                    )),
+                )
+            }
+            Some((false, _)) => continue,
+            Some((true, stored))
+                if stored.worktree == root
+                    && path.as_deref().is_some_and(|path| {
+                        in_own_worktree
+                            .iter()
+                            .any(|item| read::is_in_item_directories(path, &item.to_string()))
+                    }) =>
+            {
+                continue;
+            }
+            _ => (context, path),
+        };
+        presented_problems.push((
+            (
+                observed_at,
+                context.clone(),
+                path.clone(),
+                code.clone(),
+                guidance.clone(),
+                id,
+            ),
+            DiscoveryProblem {
+                context: context
+                    .as_deref()
+                    .map(|value| stored_absolute_path(value, root))
+                    .transpose()?,
+                path: path
+                    .as_deref()
+                    .map(|value| stored_relative_path(value, root))
+                    .transpose()?,
+                code,
+                guidance,
+                observed_at: stored_timestamp(observed_at, root)?,
+            },
+        ));
+    }
+    // The order the index sorts its rows in, as they are presented.
+    presented_problems.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let problems = presented_problems
         .into_iter()
-        .map(|(context, path, code, guidance, observed_at)| Ok(DiscoveryProblem {
-            context: context.as_deref().map(|value| stored_absolute_path(value, root)).transpose()?,
-            path: path.as_deref().map(|value| stored_relative_path(value, root)).transpose()?,
-            code,
-            guidance,
-            observed_at: stored_timestamp(observed_at, root)?,
-        }))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(_, problem)| problem)
+        .collect();
 
     Ok(RepositorySnapshot {
         root: root.to_owned(),
         configuration,
         refresh_required,
-        contexts: contexts.into_iter().map(|(_, context)| context).collect(),
+        contexts: contexts
+            .into_iter()
+            .map(|(_, _, context)| context)
+            .collect(),
         items,
         problems,
         remote: remote::state::read_snapshot(connection, *repository_id)?,

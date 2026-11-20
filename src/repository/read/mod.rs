@@ -62,7 +62,10 @@ pub use dto::{
     UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
-pub(crate) use items::{is_plain_relative, observe_in_context};
+pub(crate) use items::{
+    invalid_context_problem_path, is_in_item_directories, is_plain_relative, observe_in_context,
+    presents_context, presents_item_contexts,
+};
 pub use local_sync::{
     LocalContextConflictContentDto, LocalContextConflictEntryDto, LocalContextSyncDataType,
     LocalContextSyncEligibility, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,

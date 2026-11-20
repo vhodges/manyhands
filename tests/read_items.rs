@@ -2570,7 +2570,9 @@ fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_t
     assert_eq!(ids(&list), [Some(DOCUMENT_A), Some(DOCUMENT_B)]);
     assert_eq!(list.items[0].title.as_deref(), Some("Primary"));
     assert_eq!(list.items[0].context.kind, ItemContextKind::Primary);
-    // The index is in the middle of changing, and every entry says so.
+    // The index is in the middle of changing: it holds a worktree that is
+    // no longer there, which is no valid item context, and every entry
+    // says so.
     assert_eq!(list.index.state, IndexState::Stale);
     assert_eq!(list.items[1].index.state, IndexState::Stale);
     assert_eq!(shown.context.kind, ItemContextKind::Primary);
@@ -2588,7 +2590,8 @@ fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_t
     );
 
     // The worktree is there, with its own copy: that copy is the effective
-    // one, and the index is still behind.
+    // one. The primary's copy and the copy in the item's own worktree are
+    // what the first edit of an item makes, and leave the index current.
     let worktree = root.join(".manyhands/worktrees").join(DOCUMENT_A);
     let edited = document_source(DOCUMENT_A, "Worktree", "");
     write(&worktree, "docs/a.md", &edited);
@@ -2598,14 +2601,13 @@ fn an_item_the_index_holds_twice_is_listed_once_and_read_from_the_copy_that_is_t
     assert_eq!(ids(&list), [Some(DOCUMENT_A), Some(DOCUMENT_B)]);
     assert_eq!(list.items[0].title.as_deref(), Some("Worktree row"));
     assert_eq!(list.items[0].context.kind, ItemContextKind::Active);
-    assert_eq!(list.index.state, IndexState::Stale);
+    assert_eq!(list.index.state, IndexState::Current);
     assert_eq!(shown.context.kind, ItemContextKind::Active);
     assert_eq!(
         Path::new(&shown.context.worktree),
         fs::canonicalize(&worktree).unwrap()
     );
     assert_eq!(shown.source.as_deref(), Some(edited.as_str()));
-    assert_eq!(shown.index.state, IndexState::Stale);
 
     // The worktree is there and its copy is not: a list, which opens no
     // file, still names the worktree; a complete read falls back.
@@ -4402,22 +4404,27 @@ fn a_ticket_the_index_holds_twice_shows_only_its_effective_rows_relationships() 
         );
         let repo = enabled.service.resolve_repository(root).unwrap();
         let list = all_tickets(&enabled.service, &repo);
-        // One entry, and an index that holds an item twice is behind.
+        // One entry.
         assert_eq!(ids(&list), [Some(TICKET_A)]);
-        assert_eq!(list.index.state, IndexState::Stale);
         let a = list.items[0].clone();
         assert_git_transport_uninitialized();
-        (a.context.kind, a.slug, a.deps)
+        (a.context.kind, a.slug, a.deps, list.index.state)
     };
+    // An index that holds a copy in another item's worktree, or the item's
+    // own worktree once it is gone, is behind.
     let primary = (
         ItemContextKind::Primary,
         Some(SLUG.to_owned()),
         vec![dependency(TICKET_B, DependencyState::Unresolved)],
+        IndexState::Stale,
     );
+    // The primary's copy and the one in the item's own worktree are what
+    // the first edit of an item makes, which is not behind.
     let own_worktree = (
         ItemContextKind::Active,
         Some("zz-zz-zzzzz".to_owned()),
         vec![dependency(ABSENT, DependencyState::Unresolved)],
+        IndexState::Current,
     );
 
     // A copy in another item's worktree is never the effective one.
@@ -5362,8 +5369,8 @@ fn a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale(
     assert_eq!(tree.index.state, IndexState::Current, "dependencies");
 }
 
-/// Lists, `show` by ID and by path, and the dependency read, for the
-/// edited ticket once only its primary copy is to be presented.
+/// Lists, `show` by ID and by path, and the dependency and readiness reads,
+/// for the edited ticket once only its primary copy is to be presented.
 fn assert_presented_from_the_primary(world: &World) {
     let (service, repo) = (world.service(), &world.repo);
     let primary = (
@@ -5399,7 +5406,14 @@ fn assert_presented_from_the_primary(world: &World) {
     let tree = service
         .ticket_dependencies(repo, &item_id(EDITED), DependencyDirection::Both, None)
         .unwrap();
+    assert_eq!(tree.ticket.title.as_deref(), Some(PRIMARY_TITLE));
     assert_eq!(tree.index.state, IndexState::Current, "dependencies");
+    let ready = service
+        .ticket_readiness(repo, &TicketFilter::default())
+        .unwrap();
+    assert_eq!(ids(&ready), [Some(EDITED)]);
+    assert_eq!(presented(&ready.items[0]), primary);
+    assert_eq!(ready.index.state, IndexState::Current, "readiness");
 }
 
 fn a_released_worktree_presents_the_primary_copy_again() {
@@ -5422,8 +5436,8 @@ fn an_invalid_worktree_as_the_refresh_stores_it_presents_the_primary_copy() {
     assert_presented_from_the_primary(&presentation::invalid_worktree(false));
 }
 
-/// Lists and `show`, for a ticket and a document only their worktrees
-/// hold.
+/// Lists, `show` and the readiness read, for a ticket and a document only
+/// their worktrees hold.
 fn an_item_only_in_a_worktree_is_presented_from_it() {
     let world = presentation::new_items_in_worktrees();
     let (service, repo) = (world.service(), &world.repo);
@@ -5442,11 +5456,20 @@ fn an_item_only_in_a_worktree_is_presented_from_it() {
         let shown = service.show_item(repo, &item_id(id)).unwrap();
         assert_eq!(presented(&shown), expected);
     }
+    let ready = service
+        .ticket_readiness(repo, &TicketFilter::default())
+        .unwrap();
+    assert_eq!(ids(&ready), [Some(NEW_TICKET)]);
+    assert_eq!(
+        presented(&ready.items[0]),
+        presented(&tickets.items[0]),
+        "readiness"
+    );
 }
 
-/// Lists and `show` by ID and by path: no item worktree is a context any
-/// read presents, so the edited ticket is its primary copy and the new
-/// ticket is not found.
+/// Lists, the readiness read and `show` by ID and by path: no item worktree
+/// is a context any read presents, so the edited ticket is its primary copy
+/// and the new ticket is not found.
 fn assert_no_item_context_is_presented(world: &World) {
     let (service, repo) = (world.service(), &world.repo);
     let primary = (
@@ -5458,6 +5481,11 @@ fn assert_no_item_context_is_presented(world: &World) {
     let tickets = all_tickets(service, repo);
     assert_eq!(ids(&tickets), [Some(EDITED)]);
     assert_eq!(presented(&tickets.items[0]), primary);
+    let ready = service
+        .ticket_readiness(repo, &TicketFilter::default())
+        .unwrap();
+    assert_eq!(ids(&ready), [Some(EDITED)]);
+    assert_eq!(presented(&ready.items[0]), primary, "readiness");
     let shown = service.show_item(repo, &item_id(EDITED)).unwrap();
     assert_eq!(presented(&shown), primary);
     assert_eq!(
@@ -5561,7 +5589,6 @@ fn relationships_and_short_codes_come_from_presented_copies_only() {
 }
 
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn presentation_across_contexts() {
     presentation::run(&[
         Row {

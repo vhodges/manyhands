@@ -139,6 +139,8 @@ const RELATIONSHIP_PROBLEMS: [ProblemCode; 5] = [
 
 /// Where item worktrees are, below the repository root.
 const WORKTREES_DIRECTORY: &str = ".manyhands/worktrees";
+/// Where each item's comments are, below a context's worktree.
+const COMMENTS_DIRECTORY: &str = ".manyhands/comments";
 
 const DOCUMENTS_DIRECTORY: &str = "docs";
 const DOCUMENT_PREFIX: &str = "docs/";
@@ -549,6 +551,55 @@ fn stored_context_kind(stored: &str) -> Result<ItemContextKind, ReadError> {
     }
 }
 
+/// Whether the reads present a context the index stores as `kind`, when
+/// `item_contexts` says whether they present item contexts at all. The root
+/// always is one. An item worktree that is not a valid item context never
+/// is: nothing in it is presented, and the primary's copy of its item, if
+/// any, is that item's.
+pub(crate) fn presents_context(kind: &str, item_contexts: bool) -> bool {
+    match kind {
+        "active" => item_contexts,
+        "invalid" => false,
+        _ => true,
+    }
+}
+
+/// Whether the reads present the registration's item contexts. Discovery
+/// observes them only while the primary's configuration is valid, so none
+/// is presented once the index holds that it is missing or invalid,
+/// whatever item contexts it still holds.
+pub(crate) fn presents_item_contexts(
+    connection: &Connection,
+    registration_id: i64,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM configuration_observations
+                            WHERE repository_id = ?1 AND state != 'valid')",
+        [registration_id],
+        |row| row.get(0),
+    )
+}
+
+/// Where the reads present a problem stored in the item worktree that is
+/// not a valid item context at `worktree`, relative to the root: in the
+/// primary's frame, at the worktree itself, or at `path` inside it. That is
+/// where a refresh that stores no context for such a worktree stores it.
+pub(crate) fn invalid_context_problem_path(worktree: &str, path: Option<&str>) -> String {
+    match path.filter(|path| !path.is_empty()) {
+        Some(path) => format!("{worktree}/{path}"),
+        None => worktree.to_owned(),
+    }
+}
+
+/// Whether `path`, relative to the root, is inside the ticket or the comment
+/// directory of the item `id`. While the item is in its own worktree, the
+/// primary's problems there are not presented: that worktree's are.
+pub(crate) fn is_in_item_directories(path: &str, id: &str) -> bool {
+    [TICKETS_DIRECTORY, COMMENTS_DIRECTORY]
+        .into_iter()
+        .any(|directory| Path::new(path).starts_with(Path::new(directory).join(id)))
+}
+
 fn stored_change_source(stored: &str) -> Result<ChangeSource, ReadError> {
     match stored {
         "git" => Ok(ChangeSource::GitCommit),
@@ -566,6 +617,9 @@ fn timestamp(seconds: i64) -> Option<String> {
 /// The registration's index state and, in seconds, when it was last
 /// refreshed. A registration removed since the repository was resolved is
 /// `repository_not_registered`.
+///
+/// The row of an item worktree that is not a valid item context is no
+/// context the reads present, and is not counted as one the index holds.
 pub(super) fn stored_index_state(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -574,7 +628,8 @@ pub(super) fn stored_index_state(
         .query_row(
             "SELECT refresh_required, refreshed_at,
                     EXISTS(SELECT 1 FROM contexts
-                            WHERE contexts.repository_id = repositories.id)
+                            WHERE contexts.repository_id = repositories.id
+                              AND contexts.kind != 'invalid')
                FROM repositories
               WHERE id = ?1 AND root_path = ?2",
             rusqlite::params![repo.registration_id(), repo.root().to_str()],
@@ -589,8 +644,9 @@ pub(super) fn stored_index_state(
     ))
 }
 
-/// Every context of the registration, in worktree order.
-fn stored_contexts(
+/// Every context of the registration the reads present, in worktree order.
+/// See `presents_context`.
+pub(super) fn stored_contexts(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredContext>, ReadError> {
@@ -609,24 +665,30 @@ fn stored_contexts(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    rows.into_iter()
-        .map(|(kind, branch, worktree, head_oid)| {
-            Ok(StoredContext {
-                kind: stored_context_kind(&kind)?,
-                branch,
-                worktree,
-                head_oid,
-            })
-        })
-        .collect()
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let mut contexts = Vec::new();
+    for (kind, branch, worktree, head_oid) in rows {
+        let context = StoredContext {
+            kind: stored_context_kind(&kind)?,
+            branch,
+            worktree,
+            head_oid,
+        };
+        if presents_context(&kind, item_contexts) {
+            contexts.push(context);
+        }
+    }
+    Ok(contexts)
 }
 
-/// Every document and ticket the index holds for the registration. The
-/// order is the index's; each caller sorts what it returns.
+/// Every document and ticket the index holds for the registration in a
+/// context the reads present (see `presents_context`). The order is the
+/// index's; each caller sorts what it returns.
 pub(super) fn stored_items(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredItem>, ReadError> {
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
     let mut statement = connection.prepare(
         "SELECT contexts.kind, contexts.branch, contexts.worktree_path, contexts.head_oid,
                 items.item_id, items.kind, items.canonical_path, items.title,
@@ -640,8 +702,12 @@ pub(super) fn stored_items(
     )?;
     let mut rows = statement.query([repo.registration_id()])?;
     let mut items = Vec::new();
+    // Whether each row, in the same order, is in a context the reads
+    // present. Every row is checked, and its edges attached, all the same.
+    let mut presented = Vec::new();
     while let Some(row) = rows.next()? {
         let context_kind: String = row.get(0)?;
+        presented.push(presents_context(&context_kind, item_contexts));
         let kind: String = row.get(5)?;
         let unknown: Option<String> = row.get(14)?;
         let activity_source: String = row.get(16)?;
@@ -699,6 +765,8 @@ pub(super) fn stored_items(
         });
     }
     stored_relationships(connection, repo, &mut items)?;
+    let mut presented = presented.into_iter();
+    items.retain(|_| presented.next().unwrap_or(false));
     Ok(items)
 }
 
@@ -801,39 +869,153 @@ fn stored_relationships(
     Ok(())
 }
 
-/// Every stored problem that has a path and a context, in context, path,
-/// code and then insertion order. The stored guidance is not read: it can
-/// hold a parser's or the operating system's own words.
+/// Every stored problem that has a path and a context, as the reads present
+/// it (see `presented_problems`), in context, path, code and then insertion
+/// order.
 pub(super) fn stored_problems(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredProblem>, ReadError> {
+    Ok(presented_problems(connection, repo)?
+        .into_iter()
+        .filter_map(|problem| {
+            Some(StoredProblem {
+                context: problem.context?,
+                path: problem.path?,
+                code: problem.code,
+            })
+        })
+        .collect())
+}
+
+/// A stored problem as the reads present it: the context it is in, when it
+/// is in one, and its path there, when it has one.
+pub(super) struct PresentedProblem {
+    pub(super) context: Option<StoredContext>,
+    pub(super) path: Option<String>,
+    pub(super) code: ProblemCode,
+}
+
+/// Every stored problem the reads present, in context, path, code and then
+/// insertion order. The stored guidance is not read: it can hold a parser's
+/// or the operating system's own words.
+///
+/// Each is presented in the context the index presents its item from, as
+/// Table A of the fast-writes design says, whether the index stores it
+/// there or in the context it was found in:
+///
+/// - A problem of an item worktree that is not a valid item context is the
+///   primary's, at the worktree's path below the root (see
+///   `invalid_context_problem_path`).
+/// - The problems of an item context are not presented while no item
+///   context is (see `presents_item_contexts`).
+/// - The primary's problems inside the ticket and comment directories of an
+///   item whose own worktree is an item context the reads present are not
+///   presented: that worktree's are. Which worktrees those are is what the
+///   index holds, so one it still holds after it was removed outside
+///   Manyhands hides them until the next refresh.
+pub(super) fn presented_problems(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+) -> Result<Vec<PresentedProblem>, ReadError> {
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let root = absolute_path_string(repo.root()).ok_or_else(invalid_stored_data)?;
     let mut statement = connection.prepare(
-        "SELECT contexts.kind, contexts.branch, contexts.worktree_path, contexts.head_oid,
-                problems.path, problems.code
-           FROM problems
-           JOIN contexts ON contexts.id = problems.context_id
-          WHERE problems.repository_id = ?1 AND problems.path IS NOT NULL
-          ORDER BY contexts.worktree_path ASC, problems.path ASC, problems.code ASC,
-                   problems.id ASC",
+        "SELECT id, kind, branch, worktree_path, head_oid FROM contexts
+          WHERE repository_id = ?1",
     )?;
+    let mut contexts: BTreeMap<i64, (String, StoredContext)> = BTreeMap::new();
+    let mut rows = statement.query([repo.registration_id()])?;
+    while let Some(row) = rows.next()? {
+        let kind: String = row.get(1)?;
+        let context = StoredContext {
+            kind: stored_context_kind(&kind)?,
+            branch: row.get(2)?,
+            worktree: row.get(3)?,
+            head_oid: row.get(4)?,
+        };
+        contexts.insert(row.get(0)?, (kind, context));
+    }
+    let root_context = contexts
+        .values()
+        .map(|(_, context)| context)
+        .find(|context| context.worktree == root)
+        .cloned()
+        .unwrap_or_else(|| unobserved_root(root.clone()));
+    // The items in their own worktrees, as the reads present them.
+    let in_own_worktree: BTreeSet<String> = contexts
+        .values()
+        .filter(|(kind, _)| kind == "active" && presents_context(kind, item_contexts))
+        .filter_map(|(_, context)| worktree_item_id(repo, &context.worktree))
+        .collect();
+
+    let mut statement = connection
+        .prepare("SELECT id, context_id, path, code FROM problems WHERE repository_id = ?1")?;
     let mut rows = statement.query([repo.registration_id()])?;
     let mut problems = Vec::new();
     while let Some(row) = rows.next()? {
-        let context_kind: String = row.get(0)?;
-        let code: String = row.get(5)?;
-        problems.push(StoredProblem {
-            context: StoredContext {
-                kind: stored_context_kind(&context_kind)?,
-                branch: row.get(1)?,
-                worktree: row.get(2)?,
-                head_oid: row.get(3)?,
+        let id: i64 = row.get(0)?;
+        let context_id: Option<i64> = row.get(1)?;
+        let path: Option<String> = row.get(2)?;
+        let code: String = row.get(3)?;
+        let (context, path) = match context_id {
+            None => (None, path),
+            Some(context_id) => {
+                let (kind, context) = contexts.get(&context_id).ok_or_else(invalid_stored_data)?;
+                if kind == "invalid" {
+                    let worktree = context_directory(repo, &context.worktree)
+                        .filter(|directory| !directory.as_os_str().is_empty())
+                        .and_then(|directory| directory.to_str().map(str::to_owned))
+                        .ok_or_else(invalid_stored_data)?;
+                    (
+                        Some(root_context.clone()),
+                        Some(invalid_context_problem_path(&worktree, path.as_deref())),
+                    )
+                } else if !presents_context(kind, item_contexts)
+                    || (context.worktree == root
+                        && path.as_deref().is_some_and(|path| {
+                            in_own_worktree
+                                .iter()
+                                .any(|item| is_in_item_directories(path, item))
+                        }))
+                {
+                    continue;
+                } else {
+                    (Some(context.clone()), path)
+                }
+            }
+        };
+        problems.push((
+            id,
+            code.clone(),
+            PresentedProblem {
+                context,
+                path,
+                code: ProblemCode::from_stored(&code),
             },
-            path: row.get(4)?,
-            code: ProblemCode::from_stored(&code),
-        });
+        ));
     }
-    Ok(problems)
+    problems.sort_by(|left, right| problem_order(left).cmp(&problem_order(right)));
+    Ok(problems
+        .into_iter()
+        .map(|(_, _, problem)| problem)
+        .collect())
+}
+
+/// The order the index sorts problem rows in, as they are presented: by
+/// worktree, path, stored code and then row, with an absent value first.
+fn problem_order(
+    (id, code, problem): &(i64, String, PresentedProblem),
+) -> (Option<&str>, Option<&str>, &str, i64) {
+    (
+        problem
+            .context
+            .as_ref()
+            .map(|context| context.worktree.as_str()),
+        problem.path.as_deref(),
+        code,
+        *id,
+    )
 }
 
 /// Whether the last refresh saw every place an item of `kind` can be, as
@@ -1251,6 +1433,15 @@ fn context_directory(repo: &ResolvedRepository, worktree: &str) -> Option<PathBu
     Some(Path::new(WORKTREES_DIRECTORY).join(id))
 }
 
+/// The ID of the item whose worktree `worktree` is, when it is an item
+/// worktree under the root.
+fn worktree_item_id(repo: &ResolvedRepository, worktree: &str) -> Option<String> {
+    context_directory(repo, worktree)?
+        .file_name()?
+        .to_str()
+        .map(str::to_owned)
+}
+
 /// `root` followed by each component of `relative`, which is written with
 /// forward slashes, so that the result uses the platform's own separator.
 fn below(root: &Path, relative: &Path) -> PathBuf {
@@ -1537,6 +1728,7 @@ fn is_own_worktree_row(repo: &ResolvedRepository, row: &StoredItem) -> bool {
 }
 
 const OWN_WORKTREE: u8 = 0;
+const PRIMARY_COPY: u8 = 1;
 const OTHER_WORKTREE: u8 = 2;
 
 /// The order in which the rows of one item are tried: its own worktree's,
@@ -1550,23 +1742,53 @@ fn row_rank(repo: &ResolvedRepository, row: &StoredItem) -> u8 {
     if is_own_worktree_row(repo, row) {
         OWN_WORKTREE
     } else if row.context.kind != ItemContextKind::Active {
-        1
+        PRIMARY_COPY
     } else {
         OTHER_WORKTREE
     }
 }
 
-/// One row for each item, and whether the index is known to be behind: it
-/// held an item more than once, or held one only as a copy in another
-/// item's worktree.
+/// The rows of one item in the order they are tried, and whether Table A
+/// of the fast-writes design explains the index holding them: once, or as
+/// the primary's copy and the copy in the item's own worktree, which is
+/// what the first edit of an item the primary holds makes. Any other set of
+/// rows is what a refresh leaves part of the way through, or a copy in
+/// another item's worktree, and the index is behind.
+fn ranked<'a>(
+    repo: &ResolvedRepository,
+    mut rows: Vec<&'a StoredItem>,
+) -> (Vec<&'a StoredItem>, bool) {
+    // The sort keeps the index's order within each rank.
+    rows.sort_by_key(|row| row_rank(repo, row));
+    let explained = match rows.as_slice() {
+        [_] => true,
+        [own, primary] => {
+            row_rank(repo, own) == OWN_WORKTREE && row_rank(repo, primary) == PRIMARY_COPY
+        }
+        _ => false,
+    };
+    (rows, explained)
+}
+
+/// One row for each item, and whether the index is known to be behind.
+///
+/// This and `effective_copy` are where a read chooses the copy of an item
+/// it presents. Each takes the rows of the contexts the reads present
+/// (`stored_items`), and the stored shape makes no difference: an index
+/// that leaves out the primary's copy of an item in its own worktree is
+/// read as one that holds both.
+///
+/// The row of the item's own worktree is the effective one while that
+/// worktree is there, and otherwise the primary one. The index is behind
+/// when it holds an item as Table A does not explain (see `ranked`), when
+/// the item's own worktree it holds is no longer there, or when it holds an
+/// item only as a copy in another item's worktree.
 ///
 /// A refresh stores the root, each item worktree and the removal of
 /// worktrees that are gone in separate transactions, so a read can find an
 /// item both in the primary context and in the row of a worktree that no
-/// longer exists, or the reverse. Then the row of the item's own worktree
-/// is the effective one if that worktree is still there, and otherwise the
-/// primary one; and the index, which is in the middle of changing, is
-/// behind.
+/// longer exists. The primary's copy is then the effective one, and the
+/// index, which is in the middle of changing, is behind.
 pub(super) fn effective_rows<'a>(
     repo: &ResolvedRepository,
     stored: &'a [StoredItem],
@@ -1578,9 +1800,9 @@ pub(super) fn effective_rows<'a>(
     let mut is_behind = false;
     let rows = by_id
         .into_values()
-        .map(|mut rows| {
-            is_behind |= rows.len() > 1;
-            rows.sort_by_key(|row| row_rank(repo, row));
+        .map(|rows| {
+            let (rows, explained) = ranked(repo, rows);
+            is_behind |= !explained;
             let row = rows
                 .iter()
                 .find(|row| {
@@ -1590,7 +1812,7 @@ pub(super) fn effective_rows<'a>(
                 })
                 .copied()
                 .unwrap_or(rows[0]);
-            is_behind |= row_rank(repo, row) == OTHER_WORKTREE;
+            is_behind |= !std::ptr::eq(row, rows[0]) || row_rank(repo, row) == OTHER_WORKTREE;
             row
         })
         .collect();
@@ -1613,7 +1835,8 @@ pub(super) struct EffectiveCopy<'a> {
 /// a row with nothing behind it gives way to the next; a copy that is there
 /// and cannot be read is a failure, not a reason to answer from another
 /// copy. `index` comes back `stale` when it claimed to be current and held
-/// the item more than once, or only as a copy in another item's worktree.
+/// the item as Table A does not explain (see `ranked`), when the copy read
+/// is not the first tried, or when it is a copy in another item's worktree.
 ///
 /// No row, and no row with a file behind it, is `item_not_found`.
 pub(super) fn effective_copy<'a>(
@@ -1622,28 +1845,24 @@ pub(super) fn effective_copy<'a>(
     id: &str,
     index: IndexStateDto,
 ) -> Result<EffectiveCopy<'a>, ReadError> {
-    let mut rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
+    let rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
     // A refresh can only find the item if the index is behind.
     if rows.is_empty() {
         return Err(item_not_found(repo, index.state != IndexState::Current));
     }
-    let index = if rows.len() > 1 {
-        behind(&index)
-    } else {
-        index
-    };
-    // The sort keeps the index's order within each rank.
-    rows.sort_by_key(|row| row_rank(repo, row));
-    for row in rows {
+    let (rows, explained) = ranked(repo, rows);
+    let index = if explained { index } else { behind(&index) };
+    for (tried, row) in rows.into_iter().enumerate() {
         if canonical_item_kind(&row.path).is_none() {
             return Err(invalid_stored_data());
         }
         match read_item_file(repo, &row.context.worktree, &row.path)? {
             ItemFileRead::Found(file) => {
-                // Answered from a copy in another item's worktree: a last
-                // resort, and the index is behind for offering nothing
-                // better.
-                let index = if row_rank(repo, row) == OTHER_WORKTREE {
+                // Answered from a copy the index did not offer first, its
+                // own being gone, or from a copy in another item's
+                // worktree, a last resort: the index is behind for offering
+                // nothing better.
+                let index = if tried > 0 || row_rank(repo, row) == OTHER_WORKTREE {
                     behind(&index)
                 } else {
                     index
@@ -1780,10 +1999,14 @@ impl RepositoryService {
     /// the nonconforming form with its source. A file that cannot be opened
     /// is `repository_inaccessible`.
     ///
-    /// When the index holds the item in more than one context, which it can
-    /// while a refresh is under way, the copy in the item's own worktree is
-    /// read if it is still there, otherwise the primary copy, and the index
-    /// is `stale`. A copy that is there and cannot be read fails the read.
+    /// When the index holds the item in more than one context, the copy in
+    /// the item's own worktree is read if it is still there, otherwise the
+    /// primary copy. Holding the primary's copy and that worktree's, as the
+    /// first edit of an item the primary holds does, leaves the index as it
+    /// is; reading the primary's because the worktree's is gone, or holding
+    /// the item any other way, which it can while a refresh is under way,
+    /// makes it `stale` (see `effective_copy`). A copy that is there and
+    /// cannot be read fails the read.
     pub fn show_item(&self, repo: &ResolvedRepository, id: &ItemId) -> Result<ItemDto, ReadError> {
         let id = id.to_string();
         self.read_session(RepositoryOperation::Read, |connection| {
@@ -2126,7 +2349,8 @@ fn named_worktree(repo: &ResolvedRepository, context: Option<&Path>) -> Result<S
 }
 
 /// The context whose worktree is `worktree`: the repository root, or an
-/// item context the index holds as active. Any other is `invalid_path`.
+/// item context the index holds as active and the reads present. Any other
+/// is `invalid_path`.
 fn named_context(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -2139,15 +2363,20 @@ fn named_context(
     {
         Some(context) if worktree == root || context.kind == ItemContextKind::Active => Ok(context),
         Some(_) => Err(ReadError::invalid_path()),
-        // The root is a context whether or not it has been observed;
-        // unobserved, nothing has verified its branch.
-        None if worktree == root => Ok(StoredContext {
-            kind: ItemContextKind::Unverified,
-            branch: None,
-            worktree: root,
-            head_oid: None,
-        }),
+        None if worktree == root => Ok(unobserved_root(root)),
         None => Err(ReadError::invalid_path()),
+    }
+}
+
+/// The root, whose worktree is `root`, when the index holds no context for
+/// it. The root is a context whether or not it has been observed;
+/// unobserved, nothing has verified its branch.
+fn unobserved_root(root: String) -> StoredContext {
+    StoredContext {
+        kind: ItemContextKind::Unverified,
+        branch: None,
+        worktree: root,
+        head_oid: None,
     }
 }
 

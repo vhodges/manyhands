@@ -1108,6 +1108,31 @@ fn index_status_is_stale_when_the_index_holds_an_item_twice() {
         enabled.service.list_documents(&repo).unwrap().index.state,
         IndexState::Stale
     );
+
+    // The same item in the primary context and in its own worktree's, the
+    // worktree there: what the first edit of an item the primary holds
+    // makes, which is not behind.
+    fs::create_dir_all(repo.root().join(".manyhands/worktrees").join(DOCUMENT_A)).unwrap();
+    items::index(enabled.data_directory.path())
+        .execute(
+            "UPDATE contexts
+                SET worktree_path = replace(worktree_path, '/.manyhands/worktrees/x',
+                                            '/.manyhands/worktrees/' || ?1),
+                    branch = 'manyhands/document/' || ?1, item_id = ?1
+              WHERE kind = 'active'",
+            [DOCUMENT_A],
+        )
+        .unwrap();
+
+    let status = enabled.service.index_status(&repo).unwrap();
+
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(2));
+    assert_eq!(status.item_count, Some(4));
+    assert_eq!(
+        enabled.service.list_documents(&repo).unwrap().index.state,
+        IndexState::Current
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -2145,7 +2170,6 @@ fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts()
 }
 
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn presentation_across_contexts() {
     presentation::run(&[
         Row {

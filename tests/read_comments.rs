@@ -1332,7 +1332,8 @@ fn comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_s
     drop(connection);
 
     // The worktree is not there: the primary row is the one with a file
-    // behind it, and its comments are the ones read.
+    // behind it, and its comments are the ones read. The index holds a
+    // worktree that is gone, and is behind.
     let from_primary = comments(&enabled.service, &repo, TICKET_A);
 
     assert_eq!(ids(&from_primary.items), [Some(COMMENT_A)]);
@@ -1361,7 +1362,6 @@ fn comments_of_an_item_the_index_holds_twice_come_from_the_chosen_copy_and_are_s
     assert_eq!(ids(&from_worktree.items), [Some(COMMENT_B)]);
     assert_eq!(from_worktree.context.kind, ItemContextKind::Active);
     assert_eq!(Path::new(&from_worktree.context.worktree), worktree);
-    assert_eq!(from_worktree.index.state, IndexState::Stale);
     assert_git_transport_uninitialized();
 }
 
@@ -1568,7 +1568,6 @@ fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts()
 }
 
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn presentation_across_contexts() {
     presentation::run(&[
         Row {
