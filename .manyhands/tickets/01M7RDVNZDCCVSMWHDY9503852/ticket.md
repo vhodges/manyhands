@@ -3,7 +3,7 @@ slug: vh-f3wts
 id: 01M7RDVNZDCCVSMWHDY9503852
 title: Saves, comments, promote and close take 20 s to 5 min re-walking Git history for every item
 type: defect
-status: implementing
+status: waiting
 project: manyhands
 team: core
 manyhands_managed: true
