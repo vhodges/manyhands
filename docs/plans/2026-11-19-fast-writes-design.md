@@ -23,6 +23,11 @@ A person expects a local save to be quick, checkpoint commit included; sharing a
 13. **The design is approved** (owner, 2026-11-19: "approved, accept the exception, write the plan").
 14. **The `context sync-local` exception is accepted**: a crashed `context sync-local` still blocks refresh and poll until resumed, because its row keeps repository scope; narrowing it is left to a separate ticket if it is ever needed.
 
+15. **The implementation plan is approved** (owner, 2026-11-19: "approved, all recommended answers, subagent-driven, go ahead"), with its planning amendments P-1–P-5 (`docs/plans/2026-11-19-fast-writes-implementation.md`, "Planning amendments to the design"), which take precedence over this design where they differ: P-1 cleanup checks (one full check inside removal, one cheap check before the remote delete); P-2 reads keep today's newer-file staleness rule against the context's own `indexed_at`; P-3 a write's index step, and a sync's, observe outside the lease and store under it after a basis re-check (replacing "under the lease it holds for the write" in Phase 1 and R-3); P-4 a sync's hand-off keeps the `refresh` action with a per-item `synchronization-index-v1/` target; P-5 previews add no blockers.
+16. **A primary sync's hand-off row is the primary's own item in Table B**; close, promotion and folder create index under whole-repository refresh rows and keep repository scope, a second exception to decision 10 beside decision 14.
+17. **The measurement script may run `repo enable`, `repo identity-set`, `key generate` and the confirms of close and promote in its own scratch registry and replica**; the owner adds its throwaway public key to localhost's `authorized_keys` or names a key to import.
+18. **The named edits E-1–E-11 are approved**, with the inventory the plan's Task 3 brings to its checkpoint still to be approved there. Execution is subagent-driven.
+
 ## Goals
 
 1. A write updates the index for the contexts it changed and nothing else, once, under the lease it holds for the write (Phase 1's command table).

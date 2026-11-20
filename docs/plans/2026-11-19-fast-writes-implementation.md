@@ -8,7 +8,9 @@
 
 **Tech Stack:** Rust, git2 0.20.4 (libgit2 with libssh2), rusqlite registry, serde_json, the SSH test harness in `tests/support/ssh_*`.
 
-**Spec:** `docs/plans/2026-11-19-fast-writes-design.md` (approved 2026-11-19; decisions 1–14, rulings R-1–R-7, Tables A and B), with the planning amendments P-1–P-5 below, which the owner approves with this plan. Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts): its "How to measure" section and planning comments 1–3.
+**Status:** approved by the owner, 2026-11-19, with all recommended answers to the owner questions below; execution subagent-driven.
+
+**Spec:** `docs/plans/2026-11-19-fast-writes-design.md` (approved 2026-11-19; decisions 1–18, rulings R-1–R-7, Tables A and B), with the planning amendments P-1–P-5 below, approved with this plan. Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts): its "How to measure" section and planning comments 1–3.
 
 ## Planning amendments to the design (for the owner's approval)
 
