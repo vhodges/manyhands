@@ -693,6 +693,55 @@ fn an_index_step_stores_only_after_a_basis_recheck_under_the_lease() {
     assert_eq!(fixture.row(&operation).0, "completed");
 }
 
+/// An index step that cannot take the repository's lease to store (another
+/// call holds it past the lease's timeout) stores nothing. The write has
+/// committed, so it answers as a raced one does, `discovery_pending` with its
+/// commit, not `busy`. Its context is left dirty and its row still owes the
+/// hand-off, which `operation resume` completes once the lease is free.
+#[test]
+fn an_index_step_that_cannot_take_the_lease_leaves_the_write_owing_its_hand_off() {
+    let fixture = Fixture::with_context();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(None));
+    {
+        let (held, root, data) = (
+            held.clone(),
+            fixture.root.clone(),
+            fixture.data.path().to_owned(),
+        );
+        fixture.service.set_observation_hook_for_testing(move || {
+            let lease =
+                RepositoryService::hold_lease_for_testing(&root, &data, LeaseKind::Repository)
+                    .unwrap();
+            *held.lock().unwrap() = Some(lease);
+        });
+    }
+
+    let pending = fixture.save(RequestId::new(), &fixture.save_input("Unleased save"));
+    assert!(held.lock().unwrap().is_some(), "the lease was not held");
+    assert_eq!(
+        (pending.code, pending.effects.discovery),
+        (ResultCode::DiscoveryPending, DiscoveryEffect::Pending),
+        "{pending:?}"
+    );
+    let commit = pending.effects.commit_oid.clone().expect("a commit");
+    let operation = pending.operation_id.clone().expect("an operation");
+    assert_eq!(fixture.head(TICKET), commit);
+    let (state, _, owed) = fixture.row(&operation);
+    assert_eq!((state.as_str(), owed), ("retry", owed_by(TICKET)));
+    assert_eq!(fixture.title(TICKET), Some("First save".to_owned()));
+    assert_eq!(fixture.mark(TICKET), Some(1));
+    assert_eq!(fixture.status(), IndexStatusState::Stale);
+
+    drop(held.lock().unwrap().take());
+    let resumed = fixture.resume(&operation);
+    assert_eq!(resumed.code, ResultCode::Ok, "{resumed:?}");
+    assert_eq!(fixture.row(&operation).0, "completed");
+    assert_eq!(fixture.head(TICKET), commit);
+    assert_eq!(fixture.title(TICKET), Some("Unleased save".to_owned()));
+    assert_eq!(fixture.mark(TICKET), Some(0));
+    assert_eq!(fixture.status(), IndexStatusState::Current);
+}
+
 /// A create's index step stores its new context and nothing else: the
 /// primary is not observed, and the repository is not marked behind, since
 /// the create's own row owes the context while nothing is stored for it.

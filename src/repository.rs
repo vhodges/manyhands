@@ -4352,6 +4352,12 @@ impl RepositoryService {
     /// to take: the row's list keeps it owed. Nothing whole-repository is
     /// touched: not the repository's `refresh_required`, nor its
     /// `refreshed_at`.
+    ///
+    /// A lease another call holds past its timeout leaves nothing that can
+    /// be checked again. Nothing is stored and nothing deleted; every
+    /// observed context is left dirty, as one that moved is. The write has
+    /// committed by then, so it answers as a raced one does, its hand-off
+    /// pending, not `busy`.
     fn index_observed_contexts(
         &self,
         repository: &Repository,
@@ -4392,11 +4398,16 @@ impl RepositoryService {
         self.run_observation_hook(operation, root)?;
         self.run_refresh_persist_hook(operation, root)?;
 
-        let _repository_lease = repository_lease(repository, root, operation)?;
+        let lease = match repository_lease(repository, root, operation) {
+            Ok(lease) => Some(lease),
+            Err(error) if error.kind == RepositoryErrorKind::RepositoryBusy => None,
+            Err(error) => return Err(error),
+        };
         let checked = observed
             .iter()
             .map(|(listed, observation)| {
-                let current = !observation.left_dirty
+                let current = lease.is_some()
+                    && !observation.left_dirty
                     && discovery::basis_holds(
                         repository,
                         root,
@@ -4433,13 +4444,15 @@ impl RepositoryService {
                 moved.get_or_insert(worktree.as_path());
             }
         }
-        for key in gone {
-            delete_context_rows(&transaction, repository_id, key).map_err(sqlite)?;
+        if lease.is_some() {
+            for key in gone {
+                delete_context_rows(&transaction, repository_id, key).map_err(sqlite)?;
+            }
         }
         self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, root)?;
-        let (outcome, state) = match moved {
-            None => (IndexOutcome::Current, "completed"),
-            Some(_) => (IndexOutcome::LeftDirty, "retry"),
+        let (outcome, state) = match (&lease, moved) {
+            (Some(_), None) => (IndexOutcome::Current, "completed"),
+            (None, _) | (_, Some(_)) => (IndexOutcome::LeftDirty, "retry"),
         };
         if !transition_indexing(&transaction, owner, state, moved)
             .map_err(|error| error.for_operation(operation, root))?
