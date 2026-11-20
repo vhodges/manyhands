@@ -48,6 +48,8 @@ pub use comment_publication::*;
 mod blocker;
 #[cfg(test)]
 mod comment_publication_tests;
+#[cfg(test)]
+mod context_index_tests;
 mod discovery;
 #[cfg(test)]
 mod git_fixtures;
@@ -73,6 +75,7 @@ mod remote;
 mod ticket_guard;
 pub mod transport;
 
+use activity::PrimaryActivityMap;
 pub use bridges::abandon::{
     AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationRemains,
     PendingStanding,
@@ -90,8 +93,9 @@ use coordination::{
     cache_read_guard, cache_write_guard, leases_are_free, repository_lease,
 };
 use discovery::{
-    ObservedCommentThread, ObservedItem, RootConfiguration, RootObservation,
-    RootObservationProblem, migrate_registry, observe_root, open_registry, open_registry_read_only,
+    ContextObservation, ObservedActivity, ObservedCommentThread, ObservedContexts,
+    RootConfiguration, RootObservation, RootObservationProblem, migrate_registry, observe_contexts,
+    open_registry, open_registry_read_only,
 };
 pub use keys::{
     GeneratedKeyDeletionPreflight, PrivateKeySourceState, PublicKeyMetadataState,
@@ -1585,7 +1589,8 @@ impl RepositoryService {
         // no newer than this, so a file changed while it runs reads as
         // changed since.
         let observed_from = OffsetDateTime::now_utc().unix_timestamp();
-        let before = observe_root(repository, &root);
+        let mut activity = load_activity_map(&self.registry_path, &root, operation)?;
+        let before = observe_contexts(repository, &root, &mut activity);
         if let Err(error) =
             self.check_failure(FailurePoint::AfterContextObservation, operation, &root)
         {
@@ -1607,7 +1612,7 @@ impl RepositoryService {
         {
             hook();
         }
-        let after = observe_root(repository, &root);
+        let after = observe_contexts(repository, &root, &mut activity);
         touch_refresh_index_owner(&self.registry_path, owner.clone(), &root)?;
         if let Some(hook) = self
             .refresh_persist_hook
@@ -1630,42 +1635,24 @@ impl RepositoryService {
             set_refresh_operation(&self.registry_path, owner, "failed", None, &root)?;
             return Err(error);
         }
-        let mut changed = changed_contexts(&before, &after, &root);
-        if !changed.contains(&root) {
-            persist_context_refresh(
-                &self.registry_path,
-                repository_id,
-                owner.clone(),
-                &before,
-                &before.context,
-                &before.head,
-                &before.items,
-                &before.problems,
-                &before.validation.problems,
-                &root,
-            )?;
-        }
-        for active in &before.active_contexts {
-            if !changed.contains(&active.context.worktree) {
+        let changed = changed_contexts(&before, &after);
+        for observation in before.contexts() {
+            if !changed.contains(&observation.context.worktree) {
                 persist_context_refresh(
                     &self.registry_path,
                     repository_id,
                     owner.clone(),
-                    &before,
-                    &active.context,
-                    &active.head,
-                    &active.items,
-                    &active.problems,
-                    &active.validation.problems,
+                    observation,
                     &root,
                 )?;
             }
         }
-        if let Some(context) = changed.pop_first() {
+        if let Some(context) = changed.first().cloned() {
             persist_retry_problem(
                 &self.registry_path,
                 repository_id,
                 &context,
+                &changed,
                 owner.clone(),
                 &root,
             )?;
@@ -1721,7 +1708,8 @@ impl RepositoryService {
         let result = (|| {
             // As in a refresh: the time before the first observation.
             let observed_from = OffsetDateTime::now_utc().unix_timestamp();
-            let observation = observe_root(&repository, &root);
+            let mut activity = load_activity_map(&self.registry_path, &root, operation)?;
+            let observation = observe_contexts(&repository, &root, &mut activity);
             if let Some(hook) = self
                 .observation_hook
                 .lock()
@@ -1738,10 +1726,11 @@ impl RepositoryService {
                 hook();
             }
             let _repository_lease = repository_lease(&repository, &root, operation)?;
-            let after = observe_root(&repository, &root);
+            let after = observe_contexts(&repository, &root, &mut activity);
             set_rebuild_operation(&self.registry_path, operation_id, "observed", &root)?;
-            if !changed_contexts(&observation, &after, &root).is_empty() {
-                persist_rebuild_retry(&self.registry_path, operation_id, &root)?;
+            let changed = changed_contexts(&observation, &after);
+            if !changed.is_empty() {
+                persist_rebuild_retry(&self.registry_path, operation_id, &root, &changed)?;
                 return read_repository_snapshot_from_registry(&self.registry_path, &root);
             }
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)?;
@@ -6093,6 +6082,38 @@ fn registered_repository_id(
         })
 }
 
+/// The activity map the index holds for the repository at `root`, for the
+/// primary's observation to bring to its head; an empty map, which that
+/// observation builds, when the repository is not registered or nothing is
+/// stored for it.
+fn load_activity_map(
+    registry_path: &Path,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<PrimaryActivityMap, RepositoryError> {
+    let _cache_guard = cache_read_guard(registry_path, root, operation)?;
+    let root_path = registry_root_key(root, operation)?;
+    let mut connection = open_registry(registry_path, &mut |_| {})
+        .map_err(|error| error.for_operation(operation, root))?;
+    // One read of the base and the entries, which a store writes together.
+    let transaction = connection
+        .transaction()
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    let repository_id: Option<i64> = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    match repository_id {
+        Some(repository_id) => PrimaryActivityMap::load(&transaction, repository_id),
+        None => Ok(PrimaryActivityMap::default()),
+    }
+    .map_err(|error| error.for_operation(operation, root))
+}
+
 fn set_rebuild_operation(
     registry_path: &Path,
     operation_id: i64,
@@ -6162,21 +6183,20 @@ fn persist_rebuild_observation(
     registry_path: &Path,
     operation_id: i64,
     root: &Path,
-    observation: &RootObservation,
+    observation: &ObservedContexts,
     observed_from: i64,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
-    let persisted_context_count =
-        i64::try_from(1 + observation.active_contexts.len()).map_err(|_| {
-            RepositoryError::new(
-                operation,
-                Some(root.to_owned()),
-                RepositoryErrorKind::Sqlite,
-                "too many observed contexts to persist",
-            )
-        })?;
+    let persisted_context_count = i64::try_from(observation.contexts().count()).map_err(|_| {
+        RepositoryError::new(
+            operation,
+            Some(root.to_owned()),
+            RepositoryErrorKind::Sqlite,
+            "too many observed contexts to persist",
+        )
+    })?;
     let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(operation, root))?;
     let transaction = connection
@@ -6233,10 +6253,15 @@ fn persist_rebuild_observation(
     .map_err(|error| error.for_operation(operation, root))
 }
 
+/// What a rebuild that found the repository changing while it observed
+/// stores: nothing it observed. The index is marked stale, and each context
+/// that changed (`changed`, by worktree) keeps its rows, marked as owed an
+/// indexing.
 fn persist_rebuild_retry(
     registry_path: &Path,
     operation_id: i64,
     root: &Path,
+    changed: &BTreeSet<PathBuf>,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RebuildRepository;
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
@@ -6259,6 +6284,10 @@ fn persist_rebuild_retry(
             [repository_id],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    for context in changed {
+        mark_context_dirty(&transaction, repository_id, context)
+            .map_err(|error| error.for_operation(operation, root))?;
+    }
     transaction
         .execute(
             "INSERT INTO problems (repository_id, code, guidance, observed_at)
@@ -6360,55 +6389,23 @@ fn record_persisted_context(
     Ok(())
 }
 
-fn changed_contexts(
-    before: &RootObservation,
-    after: &RootObservation,
-    root: &Path,
-) -> BTreeSet<PathBuf> {
+/// The contexts, by worktree, that changed between two observations of the
+/// repository: each that either observation left dirty, that the two read
+/// differently, or that only one of them found. None of them is stored.
+fn changed_contexts(before: &ObservedContexts, after: &ObservedContexts) -> BTreeSet<PathBuf> {
     let mut changed = BTreeSet::new();
-    if before.head.oid != after.head.oid
-        || before.head.branch != after.head.branch
-        || before.configuration_source != after.configuration_source
-        || before.sources != after.sources
-        || before.folders != after.folders
-        || format!(
-            "{:?}{:?}{:?}{:?}",
-            before.context, before.items, before.problems, before.validation
-        ) != format!(
-            "{:?}{:?}{:?}{:?}",
-            after.context, after.items, after.problems, after.validation
-        )
-    {
-        changed.insert(root.to_owned());
-    }
-    for context in &before.active_contexts {
+    for context in before.contexts() {
         let stable = after
-            .active_contexts
-            .iter()
+            .contexts()
             .find(|candidate| candidate.context.worktree == context.context.worktree)
-            .is_some_and(|candidate| {
-                candidate.head.oid == context.head.oid
-                    && candidate.head.branch == context.head.branch
-                    && candidate.sources == context.sources
-                    && format!(
-                        "{:?}{:?}{:?}{:?}",
-                        candidate.context,
-                        candidate.items,
-                        candidate.problems,
-                        candidate.validation
-                    ) == format!(
-                        "{:?}{:?}{:?}{:?}",
-                        context.context, context.items, context.problems, context.validation
-                    )
-            });
+            .is_some_and(|candidate| observed_the_same(context, candidate));
         if !stable {
             changed.insert(context.context.worktree.clone());
         }
     }
-    for context in &after.active_contexts {
+    for context in after.contexts() {
         if !before
-            .active_contexts
-            .iter()
+            .contexts()
             .any(|candidate| candidate.context.worktree == context.context.worktree)
         {
             changed.insert(context.context.worktree.clone());
@@ -6417,17 +6414,41 @@ fn changed_contexts(
     changed
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Whether two observations of one context read the same, and neither was
+/// left dirty. What either rests on (its basis, when it began, the activity
+/// map) is not compared: only what would be stored.
+fn observed_the_same(before: &ContextObservation, after: &ContextObservation) -> bool {
+    !before.left_dirty
+        && !after.left_dirty
+        && before.head.oid == after.head.oid
+        && before.head.branch == after.head.branch
+        && before
+            .configuration
+            .as_ref()
+            .map(|configuration| &configuration.source)
+            == after
+                .configuration
+                .as_ref()
+                .map(|configuration| &configuration.source)
+        && before.sources == after.sources
+        && before.folders == after.folders
+        && format!(
+            "{:?}{:?}{:?}{:?}",
+            before.context, before.items, before.problems, before.validation
+        ) == format!(
+            "{:?}{:?}{:?}{:?}",
+            after.context, after.items, after.problems, after.validation
+        )
+}
+
+/// Stores one context a refresh observed, in a transaction of its own that
+/// the refresh still owns indexing in, and records on its row that the
+/// context is stored.
 fn persist_context_refresh(
     registry_path: &Path,
     repository_id: i64,
     owner: IndexOwner,
-    root_observation: &RootObservation,
-    context: &discovery::RootContextObservation,
-    head: &discovery::RootHeadObservation,
-    items: &[ObservedItem],
-    problems: &[RootObservationProblem],
-    validation: &[canonical::ValidationProblem],
+    observation: &ContextObservation,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let _cache_guard =
@@ -6441,77 +6462,14 @@ fn persist_context_refresh(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     require_index_owner(&transaction, owner.clone(), root)?;
-    transaction
-        .execute(
-            "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
-            params![repository_id, context.worktree.to_str()],
-        )
-        .map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RefreshRepository, root)
-        })?;
-    if context.worktree == root {
-        transaction
-            .execute(
-                "DELETE FROM configuration_observations WHERE repository_id = ?1",
-                [repository_id],
-            )
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RefreshRepository, root)
-            })?;
-        transaction
-            .execute(
-                "UPDATE repositories SET config_blob_oid = ?2 WHERE id = ?1",
-                params![
-                    repository_id,
-                    matches!(root_observation.configuration, RootConfiguration::Valid(_))
-                        .then(|| root_observation
-                            .configuration_blob_oid
-                            .map(|oid| oid.to_string()))
-                        .flatten()
-                ],
-            )
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RefreshRepository, root)
-            })?;
-        match &root_observation.configuration {
-            RootConfiguration::Valid(configuration) => {
-                transaction.execute("INSERT INTO configuration_observations (repository_id, state, primary_branch, publication_remote) VALUES (?1, 'valid', ?2, ?3)", params![repository_id, configuration.primary_branch, configuration.publication_remote]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-            }
-            RootConfiguration::Missing => {
-                transaction.execute("INSERT INTO configuration_observations (repository_id, state) VALUES (?1, 'missing')", [repository_id]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-            }
-            RootConfiguration::Invalid(problem) => {
-                transaction.execute("INSERT INTO configuration_observations (repository_id, state, invalid_code, guidance) VALUES (?1, 'invalid', ?2, ?3)", params![repository_id, validation_code_name(problem.code.clone()), problem.message]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-            }
-        }
-    }
-    persist_context(
-        &transaction,
-        repository_id,
-        PersistedContext {
-            context,
-            head,
-            items,
-            // Folders are those of the primary worktree only.
-            folders: if context.worktree == root {
-                &root_observation.folders
-            } else {
-                &[]
-            },
-            problems,
-            validation_problems: validation,
-        },
-        root,
-    )?;
+    persist_context_index(&transaction, repository_id, observation)
+        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     transaction.commit().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root)
     })?;
     let connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
-    if !record_owned_persisted_context(&connection, owner, &context.worktree)
+    if !record_owned_persisted_context(&connection, owner, &observation.context.worktree)
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
         return Err(nonowner_error(root));
@@ -6519,10 +6477,15 @@ fn persist_context_refresh(
     Ok(())
 }
 
+/// What a refresh that found contexts changing while it observed them
+/// stores: the index marked stale, with a problem on `context`, the first
+/// of them, and each of `changed` keeping its rows, marked as owed an
+/// indexing.
 fn persist_retry_problem(
     registry_path: &Path,
     repository_id: i64,
     context: &Path,
+    changed: &BTreeSet<PathBuf>,
     owner: IndexOwner,
     root: &Path,
 ) -> Result<(), RepositoryError> {
@@ -6558,6 +6521,10 @@ fn persist_retry_problem(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     transaction.execute("INSERT INTO problems (repository_id, context_id, code, guidance, observed_at) VALUES (?1, ?2, 'retry-required', 'the context changed while it was being observed; refresh again', ?3)", params![repository_id, context_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    for worktree in changed {
+        mark_context_dirty(&transaction, repository_id, worktree)
+            .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
+    }
     if !transition_indexing(&transaction, owner, "retry", Some(context))
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
@@ -6568,10 +6535,13 @@ fn persist_retry_problem(
     })
 }
 
+/// Completes a refresh that stored every context it observed: the rows of
+/// each context it did not find (a worktree removed or released) go, and
+/// the index is marked current from `observed_from`.
 fn reconcile_disappeared_contexts(
     registry_path: &Path,
     repository_id: i64,
-    observation: &RootObservation,
+    observation: &ObservedContexts,
     owner: IndexOwner,
     observed_from: i64,
     root: &Path,
@@ -6587,13 +6557,9 @@ fn reconcile_disappeared_contexts(
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
     require_index_owner(&transaction, owner.clone(), root)?;
-    let paths = std::iter::once(observation.context.worktree.clone())
-        .chain(
-            observation
-                .active_contexts
-                .iter()
-                .map(|context| context.context.worktree.clone()),
-        )
+    let paths = observation
+        .contexts()
+        .map(|context| context.context.worktree.clone())
         .collect::<BTreeSet<_>>();
     let stored = transaction
         .prepare("SELECT worktree_path FROM contexts WHERE repository_id = ?1")
@@ -6693,11 +6659,14 @@ fn observations_match(before: &RootObservation, after: &RootObservation) -> bool
             })
 }
 
-#[allow(dead_code)]
+/// Replaces every row the index holds for the repository with what
+/// `observation` holds, each context's from its own observation through
+/// `persist_context_index`: what a rebuild and a local sync store. Their
+/// caller has found no context that changed while it was observed.
 fn persist_observation(
     transaction: &rusqlite::Transaction<'_>,
     repository_id: i64,
-    observation: &RootObservation,
+    observation: &ObservedContexts,
     root: &Path,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RefreshRepository;
@@ -6713,26 +6682,101 @@ fn persist_observation(
             [repository_id],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    for context in observation.contexts() {
+        persist_context_index(transaction, repository_id, context)
+            .map_err(|error| error.for_operation(operation, root))?;
+    }
+    Ok(())
+}
+
+/// Stores one context's index rows from its own observation alone, in
+/// place of what was stored for it: every store of index rows goes through
+/// here.
+///
+/// The context's row records its basis, the time its observation began as
+/// its indexed time, and no mark; under it go its items, with their edges
+/// and comments, and its problems. An item worktree that is no valid item
+/// context is a row of the kind `invalid` holding its one problem, at the
+/// worktree itself (the empty path). The primary also stores the
+/// configuration it read, its folders, the head its activity map is valid
+/// for and, when the observation changed it, the map.
+///
+/// A context left dirty, one that changed while it was read, is not
+/// stored: what was stored for it stays, marked as owed an indexing.
+///
+/// An error names no operation or root; the caller names them.
+fn persist_context_index(
+    transaction: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+    observation: &ContextObservation,
+) -> Result<(), RepositoryError> {
+    let worktree = &observation.context.worktree;
+    if observation.left_dirty {
+        return mark_context_dirty(transaction, repository_id, worktree);
+    }
+    // Its items, comments, edges, folders and problems go with it.
+    transaction
+        .execute(
+            "DELETE FROM contexts WHERE repository_id = ?1 AND worktree_path = ?2",
+            params![repository_id, worktree.to_str()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    if let Some(configuration) = &observation.configuration {
+        persist_configuration(transaction, repository_id, configuration)?;
+    }
+    persist_context(transaction, repository_id, observation)?;
+    if let Some(ObservedActivity {
+        changed: Some(activity),
+        ..
+    }) = &observation.activity
+    {
+        activity.store(transaction, repository_id)?;
+    }
+    Ok(())
+}
+
+/// Marks the context whose worktree is `worktree` as owed an indexing,
+/// leaving what is stored for it as it is. A context nothing is stored for
+/// has nothing to mark: the next refresh observes it as new.
+fn mark_context_dirty(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    worktree: &Path,
+) -> Result<(), RepositoryError> {
+    connection
+        .execute(
+            "UPDATE contexts SET dirty = 1 WHERE repository_id = ?1 AND worktree_path = ?2",
+            params![repository_id, worktree.to_str()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(())
+}
+
+/// Replaces the configuration the primary's observation read: its state,
+/// and the blob of a valid configuration that the head holds as it is.
+fn persist_configuration(
+    transaction: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+    observed: &discovery::ObservedConfiguration,
+) -> Result<(), RepositoryError> {
     transaction
         .execute(
             "DELETE FROM configuration_observations WHERE repository_id = ?1",
             [repository_id],
         )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        .map_err(RepositoryError::sqlite)?;
     transaction
         .execute(
             "UPDATE repositories SET config_blob_oid = ?2 WHERE id = ?1",
             params![
                 repository_id,
-                matches!(observation.configuration, RootConfiguration::Valid(_))
-                    .then(|| observation
-                        .configuration_blob_oid
-                        .map(|oid| oid.to_string()))
+                matches!(observed.configuration, RootConfiguration::Valid(_))
+                    .then(|| observed.blob_oid.map(|oid| oid.to_string()))
                     .flatten()
             ],
         )
-        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    match &observation.configuration {
+        .map_err(RepositoryError::sqlite)?;
+    match &observed.configuration {
         RootConfiguration::Valid(configuration) => {
             transaction.execute(
                 "INSERT INTO configuration_observations (repository_id, state, primary_branch, publication_remote) VALUES (?1, 'valid', ?2, ?3)",
@@ -6746,62 +6790,40 @@ fn persist_observation(
             "INSERT INTO configuration_observations (repository_id, state, invalid_code, guidance) VALUES (?1, 'invalid', ?2, ?3)",
             params![repository_id, validation_code_name(problem.code.clone()), problem.message],
         ),
-    }.map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-    persist_context(
-        transaction,
-        repository_id,
-        PersistedContext {
-            context: &observation.context,
-            head: &observation.head,
-            items: &observation.items,
-            folders: &observation.folders,
-            problems: &observation.problems,
-            validation_problems: &observation.validation.problems,
-        },
-        root,
-    )?;
-    for active in &observation.active_contexts {
-        persist_context(
-            transaction,
-            repository_id,
-            PersistedContext {
-                context: &active.context,
-                head: &active.head,
-                items: &active.items,
-                folders: &[],
-                problems: &active.problems,
-                validation_problems: &active.validation.problems,
-            },
-            root,
-        )?;
     }
+    .map_err(RepositoryError::sqlite)?;
     Ok(())
 }
 
-struct PersistedContext<'a> {
-    context: &'a discovery::RootContextObservation,
-    head: &'a discovery::RootHeadObservation,
-    items: &'a [ObservedItem],
-    /// The directories under `docs/` that the observation listed: those
-    /// of the primary worktree, and none for any other context.
-    folders: &'a [discovery::ObservedFolder],
-    problems: &'a [RootObservationProblem],
-    validation_problems: &'a [canonical::ValidationProblem],
-}
-
+/// Inserts the context's row and the rows under it, from its observation.
 fn persist_context(
     transaction: &rusqlite::Transaction<'_>,
     repository_id: i64,
-    observed: PersistedContext<'_>,
-    root: &Path,
+    observed: &ContextObservation,
 ) -> Result<(), RepositoryError> {
     let operation = RepositoryOperation::RefreshRepository;
+    // Errors are named for the context; the caller names its own root.
+    let root = observed.context.worktree.as_path();
     transaction.execute(
-        "INSERT INTO contexts (repository_id, kind, branch, worktree_path, item_id, head_oid) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![repository_id, context_kind_name(observed.context.kind), observed.context.branch, observed.context.worktree.to_str(), observed.context.item_id.as_ref().map(ToString::to_string), observed.head.oid.map(|oid| oid.to_string())],
+        "INSERT INTO contexts (repository_id, kind, branch, worktree_path, item_id, head_oid, basis, indexed_at, dirty, activity_base) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
+        params![
+            repository_id,
+            context_kind_name(observed.context.kind),
+            observed.context.branch,
+            observed.context.worktree.to_str(),
+            observed.context.item_id.as_ref().map(ToString::to_string),
+            observed.head.oid.map(|oid| oid.to_string()),
+            observed.basis.encode(),
+            observed.started_at_ns,
+            observed
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.base)
+                .map(|oid| oid.to_string())
+        ],
     ).map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     let context_id = transaction.last_insert_rowid();
-    for item in observed.items {
+    for item in &observed.items {
         transaction.execute(
             "INSERT INTO discovered_items (context_id, item_id, kind, canonical_path, title, ticket_type, status, project, team, closed_at, activity_at, activity_source, closed_by, unknown_metadata, slug) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![context_id, item.id.to_string(), authoring_kind_name(item.kind), item.path.to_str(), item.title, item.ticket_type, item.status, item.project, item.team, item.closed_at.map(OffsetDateTime::unix_timestamp), item.activity_at.unix_timestamp(), activity_source_name(item.activity_source), item.closed_by, item.unknown_metadata.to_stored(), item.relationships.slug],
@@ -6811,8 +6833,9 @@ fn persist_context(
         persist_comments(transaction, item_row, &item.comments, None, root)?;
     }
     // Nothing is deleted here: the folders of the context's earlier
-    // observation went with its row when it was deleted to be replaced.
-    for folder in observed.folders {
+    // observation went with its row when it was deleted to be replaced. Only
+    // the primary's observation lists folders.
+    for folder in &observed.folders {
         transaction
             .execute(
                 "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (?1, ?2, ?3)",
@@ -6821,7 +6844,7 @@ fn persist_context(
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
     let observed_at = OffsetDateTime::now_utc().unix_timestamp();
-    for problem in observed.problems {
+    for problem in &observed.problems {
         let (path, code, guidance) = match problem {
             RootObservationProblem::Configuration(problem) => (
                 Some(problem.path.as_path()),
@@ -6859,7 +6882,7 @@ fn persist_context(
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, stored_path, code, guidance, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }
-    for problem in observed.validation_problems {
+    for problem in &observed.validation.problems {
         transaction.execute("INSERT INTO problems (repository_id, context_id, path, code, guidance, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![repository_id, context_id, problem.path.to_str(), validation_code_name(problem.code.clone()), problem.message, observed_at])
             .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     }

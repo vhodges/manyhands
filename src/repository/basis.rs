@@ -240,7 +240,6 @@ impl Basis {
     /// A path is stored as text, so one that is not UTF-8 does not read back
     /// as itself: a basis that holds one never checks as the same, and its
     /// context is observed each time.
-    #[cfg_attr(not(test), allow(dead_code))] // Stored by the per-context indexing that follows.
     pub(super) fn encode(&self) -> String {
         let text = |path: &OsStr| path.to_string_lossy().into_owned();
         let stored = StoredBasis {
@@ -795,15 +794,17 @@ mod tests {
     };
 
     use git2::Repository;
+    use rusqlite::{Connection, params};
 
     use super::*;
     use crate::repository::{
         activity::PrimaryActivityMap,
         discovery::{
             ContextKey, ContextObservation, ListedContext, clear_scan_hook, list_contexts,
-            observe_context, set_context_scan_hook, stat_basis,
+            migrate_registry, observe_context, open_registry, set_context_scan_hook, stat_basis,
         },
         git_fixtures::{active_worktree_at, checkpoint, repository_on_main},
+        persist_context_index,
     };
 
     const DOCUMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -938,6 +939,67 @@ mod tests {
                 Some(stored),
                 indexed_at_ns,
             )
+        }
+    }
+
+    /// An index holding one registration, for the context of the worktree
+    /// at `root`, that each observation is stored to as it is indexed.
+    struct Index {
+        _directory: tempfile::TempDir,
+        connection: Connection,
+    }
+
+    /// What the index holds for its one context: the row, with what it
+    /// records of its last indexing, and the titles of its items.
+    type Stored = ((i64, Option<String>, Option<i64>), Vec<String>);
+
+    impl Index {
+        fn new(root: &Path) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let mut connection =
+                open_registry(&directory.path().join("index.sqlite3"), &mut |_| {}).unwrap();
+            migrate_registry(&mut connection).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                     VALUES (1, ?1, 1, 'accessible', 0)",
+                    params![root.to_str()],
+                )
+                .unwrap();
+            Self {
+                _directory: directory,
+                connection,
+            }
+        }
+
+        fn store(&mut self, observation: &ContextObservation) {
+            let transaction = self.connection.transaction().unwrap();
+            persist_context_index(&transaction, 1, observation).unwrap();
+            transaction.commit().unwrap();
+        }
+
+        fn stored(&self) -> Stored {
+            let row = self
+                .connection
+                .query_row("SELECT id, basis, indexed_at FROM contexts", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .unwrap();
+            let titles = self
+                .connection
+                .prepare("SELECT title FROM discovered_items ORDER BY id")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            (row, titles)
+        }
+
+        fn dirty(&self) -> i64 {
+            self.connection
+                .query_row("SELECT dirty FROM contexts", [], |row| row.get(0))
+                .unwrap()
         }
     }
 
@@ -1158,6 +1220,15 @@ mod tests {
                 shows,
                 Shows::LeftDirty | Shows::ReadAgain | Shows::NotReadAgain
             ) {
+                // The context as it was indexed before the edit.
+                let previous = (shows == Shows::LeftDirty).then(|| {
+                    let mut index = Index::new(&fixture.worktrees.root);
+                    let observation = fixture.observe(&listed);
+                    assert!(!observation.left_dirty, "{row}");
+                    index.store(&observation);
+                    assert_eq!(index.dirty(), 0, "{row}");
+                    index
+                });
                 let reads = Rc::new(Cell::new(0));
                 let counted = reads.clone();
                 let worktrees = fixture.worktrees.clone();
@@ -1173,6 +1244,15 @@ mod tests {
                 let expected_reads = if shows == Shows::NotReadAgain { 1 } else { 2 };
                 assert_eq!(reads.get(), expected_reads, "{row}: reads");
                 assert_eq!(observation.left_dirty, shows == Shows::LeftDirty, "{row}");
+                if let Some(mut index) = previous {
+                    // Storing it keeps the rows indexed before, marked as owed
+                    // an indexing.
+                    let before = index.stored();
+                    assert_eq!(before.1, ["Fixture document"], "{row}");
+                    index.store(&observation);
+                    assert_eq!(index.stored(), before, "{row}: the previous rows");
+                    assert_eq!(index.dirty(), 1, "{row}: the mark");
+                }
                 if shows == Shows::ReadAgain {
                     assert!(
                         observation.sources.iter().any(|(path, source)| {

@@ -180,6 +180,42 @@ pub(super) struct ContextObservation {
     pub(super) started_at_ns: i64,
     pub(super) valid: bool,
     pub(super) left_dirty: bool,
+    /// The primary's activity map as the observation left it; `None` for an
+    /// item context.
+    pub(super) activity: Option<ObservedActivity>,
+}
+
+/// The primary's activity map after its observation brought it to the head.
+#[derive(Debug)]
+pub(super) struct ObservedActivity {
+    /// The head the map is valid for, which the primary's row records.
+    pub(super) base: Option<git2::Oid>,
+    /// The map, when the observation changed the one it was given (it
+    /// advanced it over new commits, or built it again): it is stored with
+    /// the primary's rows. `None` when it is unchanged, so that what is
+    /// stored of it stays as it is.
+    pub(super) changed: Option<PrimaryActivityMap>,
+}
+
+/// Every context of a repository, each observed on its own: what the index
+/// stores, one context's rows from that context's observation alone.
+///
+/// `primary` holds every item of the root, an item that an active context
+/// holds as well among them, and every problem it finds; what listing the
+/// worktree base meets is among them. `items` holds each directory under
+/// the worktree base named by an item's ULID, in name order, valid or not.
+/// A primary whose configuration is not valid has none.
+#[derive(Debug)]
+pub(super) struct ObservedContexts {
+    pub(super) primary: ContextObservation,
+    pub(super) items: Vec<ContextObservation>,
+}
+
+impl ObservedContexts {
+    /// The primary, then each item context.
+    pub(super) fn contexts(&self) -> impl Iterator<Item = &ContextObservation> {
+        std::iter::once(&self.primary).chain(&self.items)
+    }
 }
 
 /// The primary's configuration as its observation read it.
@@ -428,12 +464,16 @@ fn context_scan_checkpoint(worktree: &Path) {
 /// An item worktree that is not a valid item context is not among
 /// `active_contexts`: its problem is the primary's. A primary whose
 /// configuration is not valid has no item contexts.
+///
+/// This is what a preview reads. The index stores `observe_contexts`
+/// instead, each context as it is.
 pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
-    #[cfg(test)]
-    scan_checkpoint(root);
-    // No map is stored for the primary yet, so one is built with one walk of
-    // its history.
-    let mut activity = PrimaryActivityMap::default();
+    // A preview stores nothing, so it builds a map of its own with one walk
+    // of the primary's history.
+    let ObservedContexts {
+        primary,
+        items: item_contexts,
+    } = observe_contexts(repository, root, &mut PrimaryActivityMap::default());
     let ContextObservation {
         configuration,
         context,
@@ -444,21 +484,28 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         folders,
         mut problems,
         ..
-    } = observe_context(
-        repository,
-        root,
-        &ListedContext::primary(root),
-        &mut activity,
-    );
+    } = primary;
     let ObservedConfiguration {
         configuration,
         source: configuration_source,
         blob_oid: configuration_blob_oid,
     } = configuration.expect("the primary's observation reads its configuration");
-    let active_contexts = match configuration {
-        RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
-        RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
-    };
+    let mut active_contexts = Vec::new();
+    for observation in item_contexts {
+        if !observation.valid {
+            problems.extend(observation.problems);
+            continue;
+        }
+        active_contexts.push(ActiveContextObservation {
+            context: observation.context,
+            head: observation.head,
+            sources: observation.sources,
+            validation: observation.validation,
+            items: observation.items,
+            problems: observation.problems,
+        });
+    }
+    active_contexts.sort_by(|left, right| left.context.branch.cmp(&right.context.branch));
     leave_active_items_to_their_contexts(
         root,
         &active_contexts,
@@ -480,6 +527,35 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         problems,
         active_contexts,
     }
+}
+
+/// Every context of the repository at `root`, each observed on its own from
+/// its own sources: the primary, its items taking their commits from
+/// `activity`, then, while its configuration is valid, each item context
+/// `list_item_contexts` lists. What that listing meets is the primary's
+/// problem, as it is the root's.
+pub(super) fn observe_contexts(
+    repository: &Repository,
+    root: &Path,
+    activity: &mut PrimaryActivityMap,
+) -> ObservedContexts {
+    #[cfg(test)]
+    scan_checkpoint(root);
+    let mut primary = observe_context(repository, root, &ListedContext::primary(root), activity);
+    let items = match primary
+        .configuration
+        .as_ref()
+        .map(|observed| &observed.configuration)
+    {
+        Some(RootConfiguration::Valid(_)) => list_item_contexts(root, &mut primary.problems)
+            .iter()
+            .map(|listed| {
+                observe_context(repository, root, listed, &mut PrimaryActivityMap::default())
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    ObservedContexts { primary, items }
 }
 
 /// The contexts of the repository at `root`: the primary, then each
@@ -584,7 +660,8 @@ pub(super) fn stat_basis(
 /// `src/`, is no difference.
 ///
 /// The primary's items take their commit from `activity`, brought to the
-/// primary's head. An item context does not use it.
+/// primary's head, and the observation holds the map as it left it. An item
+/// context does not use it.
 pub(super) fn observe_context(
     repository: &Repository,
     root: &Path,
@@ -592,6 +669,7 @@ pub(super) fn observe_context(
     activity: &mut PrimaryActivityMap,
 ) -> ContextObservation {
     let recorded_root = recorded_root(listed);
+    let given_base = activity.base();
     let mut read_again = false;
     loop {
         let started_at_ns = now_ns();
@@ -618,6 +696,14 @@ pub(super) fn observe_context(
         observation.started_at_ns = started_at_ns;
         if !moved || read_again {
             observation.left_dirty = moved;
+            if listed.key == ContextKey::Primary {
+                // The map changes only when its base moves, on whichever read
+                // advanced it.
+                observation.activity = Some(ObservedActivity {
+                    base: activity.base(),
+                    changed: (activity.base() != given_base).then(|| activity.clone()),
+                });
+            }
             return observation;
         }
         read_again = true;
@@ -770,6 +856,7 @@ fn read_primary(
         started_at_ns: 0,
         valid: true,
         left_dirty: false,
+        activity: None,
     }
 }
 
@@ -827,6 +914,7 @@ fn read_item_context(
         started_at_ns: 0,
         valid: false,
         left_dirty: false,
+        activity: None,
     };
     let unobserved = || RootHeadObservation {
         branch: None,
@@ -943,39 +1031,8 @@ fn read_item_context(
         started_at_ns: 0,
         valid: true,
         left_dirty: false,
+        activity: None,
     }
-}
-
-/// The valid item contexts, in branch order. The problem of a worktree that
-/// is not one is the primary's.
-fn observe_active_contexts(
-    root_repository: &Repository,
-    root: &Path,
-    problems: &mut Vec<RootObservationProblem>,
-) -> Vec<ActiveContextObservation> {
-    let mut contexts = Vec::new();
-    for listed in list_item_contexts(root, problems) {
-        let observation = observe_context(
-            root_repository,
-            root,
-            &listed,
-            &mut PrimaryActivityMap::default(),
-        );
-        if !observation.valid {
-            problems.extend(observation.problems);
-            continue;
-        }
-        contexts.push(ActiveContextObservation {
-            context: observation.context,
-            head: observation.head,
-            sources: observation.sources,
-            validation: observation.validation,
-            items: observation.items,
-            problems: observation.problems,
-        });
-    }
-    contexts.sort_by(|left, right| left.context.branch.cmp(&right.context.branch));
-    contexts
 }
 
 fn observe_items(

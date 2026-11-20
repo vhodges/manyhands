@@ -887,11 +887,16 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     owner.authorize()?;
     let git = git2::Repository::open(owner.repo.root())?;
     let observed_from = time::OffsetDateTime::now_utc().unix_timestamp();
-    let before = observe_root(&git, owner.repo.root());
+    let mut activity = load_activity_map(
+        &owner.service.registry_path,
+        owner.repo.root(),
+        RepositoryOperation::ContextSyncLocal,
+    )?;
+    let before = observe_contexts(&git, owner.repo.root(), &mut activity);
     boundary(owner, FailurePoint::BeforeIndexTransactionCommit)?;
     super::control::safe_point(owner)?;
-    let after = observe_root(&git, owner.repo.root());
-    if !changed_contexts(&before, &after, owner.repo.root()).is_empty() {
+    let after = observe_contexts(&git, owner.repo.root(), &mut activity);
+    if !changed_contexts(&before, &after).is_empty() {
         return Err(Fault::foreign());
     }
     // Matching discovery snapshots do not establish integration authority: both

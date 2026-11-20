@@ -93,7 +93,7 @@ pub(super) fn item_commit_activity(
 /// It is built once from the whole first-parent chain, then advanced over the
 /// commits added since. It has no window: an item untouched for longer than
 /// an item walk looks back still has its time.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct PrimaryActivityMap {
     base: Option<Oid>,
     newest: BTreeMap<PathBuf, CommitActivity>,
@@ -111,7 +111,6 @@ impl PrimaryActivityMap {
     /// The map stored for a registration: the entries of `primary_activity`
     /// and the base its primary context records. An entry that cannot be read
     /// discards the map, which the next `advance` rebuilds.
-    #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
     pub(super) fn load(tx: &Transaction<'_>, repository_id: i64) -> Result<Self, RepositoryError> {
         let base = tx
             .query_row(
@@ -160,7 +159,6 @@ impl PrimaryActivityMap {
     /// context, the one `load` reads it from. Without a primary context the
     /// entries are stored and the base is not, so the map read back has no
     /// base and rebuilds.
-    #[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
     pub(super) fn store(
         &self,
         tx: &Transaction<'_>,
@@ -200,6 +198,12 @@ impl PrimaryActivityMap {
         )
         .map_err(RepositoryError::sqlite)?;
         Ok(())
+    }
+
+    /// The head the map is valid for; `None` for a map that has never been
+    /// brought to one. `advance` changes the map only when it moves this.
+    pub(super) fn base(&self) -> Option<Oid> {
+        self.base
     }
 
     /// Brings the map to `head`. It diffs only the commits since its base
