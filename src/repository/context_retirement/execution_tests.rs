@@ -287,7 +287,6 @@ fn retirement_absence_index_retry_does_not_reselect_or_touch_new_worktree() {
         "UPDATE OF final_result ON context_retirement_records",
         "UPDATE OF phase ON context_retirement_attempts WHEN NEW.phase='ended'",
         "UPDATE OF state ON operation_records WHEN NEW.state='completed' AND OLD.action='retire_context'",
-        "UPDATE OF refresh_required ON repositories WHEN NEW.refresh_required=0",
     ] {
         let f = Fixture::new();
         let operation = OperationId::new();
@@ -307,11 +306,10 @@ fn retirement_absence_index_retry_does_not_reselect_or_touch_new_worktree() {
         assert_ne!(state.0, "completed");
         assert_eq!(state.1, "index_pending");
         assert!(state.2.is_none());
-        assert!(
-            db.query_row("SELECT refresh_required FROM repositories", [], |r| r
-                .get::<_, bool>(0))
-                .unwrap()
-        );
+        assert!(!f.service.contexts_indexed(
+            f.root.path(),
+            &[discovery::ContextKey::Item(ITEM.parse().unwrap())]
+        ));
         assert_eq!(
             db.query_row("SELECT phase FROM context_retirement_attempts", [], |r| {
                 r.get::<_, String>(0)
