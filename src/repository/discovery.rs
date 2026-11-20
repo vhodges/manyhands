@@ -16,10 +16,10 @@ use crate::canonical;
 use super::{
     AuthoringKind, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH,
     MAX_DOCUMENT_DIRECTORY_ENTRIES, MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT,
-    RegistryConnectionPhase, RepositoryError,
+    RegistryConnectionPhase, RepositoryError, activity::item_commit_activity,
 };
 
-const MAX_ACTIVITY_HISTORY_COMMITS: usize = 1024;
+pub(super) const MAX_ACTIVITY_HISTORY_COMMITS: usize = 1024;
 
 #[derive(Debug)]
 pub(super) enum RootConfiguration {
@@ -385,7 +385,13 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
     let mut folders = Vec::new();
     collect_root_sources(root, &mut sources, &mut folders, &mut problems);
     let mut validation = canonical::validate_context(sources.clone());
-    let mut items = observe_items(repository, root, &sources, &validation);
+    let mut items = observe_items(
+        repository,
+        root,
+        ActivityHistory::Checkout,
+        &sources,
+        &validation,
+    );
     let active_contexts = match configuration {
         RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
         RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
@@ -549,7 +555,13 @@ fn observe_active_contexts(
             ));
             continue;
         }
-        let items = observe_items(&repository, &expected_path, &sources, &validation);
+        let items = observe_items(
+            &repository,
+            &expected_path,
+            ActivityHistory::Item(head.oid),
+            &sources,
+            &validation,
+        );
         contexts.push(ActiveContextObservation {
             context: RootContextObservation {
                 kind: DiscoveryContextKind::Active,
@@ -571,6 +583,7 @@ fn observe_active_contexts(
 fn observe_items(
     repository: &Repository,
     root: &Path,
+    history: ActivityHistory,
     sources: &[(PathBuf, String)],
     validation: &canonical::ValidatedContext,
 ) -> Vec<ObservedItem> {
@@ -645,7 +658,8 @@ fn observe_items(
                 .collect::<Vec<_>>();
             let mut owned_paths = vec![path.clone()];
             collect_comment_paths(&comments, &mut owned_paths);
-            let (activity_at, activity_source) = observe_activity(repository, root, &owned_paths)?;
+            let (activity_at, activity_source) =
+                observe_activity(repository, root, history, &owned_paths)?;
             Some(ObservedItem {
                 id: id.clone(),
                 kind: metadata.0,
@@ -699,12 +713,39 @@ fn collect_comment_paths(comments: &[ObservedCommentThread], paths: &mut Vec<Pat
     }
 }
 
-fn observe_activity(
+/// Where an observation reads the commit part of an item's activity from.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ActivityHistory {
+    /// The first-parent history of the checkout's HEAD, one diff per commit.
+    Checkout,
+    /// An item context at this head: a first-parent walk restricted to the
+    /// item's own paths.
+    Item(Option<git2::Oid>),
+}
+
+pub(super) fn observe_activity(
+    repository: &Repository,
+    root: &Path,
+    history: ActivityHistory,
+    paths: &[PathBuf],
+) -> Option<(OffsetDateTime, super::DiscoveryActivitySource)> {
+    let commit = match history {
+        ActivityHistory::Checkout => latest_commit_touching(repository, paths),
+        ActivityHistory::Item(head) => head
+            .and_then(|head| item_commit_activity(repository, head, paths).ok()?.found)
+            .map(|found| found.at),
+    };
+    activity_with_uncommitted(repository, root, paths, commit)
+}
+
+/// An item's activity: its newest commit, or the newest modification time of
+/// its uncommitted paths when that is later.
+pub(super) fn activity_with_uncommitted(
     repository: &Repository,
     root: &Path,
     paths: &[PathBuf],
+    commit: Option<OffsetDateTime>,
 ) -> Option<(OffsetDateTime, super::DiscoveryActivitySource)> {
-    let commit = latest_commit_touching(repository, paths);
     let modified = paths
         .iter()
         .filter_map(|path| {
@@ -728,14 +769,17 @@ fn observe_activity(
     }
 }
 
-fn latest_commit_touching(repository: &Repository, paths: &[PathBuf]) -> Option<OffsetDateTime> {
+pub(super) fn latest_commit_touching(
+    repository: &Repository,
+    paths: &[PathBuf],
+) -> Option<OffsetDateTime> {
     first_parent_commits(repository, MAX_ACTIVITY_HISTORY_COMMITS)
         .into_iter()
         .find(|commit| commit_touches_paths(repository, commit, paths))
         .and_then(|commit| OffsetDateTime::from_unix_timestamp(commit.time().seconds()).ok())
 }
 
-fn first_parent_commits<'repository>(
+pub(super) fn first_parent_commits<'repository>(
     repository: &'repository Repository,
     maximum: usize,
 ) -> Vec<git2::Commit<'repository>> {
@@ -754,7 +798,7 @@ fn first_parent_commits<'repository>(
     commits
 }
 
-fn commit_touches_paths(
+pub(super) fn commit_touches_paths(
     repository: &Repository,
     commit: &git2::Commit<'_>,
     paths: &[PathBuf],
@@ -2859,6 +2903,34 @@ mod tests {
         let observation = observe_root(&repository, directory.path());
         let item = observed_document(&observation);
 
+        assert_eq!(
+            item.activity_at,
+            OffsetDateTime::from_unix_timestamp(10).unwrap()
+        );
+        assert_eq!(item.activity_source, DiscoveryActivitySource::GitCommit);
+    }
+
+    #[test]
+    fn an_item_context_observes_the_commit_activity_of_its_own_branch() {
+        let (directory, repository) = repository_on_main();
+        write_config(
+            directory.path(),
+            "format_version = 1\nprimary_branch = \"main\"\n",
+        );
+        let worktree = active_worktree(
+            &repository,
+            directory.path(),
+            "document",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        );
+        fs::create_dir_all(worktree.join("docs")).unwrap();
+        fs::write(worktree.join("docs/document.md"), document_source()).unwrap();
+        let linked = Repository::open(&worktree).unwrap();
+        checkpoint(&linked, Path::new("docs/document.md"), 10);
+
+        let observation = observe_root(&repository, directory.path());
+
+        let item = &observation.active_contexts[0].items[0];
         assert_eq!(
             item.activity_at,
             OffsetDateTime::from_unix_timestamp(10).unwrap()

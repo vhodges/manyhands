@@ -25,6 +25,7 @@ use time::OffsetDateTime;
 
 use crate::canonical;
 
+mod activity;
 mod bridges;
 mod cleanup;
 mod closure;
