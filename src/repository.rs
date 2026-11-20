@@ -47,6 +47,8 @@ mod coordination;
 pub use comment_publication::*;
 mod blocker;
 #[cfg(test)]
+mod command_index_tests;
+#[cfg(test)]
 mod comment_publication_tests;
 #[cfg(test)]
 mod context_index_tests;
@@ -1484,7 +1486,19 @@ impl RepositoryService {
         &self,
         request: RefreshRepositoryRequest,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        self.refresh_repository_as(request, "", true, true)
+        self.refresh_repository_as(request, "", true, RefreshScope::Recorded)
+    }
+
+    /// The index step of a write whose only change is to `contexts`, under
+    /// a refresh row of its own: the row is recorded as owing them before it
+    /// is claimed, and they alone are indexed. Folder create's, for the
+    /// primary.
+    fn refresh_contexts(
+        &self,
+        request: RefreshRepositoryRequest,
+        contexts: &[ContextKey],
+    ) -> Result<RefreshOutcome, RepositoryError> {
+        self.refresh_repository_as(request, "", true, RefreshScope::Owing(contexts))
     }
 
     // Only synchronization's validated local-only identity may use a nonempty
@@ -1495,33 +1509,44 @@ impl RepositoryService {
         target: &str,
         authored: bool,
     ) -> Result<RefreshOutcome, RepositoryError> {
-        self.refresh_repository_as(request, target, authored, false)
+        self.refresh_repository_as(request, target, authored, RefreshScope::Whole)
     }
 
-    /// `refresh_repository_target`. With `recorded`, a row that records the
-    /// contexts it owes is indexed by those contexts alone; see
-    /// `resume_hand_off`.
+    /// `refresh_repository_target`, indexing what `scope` says once the row
+    /// is claimed. Unless it is `Whole`, a row that records the contexts it
+    /// owes is indexed by those contexts alone (see `resume_hand_off`), and
+    /// a retirement's row by the deletion of its context's rows (see
+    /// `index_retirement_claimed`). A row that records none is a refresh of
+    /// the whole repository.
     fn refresh_repository_as(
         &self,
         request: RefreshRepositoryRequest,
         target: &str,
         authored: bool,
-        recorded: bool,
+        scope: RefreshScope<'_>,
     ) -> Result<RefreshOutcome, RepositoryError> {
         let root = &request.root;
         let operation = RepositoryOperation::RefreshRepository;
         self.require_index_available(operation, Some(root))?;
         let (repository, root) = canonical_repository_root(root, operation)?;
-        let (repository_id, owner, owed) = {
+        let owing = match scope {
+            RefreshScope::Owing(contexts) => Some(contexts),
+            RefreshScope::Whole | RefreshScope::Recorded => None,
+        };
+        let (repository_id, claimed) = {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             let repository_id = registered_repository_id(&self.registry_path, &root, operation)?;
-            let Some((_record, owner, owed)) =
-                self.claim_refresh_indexing(&root, request.operation_id, target, authored)?
+            let Some(claimed) =
+                self.claim_refresh_indexing(&root, request.operation_id, target, authored, owing)?
             else {
                 return Ok(RefreshOutcome::IndexPending { root });
             };
-            (repository_id, owner, owed.filter(|_| recorded))
+            (repository_id, claimed)
         };
+        let owner = claimed.owner;
+        let owed = claimed
+            .owed
+            .filter(|_| !matches!(scope, RefreshScope::Whole));
         let heartbeat = IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
             owner.clone(),
@@ -1538,6 +1563,9 @@ impl RepositoryService {
         }
         self.run_refresh_claim_hook();
         let result = match owed {
+            Some(contexts) if claimed.retirement => {
+                self.index_retirement_claimed(&root, repository_id, owner.clone(), &contexts)
+            }
             Some(contexts) => self
                 .index_claimed_contexts(&repository, &root, repository_id, owner.clone(), &contexts)
                 .and_then(|outcome| match outcome {
@@ -4201,8 +4229,9 @@ impl RepositoryService {
     /// Records on the pending row of `record` that it owes an indexing of
     /// `contexts`, in place of what it recorded when it was begun (its own
     /// item's context). A command whose write reaches other contexts records
-    /// them so before its commit.
-    #[cfg_attr(not(test), allow(dead_code))] // The commands that name their own contexts follow.
+    /// them so before its commit. A row that is not pending, or not there,
+    /// records nothing and is `RecoveryRequired`.
+    #[cfg_attr(not(test), allow(dead_code))] // No command's write reaches past its own row's list yet.
     fn record_owed_contexts(
         &self,
         root: &Path,
@@ -4213,14 +4242,18 @@ impl RepositoryService {
         let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
         let connection = open_registry(&self.registry_path, &mut |_| {})
             .map_err(|error| error.for_operation(operation, root))?;
-        connection
-            .execute(
-                "UPDATE operation_records SET owed_contexts = ?2
-                  WHERE id = ?1 AND state != 'completed'",
-                params![record.id, encode_owed_contexts(contexts)],
-            )
-            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-        Ok(())
+        if write_owed_contexts(&connection, record.id, contexts)
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?
+        {
+            Ok(())
+        } else {
+            Err(RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RecoveryRequired,
+                "the operation's row is not pending",
+            ))
+        }
     }
 
     /// The index step of the pending row of `record` for `contexts`: the row
@@ -4470,7 +4503,9 @@ impl RepositoryService {
     ///
     /// Close, promotion and folder create never come here: they index
     /// under refresh rows of their own, which keep the whole repository's
-    /// scope (design decision 16).
+    /// scope in the way of other calls (design decision 16). Close's and
+    /// promotion's refresh the whole repository; folder create's records
+    /// that it owes the primary, and indexes that alone (`refresh_contexts`).
     fn claim_lifecycle_indexing(
         &self,
         root: &Path,
@@ -4497,14 +4532,16 @@ impl RepositoryService {
 
     /// Begins or takes up the refresh row of `operation_id` and claims it for
     /// indexing, giving the contexts the row records it owes; see
-    /// `claim_lifecycle_indexing`.
+    /// `claim_lifecycle_indexing`. With `owing`, a pending row is first
+    /// recorded as owing those contexts.
     fn claim_refresh_indexing(
         &self,
         root: &Path,
         operation_id: OperationId,
         target: &str,
         authored: bool,
-    ) -> Result<Option<(RecoveryRecord, IndexOwner, OwedContexts)>, RepositoryError> {
+        owing: Option<&[ContextKey]>,
+    ) -> Result<Option<ClaimedRefresh>, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
         let mut connection = open_registry(&self.registry_path, &mut |_| {})
@@ -4524,6 +4561,10 @@ impl RepositoryService {
             self.clock.now().unix_timestamp(),
         )
         .map_err(|error| error.for_operation(operation, root))?;
+        let sqlite = |error| RepositoryError::sqlite(error).for_operation(operation, root);
+        if let Some(contexts) = owing {
+            write_owed_contexts(&connection, record.id, contexts).map_err(sqlite)?;
+        }
         let Some(owner) = claim_indexing(
             &connection,
             record.id,
@@ -4533,9 +4574,19 @@ impl RepositoryService {
         else {
             return Ok(None);
         };
-        let owed = recovery::recorded_owed_contexts(&connection, record.id)
-            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
-        Ok(Some((record, owner, owed)))
+        let owed = recovery::recorded_owed_contexts(&connection, record.id).map_err(sqlite)?;
+        let retirement = connection
+            .query_row(
+                "SELECT action = 'retire_context' FROM operation_records WHERE id = ?1",
+                [record.id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite)?;
+        Ok(Some(ClaimedRefresh {
+            owner,
+            owed,
+            retirement,
+        }))
     }
 
     fn require_index_available(
@@ -6368,6 +6419,26 @@ pub(super) enum IndexOutcome {
     LeftDirty,
 }
 
+/// What a refresh under a row's ID indexes once it has claimed the row.
+#[derive(Clone, Copy)]
+enum RefreshScope<'a> {
+    /// The whole repository, whatever the row records.
+    Whole,
+    /// What the row records it owes; see `refresh_repository_as`.
+    Recorded,
+    /// `contexts`, which the row is recorded as owing before it is claimed.
+    Owing(&'a [ContextKey]),
+}
+
+/// A row a refresh has claimed for indexing.
+struct ClaimedRefresh {
+    owner: IndexOwner,
+    /// What the row records it owes.
+    owed: OwedContexts,
+    /// Whether the row is a retirement's, whose index step is its own.
+    retirement: bool,
+}
+
 /// Whether the current call has begun a durable write that it has not undone.
 ///
 /// A rejected call that began its own journal row and left nothing behind
@@ -7099,8 +7170,8 @@ fn observations_match(before: &RootObservation, after: &RootObservation) -> bool
 
 /// Replaces every row the index holds for the repository with what
 /// `observation` holds, each context's from its own observation through
-/// `persist_context_index`: what a rebuild and a local sync store. Their
-/// caller has found no context that changed while it was observed.
+/// `persist_context_index`: what a rebuild stores. Its caller has found no
+/// context that changed while it was observed.
 fn persist_observation(
     transaction: &rusqlite::Transaction<'_>,
     repository_id: i64,
@@ -12170,6 +12241,22 @@ fn index_behind(connection: &rusqlite::Connection, repository_id: i64) -> rusqli
         |row| row.get(0),
     )?;
     Ok(marked || DirtyContexts::read(connection, repository_id)?.any())
+}
+
+/// Records on the row `record_id`, while it is pending, that it owes an
+/// indexing of `contexts`. Says whether it was pending to record it on.
+fn write_owed_contexts(
+    connection: &rusqlite::Connection,
+    record_id: i64,
+    contexts: &[ContextKey],
+) -> rusqlite::Result<bool> {
+    connection
+        .execute(
+            "UPDATE operation_records SET owed_contexts = ?2
+              WHERE id = ?1 AND state != 'completed'",
+            params![record_id, encode_owed_contexts(contexts)],
+        )
+        .map(|written| written != 0)
 }
 
 /// The stored text of `contexts` as an operation row's `owed_contexts`; see

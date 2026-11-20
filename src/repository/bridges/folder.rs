@@ -447,8 +447,8 @@ fn observe(root: &Path, path: &DocumentFolderPath) -> Result<Observed, Repositor
 impl RepositoryService {
     /// Makes the directory `request.path` under `docs/` in the primary
     /// worktree of the registered repository at `request.root`, with
-    /// every directory above it that is missing, and then refreshes the
-    /// index under `request.operation_id`.
+    /// every directory above it that is missing, and then indexes the
+    /// primary under a refresh row of `request.operation_id`.
     ///
     /// It is idempotent: a directory that is there is left as it is,
     /// and the refresh still runs, so that the index holds the folder
@@ -571,8 +571,8 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(OPERATION, root))
     }
 
-    /// Refreshes the index under `operation_id` and says whether it now
-    /// holds what the repository does.
+    /// Indexes the primary, the one context a folder is in, under a refresh
+    /// row of `operation_id`, and says whether the index now holds it.
     ///
     /// A refresh that did not complete leaves its row pending, which
     /// refuses every other operation on the repository until a call
@@ -581,10 +581,13 @@ impl RepositoryService {
     /// call that left nothing behind, and the next refresh, under any
     /// ID, is what brings the index up to date.
     fn refresh_for_folder(&self, root: &Path, operation_id: OperationId) -> FolderDiscovery {
-        let refreshed = self.refresh_repository(RefreshRepositoryRequest {
-            root: root.to_owned(),
-            operation_id,
-        });
+        let refreshed = self.refresh_contexts(
+            RefreshRepositoryRequest {
+                root: root.to_owned(),
+                operation_id,
+            },
+            &[discovery::ContextKey::Primary],
+        );
         if matches!(refreshed, Ok(RefreshOutcome::Refreshed { snapshot: _ })) {
             return FolderDiscovery::Current;
         }

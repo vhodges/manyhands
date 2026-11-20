@@ -355,7 +355,7 @@ impl RepositoryService {
                     && materialization
                         .as_ref()
                         .is_none_or(|(_, _, step)| step == "complete");
-                tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
+                tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,owed_contexts) VALUES(?1,?2,?3,'retire_context',?4,'created',?5,?6)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp(),crate::repository::encode_owed_contexts(&[ContextKey::Item(request.item_id.clone())])]).map_err(RepositoryError::sqlite)?;
                 let local_id = tx.last_insert_rowid();
                 recovery::attribute_local_row(&tx, local_id, &origin)
                     .map_err(RepositoryError::sqlite)?;
@@ -399,15 +399,21 @@ impl RepositoryService {
             tx.commit().map_err(RepositoryError::sqlite)?;
         }
         drop(lease);
-        // Full discovery is local and outside the lease, under this SAME local
+        // The index step is local and outside the lease, under this SAME local
         // operation's separate index epoch. It cannot invoke cleanup/transport.
+        // It deletes the retired context's rows; see `index_retirement_claimed`.
         let refreshed = if let Some(fence) = scope.fence() {
             self.refresh_retirement_request(&request, fence)
         } else {
-            self.refresh_repository(RefreshRepositoryRequest {
-                root: root.clone(),
-                operation_id: request.operation_id,
-            })
+            self.refresh_repository_as(
+                RefreshRepositoryRequest {
+                    root: root.clone(),
+                    operation_id: request.operation_id,
+                },
+                "",
+                true,
+                crate::repository::RefreshScope::Recorded,
+            )
         };
         match refreshed {
             Ok(RefreshOutcome::Refreshed { .. }) => {

@@ -879,3 +879,36 @@ fn a_hand_off_whose_context_has_not_moved_completes_without_observing_it() {
         assert_eq!(fixture.title(TICKET), Some(title.to_owned()), "{changed}");
     }
 }
+
+/// Recording what a row owes needs the row to be pending: on a completed
+/// row, or on one that is not there, nothing is recorded, and the answer is
+/// `RecoveryRequired`.
+#[test]
+fn recording_what_a_row_owes_needs_a_pending_row() {
+    for case in ["a completed row", "no row"] {
+        let fixture = Fixture::with_context();
+        let (operation, mut record) = fixture.owing_row(None);
+        if case == "a completed row" {
+            fixture
+                .index()
+                .execute(
+                    "UPDATE operation_records SET state = 'completed' WHERE operation_ulid = ?1",
+                    [&operation],
+                )
+                .unwrap();
+        } else {
+            record.id += 1;
+        }
+
+        let refused = fixture
+            .service
+            .record_owed_contexts(&fixture.root, record, &[ContextKey::Item(item(TICKET))])
+            .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "{case}"
+        );
+        assert_eq!(fixture.row(&operation).2, None, "{case}");
+    }
+}

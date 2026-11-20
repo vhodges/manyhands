@@ -403,7 +403,7 @@ pub(crate) fn refresh(
         service.take_index_owner_heartbeat_hook(),
     );
     service.run_refresh_claim_hook();
-    let result = service.refresh_repository_claimed(&git, root.clone(), id, owner.clone());
+    let result = service.index_retirement(&git, root.clone(), id, owner.clone());
     drop(heartbeat);
     match result {
         Ok(result) => Ok(result),

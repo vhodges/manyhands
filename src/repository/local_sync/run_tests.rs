@@ -1109,6 +1109,58 @@ fn a_local_sync_index_that_races_an_edit_marks_the_raced_context_dirty() {
     assert_eq!(marks, [(text(f.root.path()), 0), (text(&worktree), 1)]);
 }
 
+/// A local sync's index step stores the one context it changed, its item's,
+/// and nothing else: the primary keeps what was stored for it, and the
+/// repository's own mark and refresh time are as they were.
+#[test]
+fn a_local_sync_indexes_only_its_own_context() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    graph(&f, "merge");
+    let observation = f.observe();
+    let db = f.db();
+    db.execute("UPDATE repositories SET refresh_required = 1", [])
+        .unwrap();
+    let repository = || {
+        db.query_row(
+            "SELECT refresh_required, refreshed_at FROM repositories",
+            [],
+            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<i64>>(1)?)),
+        )
+        .unwrap()
+    };
+    let stored = |worktree: &Path| {
+        db.query_row(
+            "SELECT basis, indexed_at, dirty FROM contexts WHERE worktree_path = ?1",
+            [worktree.to_str().unwrap()],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let worktree = f
+        .root
+        .path()
+        .join(".manyhands/worktrees")
+        .join(f.item.to_string());
+    let (repository_before, primary_before, own_before) =
+        (repository(), stored(f.root.path()), stored(&worktree));
+
+    let report = execute(&f, OperationId::new(), &observation.observation);
+
+    assert_eq!(report.code, ResultCode::Ok, "{report:?}");
+    assert_eq!(report.effects.discovery, DiscoveryEffect::Current);
+    assert_eq!(repository(), repository_before);
+    assert_eq!(stored(f.root.path()), primary_before);
+    let own = stored(&worktree);
+    assert_ne!(own.0, own_before.0, "the merge is stored");
+    assert_eq!(own.2, 0);
+}
+
 #[test]
 fn local_sync_same_mismatch_code_uses_historical_effects_for_its_failure_class() {
     let mut classes = Vec::new();

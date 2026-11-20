@@ -377,9 +377,106 @@ impl RepositoryService {
             self.take_index_owner_heartbeat_hook(),
         );
         self.run_refresh_claim_hook();
-        let result = self.refresh_repository_claimed(&git, root, id, owner);
+        let result = self.index_retirement(&git, root, id, owner);
         drop(heartbeat);
         result
+    }
+
+    /// The index step of the retirement whose row `owner` has claimed: the
+    /// deletion of the rows of the context the row records it owes (see
+    /// `index_retirement_claimed`), or, for a row that records none (an
+    /// older build's), a refresh of the whole repository, as before.
+    pub(super) fn index_retirement(
+        &self,
+        git: &git2::Repository,
+        root: std::path::PathBuf,
+        repository_id: i64,
+        owner: crate::repository::recovery::IndexOwner,
+    ) -> Result<crate::repository::RefreshOutcome, RepositoryError> {
+        let operation = crate::repository::RepositoryOperation::RefreshRepository;
+        let owed = {
+            let _cache_guard =
+                crate::repository::cache_read_guard(&self.registry_path, &root, operation)?;
+            let connection =
+                crate::repository::discovery::open_registry(&self.registry_path, &mut |_| {})
+                    .map_err(|error| error.for_operation(operation, &root))?;
+            crate::repository::recovery::recorded_owed_contexts(&connection, owner.record_id)
+                .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, &root))?
+        };
+        match owed {
+            Some(contexts) => self.index_retirement_claimed(&root, repository_id, owner, &contexts),
+            None => self.refresh_repository_claimed(git, root, repository_id, owner),
+        }
+    }
+
+    /// The index step of a retirement whose row `owner` has claimed, for the
+    /// `contexts` it records it owes (its own item's): in one transaction, the
+    /// rows of each of them that is gone are deleted and the retirement is
+    /// finalized. Nothing is observed or stored. A context that is still
+    /// there, as a preserving abandon's may be, keeps its rows and the mark
+    /// the retirement gave them, for the next refresh. A promotion's fence of
+    /// the claim is met as a refresh meets it, with one more pass under a
+    /// fresh epoch of the row.
+    pub(in super::super) fn index_retirement_claimed(
+        &self,
+        root: &std::path::Path,
+        repository_id: i64,
+        owner: crate::repository::recovery::IndexOwner,
+        contexts: &[crate::repository::discovery::ContextKey],
+    ) -> Result<crate::repository::RefreshOutcome, RepositoryError> {
+        self.claimed_with_reclaim(root, owner, |owner| {
+            self.delete_retired_contexts(root, repository_id, owner, contexts)
+        })?;
+        Ok(crate::repository::RefreshOutcome::Refreshed {
+            snapshot: self.repository_snapshot(root)?,
+        })
+    }
+
+    /// One pass of `index_retirement_claimed`. A failure before its
+    /// transaction leaves the row `failed`, as a refresh's does.
+    fn delete_retired_contexts(
+        &self,
+        root: &std::path::Path,
+        repository_id: i64,
+        owner: crate::repository::recovery::IndexOwner,
+        contexts: &[crate::repository::discovery::ContextKey],
+    ) -> Result<(), RepositoryError> {
+        use crate::repository::{FailurePoint, RepositoryOperation, discovery, recovery};
+        let operation = RepositoryOperation::RefreshRepository;
+        if let Err(error) =
+            self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, root)
+        {
+            crate::repository::set_refresh_operation(
+                &self.registry_path,
+                owner,
+                "failed",
+                None,
+                root,
+            )?;
+            return Err(error);
+        }
+        let sqlite = |error| RepositoryError::sqlite(error).for_operation(operation, root);
+        let _cache_guard =
+            crate::repository::cache_read_guard(&self.registry_path, root, operation)?;
+        let mut connection = discovery::open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(sqlite)?;
+        crate::repository::require_index_owner(&transaction, owner.clone(), root)?;
+        for context in contexts {
+            if discovery::listed_context(root, context).is_none() {
+                crate::repository::delete_context_rows(&transaction, repository_id, context)
+                    .map_err(sqlite)?;
+            }
+        }
+        if !record::finalize_index(&transaction, owner.clone(), repository_id, root)?
+            && !recovery::transition_indexing(&transaction, owner, "completed", None)
+                .map_err(|error| error.for_operation(operation, root))?
+        {
+            return Err(crate::repository::nonowner_error(root));
+        }
+        transaction.commit().map_err(sqlite)
     }
 }
 
