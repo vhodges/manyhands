@@ -311,6 +311,12 @@ setup_replica() {
     else
         note "creating the bare remote $bare"
         scratch_git clone --quiet --bare --no-local "$replica" "$bare"
+        # The remote holds the item branches; the replica must not, or the
+        # poll finds each branch already present with no recorded intent and
+        # refuses to materialize its context (blocked_by_local_state). The
+        # objects stay in the replica; the first poll fetches the branches.
+        scratch_git -C "$replica" for-each-ref --format='delete %(refname)' refs/heads/manyhands \
+            | scratch_git -C "$replica" update-ref --stdin
         if [[ $ssh_port == 22 ]]; then
             url=ssh://$(id -un)@127.0.0.1$bare
         else
@@ -319,7 +325,7 @@ setup_replica() {
     fi
     scratch_git -C "$replica" remote add origin "$url"
     setting_set remote_url "$url"
-    note "replica has $(scratch_git -C "$replica" for-each-ref --format='x' refs/heads/manyhands | wc -l) manyhands/* branches; remote is $url"
+    note "replica has $(scratch_git -C "$replica" for-each-ref --format='x' refs/heads/manyhands | wc -l) local manyhands/* branches; remote is $url"
 }
 
 setup_registry() {
@@ -447,6 +453,26 @@ elapsed() {
     awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", end - start }'
 }
 
+# check_poll_dispositions ANSWER: prints the poll's disposition counts and
+# succeeds only when at least one target was materialized and none was refused
+# (blocked_by_local_state, materialization_incomplete) or lost
+# (inaccessible, not_reached).
+check_poll_dispositions() {
+    python3 -I -c '
+import json, sys
+from collections import Counter
+targets = json.loads(sys.argv[1])["data"].get("targets") or []
+counts = Counter(t.get("disposition") for t in targets)
+print("measure-writes: poll targets:", dict(counts), file=sys.stderr)
+refused = [d for d in ("blocked_by_local_state", "materialization_incomplete", "inaccessible", "not_reached") if counts[d]]
+if not counts["materialized"]:
+    print("measure-writes: the poll materialized no context", file=sys.stderr)
+if refused:
+    print("measure-writes: the poll refused or lost targets:", ", ".join(refused), file=sys.stderr)
+sys.exit(0 if counts["materialized"] and not refused else 1)
+' "$1"
+}
+
 phase_trust_host() {
     local expected=
     while (($#)); do
@@ -469,6 +495,8 @@ phase_trust_host() {
     port=$(json_get data.port <<<"$answer")
     algorithm=$(json_get data.presented_algorithm <<<"$answer")
     fingerprint=$(json_get data.presented_fingerprint <<<"$answer")
+    local pinned
+    pinned=$(json_get data.pinned_fingerprint <<<"$answer")
     [[ -n $host && -n $port && -n $algorithm && -n $fingerprint ]] \
         || die "host observe gave no host key: $answer"
     [[ $host == 127.0.0.1 ]] || die "refusing to approve $host: this script trusts only 127.0.0.1"
@@ -482,25 +510,26 @@ phase_trust_host() {
         die "the host presents $fingerprint, not the expected $expected: not approving"
     fi
 
-    python3 -I -c '
+    if [[ $pinned == "$fingerprint" ]]; then
+        note "$host:$port is already pinned to this fingerprint: not approving again"
+    else
+        python3 -I -c '
 import json, sys
 json.dump({"authority": sys.argv[2], "algorithm": sys.argv[3], "fingerprint": sys.argv[4]}, open(sys.argv[1], "w"))
 ' "$root/inputs/approve.json" "$host:$port" "$algorithm" "$fingerprint"
-    confirmed 'host approve' host approve --repo "$replica" --input "$root/inputs/approve.json"
-    note "approved $host:$port"
+        confirmed 'host approve' host approve --repo "$replica" --input "$root/inputs/approve.json"
+        note "approved $host:$port"
+    fi
 
-    # The first poll materializes every open context.
+    # The first poll materializes every open context. A poll answers ok even
+    # when it left every target alone, so read the dispositions: trust is only
+    # recorded when it materialized contexts and refused none.
     local start end
     start=$(date +%s.%N)
     api_must 'poll once' poll once --repo "$replica" --request-id "$(new_id)"
     end=$(date +%s.%N)
     note "poll once took $(elapsed "$start" "$end") s"
-    python3 -I -c '
-import json, sys
-from collections import Counter
-targets = json.load(sys.stdin)["data"].get("targets") or []
-print("measure-writes: poll targets:", dict(Counter(t.get("disposition") for t in targets)), file=sys.stderr)
-' <<<"$answer"
+    check_poll_dispositions "$answer" || die 'the first poll did not materialize the open contexts: not recording trust (the host is pinned; fix the cause and run trust-host again)'
     setting_set trusted yes
     note "trust-host finished; next: $program run --root $root --out <csv>"
 }
@@ -520,10 +549,16 @@ record() {
 # and records it. The call must succeed. The answer is left in $answer.
 timed_api() {
     local name=$1 run=$2 start end rc=0 outcome
+    local reply=$root/inputs/timed-answer.json
     shift 2
+    # Everything but the CLI itself stays outside the timed window: the safety
+    # checks run first, and the answer goes to a file instead of through a
+    # command substitution.
+    check_cli
     start=$(date +%s.%N)
-    answer=$(cli --json --non-interactive "$@") || rc=$?
+    scratch_env "$cli" --json --non-interactive "$@" >"$reply" || rc=$?
     end=$(date +%s.%N)
+    answer=$(<"$reply")
     outcome=$(json_get outcome <<<"$answer" 2>/dev/null || true)
     case $outcome in
         success | noop) ;;
@@ -767,9 +802,13 @@ phase_run() {
     note "wrote $out"
 }
 
-case ${1:-} in
-    setup) shift; phase_setup "$@" ;;
-    trust-host) shift; phase_trust_host "$@" ;;
-    run) shift; phase_run "$@" ;;
-    *) usage ;;
-esac
+# Run the phase unless the file is being sourced (the functions can then be
+# exercised on their own).
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    case ${1:-} in
+        setup) shift; phase_setup "$@" ;;
+        trust-host) shift; phase_trust_host "$@" ;;
+        run) shift; phase_run "$@" ;;
+        *) usage ;;
+    esac
+fi
