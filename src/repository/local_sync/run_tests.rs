@@ -1050,6 +1050,65 @@ fn local_sync_index_handoff_cannot_be_settled_by_generic_refresh() {
     );
 }
 
+/// A local sync whose index step finds a context changing while it observes
+/// answers that its index is pending, as it did, and marks that context
+/// dirty: its rows stay what they were, owed an indexing, and no other
+/// context, nor the repository, is marked.
+#[test]
+fn a_local_sync_index_that_races_an_edit_marks_the_raced_context_dirty() {
+    let f = Fixture::new(AuthoringKind::Document);
+    graph(&f, "merge");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncBeforeIndex,
+    );
+    let worktree = f
+        .root
+        .path()
+        .join(".manyhands/worktrees")
+        .join(f.item.to_string());
+    let raced = worktree.join("docs/local.md");
+    run::BOUNDARY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |point| {
+            if point == FailurePoint::BeforeIndexTransactionCommit {
+                fs::write(&raced, "raced\n").unwrap();
+            }
+        }))
+    });
+    let report = execute(&f, id, &observation.observation);
+    run::BOUNDARY_HOOK.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        (report.code, report.reason, report.state),
+        (
+            ResultCode::DiscoveryPending,
+            Reason::IndexPending,
+            Some(LocalSyncState::IndexPending)
+        ),
+        "{report:?}"
+    );
+    assert_eq!(report.effects.discovery, DiscoveryEffect::Pending);
+    let db = f.db();
+    let behind: bool = db
+        .query_row("SELECT refresh_required FROM repositories", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let marks = db
+        .prepare("SELECT worktree_path, dirty FROM contexts ORDER BY worktree_path")
+        .unwrap()
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let text = |path: &Path| path.to_str().unwrap().to_owned();
+    assert!(!behind);
+    assert_eq!(marks, [(text(f.root.path()), 0), (text(&worktree), 1)]);
+}
+
 #[test]
 fn local_sync_same_mismatch_code_uses_historical_effects_for_its_failure_class() {
     let mut classes = Vec::new();

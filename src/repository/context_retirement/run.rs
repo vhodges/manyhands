@@ -11,8 +11,10 @@ use crate::{
         RemoteReservation, RemoteSafePointOutcome, RepositoryError, RepositoryOperation,
         RepositoryService, canonical_repository_root,
         cleanup::{BranchDeletion, ContextCleanup},
+        discovery::ContextKey,
         item_context,
         keys::*,
+        mark_registered_contexts_dirty,
         remote::{
             observation::{observation_plan, transport_category},
             reservation, state,
@@ -579,11 +581,9 @@ impl RepositoryService {
             require_materialization(tx, request.operation_id, true)?;
             if tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='owned_intent',materialization_settled=1,branch_removal=?2 WHERE operation_ulid=?1 AND phase='branch_deleting' AND owner_epoch=?3 AND materialization_settled=0",params![request.operation_id.to_string(),flag,owner.retirement_execution()?.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE operation_ulid=?1 AND action='retire_context' AND state IN ('created','context_worktree_released')",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
-            tx.execute(
-                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                [id],
-            )
-            .map_err(RepositoryError::sqlite)?;
+            // The removed context's rows stay marked until the index step
+            // deletes them.
+            mark_registered_contexts_dirty(tx, id, &[ContextKey::Item(request.item_id.clone())])?;
             record::audit_connection(tx)
         });
         drop(cleanup);

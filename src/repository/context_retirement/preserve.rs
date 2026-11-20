@@ -4,7 +4,7 @@
 use super::{ContextRetirementReport, RetirementRemoval, record, request_scope::RequestFence};
 use crate::repository::{
     self, OperationId, RefreshOutcome, RepositoryError, RepositoryOperation, RepositoryService,
-    mutation, recovery, remote::state,
+    discovery::ContextKey, mark_registered_contexts_dirty, mutation, recovery, remote::state,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use state::recovery_required;
@@ -320,11 +320,18 @@ pub(crate) fn begin(
         // that tombstone until refresh makes the abandon request's real claim;
         // relabeling it here would falsely require a spend at the fenced epoch.
         tx.execute("UPDATE operation_records SET state=CASE WHEN state='index_invalidated' THEN state ELSE 'authoritative_observed' END,completed_step='context_retirement_preserved' WHERE id=?1",[row.id]).map_err(|_|recovery_required())?;
-        tx.execute(
-            "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-            [id],
-        )
-        .map_err(|_| recovery_required())?;
+        // What the retirement changed before it was abandoned is its own
+        // context's.
+        let item_id: String = tx
+            .query_row(
+                "SELECT item_id FROM context_retirement_records WHERE operation_ulid=?1",
+                [operation.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        let item_id = item_id.parse().map_err(|_| recovery_required())?;
+        mark_registered_contexts_dirty(tx, id, &[ContextKey::Item(item_id)])
+            .map_err(|_| recovery_required())?;
         record::audit_connection(tx)
     })?;
     drop(lease);

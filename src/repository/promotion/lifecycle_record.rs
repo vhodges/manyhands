@@ -13,6 +13,7 @@ use crate::{
         RepositoryService,
         cleanup::{self, RetirementEvidence},
         closure::record::ClosureRecord,
+        lifecycle_contexts, mark_registered_contexts_dirty,
         promotion::record::PromotionRecord,
         remote::{
             reservation::{self, RemoteReservation},
@@ -936,12 +937,10 @@ pub(in super::super) fn complete_record<R: ParentRecord>(
     crate::repository::recovery::invalidate_index_observations(tx, id)?;
     // Completion may be followed immediately by process exit (F11). Its
     // index-only handoff must be durable in this same transaction so replay
-    // cannot mistake pre-cleanup discovery for an already-refreshed outcome.
-    tx.execute(
-        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-        [id],
-    )
-    .map_err(|_| state::recovery_required())?;
+    // cannot mistake pre-cleanup discovery for an already-refreshed outcome:
+    // the contexts it changed are marked, the retired one's until its rows go.
+    mark_registered_contexts_dirty(tx, id, &lifecycle_contexts(r.item_id()))
+        .map_err(|_| state::recovery_required())?;
     tx.execute(&format!("UPDATE {} SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",R::KIND.table()),params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
     if let Some(owner) = owner {
         reservation::finish_parent(R::KIND, service, tx, id, owner)?;

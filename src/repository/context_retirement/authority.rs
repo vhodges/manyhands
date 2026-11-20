@@ -4,8 +4,9 @@ use super::super::request_scope::Scope;
 use super::super::{ContextRetirementReport, RetireContextRequest};
 use crate::repository::{
     OperationId, RemoteOperationAction, RemoteOperationPriority, RemoteOperationTarget,
-    RemoteReservation, RepositoryError, RepositoryService, authoring_kind_segment, local_sync,
-    recovery,
+    RemoteReservation, RepositoryError, RepositoryService, authoring_kind_segment,
+    discovery::ContextKey,
+    local_sync, mark_registered_contexts_dirty, recovery,
     remote::{observation::ObservationConfiguration, reservation, state},
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -417,11 +418,7 @@ pub(in super::super) fn claim_initial(
             super::super::run::require_materialization(tx, request.operation_id, true)?;
             tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='initial',materialization_settled=1 WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
             tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_retirement_absent' WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
-            tx.execute(
-                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                [id],
-            )
-            .map_err(RepositoryError::sqlite)?;
+            mark_registered_contexts_dirty(tx, id, &[ContextKey::Item(request.item_id.clone())])?;
         }
         super::audit_connection(tx)?;
         Ok(())

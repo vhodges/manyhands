@@ -896,7 +896,30 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     boundary(owner, FailurePoint::BeforeIndexTransactionCommit)?;
     super::control::safe_point(owner)?;
     let after = observe_contexts(&git, owner.repo.root(), &mut activity);
-    if !changed_contexts(&before, &after).is_empty() {
+    let changed = changed_contexts(&before, &after);
+    if !changed.is_empty() {
+        // Nothing is stored: each context that changed keeps its rows,
+        // marked as owed an indexing. The answer is the same whether or
+        // not the mark can be written, since the row still owes its index
+        // step.
+        let raced = before
+            .contexts()
+            .chain(after.contexts())
+            .filter(|observed| changed.contains(&observed.context.worktree))
+            .map(|observed| {
+                observed
+                    .context
+                    .item_id
+                    .clone()
+                    .map_or(ContextKey::Primary, ContextKey::Item)
+            })
+            .collect::<BTreeSet<_>>();
+        let _ = mark_contexts_dirty(
+            &owner.service.registry_path,
+            owner.repo.root(),
+            &Vec::from_iter(raced),
+            RepositoryOperation::ContextSyncLocal,
+        );
         return Err(Fault::foreign());
     }
     // Matching discovery snapshots do not establish integration authority: both

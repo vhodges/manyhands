@@ -240,6 +240,75 @@ impl Fixture {
             .unwrap()
     }
 
+    /// The repository's `refresh_required`, and each stored context's dirty
+    /// mark by worktree, in worktree order.
+    fn marks(&self) -> (bool, Vec<(String, i64)>) {
+        let index = self.index();
+        let behind = index
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let marks = index
+            .prepare("SELECT worktree_path, dirty FROM contexts ORDER BY worktree_path")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (behind, marks)
+    }
+
+    /// What `marks` reads once every context is stored, with the repository
+    /// marked behind when `behind` and only the contexts at `dirty` dirty.
+    fn stored_marks(&self, behind: bool, dirty: &[&Path]) -> (bool, Vec<(String, i64)>) {
+        let marks = [
+            self.root.clone(),
+            self.worktree(TICKET),
+            self.worktree(NOT_A_WORKTREE),
+        ]
+        .iter()
+        .map(|worktree| {
+            (
+                text(worktree),
+                i64::from(dirty.contains(&worktree.as_path())),
+            )
+        })
+        .collect();
+        (behind, marks)
+    }
+
+    /// Marks the context at `worktree` dirty, as a write that changed it does.
+    fn mark(&self, worktree: &Path) {
+        self.index()
+            .execute(
+                "UPDATE contexts SET dirty = 1 WHERE worktree_path = ?1",
+                [text(worktree)],
+            )
+            .unwrap();
+    }
+
+    fn status(&self) -> IndexStatusDto {
+        let repo = self.service.resolve_repository(&self.root).unwrap();
+        self.service.index_status(&repo).unwrap()
+    }
+
+    /// The index state the repository list reports for the repository.
+    fn listed(&self) -> IndexState {
+        let [summary] = &self.service.list_repositories().unwrap().items[..] else {
+            panic!("one registration");
+        };
+        summary.index.state
+    }
+
+    /// Whether the snapshot of the repository says its index is behind.
+    fn snapshot_behind(&self) -> bool {
+        self.service
+            .repository_snapshot(&self.root)
+            .unwrap()
+            .refresh_required
+    }
+
     /// The activity time the primary's copy of the ticket was stored with.
     fn primary_activity_at(&self) -> i64 {
         self.index()
@@ -420,4 +489,328 @@ fn indexing_a_context_clears_its_dirty_mark_and_stores_its_basis() {
     assert_eq!(fixture.indexing(&fixture.root).3, Some(next.to_string()));
     assert_eq!(fixture.stored_activity(&ticket_path()), Some(1_600_000_000));
     assert_eq!(fixture.primary_activity_at(), 1_600_000_000);
+}
+
+/// A refresh or a rebuild that finds a context changing while it observes
+/// it stores nothing of that context, which keeps its rows, marked dirty. A
+/// refresh stores every other context afresh and marks only that one: the
+/// repository is not marked behind as a whole. A rebuild stores nothing, so
+/// the others keep their rows and their marks, and it marks the repository
+/// behind, which only a rebuild or refresh that completes clears.
+#[test]
+fn a_refresh_or_a_rebuild_that_races_an_edit_marks_only_the_raced_context_dirty() {
+    for store in ["refresh", "rebuild"] {
+        let fixture = Fixture::new();
+        fixture.refresh();
+        let edited = fixture.worktree(TICKET);
+        let others = [fixture.root.clone(), fixture.worktree(NOT_A_WORKTREE)];
+        let stored_at = others.clone().map(|other| fixture.indexing(&other).2);
+        let raced = edited.clone();
+        fixture.service.set_observation_hook_for_testing(move || {
+            write(&raced, &ticket_path(), &ticket_source("Raced copy"));
+        });
+        let began = now_ns();
+        if store == "refresh" {
+            let outcome = fixture
+                .service
+                .refresh_repository(RefreshRepositoryRequest {
+                    root: fixture.root.clone(),
+                    operation_id: OperationId::new(),
+                })
+                .unwrap();
+            assert!(
+                matches!(&outcome, RefreshOutcome::RetryRequired { context: Some(context), .. }
+                    if *context == edited),
+                "{outcome:?}"
+            );
+        } else {
+            fixture.rebuild();
+        }
+
+        assert_eq!(
+            fixture.items(&edited),
+            [(TICKET.to_owned(), "Worktree copy".to_owned())],
+            "{store}"
+        );
+        assert_eq!(
+            fixture.marks(),
+            fixture.stored_marks(store == "rebuild", &[&edited]),
+            "{store}"
+        );
+        for (other, stored_at) in others.iter().zip(stored_at) {
+            let indexed_at = fixture.indexing(other).2;
+            if store == "refresh" {
+                assert!(
+                    indexed_at.is_some_and(|indexed_at| indexed_at >= began),
+                    "{store} {other:?}: {indexed_at:?} before {began}"
+                );
+            } else {
+                assert_eq!(indexed_at, stored_at, "{store} {other:?}");
+            }
+        }
+        assert_eq!(
+            fixture.items(&fixture.root),
+            [(TICKET.to_owned(), "Primary copy".to_owned())],
+            "{store}"
+        );
+    }
+}
+
+/// A checkpoint marks only the context it committed to as owed an indexing,
+/// after its commit: the primary, the other contexts and the repository are
+/// left as they were stored. One that commits nothing marks it all the same.
+/// One whose mark cannot be written answers `RefreshPending` with its
+/// commit, having marked nothing, and its retry marks without committing
+/// again. A context the index stores nothing for has no mark to take: the
+/// repository is marked behind as a whole instead, as before.
+#[test]
+fn a_checkpoint_marks_only_its_context_dirty() {
+    let fixture = Fixture::new();
+    fixture.refresh();
+    let edited = fixture.worktree(TICKET);
+    let context = ItemContext {
+        root: fixture.root.clone(),
+        kind: AuthoringKind::Ticket,
+        item_id: TICKET.parse().unwrap(),
+        branch: format!("manyhands/ticket/{TICKET}"),
+        worktree: edited.clone(),
+    };
+    let worktree = Repository::open(&edited).unwrap();
+    let path = PathBuf::from(ticket_path());
+    let checkpoint = || {
+        fixture
+            .service
+            .checkpoint_owned_paths(
+                &worktree,
+                &context,
+                &CommitIdentity {
+                    name: "Fixture".into(),
+                    email: "fixture@example.invalid".into(),
+                },
+                CheckpointSpec {
+                    operation: RepositoryOperation::SaveTicket,
+                    subject: "Save ticket",
+                    added_paths: &[path.as_path()],
+                    removed_source: None,
+                },
+            )
+            .unwrap()
+    };
+    let head = || worktree.head().unwrap().target().unwrap();
+    let only_its_own = fixture.stored_marks(false, &[&edited]);
+
+    let LocalCheckpoint::Checkpointed { commit_oid } = checkpoint() else {
+        panic!("the worktree's edit is committed");
+    };
+    assert_eq!(head(), commit_oid);
+    assert_eq!(fixture.marks(), only_its_own);
+    fixture.refresh();
+    assert!(matches!(checkpoint(), LocalCheckpoint::NoChange));
+    assert_eq!(fixture.marks(), only_its_own);
+
+    fixture.refresh();
+    write(&edited, &ticket_path(), &ticket_source("Edited again"));
+    *fixture.service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeRegistryWrite);
+    let LocalCheckpoint::RefreshPending { commit_oid } = checkpoint() else {
+        panic!("a mark that cannot be written leaves the commit pending its indexing");
+    };
+    assert_eq!(head(), commit_oid);
+    assert_eq!(fixture.marks(), fixture.stored_marks(false, &[]));
+    assert!(matches!(checkpoint(), LocalCheckpoint::NoChange));
+    assert_eq!(head(), commit_oid);
+    assert_eq!(fixture.marks(), only_its_own);
+
+    fixture.refresh();
+    fixture
+        .index()
+        .execute(
+            "DELETE FROM contexts WHERE worktree_path = ?1",
+            [text(&edited)],
+        )
+        .unwrap();
+    assert!(matches!(checkpoint(), LocalCheckpoint::NoChange));
+    assert_eq!(
+        fixture.marks(),
+        (
+            true,
+            vec![
+                (text(&fixture.root), 0),
+                (text(&fixture.worktree(NOT_A_WORKTREE)), 0)
+            ]
+        )
+    );
+}
+
+/// A context a pending row owes an indexing reads as dirty whatever its own
+/// mark says. The row records the contexts it owes before its commit, as
+/// `owed_contexts`, a JSON array of context keys, so a crash between that
+/// commit and the mark leaves no stale row reading current. What this build
+/// cannot read of it is owed in full; a row that completed owes nothing.
+#[test]
+fn a_context_owed_by_a_pending_row_reads_dirty() {
+    let fixture = Fixture::new();
+    fixture.refresh();
+    let ticket: canonical::ItemId = TICKET.parse().unwrap();
+    let other: canonical::ItemId = NOT_A_WORKTREE.parse().unwrap();
+    // What a row owes as stored, its state, and whether the primary and the
+    // ticket's context then read dirty.
+    for (owed, state, primary, own) in [
+        (Some(format!("[\"{TICKET}\"]")), "authoring", false, true),
+        (
+            Some("[\"primary\"]".to_owned()),
+            "authoritative_observed",
+            true,
+            false,
+        ),
+        (
+            Some(format!("[\"primary\",\"{TICKET}\"]")),
+            "indexing",
+            true,
+            true,
+        ),
+        (Some("[]".to_owned()), "authoring", false, false),
+        (None, "authoring", false, false),
+        (Some(format!("[\"{TICKET}\"]")), "completed", false, false),
+        (Some("primary".to_owned()), "authoring", true, true),
+        (
+            Some(format!("[\"{}\"]", TICKET.to_lowercase())),
+            "authoring",
+            true,
+            true,
+        ),
+        (Some("[1]".to_owned()), "authoring", true, true),
+        (
+            Some("{\"primary\":true}".to_owned()),
+            "authoring",
+            true,
+            true,
+        ),
+        (Some(String::new()), "authoring", true, true),
+    ] {
+        let case = format!("{owed:?} {state}");
+        fixture
+            .index()
+            .execute(
+                "INSERT INTO operation_records (
+                    repository_id, root_path, operation_ulid, action, state, observed_at,
+                    owed_contexts
+                 ) SELECT id, root_path, ?1, 'save_ticket', ?2, 1, ?3 FROM repositories",
+                params![OperationId::new().to_string(), state, owed],
+            )
+            .unwrap();
+
+        assert_eq!(fixture.marks(), fixture.stored_marks(false, &[]), "{case}");
+        // A close of the ticket changes the primary and the ticket's own
+        // context; one of the other item, the primary and that item's.
+        assert_eq!(
+            fixture.service.lifecycle_indexed(&fixture.root, &ticket),
+            !(primary || own),
+            "{case}"
+        );
+        assert_eq!(
+            fixture.service.lifecycle_indexed(&fixture.root, &other),
+            !primary,
+            "{case}"
+        );
+        assert_eq!(fixture.snapshot_behind(), primary || own, "{case}");
+        assert_eq!(
+            fixture.status().state,
+            if primary || own {
+                IndexStatusState::Stale
+            } else {
+                IndexStatusState::Current
+            },
+            "{case}"
+        );
+        fixture
+            .index()
+            .execute(
+                "DELETE FROM operation_records WHERE action = 'save_ticket'",
+                [],
+            )
+            .unwrap();
+    }
+}
+
+/// `index status`, the repository list and the snapshot read the index as
+/// stale while any context is dirty, whether the primary, an item's or one
+/// that is no valid item context, though the repository is not marked
+/// behind as a whole; `refreshed_at` stays when the last whole refresh
+/// began. The next refresh stores the context, and the index reads current.
+#[test]
+fn index_status_is_stale_while_any_context_is_dirty() {
+    let fixture = Fixture::new();
+    fixture.refresh();
+    for dirty in [
+        fixture.root.clone(),
+        fixture.worktree(TICKET),
+        fixture.worktree(NOT_A_WORKTREE),
+    ] {
+        let current = fixture.status();
+        assert_eq!(current.state, IndexStatusState::Current, "{dirty:?}");
+        assert_eq!(fixture.listed(), IndexState::Current, "{dirty:?}");
+
+        fixture.mark(&dirty);
+        assert_eq!(fixture.marks(), fixture.stored_marks(false, &[&dirty]));
+        let status = fixture.status();
+        assert_eq!(status.state, IndexStatusState::Stale, "{dirty:?}");
+        assert_eq!(status.refreshed_at, current.refreshed_at, "{dirty:?}");
+        assert_eq!(fixture.listed(), IndexState::Stale, "{dirty:?}");
+        assert!(fixture.snapshot_behind(), "{dirty:?}");
+
+        fixture.refresh();
+        assert_eq!(fixture.marks(), fixture.stored_marks(false, &[]));
+        assert!(!fixture.snapshot_behind(), "{dirty:?}");
+    }
+}
+
+/// A close or a promotion of an item changes the primary and the item's own
+/// context, and reads the marks of those two to answer `discovery: current`:
+/// not while either is dirty, or the repository is marked behind as a whole.
+/// Another item's mark does not hold it back, though the snapshot then reads
+/// the index as behind. Its writes mark the same two.
+#[test]
+fn the_lifecycle_reads_the_dirty_marks_of_the_contexts_it_changed() {
+    let fixture = Fixture::new();
+    fixture.refresh();
+    let ticket: canonical::ItemId = TICKET.parse().unwrap();
+    let own = fixture.worktree(TICKET);
+    let another = fixture.worktree(NOT_A_WORKTREE);
+    let indexed = || fixture.service.lifecycle_indexed(&fixture.root, &ticket);
+    assert!(indexed());
+    // What is marked (the whole repository when none), and whether the
+    // lifecycle of the ticket then reads current.
+    for (marked, current) in [
+        (Some(&another), true),
+        (Some(&own), false),
+        (Some(&fixture.root), false),
+        (None, false),
+    ] {
+        match marked {
+            Some(worktree) => fixture.mark(worktree),
+            None => {
+                fixture
+                    .index()
+                    .execute("UPDATE repositories SET refresh_required = 1", [])
+                    .unwrap();
+            }
+        }
+        assert_eq!(indexed(), current, "{marked:?}");
+        assert!(fixture.snapshot_behind(), "{marked:?}");
+        fixture.refresh();
+        assert!(indexed(), "{marked:?}");
+    }
+
+    mark_contexts_dirty(
+        &fixture.service.registry_path,
+        &fixture.root,
+        &lifecycle_contexts(&ticket),
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.marks(),
+        fixture.stored_marks(false, &[&fixture.root, &own])
+    );
+    assert!(!indexed());
 }

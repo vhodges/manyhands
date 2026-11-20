@@ -17,10 +17,10 @@ use super::{
 use crate::{
     canonical,
     repository::{
-        ConfigurationInspection, IdentityConfigProvider, IdentityInspection, RemoteInfo,
-        RepositoryError, RepositoryIdentityConfig, RepositoryOperation, RepositoryService,
-        SuppliedIdentityConfig, bridges::identity::local_initials, read_configuration_guarded,
-        remote_info_for, resolve_identity,
+        ConfigurationInspection, DirtyContexts, IdentityConfigProvider, IdentityInspection,
+        RemoteInfo, RepositoryError, RepositoryIdentityConfig, RepositoryOperation,
+        RepositoryService, SuppliedIdentityConfig, bridges::identity::local_initials,
+        read_configuration_guarded, remote_info_for, resolve_identity,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -239,6 +239,7 @@ impl RepositoryService {
                     let state: Option<String> = row.get(6)?;
                     let invalid_code: Option<String> = row.get(9)?;
                     let registration = row.get::<_, i64>(10)?;
+                    let any_dirty = DirtyContexts::read(connection, registration)?.any();
                     Ok((
                         RepositorySummaryDto {
                             root: root.clone(),
@@ -255,7 +256,12 @@ impl RepositoryService {
                                 row.get(8)?,
                                 invalid_code.as_deref(),
                             ),
-                            index: index_state(refresh_required, row.get(4)?, row.get(5)?),
+                            index: index_state(
+                                refresh_required,
+                                row.get(4)?,
+                                row.get(5)?,
+                                any_dirty,
+                            ),
                             problem_count: 0,
                         },
                         ResolvedRepository::registered(registration, root.into()),

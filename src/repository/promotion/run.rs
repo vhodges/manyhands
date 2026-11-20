@@ -1689,16 +1689,15 @@ fn refresh_with_publication<L: Lifecycle>(
     known: Option<KnownPublication>,
 ) -> L::Output {
     let outcome = make_outcome::<L>(service, root, r, known);
-    if replay
-        && service
-            .repository_snapshot(root)
-            .is_ok_and(|s| !s.refresh_required)
-    {
+    // A replay is complete once the index holds what this lifecycle
+    // changed, whatever other contexts are owed.
+    if replay && service.lifecycle_indexed(root, r.item_id()) {
         return L::complete(outcome);
     }
-    let marked = mark_document_refresh_required(
+    let marked = mark_contexts_dirty(
         &service.registry_path,
         root,
+        &lifecycle_contexts(r.item_id()),
         RepositoryOperation::RepositorySnapshot,
     )
     .is_ok();

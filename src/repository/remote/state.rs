@@ -11,6 +11,8 @@ use super::{
 };
 use crate::repository::{
     ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    discovery::ContextKey,
+    mark_registered_contexts_dirty,
     recovery::{FinalKind, JournalRow, PendingOperation},
 };
 use crate::results::ResultCode;
@@ -6526,11 +6528,21 @@ pub(super) fn observe_resolution_checkpoint(
     )
     .map_err(|_| recovery_required())?;
     tx.execute("UPDATE remote_integration_steps SET phase='applied',result_oid=?2,observed_tree_oid=?3 WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1) AND phase='commit_prepared'",params![attempt_id,checkpoint_oid.to_string(),observed_tree_oid.to_string()]).map_err(|_| recovery_required())?;
-    tx.execute(
-        "UPDATE repositories SET refresh_required=1 WHERE id=(SELECT repository_id FROM remote_operation_records WHERE id=?1)",
-        [record.id],
-    )
-    .map_err(|_| recovery_required())?;
+    // The checkpoint is in the context the synchronization resolved: an
+    // item's, or the primary's.
+    let repository_id: i64 = tx
+        .query_row(
+            "SELECT repository_id FROM remote_operation_records WHERE id=?1",
+            [record.id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    let resolved = match record.target.item() {
+        Some((_, item_id)) => ContextKey::Item(item_id.clone()),
+        None => ContextKey::Primary,
+    };
+    mark_registered_contexts_dirty(tx, repository_id, &[resolved])
+        .map_err(|_| recovery_required())?;
     Ok(())
 }
 

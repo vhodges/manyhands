@@ -26,8 +26,8 @@ use super::{
 use crate::{
     canonical::{self, ItemId},
     repository::{
-        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
-        mutation::absent_token,
+        DirtyContexts, GuardedFile, RepositoryOperation, RepositoryService,
+        discovery::UnknownMetadata, mutation::absent_token,
     },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
@@ -640,7 +640,8 @@ fn timestamp(seconds: i64) -> Option<String> {
 /// `repository_not_registered`.
 ///
 /// The row of an item worktree that is not a valid item context is no
-/// context the reads present, and is not counted as one the index holds.
+/// context the reads present, and is not counted as one the index holds;
+/// while it is dirty, the index is behind all the same.
 pub(super) fn stored_index_state(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -659,8 +660,9 @@ pub(super) fn stored_index_state(
         .optional()?;
     let (refresh_required, refreshed_at, has_contexts) =
         stored.ok_or_else(|| ReadError::new(ResultCode::RepositoryNotRegistered))?;
+    let any_dirty = DirtyContexts::read(connection, repo.registration_id())?.any();
     Ok((
-        index_state(refresh_required, refreshed_at, has_contexts),
+        index_state(refresh_required, refreshed_at, has_contexts, any_dirty),
         refreshed_at,
     ))
 }

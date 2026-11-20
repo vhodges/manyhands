@@ -92,16 +92,20 @@ fn root_action(action: RecoveryActionKind, root: Option<&str>) -> RecoveryAction
 /// context: nothing has ever been stored for it. An index that holds
 /// contexts and no refresh time was written before that time was recorded;
 /// it has rows worth listing and is `stale`, with a null `refreshed_at`.
+/// Otherwise it is `stale` while the repository is marked behind as a whole
+/// (`refresh_required`) or any context is owed an indexing (`any_dirty`:
+/// one is marked dirty, or a pending row owes it).
 fn index_state(
     refresh_required: bool,
     refreshed_at: Option<i64>,
     has_contexts: bool,
+    any_dirty: bool,
 ) -> IndexStateDto {
     IndexStateDto {
         state: match refreshed_at {
             None if !has_contexts => IndexState::NeverRefreshed,
             None => IndexState::Stale,
-            Some(_) if refresh_required => IndexState::Stale,
+            Some(_) if refresh_required || any_dirty => IndexState::Stale,
             Some(_) => IndexState::Current,
         },
         refreshed_at: refreshed_at

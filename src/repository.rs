@@ -93,7 +93,7 @@ use coordination::{
     cache_read_guard, cache_write_guard, leases_are_free, repository_lease,
 };
 use discovery::{
-    ContextObservation, ObservedActivity, ObservedCommentThread, ObservedContexts,
+    ContextKey, ContextObservation, ObservedActivity, ObservedCommentThread, ObservedContexts,
     RootConfiguration, RootObservation, RootObservationProblem, migrate_registry, observe_contexts,
     open_registry, open_registry_read_only,
 };
@@ -833,6 +833,8 @@ pub enum RemoveRegistrationOutcome {
 pub struct RepositorySnapshot {
     pub root: PathBuf,
     pub configuration: SnapshotConfiguration,
+    /// Whether the index is behind the repository: it is marked behind as a
+    /// whole, or some context is dirty or owed an indexing by a pending row.
     pub refresh_required: bool,
     pub contexts: Vec<DiscoveredContext>,
     pub items: Vec<DiscoveredItem>,
@@ -1808,6 +1810,17 @@ impl RepositoryService {
     }
 
     pub fn repository_snapshot(&self, root: &Path) -> Result<RepositorySnapshot, RepositoryError> {
+        self.read_registration(root, read_repository_snapshot)
+    }
+
+    /// Reads the registration of `root` with `read`, in one read-only
+    /// transaction, given the root as the snapshot resolves it and its
+    /// registry key.
+    fn read_registration<T>(
+        &self,
+        root: &Path,
+        read: impl FnOnce(&rusqlite::Connection, &Path, &str) -> Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
         self.require_index_available(RepositoryOperation::RepositorySnapshot, Some(root))?;
         let root = match std::fs::canonicalize(root) {
             Ok(root) => root,
@@ -1838,11 +1851,11 @@ impl RepositoryService {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|error| snapshot_index_error_source(&root, error))?;
-        let snapshot = read_repository_snapshot(&transaction, &root, root_path);
+        let read = read(&transaction, &root, root_path);
         transaction
             .rollback()
             .map_err(|error| snapshot_index_error_source(&root, error))?;
-        snapshot
+        read
     }
 
     pub fn recovery_inspection(
@@ -3901,7 +3914,7 @@ impl RepositoryService {
             // Also repair a stale owned entry left by an earlier failed index
             // write. Git is authoritative; index repair must not fail the save.
             let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
-            return match self.mark_checkpoint_refresh(&context.root, operation) {
+            return match self.mark_checkpoint_refresh(context, operation) {
                 Ok(()) => Ok(LocalCheckpoint::NoChange),
                 Err(()) => Ok(LocalCheckpoint::RefreshPending {
                     commit_oid: head.id(),
@@ -3934,12 +3947,10 @@ impl RepositoryService {
         // and can be repaired by a later save, including a no-change save.
         // This runs before handing off the save's existing authoring lease.
         let _ = refresh_owned_index(repository, &index, added_paths, removed_source);
-        Ok(
-            match self.mark_checkpoint_refresh(&context.root, operation) {
-                Ok(()) => LocalCheckpoint::Checkpointed { commit_oid },
-                Err(()) => LocalCheckpoint::RefreshPending { commit_oid },
-            },
-        )
+        Ok(match self.mark_checkpoint_refresh(context, operation) {
+            Ok(()) => LocalCheckpoint::Checkpointed { commit_oid },
+            Err(()) => LocalCheckpoint::RefreshPending { commit_oid },
+        })
     }
 
     fn reject_pending_synchronization_merge(
@@ -3996,13 +4007,23 @@ impl RepositoryService {
         Ok(())
     }
 
+    /// Marks the context a checkpoint committed to, and only it, as owed an
+    /// indexing.
     fn mark_checkpoint_refresh(
         &self,
-        root: &Path,
+        context: &ItemContext,
         operation: RepositoryOperation,
     ) -> Result<(), ()> {
+        let root = &context.root;
         self.check_failure(FailurePoint::BeforeRegistryWrite, operation, root)
-            .and_then(|()| mark_document_refresh_required(&self.registry_path, root, operation))
+            .and_then(|()| {
+                mark_contexts_dirty(
+                    &self.registry_path,
+                    root,
+                    &[ContextKey::Item(context.item_id.clone())],
+                    operation,
+                )
+            })
             .map_err(|_| ())
     }
 
@@ -6284,6 +6305,8 @@ fn persist_rebuild_retry(
             [repository_id],
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    // The repository is marked behind as a whole above, so a context with
+    // nothing stored to mark needs nothing more.
     for context in changed {
         mark_context_dirty(&transaction, repository_id, context)
             .map_err(|error| error.for_operation(operation, root))?;
@@ -6478,9 +6501,10 @@ fn persist_context_refresh(
 }
 
 /// What a refresh that found contexts changing while it observed them
-/// stores: the index marked stale, with a problem on `context`, the first
-/// of them, and each of `changed` keeping its rows, marked as owed an
-/// indexing.
+/// stores: a problem on `context`, the first of them, and each of `changed`
+/// keeping its rows, marked as owed an indexing, which makes the index
+/// stale. One of them that nothing is stored for yet has no row to mark: the
+/// repository is marked behind as a whole instead.
 fn persist_retry_problem(
     registry_path: &Path,
     repository_id: i64,
@@ -6511,18 +6535,14 @@ fn persist_retry_problem(
             RepositoryError::sqlite(error)
                 .for_operation(RepositoryOperation::RefreshRepository, root)
         })?;
-    transaction
-        .execute(
-            "UPDATE repositories SET refresh_required = 1 WHERE id = ?1",
-            [repository_id],
-        )
-        .map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RefreshRepository, root)
-        })?;
     transaction.execute("INSERT INTO problems (repository_id, context_id, code, guidance, observed_at) VALUES (?1, ?2, 'retry-required', 'the context changed while it was being observed; refresh again', ?3)", params![repository_id, context_id, OffsetDateTime::now_utc().unix_timestamp()]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    for worktree in changed {
-        mark_context_dirty(&transaction, repository_id, worktree)
+    let mut unstored = false;
+    for worktree in changed.iter().map(PathBuf::as_path).chain([context]) {
+        unstored |= !mark_context_dirty(&transaction, repository_id, worktree)
+            .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
+    }
+    if unstored {
+        mark_repository_behind(&transaction, repository_id)
             .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?;
     }
     if !transition_indexing(&transaction, owner, "retry", Some(context))
@@ -6683,6 +6703,11 @@ fn persist_observation(
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
     for context in observation.contexts() {
+        // Its rows are deleted above: one left dirty would keep none.
+        debug_assert!(
+            !context.left_dirty,
+            "a context left dirty is never stored over the whole index"
+        );
         persist_context_index(transaction, repository_id, context)
             .map_err(|error| error.for_operation(operation, root))?;
     }
@@ -6712,7 +6737,7 @@ fn persist_context_index(
 ) -> Result<(), RepositoryError> {
     let worktree = &observation.context.worktree;
     if observation.left_dirty {
-        return mark_context_dirty(transaction, repository_id, worktree);
+        return mark_context_dirty(transaction, repository_id, worktree).map(drop);
     }
     // Its items, comments, edges, folders and problems go with it.
     transaction
@@ -6736,20 +6761,21 @@ fn persist_context_index(
 }
 
 /// Marks the context whose worktree is `worktree` as owed an indexing,
-/// leaving what is stored for it as it is. A context nothing is stored for
-/// has nothing to mark: the next refresh observes it as new.
+/// leaving what is stored for it as it is, and says whether anything is
+/// stored for it to mark. A context nothing is stored for has nothing to
+/// mark: the next refresh observes it as new.
 fn mark_context_dirty(
     connection: &rusqlite::Connection,
     repository_id: i64,
     worktree: &Path,
-) -> Result<(), RepositoryError> {
-    connection
+) -> Result<bool, RepositoryError> {
+    let marked = connection
         .execute(
             "UPDATE contexts SET dirty = 1 WHERE repository_id = ?1 AND worktree_path = ?2",
             params![repository_id, worktree.to_str()],
         )
         .map_err(RepositoryError::sqlite)?;
-    Ok(())
+    Ok(marked != 0)
 }
 
 /// Replaces the configuration the primary's observation read: its state,
@@ -7063,6 +7089,12 @@ fn read_repository_snapshot(
             ));
         }
     };
+    // Behind as a whole, or in any one context: each dirty or owed an
+    // indexing is behind what its sources hold.
+    let refresh_required = refresh_required
+        || DirtyContexts::read(connection, *repository_id)
+            .map_err(|error| snapshot_index_error_source(root, error))?
+            .any();
     let configuration = connection
         .query_row(
             "SELECT state, primary_branch, publication_remote, invalid_code, guidance
@@ -11417,29 +11449,219 @@ fn configuration_tree(
         .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))
 }
 
-fn mark_document_refresh_required(
+/// Marks each of `contexts` of the repository at `root` as owed an indexing,
+/// leaving what is stored for it as it is: what a write that changed them
+/// records once it has, where it marked the whole repository behind before.
+/// A context the index stores nothing for yet, such as the worktree a create
+/// has just made, has no row to mark: the repository is marked behind as a
+/// whole instead, as before, and the next refresh stores the context.
+///
+/// A mark that cannot be written is `RegistryRefreshPending`: the write it
+/// follows stands, and is answered as pending its indexing.
+fn mark_contexts_dirty(
     registry_path: &Path,
     root: &Path,
+    contexts: &[ContextKey],
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
-    let connection = open_registry(registry_path, &mut |_| {})
+    let mut connection = open_registry(registry_path, &mut |_| {})
         .map_err(|error| registry_refresh_pending(operation, root, error))?;
-    let updated = connection
-        .execute(
-            "UPDATE repositories SET refresh_required = 1 WHERE root_path = ?1",
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| registry_refresh_pending(operation, root, error))?;
+    let repository_id: Option<i64> = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
             [root_path],
+            |row| row.get(0),
         )
+        .optional()
         .map_err(|error| registry_refresh_pending(operation, root, error))?;
-    if updated != 1 {
+    let Some(repository_id) = repository_id else {
         return Err(registry_refresh_pending(
             operation,
             root,
-            std::io::Error::other("the repository registration is missing or duplicated"),
+            std::io::Error::other("the repository registration is missing"),
         ));
+    };
+    mark_registered_contexts_dirty(&transaction, repository_id, contexts)
+        .map_err(|error| registry_refresh_pending(operation, root, error))?;
+    transaction
+        .commit()
+        .map_err(|error| registry_refresh_pending(operation, root, error))
+}
+
+/// Marks each of `contexts` of the registration `repository_id` as owed an
+/// indexing, in the caller's transaction on `connection`; see
+/// `mark_contexts_dirty`, which a write that holds no transaction of its own
+/// calls instead. A context is found by its item, the primary by having
+/// none, so the mark follows an item's context across its worktree being
+/// made again.
+///
+/// An error names no operation or root; the caller names them.
+fn mark_registered_contexts_dirty(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    contexts: &[ContextKey],
+) -> Result<(), RepositoryError> {
+    let mut unstored = false;
+    for context in contexts {
+        let marked = match context {
+            ContextKey::Primary => connection.execute(
+                "UPDATE contexts SET dirty = 1 WHERE repository_id = ?1 AND item_id IS NULL",
+                [repository_id],
+            ),
+            ContextKey::Item(item_id) => connection.execute(
+                "UPDATE contexts SET dirty = 1 WHERE repository_id = ?1 AND item_id = ?2",
+                params![repository_id, item_id.to_string()],
+            ),
+        }
+        .map_err(RepositoryError::sqlite)?;
+        unstored |= marked == 0;
+    }
+    if unstored {
+        mark_repository_behind(connection, repository_id)?;
     }
     Ok(())
+}
+
+/// Marks the registration `repository_id` behind as a whole: what a context
+/// with no stored row to mark falls back to.
+fn mark_repository_behind(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    connection
+        .execute(
+            "UPDATE repositories SET refresh_required = 1 WHERE id = ?1",
+            [repository_id],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(())
+}
+
+/// The contexts a close or a promotion of `item` changes: the primary, which
+/// its integration moves, and the item's own context, which its checkpoint
+/// or synchronization moves and its cleanup removes. Each of its writes
+/// marks both, and its answer of `discovery: current` reads both.
+fn lifecycle_contexts(item: &canonical::ItemId) -> [ContextKey; 2] {
+    [ContextKey::Primary, ContextKey::Item(item.clone())]
+}
+
+/// The contexts of one registration that the index owes an indexing: each
+/// marked dirty, and each that a pending operation row owes (its
+/// `owed_contexts`). Whether the repository is marked behind as a whole is
+/// read beside it. What this build cannot read of a mark or of a row's list
+/// is owed in full: every context is.
+#[derive(Debug, Default)]
+struct DirtyContexts {
+    every: bool,
+    contexts: BTreeSet<ContextKey>,
+}
+
+impl DirtyContexts {
+    fn read(connection: &rusqlite::Connection, repository_id: i64) -> rusqlite::Result<Self> {
+        let mut dirty = Self::default();
+        let mut marked = connection
+            .prepare("SELECT item_id FROM contexts WHERE repository_id = ?1 AND dirty != 0")?;
+        for item_id in marked.query_map([repository_id], |row| row.get::<_, Option<String>>(0))? {
+            match item_id?.map(|item_id| item_id.parse()) {
+                None => {
+                    dirty.contexts.insert(ContextKey::Primary);
+                }
+                Some(Ok(item_id)) => {
+                    dirty.contexts.insert(ContextKey::Item(item_id));
+                }
+                Some(Err(_)) => dirty.every = true,
+            }
+        }
+        let mut owing = connection.prepare(
+            "SELECT owed_contexts FROM operation_records
+              WHERE root_path = (SELECT root_path FROM repositories WHERE id = ?1)
+                AND state != 'completed' AND owed_contexts IS NOT NULL",
+        )?;
+        for owed in owing.query_map([repository_id], |row| {
+            row.get::<_, rusqlite::types::Value>(0)
+        })? {
+            match owed? {
+                rusqlite::types::Value::Text(owed) => match decode_owed_contexts(&owed) {
+                    Some(contexts) => dirty.contexts.extend(contexts),
+                    None => dirty.every = true,
+                },
+                _ => dirty.every = true,
+            }
+        }
+        Ok(dirty)
+    }
+
+    /// Whether any context is owed an indexing.
+    fn any(&self) -> bool {
+        self.every || !self.contexts.is_empty()
+    }
+
+    /// Whether any of `contexts` is owed an indexing.
+    fn any_of(&self, contexts: &[ContextKey]) -> bool {
+        self.every
+            || contexts
+                .iter()
+                .any(|context| self.contexts.contains(context))
+    }
+}
+
+/// Whether the index of the registration `repository_id` is behind its
+/// repository as a whole: it is marked so, or any context is dirty or owed
+/// an indexing. What a whole-repository operation reads before it answers
+/// that the index is current.
+fn index_behind(connection: &rusqlite::Connection, repository_id: i64) -> rusqlite::Result<bool> {
+    let marked: bool = connection.query_row(
+        "SELECT refresh_required FROM repositories WHERE id = ?1",
+        [repository_id],
+        |row| row.get(0),
+    )?;
+    Ok(marked || DirtyContexts::read(connection, repository_id)?.any())
+}
+
+/// The contexts an operation row's `owed_contexts` names. It is stored as a
+/// JSON array of context keys, each as `ContextKey::encode` writes it:
+/// `["primary","01ARZ3NDEKTSV4RRFFQ69G5FAV"]`, or `[]` for a row that owes
+/// none; NULL is a row that recorded nothing, which owes none. `None` for
+/// any other value: a row this build cannot read owes every context.
+fn decode_owed_contexts(stored: &str) -> Option<Vec<ContextKey>> {
+    let keys: Vec<String> = serde_json::from_str(stored).ok()?;
+    keys.iter().map(|key| ContextKey::decode(key)).collect()
+}
+
+impl RepositoryService {
+    /// Whether the index holds what each of `contexts` holds, as far as it
+    /// knows: the repository's snapshot reads, the repository is not marked
+    /// behind as a whole, and none of them is dirty or owed an indexing by a
+    /// pending row. What a write that changed only them reads to answer
+    /// `discovery: current`: another context's mark does not hold it back.
+    fn contexts_indexed(&self, root: &Path, contexts: &[ContextKey]) -> bool {
+        self.read_registration(root, |connection, root, root_path| {
+            // An index whose snapshot does not read holds nothing current.
+            read_repository_snapshot(connection, root, root_path)?;
+            let (repository_id, behind) = connection
+                .query_row(
+                    "SELECT id, refresh_required FROM repositories WHERE root_path = ?1",
+                    [root_path],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
+                )
+                .map_err(|error| snapshot_index_error_source(root, error))?;
+            let dirty = DirtyContexts::read(connection, repository_id)
+                .map_err(|error| snapshot_index_error_source(root, error))?;
+            Ok(!behind && !dirty.any_of(contexts))
+        })
+        .unwrap_or(false)
+    }
+
+    /// Whether the index holds what a close or a promotion of `item`
+    /// changed; see `lifecycle_contexts`.
+    fn lifecycle_indexed(&self, root: &Path, item: &canonical::ItemId) -> bool {
+        self.contexts_indexed(root, &lifecycle_contexts(item))
+    }
 }
 
 fn registry_refresh_pending(

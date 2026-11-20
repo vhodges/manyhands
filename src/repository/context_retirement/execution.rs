@@ -9,8 +9,8 @@ use super::super::{
     AuthoringKind, OperationId, RefreshOutcome, RefreshRepositoryRequest, RepositoryError,
     RepositoryErrorKind, RepositoryOperation, RepositoryService, authoring_kind_segment,
     cache_write_guard, canonical_repository_root,
-    discovery::{migrate_registry, open_registry},
-    item_context, local_sync, recovery,
+    discovery::{ContextKey, migrate_registry, open_registry},
+    item_context, local_sync, mark_registered_contexts_dirty, recovery,
     remote::state::recovery_required,
     repository_lease,
 };
@@ -388,11 +388,13 @@ impl RepositoryService {
                 }
                 tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='initial',materialization_settled=1 WHERE operation_ulid=?1", [&id]).map_err(RepositoryError::sqlite)?;
                 tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_retirement_absent' WHERE id=?1", [local_id]).map_err(RepositoryError::sqlite)?;
-                tx.execute(
-                    "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                    [repository_id],
-                )
-                .map_err(RepositoryError::sqlite)?;
+                // The retired context's rows, if any, stay marked until the
+                // index step deletes them.
+                mark_registered_contexts_dirty(
+                    &tx,
+                    repository_id,
+                    &[ContextKey::Item(request.item_id.clone())],
+                )?;
             }
             tx.commit().map_err(RepositoryError::sqlite)?;
         }

@@ -10,7 +10,9 @@ use crate::{
         RemoteReservation, RepositoryError, RepositoryErrorKind, RepositoryOperation,
         RepositoryService, authoring_kind_segment, canonical_repository_root,
         cleanup::ContextCleanup,
+        discovery::ContextKey,
         keys::*,
+        mark_registered_contexts_dirty,
         remote::{
             observation::{ObservationConfiguration, observation_plan},
             state,
@@ -243,11 +245,11 @@ impl RepositoryService {
                     tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='owned_intent',materialization_settled=1 WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
                     if tx.execute("INSERT INTO context_retirement_absence_receipts(operation_ulid,owner_epoch,intent_owner_epoch,intent_resource,intent_receipt_id,inventory,worktree_removal,branch_removal) SELECT c.operation_ulid,c.owner_epoch,e.owner_epoch,e.resource,e.receipt_id,'all_absent',c.worktree_removal,c.branch_removal FROM context_retirement_records c JOIN context_retirement_effect_intents e ON e.operation_ulid=c.operation_ulid WHERE c.operation_ulid=?1 AND c.owner_epoch=?2 AND e.owner_epoch<?2 AND (e.observation IS NULL OR e.observation IN ('removed','already_absent','incomplete')) ORDER BY e.owner_epoch DESC,e.resource LIMIT 1",params![operation,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
                     tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
-                    tx.execute(
-                        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                        [id],
-                    )
-                    .map_err(RepositoryError::sqlite)?;
+                    mark_registered_contexts_dirty(
+                        tx,
+                        id,
+                        &[ContextKey::Item(request.item_id.clone())],
+                    )?;
                     Claim::Index
                 }
                 "no_effect" => {

@@ -56,7 +56,7 @@ use super::super::{
     RepositoryOperation, RepositoryService,
     bridges::abandon::stale_heartbeat,
     cache_read_guard, cache_write_guard, canonical_repository_root, discovery,
-    ensure_safe_owned_parent, mark_document_refresh_required, open_registry,
+    ensure_safe_owned_parent, mark_contexts_dirty, open_registry,
     recovery::{self, LocalStanding},
     registered_repository_id, registry_root_key, repository_lease,
 };
@@ -485,7 +485,7 @@ impl RepositoryService {
         };
         // From here the directory is there, and the index has said it
         // is behind since before it was: whatever becomes of the
-        // refresh, it says so until one completes.
+        // refresh, it says so until the primary is indexed again.
         let discovery = self.refresh_for_folder(&root, operation_id);
         Ok(if created {
             CreateFolderOutcome::Created(discovery)
@@ -508,10 +508,18 @@ impl RepositoryService {
         // The mark is written before anything is made, and a call that
         // cannot write it makes nothing: the index never says it is
         // current while it lacks a folder this call made. A mark with
-        // no change behind it costs a refresh and misleads no one.
+        // no change behind it costs a refresh and misleads no one. Only
+        // the primary's own sources hold its folders, so only it is marked.
         let mark = || {
             self.check_failure(FailurePoint::BeforeRegistryWrite, OPERATION, root)
-                .and_then(|()| mark_document_refresh_required(&self.registry_path, root, OPERATION))
+                .and_then(|()| {
+                    mark_contexts_dirty(
+                        &self.registry_path,
+                        root,
+                        &[discovery::ContextKey::Primary],
+                        OPERATION,
+                    )
+                })
                 .map_err(CreateFolderError::before)
         };
         let (first, to_make) = match observe(root, path).map_err(CreateFolderError::before)? {

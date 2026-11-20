@@ -1230,11 +1230,10 @@ fn parent_effects(
     } else {
         CheckpointEffect::NotRequested
     };
+    // Current once the index holds what the parent changed, the primary and
+    // the item's own context, whatever other contexts are owed.
     let discovery = || {
-        if service
-            .repository_snapshot(root)
-            .is_ok_and(|snapshot| !snapshot.refresh_required)
-        {
+        if service.lifecycle_indexed(root, &parent.item_id) {
             DiscoveryEffect::Current
         } else {
             DiscoveryEffect::Pending

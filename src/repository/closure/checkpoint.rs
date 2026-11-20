@@ -16,8 +16,8 @@ use crate::{
     canonical::{self, CanonicalItem, ItemId},
     repository::{
         CommitIdentity, ConfirmedCommitIdentity, FailurePoint, PlannedIntegration, RepositoryError,
-        RepositoryOperation, RepositoryService, SynchronizationTarget,
-        mark_document_refresh_required,
+        RepositoryOperation, RepositoryService, SynchronizationTarget, lifecycle_contexts,
+        mark_contexts_dirty,
         promotion::{
             integrate,
             lifecycle::{LeasedIntegration, LifecycleError, LifecycleKind, PreIntegration},
@@ -554,11 +554,17 @@ fn boundary(
     service.check_failure(point, RepositoryOperation::RepositorySnapshot, root)
 }
 
-/// The context ref moved: the context now reads closed.
-fn context_moved(service: &RepositoryService, root: &Path) -> Result<(), RepositoryError> {
-    mark_document_refresh_required(
+/// The context ref moved: the context now reads closed. The closure's
+/// contexts are marked owed an indexing, its own and the primary's.
+fn context_moved(
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<(), RepositoryError> {
+    mark_contexts_dirty(
         &service.registry_path,
         root,
+        &lifecycle_contexts(item),
         RepositoryOperation::RepositorySnapshot,
     )
 }
@@ -679,7 +685,7 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
         prepared.checkpoint_commit,
         || boundary(service, root, FailurePoint::ClosureDuringCheckpointCheckout),
     )?;
-    context_moved(service, root)?;
+    context_moved(service, root, &r.item_id)?;
     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
     Ok(PreIntegration::Checkpoint {
         base,
@@ -716,14 +722,14 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
                     // by another writer is never adopted or removed: the
                     // record is kept for a retry.
                     finish_context_move(&context_repo, r).map_err(|_| E::recovery_required())?;
-                    context_moved(service, root)?;
+                    context_moved(service, root, &r.item_id)?;
                     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
                     closure
                 }
                 ClosingState::CheckpointWritten { tip } => {
                     // The ref moved before this call (or after a synchronization):
                     // the mark is idempotent and may not have been made.
-                    context_moved(service, root)?;
+                    context_moved(service, root, &r.item_id)?;
                     tip
                 }
                 ClosingState::Unrecognized => return Err(E::recovery_required()),
