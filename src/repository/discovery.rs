@@ -20,7 +20,7 @@ use super::{
     MAX_DOCUMENT_DIRECTORY_ENTRIES, MAX_MANAGED_DIRECTORY_ENTRIES, REGISTRY_BUSY_TIMEOUT,
     RegistryConnectionPhase, RepositoryError,
     activity::{PrimaryActivityMap, item_commit_activity},
-    basis::{Basis, Checkout, Entry, Listing, Recording},
+    basis::{Basis, BasisCheck, Checkout, Entry, Listing, Recording, check, settles},
 };
 
 #[derive(Debug)]
@@ -585,6 +585,26 @@ pub(super) fn list_contexts(
     }
 }
 
+/// The context `key` of the repository at `root`, if listing would find it
+/// now. The primary is always there. An item's context is the directory
+/// named for the item under `.manyhands/worktrees/`, while that is a
+/// directory and not a link, as `list_contexts` takes it. `None` for an item
+/// context that is gone.
+pub(super) fn listed_context(root: &Path, key: &ContextKey) -> Option<ListedContext> {
+    match key {
+        ContextKey::Primary => Some(ListedContext::primary(root)),
+        ContextKey::Item(item_id) => {
+            let worktree = root.join(".manyhands/worktrees").join(item_id.to_string());
+            fs::symlink_metadata(&worktree)
+                .is_ok_and(|metadata| metadata.is_dir())
+                .then(|| ListedContext {
+                    key: key.clone(),
+                    worktree,
+                })
+        }
+    }
+}
+
 /// The item contexts `list_contexts` lists, with the problems listing them
 /// meets reported as the root's observation reports them.
 fn list_item_contexts(
@@ -650,6 +670,26 @@ pub(super) fn stat_basis(
     );
     read_context(repository, root, listed, &mut recording, None);
     recording.finish(checkout, None)
+}
+
+/// Whether the context `listed` is still as `basis` says. `basis` was taken
+/// when the context was indexed at `indexed_at_ns`. The check passes when a
+/// basis taken by stat now checks as the same, and when each file modified too
+/// close to that time for its stat to be trusted still holds the content the
+/// basis hashed. Those few files are the only ones read.
+pub(super) fn basis_holds(
+    repository: &Repository,
+    root: &Path,
+    listed: &ListedContext,
+    basis: &Basis,
+    indexed_at_ns: i64,
+) -> bool {
+    let current = stat_basis(repository, root, listed, Some(basis), indexed_at_ns);
+    match check(basis, &current, indexed_at_ns) {
+        BasisCheck::Same => true,
+        BasisCheck::Racy(files) => settles(basis, &recorded_root(listed), &files),
+        BasisCheck::Moved => false,
+    }
 }
 
 /// Observes one context: stat, read and parse, stat again. When the second

@@ -203,7 +203,6 @@ pub(super) struct Checkout {
 
 /// What comparing a stored basis with the current one found.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) enum BasisCheck {
     Same,
     /// Nothing differs, but these files were modified too close to the
@@ -379,7 +378,6 @@ impl Basis {
 /// swap file, is no change. A file not modified at least `RACY_WINDOW_NS`
 /// before the indexed time is racy even when its stat is the same. A
 /// directory is never racy here: `stat_basis` lists such a directory again.
-#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) fn check(stored: &Basis, current: &Basis, indexed_at_ns: i64) -> BasisCheck {
     if stored.differs(current) {
         return BasisCheck::Moved;
@@ -400,7 +398,6 @@ pub(super) fn check(stored: &Basis, current: &Basis, indexed_at_ns: i64) -> Basi
 
 /// Whether each of the `racy` files of the worktree still holds what the
 /// stored basis hashed. A file the stored basis has no hash for never does.
-#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
 pub(super) fn settles(stored: &Basis, worktree: &Path, racy: &[PathBuf]) -> bool {
     racy.iter().all(|path| {
         let stored_hash = stored

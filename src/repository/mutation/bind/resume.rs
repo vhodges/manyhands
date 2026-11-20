@@ -1104,10 +1104,11 @@ impl OperationResumeBinding {
         let _ = service.finish(request, attempt, answer);
     }
 
-    /// The index hand-off of a local operation: a refresh under the
-    /// operation's ID, which claims the row, observes the repository and
-    /// completes the row. The caller has just read that the hand-off is
-    /// all the row owes.
+    /// The index hand-off of a local operation, under the operation's ID: it
+    /// claims the row, indexes the contexts the row records it owes (the
+    /// whole repository for a row that records none) and completes the row.
+    /// A recorded context that is gone counts as indexed. The caller has
+    /// just read that the hand-off is all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
         if let Some(ran) = super::retire::resume_handoff(call, &accepted.root(), self.operation_id)
@@ -1129,7 +1130,7 @@ impl OperationResumeBinding {
         call.session.report(
             &Subject::of(self, accepted).event(ProgressStage::Indexing, Effects::not_requested()),
         );
-        let refreshed = service.refresh_repository(RefreshRepositoryRequest {
+        let refreshed = service.resume_hand_off(RefreshRepositoryRequest {
             root: accepted.root(),
             operation_id: self.operation_id,
         });

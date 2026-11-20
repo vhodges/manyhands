@@ -1076,6 +1076,11 @@ impl RepositoryService {
                 "the journal row could not be closed",
             ));
         }
+        // The contexts the row owed an indexing read so still once it is
+        // closed: what the operation left is for the next refresh or resume
+        // to index. Only the index's marks are written.
+        super::super::mark_owed_by_closed_row(&transaction, row.id)
+            .map_err(|error| error.for_operation(operation, &root))?;
         transaction.commit().map_err(sqlite)?;
         Ok(AbandonOperationOutcome::Abandoned(left))
     }

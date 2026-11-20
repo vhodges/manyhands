@@ -1209,6 +1209,39 @@ fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) 
     (item, comment)
 }
 
+/// The `owed_contexts` a row of one of the `ITEM_ACTIONS` records when it is
+/// begun: its item's context, which the write's index step indexes once the
+/// write is done. Until then the context reads as owed an indexing, before
+/// the write commits to it. `item_id` is the item the row names; a row that
+/// names none owes no context of its own, so it records nothing (NULL), and
+/// its hand-off is a refresh of the whole repository.
+fn owed_at_creation(item_id: Option<&str>) -> Option<String> {
+    let item = item_id?.parse::<crate::canonical::ItemId>().ok()?;
+    Some(super::encode_owed_contexts(&[
+        super::discovery::ContextKey::Item(item),
+    ]))
+}
+
+/// The contexts the row `record_id` records it owes an indexing. `None` for
+/// a row that records none (NULL), and for one whose list this build cannot
+/// read: both are handed off to a refresh of the whole repository.
+pub(super) fn recorded_owed_contexts(
+    connection: &Connection,
+    record_id: i64,
+) -> rusqlite::Result<super::OwedContexts> {
+    let owed: Option<rusqlite::types::Value> = connection
+        .query_row(
+            "SELECT owed_contexts FROM operation_records WHERE id = ?1",
+            [record_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(match owed {
+        Some(rusqlite::types::Value::Text(owed)) => super::decode_owed_contexts(&owed),
+        _ => None,
+    })
+}
+
 /// Remote reservations cannot consume, replace or reinterpret local recovery.
 pub(super) fn require_no_pending_local(
     connection: &Connection,
@@ -1503,8 +1536,14 @@ fn begin_or_reconcile(
             // is a fresh begin: it is attributed anew, as a new row is.
             transaction
                 .execute(
-                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2 WHERE id = ?1",
-                    params![id, now()],
+                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2,
+                            owed_contexts = ?3
+                      WHERE id = ?1",
+                    params![
+                        id,
+                        now(),
+                        owed_at_creation(authored_ids(action, target).0.as_deref())
+                    ],
                 )
                 .map_err(RepositoryError::sqlite)?;
             attribute_local_row(&transaction, id, &origin).map_err(RepositoryError::sqlite)?;
@@ -1533,10 +1572,11 @@ fn begin_or_reconcile(
         .optional()
         .map_err(RepositoryError::sqlite)?;
     let (item_id, comment_id) = authored_ids(action, target);
+    let owed = owed_at_creation(item_id.as_deref());
     transaction
         .execute(
-            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, observed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)",
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, observed_at, owed_contexts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8, ?9)",
             params![
                 repository_id,
                 root_path,
@@ -1545,7 +1585,8 @@ fn begin_or_reconcile(
                 target,
                 item_id,
                 comment_id,
-                now()
+                now(),
+                owed
             ],
         )
         .map_err(RepositoryError::sqlite)?;

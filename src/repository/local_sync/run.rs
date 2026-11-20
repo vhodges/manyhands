@@ -900,8 +900,10 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     if !changed.is_empty() {
         // Nothing is stored: each context that changed keeps its rows,
         // marked as owed an indexing. The answer is the same whether or
-        // not the mark can be written, since the row still owes its index
-        // step.
+        // not the mark can be written: the row still owes its index step,
+        // which observes again when it is resumed. The row records no
+        // contexts it owes, so a mark that cannot be written leaves the
+        // raced context reading as it was stored until then.
         let raced = before
             .contexts()
             .chain(after.contexts())
@@ -913,11 +915,13 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
                     .clone()
                     .map_or(ContextKey::Primary, ContextKey::Item)
             })
-            .collect::<BTreeSet<_>>();
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let _ = mark_contexts_dirty(
             &owner.service.registry_path,
             owner.repo.root(),
-            &Vec::from_iter(raced),
+            &raced,
             RepositoryOperation::ContextSyncLocal,
         );
         return Err(Fault::foreign());
