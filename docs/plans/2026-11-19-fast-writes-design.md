@@ -1,6 +1,6 @@
 # Fast writes: index what a write changed, publish with few connections, promote and close without repeated scans
 
-Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts, which absorbed vh-z9ep3). Status: draft, revised after review rounds 1, 2 and 3, awaiting the owner's approval. Base: ticket branch `b730e7d7` (main `790a71ed`).
+Ticket `01M7RDVNZDCCVSMWHDY9503852` (vh-f3wts, which absorbed vh-z9ep3). Status: approved by the owner, 2026-11-19, after review rounds 1, 2 and 3. Base: ticket branch `b730e7d7` (main `790a71ed`).
 
 ## Intent
 
@@ -20,6 +20,8 @@ A person expects a local save to be quick, checkpoint commit included; sharing a
 10. **Per-item index holds** (R-3): a per-item index step holds only its item, and a crashed write whose commit landed does not block refresh and poll. (Accepted as "a full refresh … would finish that save's index step"; review round 2 changed the mechanism, not the outcome: see R-3. The owner confirmed the change: "leaving the record open until resumed is fine".)
 11. **Pre-commit safety checks** that read other items (duplicate ID, branch checked out elsewhere) stay, as an explicit exception to decision 2, made cheap only if measured above about 100 ms. (Stated to the owner as the default; no objection.)
 12. **The CLI keeps retrying close and promote** when their index step is pending (R-7); this replaces decision 5's earlier "don't retry" item, which rested on a wrong reading that saves are retried. (Stated to the owner as the default; no objection.)
+13. **The design is approved** (owner, 2026-11-19: "approved, accept the exception, write the plan").
+14. **The `context sync-local` exception is accepted**: a crashed `context sync-local` still blocks refresh and poll until resumed, because its row keeps repository scope; narrowing it is left to a separate ticket if it is ever needed.
 
 ## Goals
 
