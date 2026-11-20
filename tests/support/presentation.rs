@@ -33,10 +33,10 @@ use rusqlite::{Connection, params};
 use super::{
     EnabledRepository, TestRepository,
     items::{
-        COMMENT_A, COMMENT_B, COMMENT_C, COMMENT_D, COMMITTED_AT, DOCUMENT_A, DOCUMENT_B,
-        RELATED_A, RELATED_B, RELATED_C, RELATED_D, SHARED_SLUG, TICKET_A, TICKET_B, TICKET_C,
-        comment_path, commit, context_worktree, create_document_context, document_source, index,
-        item_id, refresh_completely, ticket_path, ticket_source, write, write_comment,
+        COMMENT_A, COMMENT_B, COMMENT_C, COMMENT_D, COMMENT_E, COMMITTED_AT, DOCUMENT_A,
+        DOCUMENT_B, RELATED_A, RELATED_B, RELATED_C, RELATED_D, SHARED_SLUG, TICKET_A, TICKET_B,
+        TICKET_C, comment_path, commit, context_worktree, create_document_context, document_source,
+        index, item_id, refresh_completely, ticket_path, ticket_source, write, write_comment,
     },
 };
 
@@ -68,6 +68,9 @@ pub const PRIMARY_COMMENT: &str = COMMENT_B;
 pub const COMMITTED_COMMENT: &str = COMMENT_C;
 /// A comment on the new ticket, in its worktree.
 pub const NEW_COMMENT: &str = COMMENT_D;
+/// A second comment the primary has on the edited ticket and its worktree
+/// does not, which no stored edge names.
+pub const UNNAMED_PRIMARY_COMMENT: &str = COMMENT_E;
 pub const CREATED_AT: &str = "2026-09-30T12:00:01Z";
 
 /// The relationship world: the edited ticket's primary copy has the short
@@ -651,6 +654,48 @@ pub fn relationships() -> World {
             slug: Some(OLD_SLUG),
             parent: Some(RELATIONSHIP_PARENT),
             deps: &[DEPENDENT],
+            ..PrimaryCopy::ticket(EDITED, PRIMARY_TITLE)
+        },
+    );
+    world
+}
+
+/// Row 7: the edited ticket's primary copy has two comments its worktree
+/// does not, `PRIMARY_COMMENT` and `UNNAMED_PRIMARY_COMMENT`, and the
+/// ticket only the primary holds depends on `PRIMARY_COMMENT`. Only the
+/// hidden copy holds either comment.
+pub fn hidden_comments() -> World {
+    let (fixture, enabled) = enabled_world();
+    let root = fixture.root.clone();
+    write(
+        &root,
+        &ticket_path(EDITED),
+        &ticket_source(EDITED, PRIMARY_TITLE, ""),
+    );
+    write(
+        &root,
+        &ticket_path(PRIMARY_ONLY),
+        &ticket_source(
+            PRIMARY_ONLY,
+            PRIMARY_ONLY_TITLE,
+            &format!("deps: [{PRIMARY_COMMENT}]\n"),
+        ),
+    );
+    commit_with_configuration(
+        &fixture,
+        &[&ticket_path(EDITED), &ticket_path(PRIMARY_ONLY)],
+    );
+    refresh_completely(&enabled.service, &root);
+    prepare_edit(&enabled.service, &root, AuthoringKind::Ticket, EDITED);
+    for comment in [PRIMARY_COMMENT, UNNAMED_PRIMARY_COMMENT] {
+        write_comment(&root, EDITED, comment, None, CREATED_AT, "");
+    }
+    refresh_completely(&enabled.service, &root);
+    let world = finish(fixture, enabled);
+    store_primary_copy(
+        &world,
+        PrimaryCopy {
+            comments: &[PRIMARY_COMMENT, UNNAMED_PRIMARY_COMMENT],
             ..PrimaryCopy::ticket(EDITED, PRIMARY_TITLE)
         },
     );

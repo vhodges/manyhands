@@ -871,9 +871,9 @@ impl RepositoryService {
     }
 
     /// `read_tickets` for a read that is given IDs no stored edge may
-    /// name: those of `named` that are a stored comment's are known as
-    /// comments too. Nothing else differs, and with no `named` nothing
-    /// does.
+    /// name: those of `named` that are the ID of a comment of a presented
+    /// copy are known as comments too. Nothing else differs, and with no
+    /// `named` nothing does.
     pub(super) fn read_tickets_naming<T>(
         &self,
         repo: &ResolvedRepository,
@@ -883,9 +883,9 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let mut comments = stored_comment_targets(connection, repo)?;
-            comments.extend(stored_comments_among(connection, repo, named)?);
             let (rows, is_behind) = effective_rows(repo, &stored);
+            let mut comments = stored_comment_targets(connection, repo, &rows)?;
+            comments.extend(stored_comments_among(connection, repo, &rows, named)?);
             let related = Related::of(&rows, &comments);
             let complete =
                 is_completely_observed(ItemDtoKind::Ticket, &stored_problems(connection, repo)?);

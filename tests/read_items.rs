@@ -5237,13 +5237,13 @@ fn the_folder_list_of_a_registration_that_is_gone_or_degraded_fails_as_every_lis
 // worlds are in `support::presentation`.
 // ---------------------------------------------------------------------
 
-use manyhands::repository::DependencyDirection;
+use manyhands::repository::{DependencyDirection, ProposedRelationships, UnplannableReasonCode};
 use support::items::SHARED_SLUG;
 use support::presentation::{
     self, BROKEN_ON_PRIMARY, DEPENDENT, EDITED, EDITED_DOCUMENT, NEW_DOCUMENT, NEW_DOCUMENT_PATH,
-    NEW_SLUG, NEW_TICKET, NEW_TICKET_TITLE, Needs, OLD_SLUG, PRIMARY_ONLY, PRIMARY_ONLY_TITLE,
-    PRIMARY_TITLE, RELATIONSHIP_PARENT, Row, SLUG_HOLDER, WORKTREE_DEPENDENCY, WORKTREE_TITLE,
-    World,
+    NEW_SLUG, NEW_TICKET, NEW_TICKET_TITLE, Needs, OLD_SLUG, PRIMARY_COMMENT, PRIMARY_ONLY,
+    PRIMARY_ONLY_TITLE, PRIMARY_TITLE, RELATIONSHIP_PARENT, Row, SLUG_HOLDER,
+    UNNAMED_PRIMARY_COMMENT, WORKTREE_DEPENDENCY, WORKTREE_TITLE, World,
 };
 
 /// The copy an entry or a complete read presents: its context's kind and
@@ -5588,6 +5588,66 @@ fn relationships_and_short_codes_come_from_presented_copies_only() {
     }
 }
 
+/// The list, `show`, the plan and the relationship check: a comment only
+/// the edited ticket's hidden primary copy holds is nothing a presented
+/// copy holds, so a dependency on it is unresolved, whether a stored edge
+/// or only the proposal names it.
+fn a_comment_only_a_hidden_copy_holds_is_no_relationship_target() {
+    let world = presentation::hidden_comments();
+    let (service, repo) = (world.service(), &world.repo);
+    let listed = all_tickets(service, repo);
+    let shown = service.show_item(repo, &item_id(PRIMARY_ONLY)).unwrap();
+    for (read, item) in [("list", ticket(&listed, PRIMARY_ONLY)), ("show", &shown)] {
+        assert_eq!(
+            item.deps,
+            [dependency(PRIMARY_COMMENT, DependencyState::Unresolved)],
+            "{read}"
+        );
+        assert!(
+            !codes(item).contains(&ProblemCode::RelationshipNotATicket),
+            "{read}: {:?}",
+            item.problems
+        );
+    }
+    let plan = service.ticket_plan(repo, &TicketFilter::default()).unwrap();
+    let unplannable: Vec<_> = plan
+        .unplannable
+        .iter()
+        .map(|ticket| {
+            (
+                ticket.ticket.id.as_deref(),
+                ticket
+                    .reasons
+                    .iter()
+                    .map(|reason| (reason.code, reason.ids.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        unplannable,
+        [(
+            Some(PRIMARY_ONLY),
+            vec![(
+                UnplannableReasonCode::UnresolvedDependency,
+                vec![PRIMARY_COMMENT.to_owned()]
+            )]
+        )]
+    );
+    let check = service
+        .check_ticket_relationships(
+            repo,
+            &item_id(PRIMARY_ONLY),
+            &ProposedRelationships {
+                deps: vec![item_id(UNNAMED_PRIMARY_COMMENT)],
+                parent: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(check.rejection, None);
+    assert_eq!(check.unresolved, [UNNAMED_PRIMARY_COMMENT]);
+}
+
 #[test]
 fn presentation_across_contexts() {
     presentation::run(&[
@@ -5657,6 +5717,12 @@ fn presentation_across_contexts() {
             case: "two copies of one ticket with other edges and short codes",
             needs: Needs::Readers,
             check: relationships_and_short_codes_come_from_presented_copies_only,
+        },
+        Row {
+            table_a: "relationships_and_short_codes_come_from_presented_copies_only",
+            case: "comments only a hidden primary copy holds, named as dependencies",
+            needs: Needs::Readers,
+            check: a_comment_only_a_hidden_copy_holds_is_no_relationship_target,
         },
     ]);
     assert_git_transport_uninitialized();

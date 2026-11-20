@@ -431,10 +431,15 @@ impl<'a> Related<'a> {
     }
 }
 
-/// The ID of every comment the index holds for the registration that one of
-/// its stored edges names and that no stored item has: the only comments a
+/// The ID of every comment of a presented copy that one of the index's
+/// stored edges names and that no presented item has: the only comments a
 /// relationship can be read against. They are only compared with IDs that
 /// were checked, so none is checked here.
+///
+/// `rows` holds one row for each item, its effective copy (see
+/// `effective_rows`). A comment only another copy of an item holds, such as
+/// the primary's copy that Table A hides behind the item's own worktree, is
+/// no comment a read presents.
 ///
 /// A comment no edge names is never asked about, and an ID an item has is
 /// that item's whatever comment shares it, so leaving both out changes no
@@ -443,9 +448,10 @@ impl<'a> Related<'a> {
 pub(super) fn stored_comment_targets(
     connection: &Connection,
     repo: &ResolvedRepository,
+    rows: &[&StoredItem],
 ) -> Result<Vec<String>, ReadError> {
     let mut statement = connection.prepare(
-        "SELECT DISTINCT comments.comment_id
+        "SELECT DISTINCT comments.item_id, comments.comment_id
            FROM discovered_comments AS comments
            JOIN discovered_items AS items ON items.id = comments.item_id
            JOIN contexts ON contexts.id = items.context_id
@@ -456,34 +462,47 @@ pub(super) fn stored_comment_targets(
                   JOIN discovered_items AS sources ON sources.id = edges.item_id
                   JOIN contexts AS source_contexts
                     ON source_contexts.id = sources.context_id
-                 WHERE source_contexts.repository_id = ?1)
-            AND comments.comment_id NOT IN (
-                SELECT held.item_id
-                  FROM discovered_items AS held
-                  JOIN contexts AS held_contexts ON held_contexts.id = held.context_id
-                 WHERE held_contexts.repository_id = ?1)",
+                 WHERE source_contexts.repository_id = ?1)",
     )?;
-    let ids = statement
-        .query_map([repo.registration_id()], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-    Ok(ids)
+    let found = statement
+        .query_map([repo.registration_id()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(presented_comments(rows, found))
+}
+
+/// Of `found`, each a comment's ID with the row of the item copy that holds
+/// it, the IDs of the comments a copy in `rows` holds and no item in `rows`
+/// has, each once.
+fn presented_comments(rows: &[&StoredItem], found: Vec<(i64, String)>) -> Vec<String> {
+    let copies: BTreeSet<i64> = rows.iter().map(|row| row.row_id).collect();
+    let items: BTreeSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    let ids: BTreeSet<String> = found
+        .into_iter()
+        .filter(|(copy, id)| copies.contains(copy) && !items.contains(id.as_str()))
+        .map(|(_, id)| id)
+        .collect();
+    ids.into_iter().collect()
 }
 
 /// How many IDs one statement asks about, well under what SQLite binds.
 const IDS_IN_A_STATEMENT: usize = 500;
 
-/// Those of `ids` that are the ID of a comment the index holds for the
-/// registration.
+/// Those of `ids` that are the ID of a comment of a presented copy and of no
+/// presented item. `rows` holds one row for each item, its effective copy,
+/// as for `stored_comment_targets`.
 pub(super) fn stored_comments_among(
     connection: &Connection,
     repo: &ResolvedRepository,
+    rows: &[&StoredItem],
     ids: &[String],
 ) -> Result<Vec<String>, ReadError> {
     let mut found = Vec::new();
     for ids in ids.chunks(IDS_IN_A_STATEMENT) {
         let placeholders = vec!["?"; ids.len()].join(", ");
         let mut statement = connection.prepare(&format!(
-            "SELECT DISTINCT comments.comment_id
+            "SELECT DISTINCT comments.item_id, comments.comment_id
                FROM discovered_comments AS comments
                JOIN discovered_items AS items ON items.id = comments.item_id
                JOIN contexts ON contexts.id = items.context_id
@@ -492,28 +511,30 @@ pub(super) fn stored_comments_among(
         ))?;
         let parameters = std::iter::once(rusqlite::types::Value::from(repo.registration_id()))
             .chain(ids.iter().cloned().map(rusqlite::types::Value::from));
-        let rows = statement.query_map(rusqlite::params_from_iter(parameters), |row| row.get(0))?;
-        for id in rows {
-            found.push(id?);
+        let comments = statement.query_map(rusqlite::params_from_iter(parameters), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for comment in comments {
+            found.push(comment?);
         }
     }
-    Ok(found)
+    Ok(presented_comments(rows, found))
 }
 
 /// The comments a complete read of the file `source` reads relationships
 /// against: the ones a stored edge names, and the ones only the file as it
-/// is now names. `stored` is every item row of the registration.
+/// is now names. `rows` holds one row for each item, its effective copy.
 fn comment_targets(
     connection: &Connection,
     repo: &ResolvedRepository,
-    stored: &[StoredItem],
+    rows: &[&StoredItem],
     source: &ReadSource,
 ) -> Result<Vec<String>, ReadError> {
-    let mut comments = stored_comment_targets(connection, repo)?;
+    let mut comments = stored_comment_targets(connection, repo, rows)?;
     let unseen: Vec<String> = {
         let known: BTreeSet<&str> = comments
             .iter()
-            .chain(stored.iter().map(|item| &item.id))
+            .chain(rows.iter().map(|item| &item.id))
             .map(String::as_str)
             .collect();
         let unseen: BTreeSet<&String> = source
@@ -522,7 +543,7 @@ fn comment_targets(
             .collect();
         unseen.into_iter().cloned().collect()
     };
-    comments.extend(stored_comments_among(connection, repo, &unseen)?);
+    comments.extend(stored_comments_among(connection, repo, rows, &unseen)?);
     Ok(comments)
 }
 
@@ -1935,7 +1956,7 @@ impl RepositoryService {
             let problems = stored_problems(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let comments = stored_comment_targets(connection, repo)?;
+            let comments = stored_comment_targets(connection, repo, &rows)?;
             let related = match kind {
                 ItemDtoKind::Document => Related::for_documents(&rows, &comments),
                 ItemDtoKind::Ticket => Related::of(&rows, &comments),
@@ -2017,8 +2038,9 @@ impl RepositoryService {
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
             let newer = file.newer_than(refreshed_at);
             let read = ReadSource::of(file.bytes, &row.path);
-            let comments = comment_targets(connection, repo, &stored, &read)?;
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
+            let rows = effective_rows(repo, &stored).0;
+            let comments = comment_targets(connection, repo, &rows, &read)?;
+            let related = Related::of(&rows, &comments);
             let listed = stored_item_dto(row, &related, &index);
             let mut item = match parse_file(read, &row.path, &row.context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
@@ -2110,8 +2132,9 @@ impl RepositoryService {
             let newer = file.newer_than(refreshed_at);
             let stored = stored_items(connection, repo)?;
             let read = ReadSource::of(file.bytes, path);
-            let comments = comment_targets(connection, repo, &stored, &read)?;
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
+            let rows = effective_rows(repo, &stored).0;
+            let comments = comment_targets(connection, repo, &rows, &read)?;
+            let related = Related::of(&rows, &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
