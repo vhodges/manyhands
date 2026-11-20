@@ -850,6 +850,10 @@ pub enum DiscoveryContextKind {
     Primary,
     Unverified,
     Active,
+    /// An item worktree whose observation is not a valid item context. It
+    /// is stored as a context of its own, with its problems, and is never
+    /// an `Active` one.
+    Invalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6931,6 +6935,7 @@ fn context_kind_name(kind: DiscoveryContextKind) -> &'static str {
         DiscoveryContextKind::Primary => "primary",
         DiscoveryContextKind::Unverified => "unverified",
         DiscoveryContextKind::Active => "active",
+        DiscoveryContextKind::Invalid => "invalid",
     }
 }
 fn authoring_kind_name(kind: AuthoringKind) -> &'static str {
@@ -7521,6 +7526,7 @@ fn stored_context_kind(value: &str, root: &Path) -> Result<DiscoveryContextKind,
         "primary" => Ok(DiscoveryContextKind::Primary),
         "unverified" => Ok(DiscoveryContextKind::Unverified),
         "active" => Ok(DiscoveryContextKind::Active),
+        "invalid" => Ok(DiscoveryContextKind::Invalid),
         _ => Err(snapshot_index_error(root, "stored context kind is invalid")),
     }
 }
@@ -7566,6 +7572,16 @@ fn stored_context_fields(
                     "stored active context path or branch does not match its item",
                 ))
             }
+        }
+        // An item worktree that is not a valid item context: it is the
+        // directory of an item, with whatever branch is checked out there,
+        // or none. Nothing reads it as an authoring branch.
+        DiscoveryContextKind::Invalid
+            if item_id.is_some_and(|item_id| {
+                worktree == root.join(".manyhands/worktrees").join(item_id.to_string())
+            }) =>
+        {
+            Ok(())
         }
         _ => Err(snapshot_index_error(
             root,

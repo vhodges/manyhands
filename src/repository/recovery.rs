@@ -723,6 +723,7 @@ pub(super) fn migrate_operation_records(
     validate_comment_bindings(&transaction)?;
     super::local_sync::record::migrate(&transaction)?;
     migrate_operation_attribution(&transaction)?;
+    migrate_context_basis(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -818,6 +819,99 @@ fn migrate_operation_attribution(db: &Connection) -> Result<(), RepositoryError>
         db.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [ATTRIBUTION_MIGRATION],
+        )
+        .map_err(failure)?;
+    }
+    Ok(())
+}
+
+/// The marker of the migration that adds the context basis columns.
+const CONTEXT_BASIS_MIGRATION: &str = "cycle_context_basis";
+
+/// What a context row records of its last indexing, each with its type: the
+/// observation it was stored from as JSON, which none is for a row stored
+/// before the column (unknown, so the next whole refresh observes the
+/// context again); when that observation began, in nanoseconds since the
+/// epoch; whether the context is owed an indexing; and, for the primary
+/// only, the head its activity map was built for.
+///
+/// `dirty` is clean for a row inserted without it: a build before the column
+/// stores a context only after a whole observation, and its missing basis
+/// makes the next refresh observe it again. The migration marks the rows
+/// that exist when it runs.
+const CONTEXT_BASIS_COLUMNS: [(&str, &str); 4] = [
+    ("basis", "TEXT"),
+    ("indexed_at", "INTEGER"),
+    (
+        "dirty",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1))",
+    ),
+    ("activity_base", "TEXT"),
+];
+
+/// The contexts a row's operation owes an indexing, as a JSON array of
+/// encoded context keys, written when the row is made. NULL is unknown, and
+/// is owed a whole refresh of the repository.
+const OWED_CONTEXTS_COLUMNS: [(&str, &str); 1] = [("owed_contexts", "TEXT")];
+
+/// Adds the context basis columns to the contexts and to the local journal,
+/// and marks every context the registry holds dirty, once; it runs in the
+/// recovery migration's transaction, which commits or rolls back with it.
+///
+/// The same pattern as the attribution migration: additive, idempotent, and
+/// the marker is recorded only once both tables have the columns. Unlike
+/// it, a marked registry that lacks a column is not refused: the contexts
+/// are an index, which a refresh builds again, so a column that is missing is
+/// added. When that is `dirty`, what it held is unknown, so every context
+/// is marked dirty again.
+///
+/// A SQLite failure is reported as one, as the migrations around this one do.
+fn migrate_context_basis(db: &Connection) -> Result<(), RepositoryError> {
+    let failure = RepositoryError::sqlite;
+    let migrated: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CONTEXT_BASIS_MIGRATION],
+            |row| row.get(0),
+        )
+        .map_err(failure)?;
+    let mut complete = true;
+    let mut dirty_added = false;
+    for (table, columns) in [
+        ("contexts", &CONTEXT_BASIS_COLUMNS[..]),
+        ("operation_records", &OWED_CONTEXTS_COLUMNS[..]),
+    ] {
+        if !has_table(db, table).map_err(failure)? {
+            complete = false;
+            continue;
+        }
+        let present = db
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([table], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(failure)?;
+        for (name, definition) in columns {
+            if present.iter().any(|column| column == name) {
+                continue;
+            }
+            db.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+            ))
+            .map_err(failure)?;
+            dirty_added |= *name == "dirty";
+        }
+    }
+    if complete && (!migrated || dirty_added) {
+        db.execute("UPDATE contexts SET dirty = 1", [])
+            .map_err(failure)?;
+    }
+    if complete && !migrated {
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CONTEXT_BASIS_MIGRATION],
         )
         .map_err(failure)?;
     }

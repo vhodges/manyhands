@@ -633,6 +633,10 @@ fn discovery_public_types_hold_metadata_only() {
         DiscoveryActivitySource::UncommittedFilesystem
     ));
     assert!(matches!(
+        DiscoveryContextKind::Invalid,
+        DiscoveryContextKind::Invalid
+    ));
+    assert!(matches!(
         RefreshOutcome::RetryRequired {
             root: PathBuf::from("/repository"),
             context: Some(PathBuf::from("/repository/.manyhands/worktrees/document")),

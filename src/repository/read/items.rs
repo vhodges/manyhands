@@ -540,7 +540,10 @@ pub(super) fn invalid_stored_data() -> ReadError {
 fn stored_context_kind(stored: &str) -> Result<ItemContextKind, ReadError> {
     match stored {
         "primary" => Ok(ItemContextKind::Primary),
-        "unverified" => Ok(ItemContextKind::Unverified),
+        // An invalid item worktree is not one a read may act on, as a root
+        // whose branch could not be verified is not: it reads as unverified,
+        // and the contract has no kind for it.
+        "unverified" | "invalid" => Ok(ItemContextKind::Unverified),
         "active" => Ok(ItemContextKind::Active),
         _ => Err(invalid_stored_data()),
     }

@@ -42,6 +42,40 @@ pub(super) struct RootContextObservation {
     pub(super) item_id: Option<canonical::ItemId>,
 }
 
+/// Which context of a repository a write touched or owes: the primary
+/// worktree, or the worktree of one item. It is what an operation's row
+/// records as owed, and it is stable across the worktree being released and
+/// made again, which a path is not.
+///
+/// A key is stored as text: `primary`, or the item's ULID, which can never be
+/// read as `primary`.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
+pub(super) enum ContextKey {
+    Primary,
+    Item(canonical::ItemId),
+}
+
+#[cfg_attr(not(test), allow(dead_code))] // Used by the per-context indexing that follows.
+impl ContextKey {
+    /// The stored text of the key.
+    pub(super) fn encode(&self) -> String {
+        match self {
+            Self::Primary => "primary".to_owned(),
+            Self::Item(id) => id.to_string(),
+        }
+    }
+
+    /// The key a stored text names; `None` for any other text, including
+    /// an item ID that is not in its canonical form.
+    pub(super) fn decode(stored: &str) -> Option<Self> {
+        if stored == "primary" {
+            return Some(Self::Primary);
+        }
+        stored.parse().ok().map(Self::Item)
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum RootObservationProblem {
     Configuration(canonical::ValidationProblem),
@@ -1662,6 +1696,17 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
                 invalid_code TEXT,
                 guidance TEXT
              );
+            -- The newest first-parent commit that touched each path of the
+            -- primary, as of the head `contexts.activity_base` names; a larger
+            -- ordinal is a newer commit on the chain.
+            CREATE TABLE IF NOT EXISTS primary_activity (
+                repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                path TEXT NOT NULL,
+                commit_oid TEXT NOT NULL,
+                committed_at INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                UNIQUE(repository_id, path)
+            );
             CREATE INDEX IF NOT EXISTS contexts_repository_id_idx
                 ON contexts(repository_id, worktree_path);
             CREATE INDEX IF NOT EXISTS discovered_items_context_id_idx
@@ -2090,6 +2135,334 @@ mod tests {
             ),
             once
         );
+    }
+
+    /// What the build before the context basis columns left: a registry
+    /// without them, without the activity table and without the marker.
+    /// Dropping what is there keeps the helper valid on any tree.
+    fn registry_without_context_basis(connection: &Connection) {
+        for (table, column) in [
+            ("contexts", "basis"),
+            ("contexts", "indexed_at"),
+            ("contexts", "dirty"),
+            ("contexts", "activity_base"),
+            ("operation_records", "owed_contexts"),
+        ] {
+            if column_names(connection, table)
+                .iter()
+                .any(|name| name == column)
+            {
+                connection
+                    .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                    .unwrap();
+            }
+        }
+        connection
+            .execute_batch(
+                "DROP TABLE IF EXISTS primary_activity;
+                 DELETE FROM registry_migrations WHERE name = 'cycle_context_basis';",
+            )
+            .unwrap();
+    }
+
+    fn context_basis_markers(connection: &Connection) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations WHERE name = 'cycle_context_basis'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// `(id, basis, indexed_at, dirty, activity_base)`.
+    type BasisRow = (i64, Option<String>, Option<i64>, i64, Option<String>);
+
+    fn context_basis_rows(connection: &Connection) -> Vec<BasisRow> {
+        connection
+            .prepare("SELECT id, basis, indexed_at, dirty, activity_base FROM contexts ORDER BY id")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        registry_without_context_basis(&connection);
+        // The older build's rows: a registration, a primary and an item
+        // context, and a journal row.
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path, item_id)
+                 VALUES (2, 1, 'active', '/repository/.manyhands/worktrees/a', '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+                 INSERT INTO operation_records (id, repository_id, root_path, action, state, observed_at)
+                 VALUES (1, 1, '/repository', 'refresh', 'created', 1);",
+            )
+            .unwrap();
+        assert_eq!(context_basis_markers(&connection), 0);
+        assert!(!column_names(&connection, "contexts").contains(&"dirty".to_owned()));
+        drop(connection);
+
+        // Opening the registry is what migrates it.
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+
+        for column in ["basis", "indexed_at", "dirty", "activity_base"] {
+            assert_eq!(
+                column_names(&connection, "contexts")
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "contexts.{column}"
+            );
+        }
+        assert_eq!(
+            column_names(&connection, "primary_activity"),
+            [
+                "repository_id",
+                "path",
+                "commit_oid",
+                "committed_at",
+                "ordinal"
+            ]
+        );
+        assert_eq!(context_basis_markers(&connection), 1);
+        // Every context the registry held reads dirty, with no basis: the
+        // next refresh observes it.
+        assert_eq!(
+            context_basis_rows(&connection),
+            [(1, None, None, 1, None), (2, None, None, 1, None)]
+        );
+        let owed: Option<String> = connection
+            .query_row(
+                "SELECT owed_contexts FROM operation_records WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owed, None);
+
+        // A context is dirty or clean and nothing else.
+        assert!(
+            connection
+                .execute("UPDATE contexts SET dirty = 2 WHERE id = 1", [])
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute("UPDATE contexts SET dirty = NULL WHERE id = 1", [])
+                .is_err()
+        );
+
+        // The table holds one entry for a path of a registration, and its
+        // rows go with the registration.
+        connection
+            .execute_batch(
+                "INSERT INTO primary_activity (repository_id, path, commit_oid, committed_at, ordinal)
+                 VALUES (1, 'docs/a.md', 'abc', 5, 1)",
+            )
+            .unwrap();
+        for refused in [
+            "INSERT INTO primary_activity (repository_id, path, commit_oid, committed_at, ordinal)
+             VALUES (1, 'docs/a.md', 'def', 6, 2)",
+            "INSERT INTO primary_activity (repository_id, path, commit_oid, committed_at, ordinal)
+             VALUES (9, 'docs/b.md', 'def', 6, 2)",
+            "INSERT INTO primary_activity (repository_id, path, commit_oid, committed_at)
+             VALUES (1, 'docs/c.md', 'def', 6)",
+        ] {
+            assert!(connection.execute(refused, []).is_err(), "{refused}");
+        }
+
+        // A second opening changes nothing: what was marked clean since stays
+        // clean, a row the older build writes after the migration is clean,
+        // and the marker is still one.
+        connection
+            .execute_batch(
+                "UPDATE contexts SET dirty = 0, basis = '{}', indexed_at = 9 WHERE id = 1",
+            )
+            .unwrap();
+        drop(connection);
+        let mut older = open_registry(&path, &mut |_| {}).unwrap();
+        older
+            .execute_batch(
+                "INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (3, 1, 'unverified', '/elsewhere')",
+            )
+            .unwrap();
+        migrate_registry(&mut older).unwrap();
+        migrate_registry(&mut older).unwrap();
+
+        assert_eq!(
+            context_basis_rows(&older),
+            [
+                (1, Some("{}".to_owned()), Some(9), 0, None),
+                (2, None, None, 1, None),
+                (3, None, None, 0, None),
+            ]
+        );
+        assert_eq!(context_basis_markers(&older), 1);
+        assert_eq!(object_count(&older, "table", "primary_activity"), 1);
+    }
+
+    // A registry that is marked but lost a column (a table made again by a
+    // build that did not know it) gets the column back, and what the dirty
+    // column held is unknown: every context reads dirty.
+    #[test]
+    fn a_marked_registry_that_lost_a_context_column_gets_it_back_dirty() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');",
+            )
+            .unwrap();
+        assert_eq!(context_basis_markers(&connection), 1);
+        assert_eq!(context_basis_rows(&connection), [(1, None, None, 0, None)]);
+        connection
+            .execute_batch(
+                "ALTER TABLE contexts DROP COLUMN dirty;
+                 ALTER TABLE operation_records DROP COLUMN owed_contexts;",
+            )
+            .unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+
+        assert_eq!(context_basis_rows(&connection), [(1, None, None, 1, None)]);
+        assert!(
+            column_names(&connection, "operation_records").contains(&"owed_contexts".to_owned())
+        );
+        assert_eq!(context_basis_markers(&connection), 1);
+    }
+
+    #[test]
+    fn a_context_key_encodes_as_primary_or_the_item_id_and_decodes_only_those() {
+        let id: canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+
+        assert_eq!(ContextKey::Primary.encode(), "primary");
+        assert_eq!(
+            ContextKey::Item(id.clone()).encode(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        );
+        assert_eq!(ContextKey::decode("primary"), Some(ContextKey::Primary));
+        assert_eq!(
+            ContextKey::decode("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            Some(ContextKey::Item(id))
+        );
+        for refused in [
+            "",
+            "Primary",
+            "primary ",
+            "01arz3ndektsv4rrffq69g5fav",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA",
+            "unverified",
+        ] {
+            assert_eq!(ContextKey::decode(refused), None, "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_invalid_context_kind_round_trips_through_every_kind_reader() {
+        let root = Path::new("/repository");
+        let item_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let worktree = format!("/repository/.manyhands/worktrees/{item_id}");
+        assert_eq!(
+            crate::repository::context_kind_name(DiscoveryContextKind::Invalid),
+            "invalid"
+        );
+        for kind in [
+            DiscoveryContextKind::Primary,
+            DiscoveryContextKind::Unverified,
+            DiscoveryContextKind::Active,
+            DiscoveryContextKind::Invalid,
+        ] {
+            assert_eq!(
+                crate::repository::stored_context_kind(
+                    crate::repository::context_kind_name(kind),
+                    root
+                )
+                .unwrap(),
+                kind
+            );
+        }
+
+        // The snapshot reader accepts an invalid context row: an item
+        // context's directory, whatever branch is checked out there, or
+        // none; and still refuses one that is not an item context's.
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);",
+            )
+            .unwrap();
+        let snapshot = |connection: &Connection| {
+            crate::repository::read_repository_snapshot(connection, root, "/repository")
+        };
+        for branch in [
+            None,
+            Some("feature/outside"),
+            Some("manyhands/ticket/other"),
+        ] {
+            connection.execute("DELETE FROM contexts", []).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO contexts (repository_id, kind, branch, worktree_path, item_id)
+                     VALUES (1, 'invalid', ?1, ?2, ?3)",
+                    rusqlite::params![branch, worktree, item_id],
+                )
+                .unwrap();
+            let snapshot = snapshot(&connection).unwrap();
+            assert_eq!(snapshot.contexts.len(), 1, "{branch:?}");
+            assert_eq!(snapshot.contexts[0].kind, DiscoveryContextKind::Invalid);
+            assert_eq!(snapshot.contexts[0].branch.as_deref(), branch);
+            assert_eq!(
+                snapshot.contexts[0]
+                    .item_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                Some(item_id.to_owned())
+            );
+        }
+        for (item, path) in [
+            (None, worktree.as_str()),
+            (Some(item_id), "/repository"),
+            (Some(item_id), "/repository/.manyhands/worktrees/other"),
+        ] {
+            connection.execute("DELETE FROM contexts", []).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO contexts (repository_id, kind, worktree_path, item_id)
+                     VALUES (1, 'invalid', ?1, ?2)",
+                    rusqlite::params![path, item],
+                )
+                .unwrap();
+            assert!(snapshot(&connection).is_err(), "{item:?} {path}");
+        }
     }
 
     // An index written when the item read columns existed and the
