@@ -476,6 +476,9 @@ fn indexing_a_context_clears_its_dirty_mark_and_stores_its_basis() {
             .query_row("SELECT COUNT(*) FROM activity_writes", [], |row| row.get(0))
             .unwrap()
     };
+    // A refresh observes the primary only when it is owed an indexing or
+    // moved: marked, it is observed again at the same head.
+    fixture.mark(&fixture.root);
     fixture.refresh();
     assert_eq!(fixture.primary_activity_at(), 1_600_000_000);
     assert_eq!(writes(), 0, "the map is unchanged at the same head");
@@ -493,7 +496,8 @@ fn indexing_a_context_clears_its_dirty_mark_and_stores_its_basis() {
 
 /// A refresh or a rebuild that finds a context changing while it observes
 /// it stores nothing of that context, which keeps its rows, marked dirty. A
-/// refresh stores every other context afresh and marks only that one: the
+/// refresh leaves every other context, which did not change, as it was
+/// stored, with its own indexed time, and marks only that one: the
 /// repository is not marked behind as a whole. A rebuild stores nothing, so
 /// the others keep their rows and their marks, and it marks the repository
 /// behind, which only a rebuild or refresh that completes clears.
@@ -506,10 +510,13 @@ fn a_refresh_or_a_rebuild_that_races_an_edit_marks_only_the_raced_context_dirty(
         let others = [fixture.root.clone(), fixture.worktree(NOT_A_WORKTREE)];
         let stored_at = others.clone().map(|other| fixture.indexing(&other).2);
         let raced = edited.clone();
+        // Written again as it is, the context has moved since it was stored,
+        // so a refresh observes it before the hook races it.
+        let file = edited.join(ticket_path());
+        fs::write(&file, fs::read(&file).unwrap()).unwrap();
         fixture.service.set_observation_hook_for_testing(move || {
             write(&raced, &ticket_path(), &ticket_source("Raced copy"));
         });
-        let began = now_ns();
         if store == "refresh" {
             let outcome = fixture
                 .service
@@ -538,15 +545,7 @@ fn a_refresh_or_a_rebuild_that_races_an_edit_marks_only_the_raced_context_dirty(
             "{store}"
         );
         for (other, stored_at) in others.iter().zip(stored_at) {
-            let indexed_at = fixture.indexing(other).2;
-            if store == "refresh" {
-                assert!(
-                    indexed_at.is_some_and(|indexed_at| indexed_at >= began),
-                    "{store} {other:?}: {indexed_at:?} before {began}"
-                );
-            } else {
-                assert_eq!(indexed_at, stored_at, "{store} {other:?}");
-            }
+            assert_eq!(fixture.indexing(other).2, stored_at, "{store} {other:?}");
         }
         assert_eq!(
             fixture.items(&fixture.root),

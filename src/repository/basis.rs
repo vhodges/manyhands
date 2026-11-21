@@ -207,7 +207,7 @@ pub(super) enum BasisCheck {
     Same,
     /// Nothing differs, but these files were modified too close to the
     /// indexed time for their stat to be trusted. Each is the same file when
-    /// its content still has the stored hash (`settles`).
+    /// it still holds what the stored basis read of it (`settles`).
     Racy(Vec<PathBuf>),
     Moved,
 }
@@ -397,7 +397,10 @@ pub(super) fn check(stored: &Basis, current: &Basis, indexed_at_ns: i64) -> Basi
 }
 
 /// Whether each of the `racy` files of the worktree still holds what the
-/// stored basis hashed. A file the stored basis has no hash for never does.
+/// stored basis read of it. A file the basis hashed still has that content.
+/// One it has no hash for was not read: it could not be read as text, or it
+/// is no regular file (a link, which the walk reports and does not follow).
+/// It still holds what the basis read of it while that is still so.
 pub(super) fn settles(stored: &Basis, worktree: &Path, racy: &[PathBuf]) -> bool {
     racy.iter().all(|path| {
         let stored_hash = stored
@@ -405,11 +408,19 @@ pub(super) fn settles(stored: &Basis, worktree: &Path, racy: &[PathBuf]) -> bool
             .binary_search_by(|file| file.path.as_path().cmp(path))
             .ok()
             .and_then(|index| stored.files[index].hash);
-        stored_hash.is_some()
-            && fs::read(worktree.join(path))
-                .ok()
-                .and_then(|content| Oid::hash_object(ObjectType::Blob, &content).ok())
-                == stored_hash
+        let path = worktree.join(path);
+        match stored_hash {
+            Some(_) => {
+                fs::read(&path)
+                    .ok()
+                    .and_then(|content| Oid::hash_object(ObjectType::Blob, &content).ok())
+                    == stored_hash
+            }
+            None => {
+                !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
+                    || fs::read_to_string(&path).is_err()
+            }
+        }
     })
 }
 

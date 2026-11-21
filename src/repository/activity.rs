@@ -296,6 +296,16 @@ fn first_parent<'repository>(
         .transpose()
 }
 
+#[cfg(test)]
+thread_local! { static DIFFED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// How many commits this thread has diffed since the last call: each commit
+/// `PrimaryActivityMap::advance` diffs and each an item walk examines.
+#[cfg(test)]
+pub(super) fn take_diffed() -> usize {
+    DIFFED.with(|diffed| diffed.replace(0))
+}
+
 /// What a commit changed against its first parent, or against the empty tree
 /// when it is a root.
 fn diff_against<'repository>(
@@ -304,6 +314,8 @@ fn diff_against<'repository>(
     parent: Option<&Commit<'repository>>,
     options: Option<&mut DiffOptions>,
 ) -> Result<Diff<'repository>, git2::Error> {
+    #[cfg(test)]
+    DIFFED.with(|diffed| diffed.set(diffed.get() + 1));
     let parent_tree = parent.map(Commit::tree).transpose()?;
     repository.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit.tree()?), options)
 }

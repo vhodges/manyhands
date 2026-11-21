@@ -1,10 +1,12 @@
 //! What each command indexes: the fast-writes design's table, "What each
 //! write indexes". A write indexes the contexts it changed and observes no
 //! other; a command that removes a context deletes its rows and observes
-//! nothing; the repository's own commands refresh it whole, as before.
+//! nothing; the repository's own commands refresh it whole, as before; and
+//! the whole refresh (`index refresh`, a poll's hand-off) observes only the
+//! contexts that changed since they were stored.
 //!
 //! The rows of the other commands of the table are added by the tasks that
-//! change them: `index refresh` and `poll once` by Task 12; `item sync`,
+//! change them: `item sync`,
 //! `repo sync`, the sync half of `comment add`, and the commands that index
 //! through a synchronization (`conflict resolve`, `item republish` and the
 //! comment hand-off repair) by Task 16; `ticket close` and `document
@@ -32,12 +34,12 @@ use crate::{
 
 /// A ticket on the primary whose context the fixture prepares: the one a
 /// command on its own item writes.
-const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
 /// Another ticket whose context the fixture prepares: what a command on
 /// `TICKET` leaves as it was, and what a release or a retirement removes.
-const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
+pub(super) const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
 /// A ticket on the primary only.
-const SPARE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";
+pub(super) const SPARE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";
 /// A nonconforming ticket on the primary only: it has no type.
 const BROKEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD3";
 /// A document on the primary only.
@@ -50,29 +52,29 @@ const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD6";
 const DOCUMENT_PATH: &str = "docs/guide.md";
 
 /// Every context a command here can read, as the table names it.
-const CONTEXTS: [&str; 7] = [
+pub(super) const CONTEXTS: [&str; 7] = [
     "primary", "TICKET", "OTHER", "SPARE", "BROKEN", "DOCUMENT", "NEW",
 ];
 
-fn ticket_path(id: &str) -> String {
+pub(super) fn ticket_path(id: &str) -> String {
     format!(".manyhands/tickets/{id}/ticket.md")
 }
 
-fn ticket_source(id: &str, title: &str, extra: &str) -> String {
+pub(super) fn ticket_source(id: &str, title: &str, extra: &str) -> String {
     format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
          type: task\nstatus: open\n{extra}---\nBody of {title}.\n"
     )
 }
 
-fn write(directory: &Path, path: &str, text: &str) {
+pub(super) fn write(directory: &Path, path: &str, text: &str) {
     let path = directory.join(path);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
 }
 
 /// Commits `paths` as they are on disk, on the checked-out branch.
-fn commit(repository: &Repository, paths: &[&str]) {
+pub(super) fn commit(repository: &Repository, paths: &[&str]) {
     let mut index = repository.index().unwrap();
     for path in paths {
         index.add_path(Path::new(path)).unwrap();
@@ -93,7 +95,7 @@ fn commit(repository: &Repository, paths: &[&str]) {
         .unwrap();
 }
 
-fn item(id: &str) -> canonical::ItemId {
+pub(super) fn item(id: &str) -> canonical::ItemId {
     id.parse().unwrap()
 }
 
@@ -118,28 +120,30 @@ impl SessionCredentialProvider for NoPassphrase {
 
 /// What the index stores for a context: its basis, when it was indexed,
 /// its mark, and the titles of its items.
-type Stored = (Option<String>, Option<i64>, i64, Vec<String>);
+pub(super) type Stored = (Option<String>, Option<i64>, i64, Vec<String>);
 
 /// What a command did to the index, watched from just before it ran.
-struct Watched {
+pub(super) struct Watched {
     /// The contexts the command observed, by the table's names.
-    observed: BTreeSet<&'static str>,
-    before: BTreeMap<String, Stored>,
-    after: BTreeMap<String, Stored>,
+    pub(super) observed: BTreeSet<&'static str>,
+    /// How many times it read each of them, by the table's names.
+    pub(super) counts: BTreeMap<&'static str, usize>,
+    pub(super) before: BTreeMap<String, Stored>,
+    pub(super) after: BTreeMap<String, Stored>,
 }
 
 /// An enabled repository whose primary, `main`, holds `TICKET`, `OTHER`,
 /// `SPARE`, `BROKEN` and `DOCUMENT`, with the contexts of `TICKET` and
 /// `OTHER` prepared, and everything indexed.
-struct Fixture {
+pub(super) struct Fixture {
     _directory: tempfile::TempDir,
-    data: tempfile::TempDir,
-    root: PathBuf,
-    service: RepositoryService,
+    pub(super) data: tempfile::TempDir,
+    pub(super) root: PathBuf,
+    pub(super) service: RepositoryService,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let root = directory.path().to_owned();
         let data = tempfile::tempdir().unwrap();
@@ -220,12 +224,12 @@ impl Fixture {
         fixture
     }
 
-    fn worktree(&self, id: &str) -> PathBuf {
+    pub(super) fn worktree(&self, id: &str) -> PathBuf {
         self.root.join(".manyhands/worktrees").join(id)
     }
 
     /// The worktree of the context the table names `name`.
-    fn context(&self, name: &str) -> PathBuf {
+    pub(super) fn context(&self, name: &str) -> PathBuf {
         let id = match name {
             "primary" => return self.root.clone(),
             "TICKET" => TICKET,
@@ -239,17 +243,36 @@ impl Fixture {
         self.worktree(id)
     }
 
-    fn index(&self) -> Connection {
+    pub(super) fn index(&self) -> Connection {
         Connection::open(self.data.path().join(REGISTRY_FILE)).unwrap()
     }
 
-    fn status(&self) -> IndexStatusState {
+    pub(super) fn status(&self) -> IndexStatusState {
         let repository = self.service.resolve_repository(&self.root).unwrap();
         self.service.index_status(&repository).unwrap().state
     }
 
-    fn execute(&self, mutation: Mutation) -> Envelope<MutationDataDto> {
+    pub(super) fn execute(&self, mutation: Mutation) -> Envelope<MutationDataDto> {
         self.execute_with(None, mutation)
+    }
+
+    /// `mutation`, sent as the request `request_id`: what a retry of the
+    /// same request sends again.
+    pub(super) fn execute_as(
+        &self,
+        request_id: RequestId,
+        mutation: Mutation,
+    ) -> Envelope<MutationDataDto> {
+        self.service.execute(
+            MutationCall {
+                request_id,
+                confirmation: None,
+                mutation,
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
     }
 
     /// `mutation`, prepared, and then run with the confirmation it was
@@ -304,7 +327,7 @@ impl Fixture {
 
     /// What the index stores for each context, by the table's name for
     /// it (by its path for one the table does not name).
-    fn stored(&self) -> BTreeMap<String, Stored> {
+    pub(super) fn stored(&self) -> BTreeMap<String, Stored> {
         let names = CONTEXTS
             .iter()
             .map(|name| (self.context(name), *name))
@@ -350,7 +373,7 @@ impl Fixture {
 
     /// Runs `command`, counting each context it observes, with what the
     /// index stores read before and after it.
-    fn watch(&self, command: impl FnOnce()) -> Watched {
+    pub(super) fn watch(&self, command: impl FnOnce()) -> Watched {
         let counts = CONTEXTS.map(|name| {
             let count = Rc::new(Cell::new(0));
             let counted = count.clone();
@@ -368,6 +391,11 @@ impl Fixture {
                 .iter()
                 .filter(|(_, count)| count.get() > 0)
                 .map(|(name, _)| *name)
+                .collect(),
+            counts: counts
+                .iter()
+                .filter(|(_, count)| count.get() > 0)
+                .map(|(name, count)| (*name, count.get()))
                 .collect(),
             before,
             after,
@@ -720,6 +748,69 @@ fn repo_identity_set(f: &Fixture) -> Watched {
     })
 }
 
+/// `TICKET`'s file is edited outside Manyhands; `index refresh` finds it,
+/// and the index reads current after it.
+fn index_refresh(f: &Fixture) -> Watched {
+    write(
+        &f.worktree(TICKET),
+        &ticket_path(TICKET),
+        &ticket_source(TICKET, "Edited by hand", ""),
+    );
+    let watched = f.watch(|| {
+        let refreshed = f.execute(Mutation::IndexRefresh(IndexRefreshInput {
+            root: f.root.clone(),
+        }));
+        assert_eq!(refreshed.code, ResultCode::Ok, "{refreshed:?}");
+    });
+    assert_eq!(f.status(), IndexStatusState::Current);
+    watched
+}
+
+/// The repository publishes to `origin`, whose `main` is one commit ahead,
+/// fetched (the advertisement stands in for the transport): `poll once`
+/// fast-forwards the primary and hands off to the whole refresh, and the
+/// index reads current after it.
+fn poll_once(f: &Fixture) -> Watched {
+    let repository = Repository::open(&f.root).unwrap();
+    repository
+        .remote("origin", "ssh://fixture@127.0.0.1:1/fixture")
+        .unwrap();
+    let configuration = f.root.join(canonical::CONFIG_PATH);
+    let text = fs::read_to_string(&configuration).unwrap() + "publication_remote = \"origin\"\n";
+    fs::write(&configuration, text).unwrap();
+    commit(&repository, &[canonical::CONFIG_PATH]);
+    let refreshed = f.execute(Mutation::IndexRefresh(IndexRefreshInput {
+        root: f.root.clone(),
+    }));
+    assert_eq!(refreshed.code, ResultCode::Ok, "{refreshed:?}");
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    let mut tree = repository.treebuilder(Some(&head.tree().unwrap())).unwrap();
+    tree.insert(
+        "incoming.txt",
+        repository.blob(b"incoming\n").unwrap(),
+        0o100644,
+    )
+    .unwrap();
+    let tree = repository.find_tree(tree.write().unwrap()).unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let incoming = repository
+        .commit(None, &signature, &signature, "incoming", &tree, &[&head])
+        .unwrap();
+    repository
+        .reference("refs/remotes/origin/main", incoming, true, "fixture fetch")
+        .unwrap();
+    let watched = f.watch(|| {
+        super::remote::synthetic_fetch(vec![("refs/heads/main".into(), incoming)]);
+        let polled = f.execute(Mutation::PollOnce(PollOnceInput {
+            root: f.root.clone(),
+        }));
+        assert_eq!(polled.code, ResultCode::Ok, "{polled:?}");
+    });
+    assert_eq!(repository.head().unwrap().target(), Some(incoming));
+    assert_eq!(f.status(), IndexStatusState::Current);
+    watched
+}
+
 /// A row of the table: the command, how it runs, the contexts it indexes,
 /// and the contexts whose rows it deletes.
 type Row = (
@@ -732,15 +823,18 @@ type Row = (
 /// Each command of the table observes the contexts it indexes and no
 /// other, deletes the rows of the contexts it removes, and leaves every
 /// other context's rows and basis as they were. The repository's own
-/// commands observe every context, as the whole refresh they keep does;
-/// `repo identity-set` indexes nothing, as before.
+/// commands keep their whole refresh, which observes only the contexts that
+/// changed: none for `remote add` and `remote remove`, which write only Git's
+/// configuration; the primary for `remote select`, which writes the
+/// publication remote into `.manyhands/config.toml`, a file the primary's
+/// observation reads; and every context for `repo enable`, into an index that
+/// stores none of them. `repo identity-set` indexes nothing, as before.
 #[test]
 fn each_command_indexes_only_its_contexts() {
-    const WHOLE: &[&str] = &["primary", "TICKET", "OTHER"];
     // `conflict resolve`, `item republish` and the comment hand-off repair
     // index through a synchronization: their rows are Task 16's, with the
     // syncs'. See the module's description for the other tasks' rows.
-    let rows: [Row; 18] = [
+    let rows: [Row; 20] = [
         ("ticket save", ticket_save, &["TICKET"], &[]),
         ("ticket create", ticket_create, &["NEW"], &[]),
         ("ticket slug-assign", slug_assign, &["TICKET"], &[]),
@@ -764,11 +858,18 @@ fn each_command_indexes_only_its_contexts() {
         ("context retire", context_retire, &[], &["OTHER"]),
         ("operation abandon", operation_abandon, &[], &[]),
         ("folder create", folder_create, &["primary"], &[]),
-        ("remote add", remote_add, WHOLE, &[]),
-        ("remote select", remote_select, WHOLE, &[]),
-        ("remote remove", remote_remove, WHOLE, &[]),
-        ("repo enable", repo_enable, WHOLE, &[]),
+        ("remote add", remote_add, &[], &[]),
+        ("remote select", remote_select, &["primary"], &[]),
+        ("remote remove", remote_remove, &[], &[]),
+        (
+            "repo enable",
+            repo_enable,
+            &["primary", "TICKET", "OTHER"],
+            &[],
+        ),
         ("repo identity-set", repo_identity_set, &[], &[]),
+        ("index refresh", index_refresh, &["TICKET"], &[]),
+        ("poll once", poll_once, &["primary"], &[]),
     ];
     // Every row runs, and every row that is not as the table says is named.
     let mut wrong = Vec::new();

@@ -539,23 +539,116 @@ pub(super) fn observe_contexts(
     root: &Path,
     activity: &mut PrimaryActivityMap,
 ) -> ObservedContexts {
+    let mut observed = observe_listed_contexts(repository, root, activity, |_| true)
+        .observed
+        .into_iter()
+        .map(|(_, observation)| observation);
+    let primary = observed
+        .next()
+        .expect("every context is observed, the primary first");
+    ObservedContexts {
+        primary,
+        items: observed.collect(),
+    }
+}
+
+/// The contexts of a repository as a whole refresh's first step finds them,
+/// and each one it observed.
+#[derive(Debug)]
+pub(super) struct ListedObservation {
+    /// The primary, then, while its configuration is valid, each item
+    /// context `list_item_contexts` lists, in name order.
+    pub(super) listed: Vec<ListedContext>,
+    /// What that listing met, as text: problems of the primary's, which a
+    /// listing made later compares with (`list_again`).
+    pub(super) listing: String,
+    /// Whether the item contexts were listed: the primary's configuration is
+    /// valid.
+    pub(super) valid: bool,
+    /// Each context observed, with its listing, the primary first.
+    pub(super) observed: Vec<(ListedContext, ContextObservation)>,
+}
+
+/// Lists the contexts of the repository at `root` and observes each that
+/// `changed` says may have changed since it was stored, as `observe_contexts`
+/// observes them all: the primary, its items taking their commits from
+/// `activity`, then each listed item context. What listing the worktree base
+/// meets is the primary's problem, so the primary is also observed when
+/// listing meets one.
+///
+/// The item contexts are listed only while the primary's configuration is
+/// valid. When the primary is not observed it is taken to be valid: `changed`
+/// says the primary changed when what is stored of it holds no valid
+/// configuration.
+pub(super) fn observe_listed_contexts(
+    repository: &Repository,
+    root: &Path,
+    activity: &mut PrimaryActivityMap,
+    mut changed: impl FnMut(&ListedContext) -> bool,
+) -> ListedObservation {
     #[cfg(test)]
     scan_checkpoint(root);
-    let mut primary = observe_context(repository, root, &ListedContext::primary(root), activity);
-    let items = match primary
-        .configuration
-        .as_ref()
-        .map(|observed| &observed.configuration)
-    {
-        Some(RootConfiguration::Valid(_)) => list_item_contexts(root, &mut primary.problems)
-            .iter()
-            .map(|listed| {
-                observe_context(repository, root, listed, &mut PrimaryActivityMap::default())
-            })
-            .collect(),
-        _ => Vec::new(),
+    let primary = ListedContext::primary(root);
+    let mut problems = Vec::new();
+    let items = list_item_contexts(root, &mut problems);
+    let mut observed = Vec::new();
+    if changed(&primary) || !problems.is_empty() {
+        observed.push((
+            primary.clone(),
+            observe_context(repository, root, &primary, activity),
+        ));
+    }
+    let valid = observed.first().is_none_or(|(_, primary)| {
+        matches!(
+            primary
+                .configuration
+                .as_ref()
+                .map(|observed| &observed.configuration),
+            Some(RootConfiguration::Valid(_))
+        )
+    });
+    let (items, problems) = if valid {
+        (items, problems)
+    } else {
+        (Vec::new(), Vec::new())
     };
-    ObservedContexts { primary, items }
+    let listing = format!("{problems:?}");
+    if let Some((_, primary)) = observed.first_mut() {
+        primary.problems.extend(problems);
+    }
+    for listed in &items {
+        if changed(listed) {
+            observed.push((
+                listed.clone(),
+                observe_context(repository, root, listed, &mut PrimaryActivityMap::default()),
+            ));
+        }
+    }
+    ListedObservation {
+        listed: std::iter::once(primary).chain(items).collect(),
+        listing,
+        valid,
+        observed,
+    }
+}
+
+/// The contexts of the repository at `root` listed again, as
+/// `observe_listed_contexts` listed them (the item contexts while `valid`),
+/// with what the listing met, as that function's `listing` gives it. Nothing
+/// is read.
+pub(super) fn list_again(root: &Path, valid: bool) -> (Vec<ListedContext>, String) {
+    let mut problems = Vec::new();
+    let items = if valid {
+        list_item_contexts(root, &mut problems)
+    } else {
+        Vec::new()
+    };
+    (
+        std::iter::once(ListedContext::primary(root))
+            .chain(items)
+            .collect(),
+        format!("{problems:?}"),
+    )
 }
 
 /// The contexts of the repository at `root`: the primary, then each
@@ -2680,6 +2773,12 @@ const ITEM_READ_OBJECTS: [(&str, &str, &str); 5] = [
 /// registration: it then reports itself stale instead of reporting, say,
 /// that no ticket has unknown metadata or a dependency.
 ///
+/// A refresh observes only the contexts that are owed an indexing or that
+/// moved, so the mark on the registration alone would not fill those rows
+/// again: every stored context is marked dirty as well, in the same
+/// transaction. An index from before the dirty column has none to mark; the
+/// context basis migration that follows marks each of its contexts dirty.
+///
 /// An index that already has them all is only read, so opening it takes no
 /// write lock. One that lacks any is migrated in a transaction that takes
 /// the write lock before it looks again: of two processes that open an old
@@ -2702,6 +2801,18 @@ fn migrate_item_read_schema(connection: &mut Connection) -> Result<(), Repositor
         transaction
             .execute("UPDATE repositories SET refresh_required = 1", [])
             .map_err(RepositoryError::sqlite)?;
+        let markable: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('contexts') WHERE name = 'dirty')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if markable {
+            transaction
+                .execute("UPDATE contexts SET dirty = 1", [])
+                .map_err(RepositoryError::sqlite)?;
+        }
     }
     transaction.commit().map_err(RepositoryError::sqlite)
 }
