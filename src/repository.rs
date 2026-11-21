@@ -7555,14 +7555,19 @@ impl StoredContexts {
     }
 
     /// Whether `context` may have changed since it was stored, and is to be
-    /// observed: nothing is stored for it, it is owed an indexing, or its
-    /// basis no longer holds.
+    /// observed: nothing is stored for it, it is owed an indexing, its basis
+    /// no longer holds, or it records a file modified in a later second than
+    /// it was indexed in. That last one may hold what the index holds, its
+    /// content settling by hash, and still reads stale; observing it again
+    /// gives it a later indexed time, which clears it once that time has
+    /// passed the file's.
     fn changed(&self, repository: &Repository, root: &Path, context: &ListedContext) -> bool {
         self.every
-            || self
-                .contexts
-                .get(&context.key)
-                .is_none_or(|stored| stored.owed || !stored.holds(repository, root, context))
+            || self.contexts.get(&context.key).is_none_or(|stored| {
+                stored.owed
+                    || stored.reads_newer_than_indexed()
+                    || !stored.holds(repository, root, context)
+            })
     }
 
     /// Whether another store replaced the row of `context` since `before`
@@ -7588,6 +7593,15 @@ impl StoredContexts {
 }
 
 impl StoredContext {
+    /// Whether this row's basis records a file modified in a later second
+    /// than the row was indexed in (`Basis::records_a_file_newer_than`).
+    fn reads_newer_than_indexed(&self) -> bool {
+        self.basis
+            .as_ref()
+            .zip(self.indexed_at)
+            .is_some_and(|(basis, indexed_at)| basis.records_a_file_newer_than(indexed_at))
+    }
+
     /// Whether the context `listed` is still as this row's basis says.
     fn holds(&self, repository: &Repository, root: &Path, listed: &ListedContext) -> bool {
         self.basis

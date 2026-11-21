@@ -234,6 +234,21 @@ impl Basis {
                 .eq(other.dirs.iter().map(BasisDir::shape))
     }
 
+    /// Whether a file this basis records was modified in a later second
+    /// than the one its context's observation began in (`indexed_at_ns`):
+    /// what a read compares (`ItemFile::newer_than`), so such a file reads
+    /// stale whatever it holds. Its stat can still match, and its content
+    /// settle by hash, when it was written after the observation began and
+    /// before it was read, or carries a time in the future; only a later
+    /// observation of the context, with a later indexed time, clears it.
+    pub(super) fn records_a_file_newer_than(&self, indexed_at_ns: i64) -> bool {
+        const SECOND: i64 = 1_000_000_000;
+        let indexed = indexed_at_ns.div_euclid(SECOND);
+        self.files
+            .iter()
+            .any(|file| file.mtime_ns.div_euclid(SECOND) > indexed)
+    }
+
     /// The stored text of the basis.
     ///
     /// A path is stored as text, so one that is not UTF-8 does not read back

@@ -432,3 +432,52 @@ fn the_first_refresh_after_migration_observes_every_context_once() {
     assert!(watched.observed.is_empty(), "{:?}", watched.observed);
     assert_eq!(f.status(), IndexStatusState::Current);
 }
+
+/// A file that a context's basis records as modified in a later second than
+/// the context was indexed in reads stale (the plan's P-2), though its stat
+/// still matches and its content settles by hash: it was written after the
+/// observation began and before it was read, or carries a time in the
+/// future. Setting the stored indexed time back stands for either. The next
+/// refresh observes that context again, and no other; its new indexed time
+/// is past the file's, so the read is fresh, and the refresh after it
+/// observes nothing.
+#[test]
+fn a_file_recorded_newer_than_its_context_s_indexed_time_is_observed_again() {
+    let f = Fixture::new();
+    let shown = |f: &Fixture| {
+        let repository = f.service.resolve_repository(&f.root).unwrap();
+        f.service
+            .show_item(&repository, &item(TICKET))
+            .unwrap()
+            .index
+            .state
+    };
+    let modified = fs::metadata(f.worktree(TICKET).join(ticket_path(TICKET)))
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+    // In an earlier second than the file's time, and within its racy window.
+    f.index()
+        .execute(
+            "UPDATE contexts SET indexed_at = ?1 WHERE item_id = ?2",
+            rusqlite::params![modified - 1_500_000_000, TICKET],
+        )
+        .unwrap();
+    assert_eq!(shown(&f), IndexState::Stale);
+    assert_eq!(f.status(), IndexStatusState::Current);
+
+    let watched = f.watch(|| refreshed(&f));
+    assert_eq!(watched.counts, BTreeMap::from([("TICKET", 1)]));
+    assert_unobserved_unchanged("a file newer than its indexed time", &watched);
+    let (_, indexed_at, dirty, _) = &watched.after["TICKET"];
+    assert!(indexed_at.is_some_and(|at| at > modified), "{indexed_at:?}");
+    assert_eq!(*dirty, 0);
+    assert_eq!(shown(&f), IndexState::Current);
+    assert_eq!(f.status(), IndexStatusState::Current);
+
+    let watched = f.watch(|| refreshed(&f));
+    assert!(watched.observed.is_empty(), "{:?}", watched.observed);
+}

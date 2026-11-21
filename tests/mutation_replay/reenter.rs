@@ -1401,6 +1401,68 @@ fn writers_on_two_tickets_both_complete_while_one_is_unfinished() {
     assert_eq!(world.branch_commits(TICKET_NEW), 1);
 }
 
+/// Two items' index steps side by side (the fast-writes design's "the hold,
+/// beyond Table B", and P-3). A save of `TICKET_A` is held in its index
+/// step, after it observed its context and before it takes the lease again
+/// to store it: its row is `indexing`, its commit made, and it holds no
+/// lease. A create of another ticket meanwhile runs whole, with no wait: it
+/// takes the lease, commits, observes and stores its own context, and
+/// completes, `discovery: current`. Let go, the save stores its context and
+/// completes as well. Both rows are complete, and both tickets read current
+/// from their own contexts.
+#[cfg(unix)]
+#[test]
+fn a_write_of_another_ticket_completes_while_one_ticket_s_index_step_is_held() {
+    let mut world = World::new();
+    let token = world.token(TICKET_A);
+    let clock = crate::support::mutation::StepClock::new();
+    world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
+    let (first, release, held) = first_writer_held_in_its_hand_off(&world, &token);
+
+    let second = world.execute(REQUEST_2, world.create(TICKET_NEW));
+    assert_eq!(
+        (second.outcome, second.code, second.effects.discovery),
+        (Outcome::Success, ResultCode::Ok, DiscoveryEffect::Current),
+        "{second:?}"
+    );
+    assert!(second.effects.commit_oid.is_some(), "{second:?}");
+    assert_eq!(clock.slept(), 0, "the second writer waited");
+    assert_eq!(world.branch_commits(TICKET_NEW), 1);
+    assert_eq!(
+        world.record(REQUEST_2).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    // The held save is still in its index step.
+    assert!(world.journal_row(&held).in_flight());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    release.send(()).unwrap();
+    let first = first.join().unwrap();
+    assert_eq!(
+        (first.outcome, first.code, first.effects.discovery),
+        (Outcome::Success, ResultCode::Ok, DiscoveryEffect::Current),
+        "{first:?}"
+    );
+    assert_eq!(world.pending_journal_rows(), 0);
+    for id in [TICKET_A, TICKET_NEW] {
+        let shown = world
+            .service
+            .show_item(&world.resolved(), &crate::support::items::item_id(id))
+            .unwrap();
+        assert_eq!(shown.title.as_deref(), Some(TITLE), "{id}");
+        assert_eq!(
+            shown.index.state,
+            manyhands::repository::IndexState::Current,
+            "{id}"
+        );
+        assert!(
+            shown.context.worktree.ends_with(id),
+            "{id}: {:?}",
+            shown.context
+        );
+    }
+}
+
 /// A save of `id`, as `World::save` makes it, that makes the ticket
 /// depend on `on`.
 fn depends(world: &World, id: &str, token: &str, on: &str) -> Mutation {
