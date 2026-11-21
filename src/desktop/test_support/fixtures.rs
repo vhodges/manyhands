@@ -849,6 +849,35 @@ impl Fixture {
         assert_eq!(owed.code, ResultCode::DiscoveryPending, "{}", owed.message);
         owed.operation_id.expect("the save's operation")
     }
+
+    /// Leaves a refresh of the whole of `root` stranded: run by a service
+    /// whose index transaction cannot commit
+    /// (`FailurePoint::BeforeIndexTransactionCommit`), its row is left
+    /// `failed` and pending. A row of the whole repository holds every
+    /// other operation, a poll among them (Table B's last rows), where a
+    /// stranded save that owes only its hand-off holds only its own item.
+    /// Gives its operation ID.
+    pub(crate) fn strand_refresh(&self, root: &Path) -> String {
+        let failing = RepositoryService::open_at_with_failure_point_for_testing(
+            self.data_dir(),
+            FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap();
+        let stranded = failing.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation: Mutation::IndexRefresh(IndexRefreshInput {
+                    root: root.to_owned(),
+                }),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_ne!(stranded.code, ResultCode::Ok, "{}", stranded.message);
+        stranded.operation_id.expect("the refresh's operation")
+    }
 }
 
 /// Executes `mutation` through `service`, with no confirmation: a second

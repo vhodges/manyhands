@@ -143,11 +143,13 @@ async fn second_actor_busy(cx: &mut TestAppContext) {
     assert!(sent(&world).iter().all(|(op, _)| *op != held));
 }
 
-/// With a local operation pending, the poll answers `recovery_required`
-/// before any transport. The repository waits for an unfinished operation,
-/// and is polled at most once per R-4 step (5 s, 15 s, 60 s) and then once
-/// per interval, never at the stored deadline, which no attempt recorded and
-/// so is long past (R-35, A23).
+/// With a local operation of the whole repository pending, here a stranded
+/// refresh, the poll answers `recovery_required` before any transport. (A
+/// stranded save that owes only its hand-off holds its own item only, which
+/// a poll goes past: Table B.) The repository waits for an unfinished
+/// operation, and is polled at most once per R-4 step (5 s, 15 s, 60 s) and
+/// then once per interval, never at the stored deadline, which no attempt
+/// recorded and so is long past (R-35, A23).
 #[gpui_kit::test]
 async fn unfinished_operation_waits(cx: &mut TestAppContext) {
     let world = World::new(true, cx);
@@ -155,9 +157,7 @@ async fn unfinished_operation_waits(cx: &mut TestAppContext) {
     world
         .fixture
         .create_ticket(Path::new(&root), TICKET, "One", "open");
-    world
-        .fixture
-        .strand_ticket_save(Path::new(&root), TICKET, "Renamed");
+    world.fixture.strand_refresh(Path::new(&root));
 
     world.list(std::slice::from_ref(&root), cx);
     World::settle(cx, "the first poll's refusal", |cx| {
