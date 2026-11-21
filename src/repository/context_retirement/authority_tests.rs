@@ -2333,8 +2333,9 @@ fn retirement_spec_s3_public_update_rejects_parent_and_observer_before_configura
 
 // Table B of the fast-writes design ("Table B: what a pending row holds")
 // at a present context's retirement, written before the behaviour (Task 3);
-// the rows of a synchronization's hand-off stay ignored until Task 16 writes
-// them as rows of their item. The rows and what each holds
+// the rows of a synchronization's hand-off are asked in tests of their own,
+// written as Task 16 writes them, as rows of their item (P-4). The rows and
+// what each holds
 // are `execution_tests::TableBRow`'s: a retirement waits for a row mid-write
 // of any item and for the rows of the whole repository, goes on past a row
 // of another item that owes only its hand-off, and is refused behind such a
@@ -2382,7 +2383,6 @@ fn table_b_a_present_context_s_claim_behind_each_pending_row() {
 /// `table_b_a_present_context_s_claim_behind_each_pending_row`, behind the
 /// rows of a synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_present_context_s_claim_behind_each_synchronization_s_hand_off() {
     table_b_a_present_context_s_claim_behind(TableBRow::is_a_synchronization_s);
 }
@@ -2477,7 +2477,6 @@ fn table_b_a_claimed_retirement_s_next_write_behind_each_pending_row() {
 /// `table_b_a_claimed_retirement_s_next_write_behind_each_pending_row`, behind the rows of a synchronization's
 /// hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_claimed_retirement_s_next_write_behind_each_synchronization_s_hand_off() {
     table_b_a_claimed_retirement_s_next_write_behind(TableBRow::is_a_synchronization_s);
 }
@@ -2522,7 +2521,6 @@ fn table_b_a_retirement_s_reentry_behind_each_pending_row() {
 /// `table_b_a_retirement_s_reentry_behind_each_pending_row`, behind the rows of a synchronization's
 /// hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_retirement_s_reentry_behind_each_synchronization_s_hand_off() {
     table_b_a_retirement_s_reentry_behind(TableBRow::is_a_synchronization_s);
 }
@@ -2582,7 +2580,6 @@ fn table_b_a_retirement_s_configuration_refusal_behind_each_pending_row() {
 /// `table_b_a_retirement_s_configuration_refusal_behind_each_pending_row`, behind the rows of a synchronization's
 /// hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_retirement_s_configuration_refusal_behind_each_synchronization_s_hand_off() {
     table_b_a_retirement_s_configuration_refusal_behind(TableBRow::is_a_synchronization_s);
 }

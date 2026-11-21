@@ -14451,22 +14451,21 @@ fn continuation_authority_index_pending_replays_refresh_only_across_rebuild() {
     );
     *service.failure_point.lock().unwrap() = None;
     handoff(1);
-    // An ordinary rebuild under its own operation is not this handoff: it is
-    // refused until the pending refresh is resumed, and consumes nothing.
+    let left = rows_under(fixture.data.path(), fixture.operation);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].3, "failed");
+    // An ordinary rebuild under its own operation is not this handoff: it
+    // goes on past the handoff's row, which is the primary's and owes only
+    // its handoff (Table B, P-4), and consumes nothing: the row still owes it.
     let rebuild = || {
         service.rebuild_repository(crate::repository::RebuildRepositoryRequest {
             root: root.into(),
             operation_id: OperationId::new(),
         })
     };
-    assert!(matches!(
-        rebuild(),
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::RecoveryRequired,
-            ..
-        })
-    ));
+    rebuild().unwrap();
     handoff(1);
+    assert_eq!(rows_under(fixture.data.path(), fixture.operation), left);
     let mut restart = replay.clone();
     restart.restart = true;
     assert_eq!(
@@ -16683,4 +16682,466 @@ fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
         );
         assert_eq!(rows(), before, "{case}");
     }
+}
+
+// A synchronization's index hand-off (P-4): its local `refresh` row, under
+// the synchronization's ID, is of the synchronization's item or of the
+// primary, and owes only its hand-off. Each synchronization here is
+// classified through its reservation's own checkpoints, as one that found
+// the remote current leaves it; its replay then runs the hand-off through
+// `synchronization_refresh`, and needs no transport.
+
+/// The item whose context the hand-off cases synchronize, and another.
+const HAND_OFF_X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const HAND_OFF_Y: &str = "01ARZ3NDEKTSV4RRFFQ69G5FYA";
+
+/// A new ticket `item`, saved in a context of its own.
+fn save_new_ticket(
+    service: &RepositoryService,
+    root: &Path,
+    item: &str,
+) -> Result<SaveOutcome, RepositoryError> {
+    service.save_ticket(SaveTicketRequest {
+        target: AuthoringTarget {
+            root: root.into(),
+            kind: AuthoringKind::Ticket,
+            item_id: item.parse().unwrap(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        },
+        draft: TicketDraft {
+            title: format!("Ticket {item}"),
+            body: "body".into(),
+            ticket_type: "task".into(),
+            status: "open".into(),
+            project: None,
+            team: None,
+        },
+        expected_path: ExpectedPathObservation::Missing,
+    })
+}
+
+/// The synchronization target of the ticket `item`.
+fn ticket_target(item: &str) -> SynchronizationTarget {
+    SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: item.parse().unwrap(),
+    }
+}
+
+/// The publication remote's plan, configured in the index of `root`.
+fn configure_hand_off_plan(service: &RepositoryService, root: &Path) -> RemoteRefPlan {
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(service, root, |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    plan
+}
+
+/// A synchronization of `target` whose push was verified and classified
+/// as finding the remote current at the primary's head: its remote row is
+/// completed and owes only its index hand-off, and no local row is under
+/// its ID yet. Returns the request that replays it, and what it came to.
+fn classified_synchronization(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    target: &SynchronizationTarget,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    let operation = OperationId::new();
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .reserve_remote_operation(root, operation, &target.operation_target(plan))
+        .unwrap()
+    else {
+        panic!("the fixture's reservation");
+    };
+    let oid = git2::Repository::open(root)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    service
+        .checkpoint_synchronization(
+            root,
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root, &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(plan, "refs/heads/main", oid, Some(oid)).unwrap();
+    commit_observation_batch(service, root, &owner, plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(oid),
+        local_oid: Some(oid),
+        tracking_oid: Some(oid),
+        primary_tracking_oid: Some(oid),
+        push_oid: Some(oid),
+        push_advertised_oid: Some(oid),
+    };
+    service
+        .checkpoint_synchronization(
+            root,
+            &owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .classify_synchronization(root, &owner, Authority::AlreadyCurrent(oid))
+        .unwrap();
+    (
+        SynchronizeRemoteRequest {
+            operation_id: operation,
+            target: target.clone(),
+            ..request(root)
+        },
+        SynchronizationOutcome::AlreadyCurrent {
+            target: target.clone(),
+            oid,
+        },
+    )
+}
+
+/// A local row under `operation`: its target, the item it names, the
+/// contexts it owes, its state and its last step.
+type HandOffRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
+/// The local rows under `operation`, as `HandOffRow`s.
+fn rows_under(data: &Path, operation: OperationId) -> Vec<HandOffRow> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare(
+            "SELECT target, item_id, owed_contexts, state, completed_step
+               FROM operation_records WHERE operation_ulid = ?1 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([operation.to_string()], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Whether the remote row of `operation` still owes its index hand-off.
+fn index_pending(data: &Path, operation: OperationId) -> bool {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT index_pending FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// A synchronization's hand-off that stopped before its index transaction
+/// committed leaves its row of its item (of the primary, for a
+/// synchronization of the primary), `failed`, owing only its hand-off, at
+/// a time no earlier than its classification. That row holds a new
+/// synchronization of its own item, and a folder's creation when it is the
+/// primary's (design decision 19, question 7), and nothing else: another
+/// item's save, a synchronization of each other item, a whole refresh and
+/// a folder's creation behind another item's hand-off go on, and leave the
+/// row as it was. Its own retry completes it, and the item's next
+/// synchronization is then reserved.
+#[test]
+fn a_crashed_sync_hand_off_blocks_no_other_item() {
+    for (case, target) in [
+        ("a sync of X", ticket_target(HAND_OFF_X)),
+        ("a sync of the primary", SynchronizationTarget::Primary),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let plan = configure_hand_off_plan(&service, root);
+        let classified = time::OffsetDateTime::now_utc().unix_timestamp();
+        let (replay, outcome) = classified_synchronization(&service, root, &plan, &target);
+        let operation = replay.operation_id;
+
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+        assert_eq!(
+            service
+                .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome.clone())),
+            "{case}"
+        );
+        *service.failure_point.lock().unwrap() = None;
+        let SynchronizationOutcome::AlreadyCurrent { oid, .. } = outcome else {
+            unreachable!()
+        };
+        let (hand_off, item, owed) = match &target {
+            SynchronizationTarget::Primary => (
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                r#"["primary"]"#.to_owned(),
+            ),
+            SynchronizationTarget::Context { item_id, .. } => (
+                format!("synchronization-index-v1/ticket/{item_id}/{oid}"),
+                Some(item_id.to_string()),
+                format!(r#"["{item_id}"]"#),
+            ),
+        };
+        let crashed = vec![(
+            Some(hand_off),
+            item,
+            Some(owed),
+            "failed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )];
+        assert_eq!(rows_under(data.path(), operation), crashed, "{case}");
+        let observed_at: i64 = rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT observed_at FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(observed_at >= classified, "{case}: the row's time");
+
+        // Another item's save goes on.
+        assert!(
+            matches!(
+                save_new_ticket(&service, root, HAND_OFF_Y),
+                Ok(SaveOutcome::Saved { .. })
+            ),
+            "{case}"
+        );
+        // So does a whole refresh.
+        assert!(
+            matches!(
+                service.refresh_repository(RefreshRepositoryRequest {
+                    root: root.into(),
+                    operation_id: OperationId::new(),
+                }),
+                Ok(RefreshOutcome::Refreshed { .. })
+            ),
+            "{case}"
+        );
+        // A folder's creation goes on behind another item's hand-off, and
+        // waits behind the primary's.
+        let folder = service.create_folder(CreateFolderRequest {
+            root: root.into(),
+            path: DocumentFolderPath::parse("docs/notes").unwrap(),
+            operation_id: OperationId::new(),
+        });
+        match &target {
+            SynchronizationTarget::Primary => assert!(
+                matches!(
+                    &folder,
+                    Err(error) if error.error.kind == RepositoryErrorKind::RecoveryRequired
+                        && error.error.blocker().map(|blocker| blocker.operation_id)
+                            == Some(operation)
+                ),
+                "{case}: {folder:?}"
+            ),
+            SynchronizationTarget::Context { .. } => assert!(
+                matches!(folder, Ok(CreateFolderOutcome::Created(_))),
+                "{case}: {folder:?}"
+            ),
+        }
+        // A synchronization of each other item is reserved; one of the
+        // row's own item is refused, naming the row. Each reserved one is
+        // stopped again, so that it holds the reservation no more.
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for other in [
+            ticket_target(HAND_OFF_X),
+            ticket_target(HAND_OFF_Y),
+            SynchronizationTarget::Primary,
+        ] {
+            let reserved = service.reserve_remote_operation(
+                root,
+                OperationId::new(),
+                &other.operation_target(&plan),
+            );
+            if other == target {
+                assert!(
+                    matches!(
+                        &reserved,
+                        Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired
+                            && error.blocker().map(|blocker| blocker.operation_id)
+                                == Some(operation)
+                    ),
+                    "{case}: a sync of {other:?}: {reserved:?}"
+                );
+                continue;
+            }
+            let Ok(RemoteReservationOutcome::Reserved(owner)) = reserved else {
+                panic!("{case}: a sync of {other:?}: {reserved:?}");
+            };
+            db.execute(
+                "UPDATE remote_operation_records SET phase = 'interrupted' WHERE operation_ulid = ?1",
+                [owner.operation_id().to_string()],
+            )
+            .unwrap();
+        }
+        assert_eq!(rows_under(data.path(), operation), crashed, "{case}");
+        assert!(index_pending(data.path(), operation), "{case}");
+
+        // Its own retry completes it.
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert_eq!(
+            rows_under(data.path(), operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert!(!index_pending(data.path(), operation), "{case}");
+        assert!(
+            matches!(
+                service.reserve_remote_operation(
+                    root,
+                    OperationId::new(),
+                    &target.operation_target(&plan),
+                ),
+                Ok(RemoteReservationOutcome::Reserved(_))
+            ),
+            "{case}"
+        );
+    }
+}
+
+/// An older build began a synchronization's hand-off with no target, as a
+/// refresh of the whole repository. Its synchronization's replay takes that
+/// row up when it is pending, and counts it as the hand-off done when it
+/// completed, with nothing observed: either way the remote row's debt is
+/// cleared, and the row is the one under the ID, its target kept.
+#[test]
+fn a_hand_off_row_from_an_older_build_still_replays() {
+    for (case, state) in [("pending", "failed"), ("completed", "completed")] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let plan = configure_hand_off_plan(&service, root);
+        let (replay, outcome) =
+            classified_synchronization(&service, root, &plan, &ticket_target(HAND_OFF_X));
+        let operation = replay.operation_id;
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .execute(
+                "INSERT INTO operation_records(repository_id, root_path, operation_ulid, action,
+                     target, state, observed_at)
+                 SELECT id, root_path, ?1, 'refresh', '', ?2, 1 FROM repositories",
+                rusqlite::params![operation.to_string(), state],
+            )
+            .unwrap();
+        let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = scans.clone();
+        service.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert_eq!(
+            rows_under(data.path(), operation),
+            [(
+                Some(String::new()),
+                None,
+                None,
+                "completed".to_owned(),
+                None
+            )],
+            "{case}"
+        );
+        assert!(!index_pending(data.path(), operation), "{case}");
+        assert_eq!(
+            scans.load(Ordering::SeqCst),
+            usize::from(state != "completed"),
+            "{case}: observations"
+        );
+    }
+}
+
+/// A synchronization admitted while another item's save is mid-write
+/// completes its hand-off past it (carry C-4): its row is of its own item,
+/// which that save does not hold, where an older build's whole-repository
+/// row was held by it. The save's row is left as it was.
+#[test]
+fn a_sync_s_hand_off_completes_while_another_item_s_write_is_mid_write() {
+    let (root, data, service) = fixture();
+    let root = root.path();
+    save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+    save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+    let plan = configure_hand_off_plan(&service, root);
+    let (replay, outcome) =
+        classified_synchronization(&service, root, &plan, &ticket_target(HAND_OFF_X));
+    let writing = OperationId::new();
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(
+        "INSERT INTO operation_records(repository_id, root_path, operation_ulid, action, target,
+             item_id, state, completed_step, observed_at)
+         SELECT id, root_path, ?1, 'save_ticket', ?2, ?3, 'authoring_destination_observed',
+                'authoring_destination_observed', 1
+           FROM repositories",
+        rusqlite::params![
+            writing.to_string(),
+            format!(
+                "authoring-context-v1/ticket/{HAND_OFF_Y}/Edit\0.manyhands/tickets/{HAND_OFF_Y}/ticket.md"
+            ),
+            HAND_OFF_Y
+        ],
+    )
+    .unwrap();
+    let before = rows_under(data.path(), writing);
+    let operation = replay.operation_id;
+    assert_eq!(
+        service
+            .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::Complete(outcome)
+    );
+    assert_eq!(
+        rows_under(data.path(), operation)
+            .into_iter()
+            .map(|(target, item, _, state, _)| (target, item, state))
+            .collect::<Vec<_>>(),
+        [(
+            Some(format!(
+                "synchronization-index-v1/ticket/{HAND_OFF_X}/{}",
+                git2::Repository::open(root)
+                    .unwrap()
+                    .head()
+                    .unwrap()
+                    .target()
+                    .unwrap()
+            )),
+            Some(HAND_OFF_X.to_owned()),
+            "completed".to_owned()
+        )]
+    );
+    assert!(!index_pending(data.path(), operation));
+    assert_eq!(rows_under(data.path(), writing), before);
 }

@@ -1186,12 +1186,98 @@ const ITEM_ACTIONS: [&str; 6] = [
     "release_context",
 ];
 
+/// What the target of a synchronization's index hand-off row begins with
+/// (P-4): `synchronization-index-v1/<kind>/<item>/<oid>` for a context,
+/// `synchronization-index-v1/primary/<oid>` for the primary, `<oid>` being
+/// the commit the synchronization published or found current. The row is a
+/// `refresh` under the synchronization's ID, of that item or of the primary
+/// (`Scope`), and is reported as a refresh. Older builds wrote it with no
+/// target, of the whole repository, and it is still read so.
+const SYNCHRONIZATION_INDEX_TARGET: &str = "synchronization-index-v1/";
+
+/// The target of the index hand-off row of a synchronization of `target`
+/// that published, or found current, `oid`.
+pub(super) fn synchronization_index_target(
+    target: &super::SynchronizationTarget,
+    oid: git2::Oid,
+) -> String {
+    match target {
+        super::SynchronizationTarget::Primary => hand_off_target("primary", &oid.to_string()),
+        super::SynchronizationTarget::Context { kind, item_id } => hand_off_target(
+            &format!("{}/{item_id}", super::authoring_kind_segment(kind)),
+            &oid.to_string(),
+        ),
+    }
+}
+
+/// The hand-off target of what a synchronization is `of` (`primary`, or
+/// `<kind>/<item>`) at `oid`, as `synchronization_index_target` spells it.
+fn hand_off_target(of: &str, oid: &str) -> String {
+    format!("{SYNCHRONIZATION_INDEX_TARGET}{of}/{oid}")
+}
+
+/// The kinds of item a hand-off target names, as it spells them.
+const HAND_OFF_KINDS: [super::AuthoringKind; 2] =
+    [super::AuthoringKind::Document, super::AuthoringKind::Ticket];
+
+/// The item a synchronization's index hand-off target of an item names:
+/// what follows `synchronization-index-v1/<kind>/`, up to the next `/`.
+/// `None` for a hand-off of the primary and for any other target. The
+/// commit after it is not read here: the reservation checks the whole
+/// target against its synchronization's (`validate_index_identity`), and so
+/// does a comment's binding (`comment_child_may_begin`).
+fn synchronization_index_item(target: &str) -> Option<crate::canonical::ItemId> {
+    let (kind, rest) = target
+        .strip_prefix(SYNCHRONIZATION_INDEX_TARGET)?
+        .split_once('/')?;
+    if !HAND_OFF_KINDS
+        .iter()
+        .any(|known| super::authoring_kind_segment(known) == kind)
+    {
+        return None;
+    }
+    rest.split_once('/')?.0.parse().ok()
+}
+
+/// The item a row of `action` that names `item_id` and was begun with
+/// `target` is a synchronization's index hand-off of, by
+/// `ContextKey::encode`: `primary` for a hand-off of the primary, whatever
+/// item the row names; else the item the row names, when its target is a
+/// hand-off of that item. `None` for any other row. Only the beginning of
+/// the target is read, as `scope_sql` reads it.
+fn synchronization_hand_off_of(
+    action: &str,
+    item_id: Option<&str>,
+    target: Option<&str>,
+) -> Option<String> {
+    let rest = target?.strip_prefix(SYNCHRONIZATION_INDEX_TARGET)?;
+    if action != "refresh" {
+        return None;
+    }
+    if rest.starts_with("primary/") {
+        return Some(super::discovery::ContextKey::Primary.encode());
+    }
+    let item = item_id?;
+    HAND_OFF_KINDS
+        .iter()
+        .any(|kind| rest.starts_with(&format!("{}/{item}/", super::authoring_kind_segment(kind))))
+        .then(|| item.to_owned())
+}
+
 /// The item and the comment a local row names, read from the target it is
 /// begun with: `authoring-context-v1/<kind>/<item>/<intent>`, then the
 /// paths, each after a NUL; a comment's are `.manyhands/comments` and its
 /// ID. A row of one of the `ITEM_ACTIONS` names its item, and only a
-/// comment's submission names its comment.
+/// comment's submission names its comment. A synchronization's index
+/// hand-off of an item names that item (P-4); one of the primary names
+/// none.
 fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) {
+    if action == "refresh" {
+        return (
+            synchronization_index_item(target).map(|item| item.to_string()),
+            None,
+        );
+    }
     if !ITEM_ACTIONS.contains(&action) {
         return (None, None);
     }
@@ -1210,17 +1296,36 @@ fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) 
     (item, comment)
 }
 
-/// The `owed_contexts` a row of one of the `ITEM_ACTIONS` records when it is
-/// begun: its item's context, which the write's index step indexes once the
-/// write is done. Until then the context reads as owed an indexing, before
-/// the write commits to it. `item_id` is the item the row names; a row that
-/// names none owes no context of its own, so it records nothing (NULL), and
-/// its hand-off is a refresh of the whole repository.
-fn owed_at_creation(item_id: Option<&str>) -> Option<String> {
-    let item = item_id?.parse::<crate::canonical::ItemId>().ok()?;
+/// The `owed_contexts` a row of `action` begun with `target` records when it
+/// is begun: the context of the item it is of (`Scope::of_call`), which its
+/// index step indexes once its work is done. For one of the `ITEM_ACTIONS`
+/// that is its item's, which reads as owed an indexing before the write
+/// commits to it; for a synchronization's index hand-off, the context the
+/// synchronization changed or published, the item's or the primary (P-4). A
+/// row of the whole repository owes no context of its own, so it records
+/// nothing (NULL), and its hand-off is a refresh of the whole repository.
+fn owed_at_creation(action: &str, target: &str) -> Option<String> {
+    let Scope::Item(own) = Scope::of_call(action, target) else {
+        return None;
+    };
     Some(super::encode_owed_contexts(&[
-        super::discovery::ContextKey::Item(item),
+        super::discovery::ContextKey::decode(&own)?,
     ]))
+}
+
+/// The state and last step a new row of `action` begun with `target` is
+/// written with: a synchronization's index hand-off is begun once its
+/// synchronization is classified, its work done and recorded, so it owes
+/// only its hand-off from the first (`is_committed_and_owing`); every other
+/// row is `created`, with no step.
+fn begun_standing(action: &str, target: &str) -> (&'static str, Option<&'static str>) {
+    let (item, _) = authored_ids(action, target);
+    if synchronization_hand_off_of(action, item.as_deref(), Some(target)).is_some() {
+        let step = LocalStep::AuthoritativeObserved.as_str();
+        (step, Some(step))
+    } else {
+        ("created", None)
+    }
 }
 
 /// The contexts the row `record_id` records it owes an indexing. `None` for
@@ -1267,6 +1372,40 @@ pub(super) fn require_no_pending_local(
         );
     }
     Ok(())
+}
+
+/// Refuses `call`, a new synchronization of the repository
+/// `repository_id`, while a remote operation's index debt `holds` it
+/// (`holds_remote_index_debt_sql`): a classified synchronization of the
+/// same item that owes its index step and has no local hand-off row yet
+/// (design decision 19, question 3). Once its hand-off row is written,
+/// `require_no_pending_local` holds the call for it as well, naming that
+/// row. The refusal names the remote operation.
+pub(super) fn require_no_remote_index_debt(
+    connection: &Connection,
+    repository_id: i64,
+    call: &CallScope,
+) -> Result<(), RepositoryError> {
+    let debt: Option<String> = connection
+        .query_row(
+            &format!(
+                "SELECT operation_ulid FROM remote_operation_records
+                  WHERE repository_id = ?1 AND {}
+                  ORDER BY id LIMIT 1",
+                holds_remote_index_debt_sql(call, "")
+            ),
+            [repository_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| super::remote::state::recovery_required())?;
+    match debt {
+        Some(operation_id) => {
+            Err(super::remote::state::recovery_required()
+                .with_blocker(Blocker::remote(&operation_id)))
+        }
+        None => Ok(()),
+    }
 }
 
 /// The operation of the oldest local row of the repository `repository_id`
@@ -1477,6 +1616,7 @@ fn begin_or_reconcile(
         target,
         tagged_local_binding,
         reach,
+        false,
     )?;
     let existing = transaction
         .query_row(
@@ -1555,11 +1695,7 @@ fn begin_or_reconcile(
                     "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2,
                             owed_contexts = ?3
                       WHERE id = ?1",
-                    params![
-                        id,
-                        now(),
-                        owed_at_creation(authored_ids(action, target).0.as_deref())
-                    ],
+                    params![id, now(), owed_at_creation(action, target)],
                 )
                 .map_err(RepositoryError::sqlite)?;
             attribute_local_row(&transaction, id, &origin).map_err(RepositoryError::sqlite)?;
@@ -1588,11 +1724,16 @@ fn begin_or_reconcile(
         .optional()
         .map_err(RepositoryError::sqlite)?;
     let (item_id, comment_id) = authored_ids(action, target);
-    let owed = owed_at_creation(item_id.as_deref());
+    let owed = owed_at_creation(action, target);
+    let (state, step) = begun_standing(action, target);
+    // `observed_at` is the time of the begin, after whatever work of its
+    // own a row records as done from the first: a synchronization's push
+    // or local update is done before its hand-off row is begun (design
+    // decision 32).
     transaction
         .execute(
-            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, observed_at, owed_contexts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8, ?9)",
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, completed_step, observed_at, owed_contexts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 repository_id,
                 root_path,
@@ -1601,6 +1742,8 @@ fn begin_or_reconcile(
                 target,
                 item_id,
                 comment_id,
+                state,
+                step,
                 now(),
                 owed
             ],
@@ -2060,10 +2203,12 @@ impl JournalRow {
 ///
 /// The ID a comment's binding keeps for its synchronization is that
 /// synchronization's alone. The one local operation under it is the
-/// synchronization's index hand-off: a refresh with no target, once the
-/// remote journal holds an authoritative result for the bound context.
-/// Anything else under the ID is another operation's use of it. An ID
-/// that is no binding's synchronization is not this question's.
+/// synchronization's index hand-off, once the remote journal holds an
+/// authoritative result for the bound context: a refresh with that
+/// context's hand-off target at the authoritative commit (P-4), or with no
+/// target, as older builds began it. Anything else under the ID is another
+/// operation's use of it. An ID that is no binding's synchronization is not
+/// this question's.
 ///
 /// Decided here for `begin_or_reconcile`, which asks it first, and for
 /// `require_refresh_can_begin`, so that a call which asks before it
@@ -2084,7 +2229,29 @@ fn comment_child_may_begin(
         JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
         AND r.authoritative_kind IS NOT NULL AND r.action='synchronize_context' AND r.kind=b.kind AND r.item_id=b.item_ulid)",
         params![requested,root_path], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    Ok(action == "refresh" && target.is_empty() && allowed)
+    if action != "refresh" || !allowed {
+        return Ok(false);
+    }
+    if target.is_empty() {
+        return Ok(true);
+    }
+    // The bound context's hand-off target, at the authoritative commit.
+    let hand_off: Option<String> = connection
+        .query_row(
+            "SELECT r.kind || '/' || r.item_id, r.authoritative_oid
+               FROM remote_operation_records r JOIN repositories p ON p.id = r.repository_id
+              WHERE r.operation_ulid = ?1 AND p.root_path = ?2",
+            params![requested, root_path],
+            |row| {
+                let of: String = row.get(0)?;
+                let oid: Option<String> = row.get(1)?;
+                Ok(oid.map(|oid| hand_off_target(&of, &oid)))
+            },
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .flatten();
+    Ok(hand_off.as_deref() == Some(target))
 }
 
 /// The table of the bindings of comment submissions.
@@ -2136,34 +2303,44 @@ enum Pending {
 /// call that would begin or take up a row is of; `holds` decides what the
 /// row holds.
 ///
-/// The scope is per item for the `ITEM_ACTIONS`. Everything else is of
-/// the whole repository: the one discovery index, which a refresh or a
-/// rebuild rewrites for every context; the primary branch and its
-/// checkout, which an item's context is cut from; the registration and
-/// the repository's remotes.
+/// The scope is per item for the `ITEM_ACTIONS`, and for a
+/// synchronization's index hand-off (P-4), which is of its item or of the
+/// primary. Everything else is of the whole repository: the one discovery
+/// index, which a refresh or a rebuild rewrites for every context; the
+/// primary branch and its checkout, which an item's context is cut from;
+/// the registration and the repository's remotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Scope {
-    /// One item, by its ID.
+    /// One item, by its ID, or the primary, as `primary` (design decision
+    /// 16): what `ContextKey::encode` writes, so an item's ID never reads
+    /// as the primary.
     Item(String),
     /// The whole repository.
     Repository,
 }
 
 impl Scope {
-    /// The scope of a row of `action` that names `item_id`. A row of an
-    /// item action that names no item, as each one an older build wrote
-    /// does, may be of any item: it is of the whole repository.
-    fn of_row(action: &str, item_id: Option<&str>) -> Self {
+    /// The scope of a row of `action` that names `item_id` and was begun
+    /// with `target`. A row of an item action that names no item, as each
+    /// one an older build wrote does, may be of any item: it is of the
+    /// whole repository. So is a synchronization's index hand-off with no
+    /// target, as older builds wrote it.
+    fn of_row(action: &str, item_id: Option<&str>, target: Option<&str>) -> Self {
         match item_id {
             Some(item) if ITEM_ACTIONS.contains(&action) => Self::Item(item.to_owned()),
-            _ => Self::Repository,
+            _ => synchronization_hand_off_of(action, item_id, target)
+                .map_or(Self::Repository, Self::Item),
         }
     }
 
     /// The scope of a call of `action` with `target` that takes no row
     /// up: the item the row it begins would name, or the repository.
     fn of_call(action: &str, target: &str) -> Self {
-        Self::of_row(action, authored_ids(action, target).0.as_deref())
+        Self::of_row(
+            action,
+            authored_ids(action, target).0.as_deref(),
+            Some(target),
+        )
     }
 }
 
@@ -2233,7 +2410,11 @@ impl PendingRow {
     }
 
     fn scope(&self) -> Scope {
-        Scope::of_row(&self.action, self.item_id.as_deref())
+        Scope::of_row(
+            &self.action,
+            self.item_id.as_deref(),
+            self.target.as_deref(),
+        )
     }
 
     fn standing(&self, call: &CallScope) -> Standing {
@@ -2306,6 +2487,18 @@ impl CallScope {
     /// that removes a context or rewrites the index for every context.
     pub(super) fn and_the_repository(self) -> Self {
         Self {
+            repository_wide: true,
+            ..self
+        }
+    }
+
+    /// This call, of no one item, as of the primary as well as of the whole
+    /// repository: a folder's creation, which writes the primary's worktree
+    /// and is held by the primary's own rows, a primary synchronization's
+    /// hand-off among them (design decision 19, question 7).
+    fn and_the_primary(self) -> Self {
+        Self {
+            own: Some(super::discovery::ContextKey::Primary.encode()),
             repository_wide: true,
             ..self
         }
@@ -2394,10 +2587,7 @@ pub(super) fn holds(row: &PendingRow, call: &CallScope) -> bool {
 /// (`holds_agrees_with_table_b`).
 pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
     let c = columns;
-    let of_an_item = format!(
-        "({c}item_id IS NOT NULL AND {c}action IN {})",
-        sql_list(&ITEM_ACTIONS)
-    );
+    let scope = scope_sql(c);
     let own = call.own.as_deref().map(sql_text);
     let owes = format!(
         "({c}completed_step IS NOT NULL AND {c}completed_step IN {steps}
@@ -2407,14 +2597,12 @@ pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
         registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
     );
     let rows = |standing: Standing| match standing {
-        Standing::WholeRepository => Some(format!("NOT {of_an_item}")),
-        Standing::CallsItem => own
-            .as_ref()
-            .map(|own| format!("({of_an_item} AND {c}item_id = {own})")),
+        Standing::WholeRepository => Some(format!("{scope} IS NULL")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{scope} = {own}")),
         Standing::AnotherItem {
             committed_and_owing,
         } => Some(format!(
-            "({of_an_item} AND {c}item_id IS NOT {} AND {}{owes})",
+            "({scope} IS NOT NULL AND {scope} IS NOT {} AND {}{owes})",
             own.as_deref().unwrap_or("NULL"),
             if committed_and_owing { "" } else { "NOT " }
         )),
@@ -2423,6 +2611,35 @@ pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
         "(({c}state != 'completed' OR {c}completed_step IS {registering}) AND {held})",
         registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
         held = held_sql(call, rows)
+    )
+}
+
+/// `Scope::of_row` as an SQL expression on the columns of a row of
+/// `operation_records`, named as for `holds_sql`: the item the row is of
+/// (its ID, or `primary`), or NULL for a row of the whole repository. A
+/// target's beginning is compared exactly, as `synchronization_hand_off_of`
+/// compares it.
+fn scope_sql(c: &str) -> String {
+    let begins = |prefix: String| format!("substr({c}target, 1, length({prefix})) = {prefix}");
+    let hand_off =
+        |of: String| format!("{} || {of} || '/'", sql_text(SYNCHRONIZATION_INDEX_TARGET));
+    let of_its_item = HAND_OFF_KINDS
+        .iter()
+        .map(|kind| {
+            begins(hand_off(format!(
+                "{} || {c}item_id",
+                sql_text(&format!("{}/", super::authoring_kind_segment(kind)))
+            )))
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "(CASE WHEN {c}action IN {items} THEN {c}item_id
+               WHEN {c}action = 'refresh' AND {of_the_primary} THEN {primary}
+               WHEN {c}action = 'refresh' AND ({of_its_item}) THEN {c}item_id END)",
+        items = sql_list(&ITEM_ACTIONS),
+        of_the_primary = begins(hand_off(sql_text("primary"))),
+        primary = sql_text(&super::discovery::ContextKey::Primary.encode()),
     )
 }
 
@@ -2525,9 +2742,12 @@ pub(super) enum CallReach {
 /// one: a refresh under a row's own ID, which is what `operation resume`
 /// runs for a row that owes only its hand-off, is of that row's item.
 /// Otherwise it is of the item its row would name, or of the whole
-/// repository; see `Scope`. It reached as far as `reach` says. Each other
-/// pending row, a comment's that waits for its registration among them, is
-/// in its way when it `holds` the call, and is passed over otherwise.
+/// repository; see `Scope`. It reached as far as `reach` says. With
+/// `of_the_primary`, a call of the whole repository is of the primary as
+/// well (`CallScope::and_the_primary`). Each other pending row, a comment's
+/// that waits for its registration among them, is in its way when it
+/// `holds` the call, and is passed over otherwise.
+#[allow(clippy::too_many_arguments)] // The one question both callers share.
 fn in_the_way(
     connection: &Connection,
     root_path: &str,
@@ -2536,6 +2756,7 @@ fn in_the_way(
     target: &str,
     tagged_local_binding: bool,
     reach: CallReach,
+    of_the_primary: bool,
 ) -> Result<Pending, RepositoryError> {
     let remote_active: Option<String> = connection.query_row(
         &format!("SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN {RESERVATION_PHASES} AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1"),
@@ -2608,13 +2829,14 @@ fn in_the_way(
     // its registration is completed: its own call finds it as the row its
     // ID has, below, as before.
     let takes_up = |row: &Row| row.row.state != "completed" && compatible(row);
-    let call = CallScope::of_begin(
-        pending
-            .iter()
-            .find(|row| takes_up(row))
-            .map_or_else(|| Scope::of_call(action, target), |row| row.row.scope()),
-        reach,
-    );
+    let scope = pending
+        .iter()
+        .find(|row| takes_up(row))
+        .map_or_else(|| Scope::of_call(action, target), |row| row.row.scope());
+    let call = match scope {
+        Scope::Repository if of_the_primary => CallScope::of_begin(scope, reach).and_the_primary(),
+        scope => CallScope::of_begin(scope, reach),
+    };
     let mut matching = None;
     for row in &pending {
         if compatible(row) {
@@ -2642,6 +2864,11 @@ fn in_the_way(
 /// for a call that would otherwise change something first and find the
 /// refresh refused after. Nothing is written: the refresh, not this
 /// question, asks an automatic poll to yield.
+///
+/// The one call that asks it, a folder's creation, writes the primary's
+/// worktree before its refresh: it is asked as a call of the primary as
+/// well as of the whole repository, which a primary synchronization's
+/// hand-off holds (design decision 19, question 7).
 pub(super) fn require_refresh_can_begin(
     connection: &Connection,
     root: &Path,
@@ -2693,6 +2920,7 @@ pub(super) fn require_refresh_can_begin(
         "",
         false,
         CallReach::OwnItem,
+        true,
     )? {
         Pending::Nothing | Pending::Own(_) => Ok(()),
         Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
@@ -4343,13 +4571,15 @@ mod attribution_tests {
 
     /// A row of an authoring action names its item, and only a comment's
     /// submission its comment, each read from a target of the form it is
-    /// begun with. No other row names an item here: a local
-    /// synchronization names its own when it is begun, and a retirement
-    /// none.
+    /// begun with; so does a synchronization's index hand-off of an item
+    /// (P-4), and one of the primary names none. No other row names an item
+    /// here: a local synchronization names its own when it is begun, and a
+    /// retirement none.
     #[test]
     fn an_authoring_row_names_its_item_and_only_a_comment_its_comment() {
         const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
         const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+        const OID: &str = "0123456789abcdef0123456789abcdef01234567";
         let item = || Some(ITEM.to_owned());
         for (action, target, expected) in [
             (
@@ -4397,6 +4627,36 @@ mod attribution_tests {
             ("context_sync_local", "observation".to_owned(), (None, None)),
             ("save_ticket", "remote-v1-0123".to_owned(), (None, None)),
             ("refresh", String::new(), (None, None)),
+            (
+                "refresh",
+                format!("synchronization-index-v1/ticket/{ITEM}/{OID}"),
+                (item(), None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/document/{ITEM}/{OID}"),
+                (item(), None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/primary/{OID}"),
+                (None, None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/comment/{ITEM}/{OID}"),
+                (None, None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-local-v1/ticket/{ITEM}/{OID}"),
+                (None, None),
+            ),
+            (
+                "save_ticket",
+                format!("synchronization-index-v1/ticket/{ITEM}/{OID}"),
+                (None, None),
+            ),
         ] {
             assert_eq!(
                 authored_ids(action, &target),

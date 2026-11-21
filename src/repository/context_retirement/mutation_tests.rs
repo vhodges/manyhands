@@ -3686,7 +3686,6 @@ fn table_b_a_poll_retirement_pass_behind_each_pending_row() {
 /// of a synchronization's hand-off, which Task 16's hand-off rows (P-4) are
 /// written for.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_poll_retirement_pass_behind_each_synchronization_s_hand_off() {
     table_b_a_poll_retirement_pass_behind(TableBRow::is_a_synchronization_s);
 }

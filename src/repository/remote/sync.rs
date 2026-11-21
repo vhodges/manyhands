@@ -5921,6 +5921,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
+                false,
             );
         }
         // A local child is authority for its recorded pass, not for fresh
@@ -6002,6 +6003,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
+                false,
             );
         };
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
@@ -6048,7 +6050,12 @@ impl RepositoryService {
                 if let Some(authority) = record.authority() {
                     let outcome = authority_outcome(&request.target, authority);
                     return if record.index_pending() {
-                        self.synchronization_refresh(&request, Some(&target), outcome)
+                        self.synchronization_refresh(
+                            &request,
+                            Some(&target),
+                            outcome,
+                            execution.is_some(),
+                        )
                     } else {
                         Ok(SynchronizationResult::Complete(outcome))
                     };
@@ -6438,6 +6445,7 @@ impl RepositoryService {
                     &target,
                     Authority::Published(actual),
                     observer,
+                    execution.is_some(),
                 );
             }
             match self.synchronization_publication_intent(&root, &owner)? {
@@ -6462,6 +6470,7 @@ impl RepositoryService {
                         &target,
                         authority,
                         observer,
+                        execution.is_some(),
                     );
                 }
                 PublicationIntent::Verified(_) | PublicationIntent::Attempt(_) => {
@@ -6724,6 +6733,7 @@ impl RepositoryService {
                 &target,
                 authority,
                 observer,
+                execution.is_some(),
             );
         }
         evidence.push_oid = Some(candidate);
@@ -6780,10 +6790,12 @@ impl RepositoryService {
             &target,
             authority,
             observer,
+            execution.is_some(),
         )
     }
 
-    /// Classify a verified publication and hand off to index-only discovery.
+    /// Classify a verified publication and hand off to index-only discovery,
+    /// as `synchronization_refresh` hands off for a `lifecycle_child`.
     #[allow(clippy::too_many_arguments)]
     fn finish_synchronization_publication(
         &self,
@@ -6794,6 +6806,7 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         authority: Authority,
         observer: &mut dyn SynchronizationObserver,
+        lifecycle_child: bool,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let root = &request.root;
         observer.verified(
@@ -6818,6 +6831,7 @@ impl RepositoryService {
             request,
             Some(target),
             authority_outcome(&request.target, authority),
+            lifecycle_child,
         )
     }
 
@@ -7078,17 +7092,35 @@ impl RepositoryService {
         }
         Ok(Some(oid))
     }
+    /// The index hand-off of a synchronization that came to `outcome`,
+    /// under a local `refresh` row of the synchronization's own ID; `target`
+    /// is its remote row's, for one that has one.
+    ///
+    /// The row's target says what it hands off. A synchronization with no
+    /// remote to publish to hands off under the row it bound its local head
+    /// with (`synchronization-local-v1/`). One that published, or found the
+    /// remote current, begins a row of its item, or of the primary (P-4):
+    /// `recovery::synchronization_index_target`, at the authoritative
+    /// commit. A lifecycle's child (`lifecycle_child`) begins the plain row
+    /// with no target that its parent's records accept. A row with no
+    /// target that an older build began under the ID is taken up, and a
+    /// completed one is the hand-off done, as before.
     fn synchronization_refresh(
         &self,
         request: &SynchronizeRemoteRequest,
         target: Option<&RemoteOperationTarget>,
         outcome: SynchronizationOutcome,
+        lifecycle_child: bool,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let matcher = match &outcome {
             SynchronizationOutcome::PublishPending {
                 target, local_oid, ..
             } => format!("{}/{local_oid}", local_refresh_identity(target)),
-            _ => String::new(),
+            _ if lifecycle_child => String::new(),
+            SynchronizationOutcome::Published { target, oid }
+            | SynchronizationOutcome::AlreadyCurrent { target, oid } => {
+                crate::repository::recovery::synchronization_index_target(target, *oid)
+            }
         };
         // The local row under the ID, when the journal can be read. One
         // that was abandoned is `completed` and is not a refresh that
@@ -7098,10 +7130,11 @@ impl RepositoryService {
         if let Some((_, _, _, _, step)) = &row {
             refuse_abandoned_refresh(request, step.as_deref())?;
         }
+        let authoritative = !matches!(outcome, SynchronizationOutcome::PublishPending { .. });
         let completed = row.is_some_and(|(root, action, stored, state, _)| {
             root == request.root.to_string_lossy()
                 && action == "refresh"
-                && stored == matcher
+                && (stored == matcher || (authoritative && stored.is_empty()))
                 && state == "completed"
         });
         let refreshed = completed
@@ -7762,6 +7795,7 @@ impl RepositoryService {
             &target,
             Authority::Published(local),
             observer,
+            false,
         )
     }
 }
@@ -7864,7 +7898,12 @@ impl RepositoryService {
                     .ok_or(SynchronizationError::RecoveryRequired)?,
             );
             return if inspection.index_pending() {
-                self.synchronization_refresh(request, Some(&record.target), outcome)
+                self.synchronization_refresh(
+                    request,
+                    Some(&record.target),
+                    outcome,
+                    execution.is_some(),
+                )
             } else {
                 Ok(SynchronizationResult::Complete(outcome))
             }

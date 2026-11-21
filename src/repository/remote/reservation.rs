@@ -214,13 +214,21 @@ fn mismatch() -> RepositoryError {
 }
 
 /// The sole allowed local-ID coexistence is the exact authoritative action's
-/// ordinary refresh handoff. Check every row, including failed/in-progress rows.
+/// refresh handoff: a refresh with the synchronization's hand-off target at
+/// its authoritative commit (P-4), or with no target, as older builds and a
+/// lifecycle's child begin it. Check every row, including failed/in-progress
+/// rows.
 fn validate_index_identity(
     tx: &Transaction<'_>,
     id: i64,
-    operation_id: OperationId,
+    record: &state::StoredRemoteOperation,
 ) -> Result<(), RepositoryError> {
-    let unrelated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (repository_id IS NULL OR repository_id!=?2 OR root_path!=(SELECT root_path FROM repositories WHERE id=?2) OR action!='refresh' OR target IS NULL OR target!=''))",params![operation_id.to_string(),id],|row|row.get(0)).map_err(|_| state::recovery_required())?;
+    let hand_off = state::synchronization_target(&record.target)
+        .zip(record.authority)
+        .map(|(target, authority)| {
+            crate::repository::recovery::synchronization_index_target(&target, authority.oid())
+        });
+    let unrelated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (repository_id IS NULL OR repository_id!=?2 OR root_path!=(SELECT root_path FROM repositories WHERE id=?2) OR action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?3)))",params![record.operation_id.to_string(),id,hand_off],|row|row.get(0)).map_err(|_| state::recovery_required())?;
     if unrelated { Err(mismatch()) } else { Ok(()) }
 }
 
@@ -1551,7 +1559,7 @@ impl RepositoryService {
                     && record.phase == RemoteOperationPhase::Completed
                     && is_sync(target)
                 {
-                    validate_index_identity(tx, repository_id, operation_id)?;
+                    validate_index_identity(tx, repository_id, &record)?;
                 } else if local_id {
                     return Err(mismatch());
                 }
@@ -1562,11 +1570,21 @@ impl RepositoryService {
             if local_id {
                 return Err(mismatch());
             }
-            crate::repository::recovery::require_no_pending_local(
-                tx,
-                repository_id,
-                &crate::repository::recovery::CallScope::of_remote(target),
-            )?;
+            let call = crate::repository::recovery::CallScope::of_remote(target);
+            crate::repository::recovery::require_no_pending_local(tx, repository_id, &call)?;
+            // A new synchronization of an item is held by a classified one
+            // of the same item that has not yet begun its hand-off row
+            // (design decision 19, question 3). A poll, a promotion, a close
+            // and a synchronization of the primary are not: the primary's
+            // hand-off holds a synchronization of the primary once its row
+            // is written, as before.
+            if target.action() == RemoteOperationAction::SynchronizeContext {
+                crate::repository::recovery::require_no_remote_index_debt(
+                    tx,
+                    repository_id,
+                    &call,
+                )?;
+            }
             if closure_holds_context(tx, repository_id, target)? {
                 return Ok(RemotePollReservationOutcome::Reservation(
                     RemoteReservationOutcome::Busy,
@@ -3142,7 +3160,7 @@ impl RepositoryService {
                 record.priority,
             )?;
             if record.authority.is_some() {
-                validate_index_identity(tx, id, operation_id)?;
+                validate_index_identity(tx, id, &record)?;
             } else if tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
@@ -3660,7 +3678,7 @@ impl RepositoryService {
             if record.authority.is_none() || record.phase != RemoteOperationPhase::Completed {
                 return Err(state::recovery_required());
             }
-            validate_index_identity(tx, id, operation_id)?;
+            validate_index_identity(tx, id, &record)?;
             tx.execute("UPDATE remote_operation_records SET index_pending=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
             Ok(())
         })

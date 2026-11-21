@@ -4856,8 +4856,9 @@ fn the_abandon_evidence_says_what_the_newest_look_saw_and_nothing_older() {
 // at the reservation's checks: the guard `require_no_pending_local` as a new
 // reservation (`reserve_remote_operation_kind`), a held reservation's next
 // write (`owned`) and each restart ask it. Written before the behaviour
-// (Task 3); the rows of a synchronization's hand-off stay ignored until
-// Task 16 writes them as rows of their item. A held call is refused
+// (Task 3); the rows of a synchronization's hand-off are asked in tests of
+// their own, written as Task 16 writes them, as rows of their item (P-4). A
+// held call is refused
 // `recovery_required` naming the row; whether it would have waited first is
 // the caller's liveness judgement, after this check.
 
@@ -5201,7 +5202,6 @@ fn table_b_a_new_reservation_behind_each_pending_row() {
 /// `table_b_a_new_reservation_behind_each_pending_row`, behind each row of a
 /// synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_new_reservation_behind_each_synchronization_s_hand_off() {
     table_b_a_new_reservation_behind(table_b_synchronization_rows());
 }
@@ -5241,7 +5241,6 @@ fn table_b_a_held_reservation_s_next_write_behind_each_pending_row() {
 /// `table_b_a_held_reservation_s_next_write_behind_each_pending_row`, behind
 /// each row of a synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_held_reservation_s_next_write_behind_each_synchronization_s_hand_off() {
     table_b_a_held_reservation_s_next_write_behind(table_b_synchronization_rows());
 }
@@ -5296,7 +5295,6 @@ fn table_b_a_restart_behind_each_pending_row() {
 /// `table_b_a_restart_behind_each_pending_row`, behind each row of a
 /// synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_restart_behind_each_synchronization_s_hand_off() {
     table_b_a_restart_behind(table_b_synchronization_rows());
 }

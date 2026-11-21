@@ -5941,7 +5941,6 @@ fn table_b_a_poll_s_guard_behind_each_pending_row() {
 /// synchronization's index hand-off, which Task 16's hand-off rows (P-4) are
 /// written for.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_poll_s_guard_behind_each_synchronization_s_hand_off() {
     const X: &str = TABLE_B_X;
     const OID: &str = "0123456789abcdef0123456789abcdef01234567";

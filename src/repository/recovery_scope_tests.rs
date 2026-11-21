@@ -951,9 +951,10 @@ fn table_b_calls() -> Vec<(&'static str, CallScope, Option<&'static str>, TableB
 }
 
 /// The one decision: `holds` gives Table B's answer for every state and
-/// step a row can hold, for a row of an item and of the whole repository,
-/// against every kind of call; `holds_sql` selects exactly the rows `holds`
-/// holds, its columns named alone or by an alias; and
+/// step a row can hold, for a row of an item, of the primary (a
+/// synchronization's hand-off, P-4) and of the whole repository, against
+/// every kind of call; `holds_sql` selects exactly the rows `holds` holds,
+/// its columns named alone or by an alias; and
 /// `holds_remote_index_debt_sql` holds a call behind a remote operation's
 /// index debt as `holds` holds it behind a row owing only its hand-off of
 /// the same item, or of the whole repository.
@@ -987,21 +988,81 @@ fn holds_agrees_with_table_b() {
         .chain(LocalStep::ALL.into_iter().map(|step| Some(step.as_str())))
         .chain([Some("a_step_of_a_later_build")])
         .collect();
-    // (action, item, whose it is: the item's, or `None` for the whole
-    // repository's).
-    let mut rows: Vec<(&str, Option<&str>, Option<&str>)> = ITEM_ACTIONS
+    // (action, item, target, whose it is: the item's, `primary`, or `None`
+    // for the whole repository's).
+    let empty = || Some(String::new());
+    let mut rows: Vec<(&str, Option<&str>, Option<String>, Option<&str>)> = ITEM_ACTIONS
         .into_iter()
-        .map(|action| (action, Some(ITEM_X), Some(ITEM_X)))
+        .map(|action| (action, Some(ITEM_X), empty(), Some(ITEM_X)))
         .collect();
+    let document_index = format!("synchronization-index-v1/document/{ITEM_X}/{OID}");
     rows.extend([
-        ("save_ticket", Some(ITEM_Y), Some(ITEM_Y)),
-        ("save_ticket", None, None),
-        ("refresh", None, None),
-        ("rebuild", None, None),
-        ("context_sync_local", Some(ITEM_X), None),
-        ("retire_context", None, None),
-        ("enable", None, None),
-        ("add_remote", None, None),
+        ("save_ticket", Some(ITEM_Y), empty(), Some(ITEM_Y)),
+        ("save_ticket", None, empty(), None),
+        ("refresh", None, empty(), None),
+        ("rebuild", None, empty(), None),
+        ("context_sync_local", Some(ITEM_X), empty(), None),
+        ("retire_context", None, empty(), None),
+        ("enable", None, empty(), None),
+        ("add_remote", None, empty(), None),
+        // A synchronization's index hand-off (P-4): of its item, or of the
+        // primary, whatever item it names.
+        (
+            "refresh",
+            Some(ITEM_X),
+            Some(Target::SyncIndex(ITEM_X).text()),
+            Some(ITEM_X),
+        ),
+        ("refresh", Some(ITEM_X), Some(document_index), Some(ITEM_X)),
+        (
+            "refresh",
+            None,
+            Some(Target::PrimaryIndex.text()),
+            Some("primary"),
+        ),
+        (
+            "refresh",
+            Some(ITEM_X),
+            Some(Target::PrimaryIndex.text()),
+            Some("primary"),
+        ),
+        // Of the whole repository: a hand-off target of another item than
+        // the row names, or of none; the same target under another action;
+        // a target that only begins like one; an older build's hand-off
+        // with no target; and a synchronization with no remote, bound
+        // locally.
+        (
+            "refresh",
+            Some(ITEM_Y),
+            Some(Target::SyncIndex(ITEM_X).text()),
+            None,
+        ),
+        (
+            "refresh",
+            None,
+            Some(Target::SyncIndex(ITEM_X).text()),
+            None,
+        ),
+        ("rebuild", None, Some(Target::PrimaryIndex.text()), None),
+        (
+            "refresh",
+            Some(ITEM_X),
+            Some(format!("synchronization-index-v1/comment/{ITEM_X}/{OID}")),
+            None,
+        ),
+        (
+            "refresh",
+            None,
+            Some("synchronization-index-v1/primary".to_owned()),
+            None,
+        ),
+        ("refresh", Some(ITEM_X), None, None),
+        (
+            "refresh",
+            None,
+            Some(format!("synchronization-local-v1/ticket/{ITEM_X}/{OID}")),
+            None,
+        ),
     ]);
 
     let db = Connection::open_in_memory().unwrap();
@@ -1013,23 +1074,23 @@ fn holds_agrees_with_table_b() {
     )
     .unwrap();
     let mut seeded = Vec::new();
-    for &(action, item, whose) in &rows {
+    for (action, item, target, whose) in &rows {
         for state in states {
             for &step in &steps {
                 db.execute(
                     "INSERT INTO operation_records(action, target, item_id, state, completed_step)
-                     VALUES (?1, '', ?2, ?3, ?4)",
-                    params![action, item, state, step],
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![action, target, item, state, step],
                 )
                 .unwrap();
                 let row = PendingRow {
-                    action: action.to_owned(),
-                    target: Some(String::new()),
+                    action: (*action).to_owned(),
+                    target: target.clone(),
                     item_id: item.map(str::to_owned),
                     state: state.to_owned(),
                     completed_step: step.map(str::to_owned),
                 };
-                seeded.push((db.last_insert_rowid(), whose, row));
+                seeded.push((db.last_insert_rowid(), *whose, row));
             }
         }
     }
@@ -1141,8 +1202,9 @@ fn holds_agrees_with_table_b() {
 
 // Table B of the fast-writes design (`docs/plans/2026-11-19-fast-writes-design.md`,
 // "Table B: what a pending row holds"), written before the behaviour it
-// pins (Task 3). The rows of a synchronization's index hand-off stay
-// ignored until Task 16 writes them as rows of their item. A row holds a call
+// pins (Task 3). The rows of a synchronization's index hand-off are asked in
+// a test of their own, written as Task 16 writes them, as rows of their item
+// (P-4). A row holds a call
 // when it is of the call's own item, or of the whole repository; or when the
 // call is of the whole repository and the row does not owe only its
 // hand-off; or when the call reached other items and the row is mid-write.
@@ -1362,6 +1424,29 @@ fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
         Call::Sync(Some(ITEM_X)),
         held(),
     );
+    // A synchronization admitted past the row begins its hand-off row of
+    // its own item, or of the primary, past it too (carry C-4).
+    cell(
+        row,
+        &seed,
+        "C2 another item's sync hand-off",
+        Call::Begin(RefreshRepository, CALL, Target::SyncIndex(ITEM_Y)),
+        Begun,
+    );
+    cell(
+        row,
+        &seed,
+        "C2 the primary's sync hand-off",
+        Call::Begin(RefreshRepository, CALL, Target::PrimaryIndex),
+        Begun,
+    );
+    cell(
+        row,
+        &seed,
+        "C1 its item's sync hand-off",
+        Call::Begin(RefreshRepository, CALL, Target::SyncIndex(ITEM_X)),
+        held(),
+    );
     cell(row, &seed, "C3 a whole refresh", refresh, held());
     cell(row, &seed, "C3 a rebuild", rebuild, held());
     cell(row, &seed, "C3 a folder's refresh", folder, held());
@@ -1525,7 +1610,6 @@ fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
 /// Owner question 2 for the primary's), which Task 16's hand-off rows
 /// (P-4) are written for.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_what_a_synchronization_s_hand_off_holds_at_the_local_begin_and_the_remote_guard() {
     use Answer::{Begun, Clear, TakenUp};
     use Target::{PrimaryIndex, SyncIndex};

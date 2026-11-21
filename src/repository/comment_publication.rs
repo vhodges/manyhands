@@ -601,9 +601,12 @@ impl RepositoryService {
                 RepositoryOperation::SubmitComment,
             )?;
             let connection = open_registry(&self.registry_path, &mut |_| {})?;
-            connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed'
+            // Its time is now by the wall clock the index's times are read
+            // by, after the commit Git has proved: a row whose commit is
+            // observed is read by its time (design decision 32).
+            connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed',observed_at=max(observed_at,?3)
                 WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND (state IN ('created','worktree_observed','comment_checkpoint_intent','authoring_destination_observed') OR (state='completed' AND completed_step='comment_registration_pending'))",
-                params![receipt.operation_id.to_string(),root.to_str()]).map_err(|_| recovery_error())?;
+                params![receipt.operation_id.to_string(),root.to_str(),OffsetDateTime::now_utc().unix_timestamp()]).map_err(|_| recovery_error())?;
         }
         self.refresh_repository(RefreshRepositoryRequest {
             root,

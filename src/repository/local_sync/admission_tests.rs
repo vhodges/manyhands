@@ -467,7 +467,6 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
 /// the rows of a synchronization's index hand-off, which Task 16's hand-off
 /// rows (P-4) are written for.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_context_sync_local_admission_behind_each_synchronization_s_hand_off() {
     table_b_a_context_sync_local_admission_behind(&[
         ("R4 a sync's hand-off", true),

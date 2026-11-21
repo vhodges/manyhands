@@ -1725,8 +1725,9 @@ fn retirement_specfix_s3_active_observer_still_blocks_before_claim() {
 
 // Table B of the fast-writes design ("Table B: what a pending row holds")
 // at the retirement's checks, written before the behaviour (Task 3). The rows
-// of a synchronization's hand-off stay ignored until Task 16 writes them as
-// rows of their item. A retirement waits for a row mid-write of
+// of a synchronization's hand-off are asked in tests of their own, written as
+// Task 16 writes them, as rows of their item (P-4). A retirement waits for a
+// row mid-write of
 // any item and for the rows of the whole repository; it goes on past a row
 // of another item that owes only its hand-off (a synchronization's hand-off
 // and its remote `index_pending` debt included), and is refused behind such
@@ -1811,8 +1812,7 @@ impl TableBRow {
 
     /// Whether the row is a synchronization's index hand-off or its remote
     /// `index_pending` debt, which Task 16's hand-off rows (P-4) are written
-    /// for: the tables ask these rows in tests of their own, ignored until
-    /// then.
+    /// for: the tables ask these rows in tests of their own.
     pub(super) fn is_a_synchronization_s(self) -> bool {
         matches!(
             self,
@@ -2027,7 +2027,6 @@ fn table_b_the_retirement_of_an_absent_context_behind_each_pending_row() {
 /// `table_b_the_retirement_of_an_absent_context_behind_each_pending_row`,
 /// behind the rows of a synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_the_retirement_of_an_absent_context_behind_each_synchronization_s_hand_off() {
     table_b_the_retirement_of_an_absent_context_behind(TableBRow::is_a_synchronization_s);
 }
@@ -2105,7 +2104,6 @@ fn table_b_a_retirement_pass_s_blocking_debt_behind_each_pending_row() {
 /// `table_b_a_retirement_pass_s_blocking_debt_behind_each_pending_row`,
 /// behind the rows of a synchronization's hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_retirement_pass_s_blocking_debt_behind_each_synchronization_s_hand_off() {
     table_b_a_retirement_pass_s_blocking_debt_behind(TableBRow::is_a_synchronization_s);
 }

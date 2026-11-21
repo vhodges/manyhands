@@ -146,9 +146,11 @@ impl ObserverExecution {
         let Some(retired) = retired.filter(|_| valid) else {
             return Err(recovery_required());
         };
-        let holds = recovery::holds_sql(&recovery::CallScope::retirement(&retired), "o.");
+        let call = recovery::CallScope::retirement(&retired);
+        let holds = recovery::holds_sql(&call, "o.");
+        let debt = recovery::holds_remote_index_debt_sql(&call, "");
         let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND {holds})
-          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR index_pending!=0 OR reconciliation_required!=0))"), params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR {debt} OR reconciliation_required!=0))"), params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
         if !valid || blocked {
             return Err(recovery_required());
         }
@@ -318,12 +320,9 @@ pub(in super::super) fn claim_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(
-            tx,
-            id,
-            &recovery::CallScope::retirement(&request.item_id),
-        )?;
-        let blocked: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let call = recovery::CallScope::retirement(&request.item_id);
+        recovery::require_no_pending_local(tx, id, &call)?;
+        let blocked: bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
@@ -534,12 +533,9 @@ pub(in super::super) fn refuse_fresh_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(
-            tx,
-            id,
-            &recovery::CallScope::retirement(&request.item_id),
-        )?;
-        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let call = recovery::CallScope::retirement(&request.item_id);
+        recovery::require_no_pending_local(tx, id, &call)?;
+        let blocked:bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")),[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
