@@ -1436,16 +1436,17 @@ fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_sa
     assert_eq!(world.branch_commits(TICKET_NEW), commits);
 }
 
-/// A save that sets relationships is not made to wait for a live peer:
-/// its check was made before the peer's own change reached the index, so
-/// a wait that saw the peer finish and went on would write on a stale
-/// check. It answers `busy` at once, naming the peer; the request, sent
-/// again, is checked anew.
+/// A save that sets relationships never waits for a live peer, and never
+/// writes on a stale check: the check reads from disk each context whose
+/// basis moved since it was indexed, so a peer's change that is committed
+/// and not yet indexed is part of it. Sent again once the peer finishes, the
+/// same request is rejected from the index as well.
 ///
-/// The peer saves `TICKET_A` to depend on `TICKET_NEW` and is held in its
-/// index hand-off. Were the second save, making `TICKET_NEW` depend on
-/// `TICKET_A`, to sleep, the peer would finish inside that sleep and the
-/// save would commit the cycle.
+/// The peer saves `TICKET_A` to depend on `TICKET_NEW`, commits, and is held
+/// in its index hand-off. The second save, making `TICKET_NEW` depend on
+/// `TICKET_A`, reads A's worktree as the peer left it and is rejected as the
+/// cycle it would close. Were it to sleep, the peer would finish inside that
+/// sleep.
 #[cfg(unix)]
 #[test]
 fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
@@ -1457,7 +1458,7 @@ fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
     let clock = crate::support::mutation::StepClock::new();
     world.service = crate::support::mutation::waiting_service(world.data.path(), &clock);
     let token = world.token(TICKET_A);
-    let (first, release, held) =
+    let (first, release, _held) =
         writer_held_in_its_hand_off(&world, depends(&world, TICKET_A, &token, TICKET_NEW));
     let peer = Arc::new(Mutex::new(Some((first, release))));
     let finished = Arc::new(Mutex::new(None));
@@ -1470,18 +1471,17 @@ fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
         });
     }
 
+    // The peer's dependency is in A's worktree and not in the index: the
+    // check reads it from disk, at once, and nothing is written.
     let commits = world.branch_commits(TICKET_NEW);
     let other = world.token(TICKET_NEW);
-    let busy = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    let rejected = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
     assert_eq!(
-        (busy.outcome, busy.code),
-        (Outcome::Error, ResultCode::Busy),
-        "{busy:?}"
+        (rejected.outcome, rejected.code),
+        (Outcome::Error, ResultCode::RelationshipCycle),
+        "{rejected:?}"
     );
     assert_eq!(clock.slept(), 0, "the save waited");
-    let blocker = blocker_of(&busy);
-    assert_eq!(blocker["operation_id"], held.as_str());
-    assert_eq!(blocker["live"], true);
     assert_eq!(world.branch_commits(TICKET_NEW), commits);
     assert!(world.record(REQUEST_2).is_none());
 
