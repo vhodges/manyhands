@@ -1617,21 +1617,38 @@ fn assert_retirement_preserves_remote_debt(reconciliation: bool) {
     };
     for _ in 0..2 {
         let result = f.service.retire_context(request.clone());
-        assert!(
-            matches!(result, Err(ref error) if error.kind==RepositoryErrorKind::RecoveryRequired),
-            "unrelated retained debt must block before claim, flags={flags:?}, got {result:?}; intent before={intent_before:?}, after={:?}",
-            row_image(&db, "remote_poll_materializations")
-        );
+        if reconciliation {
+            assert!(
+                matches!(result, Err(ref error) if error.kind==RepositoryErrorKind::RecoveryRequired),
+                "unrelated retained debt must block before claim, flags={flags:?}, got {result:?}; intent before={intent_before:?}, after={:?}",
+                row_image(&db, "remote_poll_materializations")
+            );
+        } else {
+            // The primary's index hand-off is the primary's own (Table B,
+            // Owner question 2): it does not hold an item's retirement, which
+            // goes on, and its repeat replays what it came to (E-12).
+            assert!(
+                matches!(result, Ok(ContextRetirementOutcome::Final(ref report)) if report.code == crate::results::ResultCode::AlreadyApplied),
+                "the primary's index debt must not hold an item's retirement, flags={flags:?}, got {result:?}"
+            );
+        }
+        // Either way, the debt is left as it was. A retirement that goes on
+        // settles its own item's materialization; one that is held leaves it.
         assert_eq!(row_image(&db, "remote_operation_records"), remote_before);
         assert_eq!(
             row_image(&db, "remote_poll_materializations"),
-            intent_before
+            if reconciliation {
+                intent_before.clone()
+            } else {
+                Vec::new()
+            }
         );
         assert_eq!(
             row_image(&db, "repositories"),
             repository_before,
             "retirement must not clear unrelated stale/index debt"
         );
+        let begun = i64::from(!reconciliation);
         assert_eq!(
             db.query_row(
                 "SELECT count(*) FROM operation_records WHERE operation_ulid=?1",
@@ -1639,19 +1656,19 @@ fn assert_retirement_preserves_remote_debt(reconciliation: bool) {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            0
+            begun
         );
         assert_eq!(
             db.query_row("SELECT count(*) FROM context_retirement_records", [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
-            0
+            begun
         );
     }
 }
 
 #[test]
-fn retirement_specfix_s3_completed_sync_index_debt_blocks_before_claim() {
+fn retirement_specfix_s3_completed_sync_index_debt_of_the_primary_does_not_block_the_claim() {
     assert_retirement_preserves_remote_debt(false);
 }
 

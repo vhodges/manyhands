@@ -1,9 +1,9 @@
 //! The scope of the hold: what an unfinished row of the local journal
-//! refuses. A row of one item refuses that item and work on the whole
-//! repository, not another item. A row an index owner may be at work
-//! under, a row of the whole repository and a row whose item is not known
-//! refuse everything. A refresh under a row's own ID takes that row up,
-//! in that row's scope.
+//! refuses. A row of one item refuses that item and, while it is mid-write,
+//! work on the whole repository, not another item, whatever state its index
+//! step is in. A row of the whole repository and a row whose item is not
+//! known refuse everything. A refresh under a row's own ID takes that row
+//! up, in that row's scope.
 
 use super::*;
 
@@ -540,13 +540,15 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             Call::Begin(SaveTicket, CALL, Ticket(ITEM_X)),
             Refused(Some(ROW_1)),
         ),
-        // An index owner may be at work under the row with no lease held,
-        // and nothing fences it from another row's claim: everything waits.
+        // An index owner may be at work under the row with no lease held. Its
+        // step stores only what a basis re-check under the lease still finds,
+        // so another item's write goes on; the whole repository waits for a
+        // row that has recorded no commit (Table B, E-6).
         (
             "indexing item row, another item",
             vec![item_row(ROW_1, "save_ticket", ITEM_X, "indexing")],
             Call::Begin(SaveTicket, CALL, Ticket(ITEM_Y)),
-            Refused(Some(ROW_1)),
+            Begun,
         ),
         (
             "indexing item row, a refresh",
@@ -564,7 +566,7 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             "invalidated item row, another item",
             vec![item_row(ROW_1, "save_ticket", ITEM_X, "index_invalidated")],
             Call::Begin(SaveTicket, CALL, Ticket(ITEM_Y)),
-            Refused(Some(ROW_1)),
+            Begun,
         ),
         (
             "invalidated item row, a folder's refresh",
@@ -683,9 +685,11 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             Refused(None),
         ),
         // A save that sets relationships was checked for cycles and kinds
-        // against the other tickets the index holds, and an unfinished row
-        // may hold a change the index has not been told of: every other
-        // pending row is in its way, while a save that sets none is not.
+        // against the other tickets the index holds, and a row mid-write may
+        // hold a change the index has not been told of: such a row is in its
+        // way, while a save that sets none is not. (These rows record no
+        // step, so they are mid-write; Table B's tables pin a row that owes
+        // only its hand-off.)
         (
             "owing item row, another item's save setting relationships",
             save_x_owing(),
