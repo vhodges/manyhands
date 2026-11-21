@@ -1572,13 +1572,11 @@ impl RepositoryService {
             }
             let call = crate::repository::recovery::CallScope::of_remote(target);
             crate::repository::recovery::require_no_pending_local(tx, repository_id, &call)?;
-            // A new synchronization of an item is held by a classified one
-            // of the same item that has not yet begun its hand-off row
-            // (design decision 19, question 3). A poll, a promotion, a close
-            // and a synchronization of the primary are not: the primary's
-            // hand-off holds a synchronization of the primary once its row
-            // is written, as before.
-            if target.action() == RemoteOperationAction::SynchronizeContext {
+            // A new synchronization is held by a classified one of its own
+            // item, or of the primary (design decision 16), that has not yet
+            // begun its hand-off row (design decision 19, question 3). A
+            // poll, a promotion and a close are not.
+            if is_sync(target) {
                 crate::repository::recovery::require_no_remote_index_debt(
                     tx,
                     repository_id,

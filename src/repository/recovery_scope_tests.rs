@@ -888,24 +888,46 @@ fn table_b_row_of(state: &str, step: Option<&str>) -> Option<TableBRow> {
     })
 }
 
-/// A call of the test of `holds`: its name, its scope, the item it is of
+/// A call of the test of `holds`: its name, its scope, the items it is of
 /// (`primary` for the primary), and the column it is of for a row of
 /// another item.
-fn table_b_calls() -> Vec<(&'static str, CallScope, Option<&'static str>, TableBColumn)> {
+type TableBCall = (
+    &'static str,
+    CallScope,
+    &'static [&'static str],
+    TableBColumn,
+);
+
+/// The calls of the test of `holds`. A close's and a promotion's scope are
+/// `CallScope::of_remote`'s own.
+fn table_b_calls() -> Vec<TableBCall> {
     use TableBColumn::*;
     let x = ITEM_X.parse().unwrap();
     let y = ITEM_Y.parse().unwrap();
+    let plan = crate::repository::RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let lifecycle = |action, kind, item: &str| {
+        CallScope::of_remote(
+            &crate::repository::RemoteOperationTarget::for_context(
+                &plan,
+                action,
+                kind,
+                item.parse().unwrap(),
+            )
+            .unwrap(),
+        )
+    };
+    use crate::repository::{AuthoringKind, RemoteOperationAction};
     vec![
         (
             "a write or sync of X",
             CallScope::item(&x),
-            Some(ITEM_X),
+            &[ITEM_X],
             OtherItem,
         ),
         (
             "a write or sync of Y",
             CallScope::item(&y),
-            Some(ITEM_Y),
+            &[ITEM_Y],
             OtherItem,
         ),
         (
@@ -914,37 +936,59 @@ fn table_b_calls() -> Vec<(&'static str, CallScope, Option<&'static str>, TableB
                 reach: CallReach::OtherItems,
                 ..CallScope::item(&x)
             },
-            Some(ITEM_X),
+            &[ITEM_X],
             OtherItemReachingOthers,
         ),
         (
             "a sync of the primary",
             CallScope::primary(),
-            Some("primary"),
+            &["primary"],
             OtherItem,
         ),
         (
             "a whole refresh, a poll, a rebuild or a retirement pass",
             CallScope::repository(),
-            None,
+            &[],
             WholeRepository,
         ),
         (
-            "a close or a promotion, which write the primary",
-            CallScope::primary().and_the_repository(),
-            Some("primary"),
+            "a close of Z, which writes the primary",
+            lifecycle(RemoteOperationAction::Close, AuthoringKind::Ticket, ITEM_Z),
+            &[ITEM_Z, "primary"],
+            WholeRepository,
+        ),
+        (
+            "a close of X, its own item, which writes the primary",
+            lifecycle(RemoteOperationAction::Close, AuthoringKind::Ticket, ITEM_X),
+            &[ITEM_X, "primary"],
+            WholeRepository,
+        ),
+        (
+            "a promotion of X, its own item, which writes the primary",
+            lifecycle(
+                RemoteOperationAction::Promote,
+                AuthoringKind::Document,
+                ITEM_X,
+            ),
+            &[ITEM_X, "primary"],
+            WholeRepository,
+        ),
+        (
+            "a folder's creation, which writes the primary",
+            CallScope::repository().and_the_primary(),
+            &["primary"],
             WholeRepository,
         ),
         (
             "a retirement of X",
             CallScope::retirement(&x),
-            Some(ITEM_X),
+            &[ITEM_X],
             OtherItemsRetirement,
         ),
         (
             "context sync-local of X",
             CallScope::item(&x).and_the_repository(),
-            Some(ITEM_X),
+            &[ITEM_X],
             OtherItemsRetirement,
         ),
     ]
@@ -1121,7 +1165,7 @@ fn holds_agrees_with_table_b() {
                 } else {
                     cell
                 };
-                let column = if whose.is_some() && *whose == of {
+                let column = if whose.is_some_and(|whose| of.contains(&whose)) {
                     TableBColumn::OwnItem
                 } else {
                     column

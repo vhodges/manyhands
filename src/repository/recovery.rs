@@ -2445,7 +2445,7 @@ impl PendingRow {
     fn standing(&self, call: &CallScope) -> Standing {
         match self.scope() {
             Scope::Repository => Standing::WholeRepository,
-            Scope::Item(item) if call.own.as_deref() == Some(item.as_str()) => Standing::CallsItem,
+            Scope::Item(item) if call.own.contains(&item) => Standing::CallsItem,
             Scope::Item(_) => Standing::AnotherItem {
                 committed_and_owing: self.is_committed_and_owing(),
             },
@@ -2453,12 +2453,13 @@ impl PendingRow {
     }
 }
 
-/// What a call is of, as `holds` reads it: the item it is of (its ID, or
-/// `primary` for the primary; none for a call of no one item), how far it
-/// reached before it began, and whether it is of the whole repository.
+/// What a call is of, as `holds` reads it: the items it is of (each by its
+/// ID, or `primary` for the primary; none for a call of no one item), how
+/// far it reached before it began, and whether it is of the whole
+/// repository. A close or a promotion is of two: its item and the primary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CallScope {
-    own: Option<String>,
+    own: std::collections::BTreeSet<String>,
     reach: CallReach,
     repository_wide: bool,
 }
@@ -2479,7 +2480,7 @@ impl CallScope {
     /// a rebuild, a poll, a retirement pass before it has its candidates.
     pub(super) fn repository() -> Self {
         Self {
-            own: None,
+            own: std::collections::BTreeSet::new(),
             reach: CallReach::OwnItem,
             repository_wide: true,
         }
@@ -2493,9 +2494,11 @@ impl CallScope {
     }
 
     /// The call of a remote operation of `target`. A poll is of the whole
-    /// repository; a synchronization of its item or of the primary; a close
-    /// or a promotion writes the primary, and is of the whole repository as
-    /// well. Their item's own rows are asked after by their own checks.
+    /// repository; a synchronization of its item or of the primary. A close
+    /// or a promotion is of its item, which it merges and retires, and of
+    /// the primary, which it writes, and of the whole repository as well: it
+    /// is held by its own item's rows as by the primary's (Table B's own
+    /// item and retirement columns).
     pub(super) fn of_remote(target: &super::RemoteOperationTarget) -> Self {
         use super::RemoteOperationAction::{
             Close, Poll, Promote, SynchronizeContext, SynchronizePrimary,
@@ -2503,7 +2506,10 @@ impl CallScope {
         match (target.action(), target.item()) {
             (SynchronizeContext, Some((_, item))) => Self::item(item),
             (SynchronizePrimary, _) => Self::primary(),
-            (Promote | Close, _) => Self::primary().and_the_repository(),
+            (Promote | Close, Some((_, item))) => {
+                Self::item(item).with_the_primary().and_the_repository()
+            }
+            (Promote | Close, None) => Self::primary().and_the_repository(),
             (Poll | SynchronizeContext, _) => Self::repository(),
         }
     }
@@ -2517,24 +2523,34 @@ impl CallScope {
         }
     }
 
-    /// This call, of no one item, as of the primary as well as of the whole
-    /// repository: a folder's creation, which writes the primary's worktree
-    /// and is held by the primary's own rows, a primary synchronization's
-    /// hand-off among them (design decision 19, question 7).
+    /// This call, of the primary as well as of the whole repository: a
+    /// folder's creation, which writes the primary's worktree and is held by
+    /// the primary's own rows, a primary synchronization's hand-off among
+    /// them (design decision 19, question 7).
     fn and_the_primary(self) -> Self {
-        Self {
-            own: Some(super::discovery::ContextKey::Primary.encode()),
-            repository_wide: true,
-            ..self
-        }
+        self.with_the_primary().and_the_repository()
+    }
+
+    /// This call, of the primary as well as of what it is of.
+    fn with_the_primary(mut self) -> Self {
+        self.own
+            .insert(super::discovery::ContextKey::Primary.encode());
+        self
     }
 
     fn of_key(key: &super::discovery::ContextKey) -> Self {
         Self {
-            own: Some(key.encode()),
+            own: std::collections::BTreeSet::from([key.encode()]),
             reach: CallReach::OwnItem,
             repository_wide: false,
         }
+    }
+
+    /// The items the call is of, as an SQL list of their keys; `None` for a
+    /// call of no one item.
+    fn own_sql(&self) -> Option<String> {
+        let own: Vec<&str> = self.own.iter().map(String::as_str).collect();
+        (!own.is_empty()).then(|| sql_list(&own))
     }
 
     /// The call `begin_or_reconcile` makes of `scope`, the scope of the row
@@ -2542,7 +2558,7 @@ impl CallScope {
     fn of_begin(scope: Scope, reach: CallReach) -> Self {
         let call = match scope {
             Scope::Item(item) => Self {
-                own: Some(item),
+                own: std::collections::BTreeSet::from([item]),
                 reach: CallReach::OwnItem,
                 repository_wide: false,
             },
@@ -2613,7 +2629,7 @@ pub(super) fn holds(row: &PendingRow, call: &CallScope) -> bool {
 pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
     let c = columns;
     let scope = scope_sql(c);
-    let own = call.own.as_deref().map(sql_text);
+    let own = call.own_sql();
     let owes = format!(
         "({c}completed_step IS NOT NULL AND {c}completed_step IN {steps}
           AND ({c}state IN {states} OR ({c}state = 'completed' AND {c}completed_step = {registering})))",
@@ -2623,12 +2639,14 @@ pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
     );
     let rows = |standing: Standing| match standing {
         Standing::WholeRepository => Some(format!("{scope} IS NULL")),
-        Standing::CallsItem => own.as_ref().map(|own| format!("{scope} = {own}")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{scope} IN {own}")),
         Standing::AnotherItem {
             committed_and_owing,
         } => Some(format!(
-            "({scope} IS NOT NULL AND {scope} IS NOT {} AND {}{owes})",
-            own.as_deref().unwrap_or("NULL"),
+            "({scope} IS NOT NULL{} AND {}{owes})",
+            own.as_ref()
+                .map(|own| format!(" AND {scope} NOT IN {own}"))
+                .unwrap_or_default(),
             if committed_and_owing { "" } else { "NOT " }
         )),
     };
@@ -2681,15 +2699,17 @@ pub(super) fn holds_remote_index_debt_sql(call: &CallScope, columns: &str) -> St
         "(CASE {c}action WHEN 'synchronize_context' THEN {c}item_id WHEN 'synchronize_primary' THEN {} END)",
         sql_text(&super::discovery::ContextKey::Primary.encode())
     );
-    let own = call.own.as_deref().map(sql_text);
+    let own = call.own_sql();
     let rows = |standing: Standing| match standing {
         Standing::WholeRepository => Some(format!("{item} IS NULL")),
-        Standing::CallsItem => own.as_ref().map(|own| format!("{item} = {own}")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{item} IN {own}")),
         Standing::AnotherItem {
             committed_and_owing: true,
         } => Some(format!(
-            "({item} IS NOT NULL AND {item} IS NOT {})",
-            own.as_deref().unwrap_or("NULL")
+            "({item} IS NOT NULL{})",
+            own.as_ref()
+                .map(|own| format!(" AND {item} NOT IN {own}"))
+                .unwrap_or_default()
         )),
         // An index debt is never mid-write.
         Standing::AnotherItem {
