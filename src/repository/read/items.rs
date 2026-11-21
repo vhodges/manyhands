@@ -2510,11 +2510,12 @@ impl RepositoryService {
 
     /// `check_ticket_relationships` as a save makes it, before it writes a
     /// ticket's `deps` or `parent`: the basis of every context, the primary
-    /// included, is first compared by stat with the one the index stores,
-    /// and each context whose basis moved is read from disk, its tickets and
-    /// comments standing in the check for what the index holds of it. So a
-    /// cycle that a commit made outside Manyhands closes is found before the
-    /// next refresh. Nothing is written to the index: what was read is not
+    /// included, is first compared with the one the index stores, by stat
+    /// and by the hash of each file too new for its stat, and each context
+    /// whose basis moved is read from disk, its tickets and comments
+    /// standing in the check for what the index holds of it. So a cycle that
+    /// a commit made outside Manyhands closes is found before the next
+    /// refresh. Nothing is written to the index: what was read is not
     /// stored, and no context is marked.
     ///
     /// No lease is taken, and none is to be held by the caller: reading a

@@ -5,10 +5,11 @@ use crate::{
     repository::{
         Mutation, MutationDataDto, ProposedRelationships, RelationshipWrite, TicketDraft,
         TicketSaveInput,
-        basis::RACY_WINDOW_NS,
+        basis::{Basis, BasisCheck, check},
         command_index_tests::{
             Fixture, OTHER, TICKET, commit, item, ticket_path, ticket_source, write,
         },
+        discovery::{ListedContext, listed_context, stat_basis},
     },
     results::ResultCode,
 };
@@ -890,57 +891,134 @@ fn made_ready_is_empty_with_no_dependents() {
 /// A comment on B, which only a commit made outside Manyhands adds.
 const COMMENT_ON_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD9";
 
+/// B's ticket depending on A.
+fn other_on_ticket() -> String {
+    ticket_source(OTHER, "Other", &format!("deps:\n- {TICKET}\n"))
+}
+
+/// Commits `text` at `path` in B's worktree with Git alone.
+fn commit_in_other(f: &Fixture, path: &str, text: &str) {
+    write(&f.worktree(OTHER), path, text);
+    commit(&Repository::open(f.worktree(OTHER)).unwrap(), &[path]);
+}
+
+/// B's context as listing finds it.
+fn other_context(f: &Fixture) -> ListedContext {
+    listed_context(&f.root, &ContextKey::Item(item(OTHER))).unwrap()
+}
+
+/// The basis the index stores for B's context, and when it was indexed.
+fn stored_basis_of_other(f: &Fixture) -> (Basis, i64) {
+    let (basis, indexed_at): (String, i64) = f
+        .index()
+        .query_row(
+            "SELECT basis, indexed_at FROM contexts WHERE item_id = ?1",
+            [OTHER],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    (Basis::decode(&basis).unwrap(), indexed_at)
+}
+
+/// Whether B's context holds a file written too close to when it was
+/// indexed for its stat to be trusted.
+fn other_is_racy(f: &Fixture) -> bool {
+    let (stored, indexed_at) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let now = stat_basis(&git, &f.root, &other_context(f), Some(&stored), indexed_at);
+    matches!(check(&stored, &now, indexed_at), BasisCheck::Racy(_))
+}
+
+/// B comes to depend on A by an edit its stat does not show, as within one
+/// tick of a filesystem with coarse timestamps: the stored basis is given
+/// the stat of B's files as they are after the edit, and keeps the hashes of
+/// what they held before.
+fn edit_other_under_its_stored_stat(f: &Fixture) {
+    write(&f.worktree(OTHER), &ticket_path(OTHER), &other_on_ticket());
+    let (stored, _) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let mut now = stat_basis(&git, &f.root, &other_context(f), None, 0);
+    for file in &mut now.files {
+        file.hash = stored
+            .files
+            .iter()
+            .find(|before| before.path == file.path)
+            .and_then(|before| before.hash);
+    }
+    f.index()
+        .execute(
+            "UPDATE contexts SET basis = ?1 WHERE item_id = ?2",
+            rusqlite::params![now.encode(), OTHER],
+        )
+        .unwrap();
+}
+
 /// A save that sets a ticket's relationships checks them against every
-/// context, and reads from disk each one whose basis moved since the index
-/// stored it, writing nothing to the index; `ticket check` reads the index
-/// alone. A is the fixture's `TICKET` and B its `OTHER`, each in a worktree
-/// of its own. In each case a commit made in B's worktree with Git alone
-/// changes what B holds, so the index still holds B as it was.
+/// context, and reads from disk each one whose basis no longer holds since
+/// the index stored it, writing nothing to the index; `ticket check` reads
+/// the index alone. A is the fixture's `TICKET` and B its `OTHER`, each in a
+/// worktree of its own. In each case B changes outside Manyhands, so the
+/// index still holds B as it was.
 ///
-/// Every context's indexed time is put past the racy window first, as if the
-/// index had been refreshed a while after the files were written, so that a
-/// context reads as moved only when its stat does.
+/// Every context was written moments before it was indexed, so its stat
+/// alone cannot vouch for it: a context nothing changed is not read, as its
+/// files still hold what the index hashed, and one whose file changed under
+/// the same stat is.
 #[test]
 fn a_relationship_check_reads_a_moved_context_from_disk() {
-    // (case, the file committed in B's worktree and its text, what a save of
-    // A sets as its one dependency, and the code and IDs it is refused with)
-    let cases = [
+    /// (case, how B changes, what a save of A sets as its one dependency,
+    /// and the code and IDs it is refused with)
+    type Case = (
+        &'static str,
+        fn(&Fixture),
+        &'static str,
+        ResultCode,
+        &'static [&'static str],
+    );
+    let cases: [Case; 3] = [
         (
-            "B comes to depend on A",
-            ticket_path(OTHER),
-            ticket_source(OTHER, "Other", &format!("deps:\n- {TICKET}\n")),
+            "B comes to depend on A by a commit",
+            |f| commit_in_other(f, &ticket_path(OTHER), &other_on_ticket()),
             OTHER,
             ResultCode::RelationshipCycle,
-            vec![TICKET, OTHER],
+            &[TICKET, OTHER],
         ),
         (
-            "a comment on B is added",
-            format!(".manyhands/comments/{OTHER}/{COMMENT_ON_OTHER}.md"),
-            format!(
-                "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
-                 id: {COMMENT_ON_OTHER}\nitem_id: {OTHER}\n\
-                 created_at: 2026-11-01T00:00:00Z\n---\nA comment.\n"
-            ),
+            "a comment on B is committed",
+            |f| {
+                commit_in_other(
+                    f,
+                    &format!(".manyhands/comments/{OTHER}/{COMMENT_ON_OTHER}.md"),
+                    &format!(
+                        "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
+                         id: {COMMENT_ON_OTHER}\nitem_id: {OTHER}\n\
+                         created_at: 2026-11-01T00:00:00Z\n---\nA comment.\n"
+                    ),
+                );
+            },
             COMMENT_ON_OTHER,
             ResultCode::InvalidRelationship,
-            vec![COMMENT_ON_OTHER],
+            &[COMMENT_ON_OTHER],
+        ),
+        (
+            "B comes to depend on A by an edit its stat does not show",
+            edit_other_under_its_stored_stat,
+            OTHER,
+            ResultCode::RelationshipCycle,
+            &[TICKET, OTHER],
         ),
     ];
-    for (case, path, text, target, code, rejected) in cases {
+    for (case, change, target, code, rejected) in cases {
         let f = Fixture::new();
-        f.index()
-            .execute(
-                "UPDATE contexts SET indexed_at = indexed_at + ?1",
-                [5 * RACY_WINDOW_NS],
-            )
-            .unwrap();
         let repo = f.service.resolve_repository(&f.root).unwrap();
         let proposed = ProposedRelationships {
             deps: vec![item(target)],
             parent: None,
         };
 
-        // With nothing changed since it was stored, no context is read.
+        // With nothing changed since it was stored, no context is read,
+        // though B, written just before it was indexed, is racy.
+        assert!(other_is_racy(&f), "{case}");
         let unmoved = f.watch(|| {
             let check = f
                 .service
@@ -950,8 +1028,7 @@ fn a_relationship_check_reads_a_moved_context_from_disk() {
         });
         assert!(unmoved.observed.is_empty(), "{case}: {:?}", unmoved.counts);
 
-        write(&f.worktree(OTHER), &path, &text);
-        commit(&Repository::open(f.worktree(OTHER)).unwrap(), &[&path]);
+        change(&f);
         let index_only = f
             .service
             .check_ticket_relationships(&repo, &item(TICKET), &proposed)

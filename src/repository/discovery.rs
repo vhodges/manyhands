@@ -786,19 +786,19 @@ pub(super) fn basis_holds(
 }
 
 /// The contexts of the repository at `root` that may have changed since the
-/// index stored them, found by stat alone: what a read that decides on other
-/// items reads from disk instead of from the index. `stored` holds each
-/// context the index stores, with its basis and the time it was indexed at,
-/// or `None` for one with no basis, or one owed an indexing whatever its basis
-/// says (marked dirty, say).
+/// index stored them, found by stat and the hash of a few files: what a read
+/// that decides on other items reads from disk instead of from the index.
+/// `stored` holds each context the index stores, with its basis and the time
+/// it was indexed at, or `None` for one with no basis, or one owed an
+/// indexing whatever its basis says (marked dirty, say).
 ///
 /// Every context listing finds is compared, the primary included. One with no
-/// stored row or no stored basis has moved, and so has one whose stat basis
-/// differs from the stored one or holds a file modified too close to its
-/// indexed time for its stat to be trusted (`check`'s `Racy`). No file is
-/// hashed to settle that: reading such a context costs one read, and taking
-/// it as unchanged could pass what it holds now. A context the index stores
-/// that is gone from disk is not listed, and is not returned.
+/// stored row or no stored basis has moved, and so has one whose basis no
+/// longer holds (`basis_holds`): its stat basis differs from the stored one,
+/// or a file modified too close to its indexed time for its stat to be
+/// trusted no longer holds the content the stored basis hashed. Those few
+/// files are the only ones read. A context the index stores that is gone
+/// from disk is not listed, and is not returned.
 ///
 /// When the worktree base cannot be listed whole, the primary and each
 /// stored context that is still there (`listed_context`) are compared, so a
@@ -826,10 +826,7 @@ pub(super) fn moved_contexts(
     listed
         .into_iter()
         .filter(|listed| match stored.get(&listed.key).copied().flatten() {
-            Some((basis, indexed_at)) => {
-                let current = stat_basis(repository, root, listed, Some(basis), *indexed_at);
-                !matches!(check(basis, &current, *indexed_at), BasisCheck::Same)
-            }
+            Some((basis, indexed_at)) => !basis_holds(repository, root, listed, basis, *indexed_at),
             None => true,
         })
         .collect()

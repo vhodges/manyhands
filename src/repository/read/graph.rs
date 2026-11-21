@@ -875,11 +875,12 @@ pub(super) struct MovedContexts(Vec<(ContextKey, ContextObservation)>);
 
 impl MovedContexts {
     /// Compares the basis of every context of `repo`, the primary included,
-    /// with the one the index stores, by stat (`discovery::moved_contexts`),
-    /// and observes each that moved, as a refresh would. A context the index
-    /// owes an indexing, a dirty one among them, is taken to have moved. An
-    /// observation left dirty, of a context that changed while it was read,
-    /// is kept all the same: it is nearer what is on disk than the index is.
+    /// with the one the index stores, by stat and by the hash of each file
+    /// too new for its stat (`discovery::moved_contexts`), and observes each
+    /// that moved, as a refresh would. A context the index owes an indexing,
+    /// a dirty one among them, is taken to have moved. An observation left
+    /// dirty, of a context that changed while it was read, is kept all the
+    /// same: it is nearer what is on disk than the index is.
     ///
     /// The index is read and nothing is written to it, and the observation
     /// hook a refresh runs before it stores is not run.
