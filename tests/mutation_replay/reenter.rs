@@ -1739,14 +1739,21 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
                 assert_eq!(envelope["effects"]["checkpoint"], "committed", "{what}");
                 assert_eq!(envelope["effects"]["discovery"], "pending", "{what}");
                 // What is owed needs no input: the operation is resumed.
-                assert_eq!(
-                    envelope["recovery"][0]["action"], "operation.resume",
-                    "{what}"
-                );
-                assert_eq!(
-                    envelope["recovery"][0]["operation_id"], envelope["operation_id"],
-                    "{what}"
-                );
+                // Or, when the other process completed the row between
+                // this answer and its recovery being offered, there is
+                // nothing left to resume, and the request is sent again.
+                if envelope["recovery"][0]["action"] == "request.retry" {
+                    assert!(envelope["recovery"][0]["operation_id"].is_null(), "{what}");
+                } else {
+                    assert_eq!(
+                        envelope["recovery"][0]["action"], "operation.resume",
+                        "{what}"
+                    );
+                    assert_eq!(
+                        envelope["recovery"][0]["operation_id"], envelope["operation_id"],
+                        "{what}"
+                    );
+                }
             }
             other => panic!("neither a result nor busy: {other}: {what}"),
         }
