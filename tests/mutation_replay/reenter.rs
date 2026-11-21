@@ -1449,7 +1449,7 @@ fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_sa
 /// sleep.
 #[cfg(unix)]
 #[test]
-fn a_save_that_sets_relationships_answers_busy_at_once_behind_a_live_peer() {
+fn a_save_that_sets_relationships_never_waits_or_writes_behind_a_live_peer() {
     use std::sync::{Arc, Mutex};
 
     let mut world = World::new();
