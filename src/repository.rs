@@ -1599,6 +1599,9 @@ impl RepositoryService {
         result
     }
 
+    /// A refresh of the whole repository under `owner`'s claim of its row
+    /// (`refresh_repository_indexed`), answered as a refresh is: once the
+    /// index holds the repository, with a snapshot of it.
     fn refresh_repository_claimed(
         &self,
         repository: &Repository,
@@ -1606,6 +1609,28 @@ impl RepositoryService {
         repository_id: i64,
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
+        match self.refresh_repository_indexed(repository, root.clone(), repository_id, owner)? {
+            WholeRefresh::Current => Ok(RefreshOutcome::Refreshed {
+                snapshot: self.repository_snapshot(&root)?,
+            }),
+            WholeRefresh::LeftDirty(context) => Ok(RefreshOutcome::RetryRequired {
+                root,
+                context: Some(context),
+            }),
+        }
+    }
+
+    /// A refresh of the whole repository under `owner`'s claim of its row,
+    /// with no snapshot of the index read for an answer: what a write's
+    /// hand-off runs, which asks only whether the index now holds the
+    /// repository.
+    fn refresh_repository_indexed(
+        &self,
+        repository: &Repository,
+        root: PathBuf,
+        repository_id: i64,
+        owner: IndexOwner,
+    ) -> Result<WholeRefresh, RepositoryError> {
         self.claimed_with_reclaim(&root, owner, |owner| {
             self.refresh_repository_observed(repository, root.clone(), repository_id, owner)
         })
@@ -1684,7 +1709,7 @@ impl RepositoryService {
         root: PathBuf,
         repository_id: i64,
         owner: IndexOwner,
-    ) -> Result<RefreshOutcome, RepositoryError> {
+    ) -> Result<WholeRefresh, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         // Taken before anything is observed: the repository's refreshed
         // time, from which a file changed while it runs reads as changed.
@@ -1717,13 +1742,8 @@ impl RepositoryService {
             raced
         });
         match outcome {
-            Ok(Some(context)) => Ok(RefreshOutcome::RetryRequired {
-                root,
-                context: Some(context),
-            }),
-            Ok(None) => Ok(RefreshOutcome::Refreshed {
-                snapshot: self.repository_snapshot(&root)?,
-            }),
+            Ok(Some(context)) => Ok(WholeRefresh::LeftDirty(context)),
+            Ok(None) => Ok(WholeRefresh::Current),
             Err(error)
                 if matches!(
                     error.kind,
@@ -4262,8 +4282,9 @@ impl RepositoryService {
     /// from when it was begun) has those contexts indexed and nothing else;
     /// see `index_claimed_contexts`. A row that records none (a repository's
     /// remote or enablement, or one an older build began) has the whole
-    /// repository refreshed, as before. Says whether the index holds the
-    /// write's work.
+    /// repository refreshed, as before, with no snapshot of the index read
+    /// after it: the answer is only whether the refresh completed. Says
+    /// whether the index holds the write's work.
     fn handoff_post_authoritative(
         &self,
         root: &Path,
@@ -4309,8 +4330,8 @@ impl RepositoryService {
                     )
                     .map(|outcome| outcome == IndexOutcome::Current),
                 None => self
-                    .refresh_repository_claimed(&repository, root, repository_id, owner.clone())
-                    .map(|outcome| matches!(outcome, RefreshOutcome::Refreshed { .. })),
+                    .refresh_repository_indexed(&repository, root, repository_id, owner.clone())
+                    .map(|refreshed| refreshed == WholeRefresh::Current),
             }
         })();
         drop(heartbeat);
@@ -6544,6 +6565,17 @@ pub(super) enum IndexOutcome {
     /// dirty. The row still owes its hand-off, as after a refresh that must
     /// be tried again (`RetryRequired`).
     LeftDirty,
+}
+
+/// What one pass of a refresh of the whole repository came to, before any
+/// snapshot of the index is read to answer it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WholeRefresh {
+    /// Every context is current, and the row is complete.
+    Current,
+    /// The context at this worktree, the first by worktree, was left dirty:
+    /// the refresh is to be tried again (`RetryRequired`).
+    LeftDirty(PathBuf),
 }
 
 /// What a refresh under a row's ID indexes once it has claimed the row.
@@ -12152,9 +12184,7 @@ fn ensure_configuration_path_clean(
         .map(|entry| (entry.id, entry.mode));
     let index_matches_ancestor = match index_entry {
         Some(index_entry) => {
-            first_parent_configuration_entries(repository, &head, operation, root)?
-                .into_iter()
-                .any(|ancestor| index_entry == ancestor)
+            first_parent_configuration_holds(repository, &head, index_entry, operation, root)?
         }
         None => false,
     };
@@ -12183,38 +12213,48 @@ fn regular_nonexecutable_file(metadata: &std::fs::Metadata) -> bool {
     true
 }
 
-fn first_parent_configuration_entries(
+/// Whether `wanted`, an entry for the configuration path, is the canonical
+/// configuration of `commit` or of a commit on its first-parent history.
+///
+/// The walk stops at the first commit whose entry is `wanted`, and reads no
+/// history past it. Whether an entry is canonical depends on its blob alone,
+/// so that commit answers for every later one with the same entry: the blob
+/// is read once, there, and only when the entries match.
+fn first_parent_configuration_holds(
     repository: &Repository,
     commit: &git2::Commit<'_>,
+    wanted: (git2::Oid, u32),
     operation: RepositoryOperation,
     root: &Path,
-) -> Result<Vec<(git2::Oid, u32)>, RepositoryError> {
+) -> Result<bool, RepositoryError> {
     let mut commit = commit.clone();
-    let mut entries = Vec::new();
     loop {
         let tree = commit
             .tree()
             .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
-        if let Some(entry) = configuration_entry_from_tree(&tree)
-            && repository.find_blob(entry.0).ok().is_some_and(|blob| {
-                std::str::from_utf8(blob.content()).is_ok_and(|source| {
-                    canonical::parse_repository_config(source).is_ok_and(|config| {
-                        canonical::serialize_repository_config(&config)
-                            .is_ok_and(|canonical| canonical.as_bytes() == blob.content())
-                    })
-                })
-            })
-        {
-            entries.push(entry);
+        if configuration_entry_from_tree(&tree) == Some(wanted) {
+            return Ok(canonical_configuration_blob(repository, wanted.0));
         }
         if commit.parent_count() == 0 {
-            break;
+            return Ok(false);
         }
         commit = commit
             .parent(0)
             .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
     }
-    Ok(entries)
+}
+
+/// Whether the blob `oid` holds a configuration exactly as it is serialized:
+/// it parses, and serializing what it parses to gives its bytes back.
+fn canonical_configuration_blob(repository: &Repository, oid: git2::Oid) -> bool {
+    repository.find_blob(oid).ok().is_some_and(|blob| {
+        std::str::from_utf8(blob.content()).is_ok_and(|source| {
+            canonical::parse_repository_config(source).is_ok_and(|config| {
+                canonical::serialize_repository_config(&config)
+                    .is_ok_and(|canonical| canonical.as_bytes() == blob.content())
+            })
+        })
+    })
 }
 
 fn configuration_entry_from_tree(tree: &git2::Tree<'_>) -> Option<(git2::Oid, u32)> {
@@ -13279,6 +13319,181 @@ mod tests {
         assert!(error.to_string().contains("restore failed"));
     }
 
+    /// `ensure_configuration_path_clean` takes the index's entry for the
+    /// configuration path when it is the canonical configuration of HEAD or
+    /// of a commit on HEAD's first-parent history, and nothing else. Its walk
+    /// of that history stops at the first commit whose entry it is: history
+    /// past that commit is not read, so a commit missing from the object
+    /// database beyond it changes nothing.
+    #[test]
+    fn the_configuration_check_takes_an_index_entry_from_first_parent_history_only() {
+        let configuration = |primary: &str| {
+            let source = format!("format_version = 1\nprimary_branch = \"{primary}\"\n");
+            let parsed = canonical::parse_repository_config(&source).unwrap();
+            assert_eq!(
+                canonical::serialize_repository_config(&parsed).unwrap(),
+                source
+            );
+            source
+        };
+        let first = configuration("main");
+        let not_canonical = format!("{first}\n");
+        let side = configuration("side");
+        let head = configuration("develop");
+        let elsewhere = configuration("elsewhere");
+        // C1 holds `first`; C2, its child, holds `not_canonical`; S, another
+        // child of C1, holds `side`; HEAD is C3, the merge of C2 and S, and
+        // holds `head`. HEAD's first-parent history is C3, C2, C1.
+        struct Fixture {
+            _directory: tempfile::TempDir,
+            root: PathBuf,
+            c2: git2::Oid,
+        }
+        let fixture = || {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let repository = Repository::init(&root).unwrap();
+            let signature =
+                Signature::new("Test", "test@example.invalid", &git2::Time::new(0, 0)).unwrap();
+            let commit = |source: &str, update: Option<&str>, parents: &[&git2::Commit<'_>]| {
+                let blob = repository.blob(source.as_bytes()).unwrap();
+                let mut manyhands = repository.treebuilder(None).unwrap();
+                manyhands.insert("config.toml", blob, 0o100644).unwrap();
+                let manyhands = manyhands.write().unwrap();
+                let mut tree = repository.treebuilder(None).unwrap();
+                tree.insert(".manyhands", manyhands, 0o040000).unwrap();
+                let tree = repository.find_tree(tree.write().unwrap()).unwrap();
+                let oid = repository
+                    .commit(update, &signature, &signature, "c", &tree, parents)
+                    .unwrap();
+                repository.find_commit(oid).unwrap()
+            };
+            let c1 = commit(&first, Some("HEAD"), &[]);
+            let c2 = commit(&not_canonical, Some("HEAD"), &[&c1]);
+            let s = commit(&side, None, &[&c1]);
+            commit(&head, Some("HEAD"), &[&c2, &s]);
+            Fixture {
+                root,
+                c2: c2.id(),
+                _directory: directory,
+            }
+        };
+        let stage = |fixture: &Fixture, source: Option<&str>| {
+            let repository = Repository::open(&fixture.root).unwrap();
+            let mut index = repository.index().unwrap();
+            index.clear().unwrap();
+            if let Some(source) = source {
+                let blob = repository.blob(source.as_bytes()).unwrap();
+                index
+                    .add(&IndexEntry {
+                        ctime: git2::IndexTime::new(0, 0),
+                        mtime: git2::IndexTime::new(0, 0),
+                        dev: 0,
+                        ino: 0,
+                        mode: 0o100644,
+                        uid: 0,
+                        gid: 0,
+                        file_size: source.len() as u32,
+                        id: blob,
+                        flags: 0,
+                        flags_extended: 0,
+                        path: canonical::CONFIG_PATH.as_bytes().to_vec(),
+                    })
+                    .unwrap();
+            }
+            index.write().unwrap();
+        };
+        let on_disk = |fixture: &Fixture, source: &str| {
+            let path = fixture.root.join(canonical::CONFIG_PATH);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, source).unwrap();
+        };
+        // C2's object is removed, so a walk that reads past HEAD fails.
+        let lose_c2 = |fixture: &Fixture| {
+            let hex = fixture.c2.to_string();
+            let repository = Repository::open(&fixture.root).unwrap();
+            std::fs::remove_file(
+                repository
+                    .path()
+                    .join("objects")
+                    .join(&hex[..2])
+                    .join(&hex[2..]),
+            )
+            .unwrap();
+        };
+        // (row, the index's entry, the worktree's file, C2 lost, accepted)
+        let rows: [(&str, Option<&str>, &str, bool, bool); 8] = [
+            ("the index holds HEAD's", Some(&head), &head, false, true),
+            (
+                "the index holds a first-parent ancestor's",
+                Some(&first),
+                &head,
+                false,
+                true,
+            ),
+            (
+                "the index holds a first-parent ancestor's that is not canonical",
+                Some(&not_canonical),
+                &head,
+                false,
+                false,
+            ),
+            (
+                "the index holds only a second parent's",
+                Some(&side),
+                &head,
+                false,
+                false,
+            ),
+            (
+                "the index holds one no commit holds",
+                Some(&elsewhere),
+                &head,
+                false,
+                false,
+            ),
+            ("the index holds none", None, &head, false, false),
+            (
+                "the worktree's file is not HEAD's",
+                Some(&head),
+                &first,
+                false,
+                false,
+            ),
+            (
+                "the index holds HEAD's and HEAD's first parent is missing",
+                Some(&head),
+                &head,
+                true,
+                true,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (row, index, worktree, lost, accepted) in rows {
+            let fixture = fixture();
+            stage(&fixture, index);
+            on_disk(&fixture, worktree);
+            if lost {
+                lose_c2(&fixture);
+            }
+            let repository = Repository::open(&fixture.root).unwrap();
+            let checked = ensure_configuration_path_clean(
+                &repository,
+                &fixture.root,
+                RepositoryOperation::SetPublicationRemote,
+            );
+            let as_expected = match (&checked, accepted) {
+                (Ok(()), true) => true,
+                (Err(error), false) => error.kind == RepositoryErrorKind::DirtyConfigurationPath,
+                _ => false,
+            };
+            if !as_expected {
+                wrong.push(format!("{row}: {checked:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     #[test]
     fn nonblob_configuration_tree_entry_is_not_a_stale_index_candidate() {
         let directory = tempfile::tempdir().unwrap();
@@ -13316,22 +13531,26 @@ mod tests {
                 path: canonical::CONFIG_PATH.as_bytes().to_vec(),
             })
             .unwrap();
+        let staged = index
+            .get_path(Path::new(canonical::CONFIG_PATH), 0)
+            .map(|entry| (entry.id, entry.mode))
+            .unwrap();
 
-        assert!(
-            first_parent_configuration_entries(
-                &repository,
-                &commit,
-                RepositoryOperation::SetPublicationRemote,
-                directory.path(),
-            )
-            .unwrap()
-            .is_empty()
-        );
-        assert!(
-            index
-                .get_path(Path::new(canonical::CONFIG_PATH), 0)
-                .is_some()
-        );
+        // No entry is found in a tree whose configuration path is a tree:
+        // not the index's, and not the tree entry itself, in either mode.
+        for wanted in [staged, (empty, 0o100644), (empty, 0o040000)] {
+            assert!(
+                !first_parent_configuration_holds(
+                    &repository,
+                    &commit,
+                    wanted,
+                    RepositoryOperation::SetPublicationRemote,
+                    directory.path(),
+                )
+                .unwrap(),
+                "{wanted:?}"
+            );
+        }
     }
 
     #[cfg(unix)]
