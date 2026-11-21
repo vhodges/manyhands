@@ -12421,9 +12421,21 @@ fn lifecycle_contexts(item: &canonical::ItemId) -> [ContextKey; 2] {
 
 /// The contexts of one registration that the index owes an indexing: each
 /// marked dirty, and each that a pending operation row owes (its
-/// `owed_contexts`). Whether the repository is marked behind as a whole is
-/// read beside it. What this build cannot read of a mark or of a row's list
-/// is owed in full: every context is.
+/// `owed_contexts`) until the index stores it from what the row committed.
+/// Whether the repository is marked behind as a whole is read beside it.
+/// What this build cannot read of a mark or of a row's list is owed in
+/// full: every context is.
+///
+/// A context a pending row owes is no longer owed once the row's commit is
+/// observed and the context is stored from an observation that began after
+/// it (design decision 32): a whole refresh that indexes a crashed save's
+/// context makes it read current, while the row stays open for its own
+/// resume or retry. The row's time is its `observed_at`, which each of its
+/// steps records once that step is done, so for a row past its commit
+/// (`recovery::is_committed_and_owing`) it is at or after the commit; it is
+/// kept in whole seconds, so only an observation that began in a later
+/// second is known to follow it. A row still mid-write, or a context stored
+/// with no time, stays owed.
 #[derive(Debug, Default)]
 struct DirtyContexts {
     every: bool,
@@ -12446,17 +12458,64 @@ impl DirtyContexts {
                 Some(Err(_)) => dirty.every = true,
             }
         }
+        // When each stored context's observation began, in nanoseconds: the
+        // earliest, for a context stored more than once, and none when any of
+        // its rows has no time.
+        let mut indexed: BTreeMap<ContextKey, Option<i64>> = BTreeMap::new();
+        let mut stored = connection
+            .prepare("SELECT item_id, indexed_at FROM contexts WHERE repository_id = ?1")?;
+        for row in stored.query_map([repository_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+            ))
+        })? {
+            let (item_id, indexed_at) = row?;
+            let key = match item_id.map(|item_id| item_id.parse()) {
+                None => ContextKey::Primary,
+                Some(Ok(item_id)) => ContextKey::Item(item_id),
+                Some(Err(_)) => continue,
+            };
+            let earliest = indexed.entry(key).or_insert(indexed_at);
+            *earliest = earliest
+                .zip(indexed_at)
+                .map(|(stored, again)| stored.min(again));
+        }
         let mut owing = connection.prepare(
-            "SELECT owed_contexts FROM operation_records
+            "SELECT owed_contexts, state, completed_step, observed_at FROM operation_records
               WHERE root_path = (SELECT root_path FROM repositories WHERE id = ?1)
                 AND state != 'completed' AND owed_contexts IS NOT NULL",
         )?;
-        for owed in owing.query_map([repository_id], |row| {
-            row.get::<_, rusqlite::types::Value>(0)
+        for row in owing.query_map([repository_id], |row| {
+            Ok((
+                row.get::<_, rusqlite::types::Value>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
         })? {
-            match owed? {
+            let (owed, state, step, observed_at) = row?;
+            // The first nanosecond known to follow the row's commit, if it is
+            // committed.
+            let after_commit = recovery::is_committed_and_owing(&state, step.as_deref())
+                .then(|| observed_at.checked_add(1)?.checked_mul(1_000_000_000))
+                .flatten();
+            let stored_since_commit = |context: &ContextKey| {
+                after_commit.is_some_and(|after| {
+                    indexed
+                        .get(context)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|indexed_at| indexed_at >= after)
+                })
+            };
+            match owed {
                 rusqlite::types::Value::Text(owed) => match decode_owed_contexts(&owed) {
-                    Some(contexts) => dirty.contexts.extend(contexts),
+                    Some(contexts) => dirty.contexts.extend(
+                        contexts
+                            .into_iter()
+                            .filter(|context| !stored_since_commit(context)),
+                    ),
                     None => dirty.every = true,
                 },
                 _ => dirty.every = true,

@@ -357,6 +357,41 @@ impl Fixture {
         self.service.index_status(&repository).unwrap().state
     }
 
+    /// How a show of `id` reads the index for it.
+    fn shown(&self, id: &str) -> IndexState {
+        let repository = self.service.resolve_repository(&self.root).unwrap();
+        self.service
+            .show_item(&repository, &item(id))
+            .unwrap()
+            .index
+            .state
+    }
+
+    /// Whether `operation` is pending as `index status` and `operation list`
+    /// list it; both are asked, and they must agree.
+    fn listed_pending(&self, operation: &str) -> bool {
+        let repository = self.service.resolve_repository(&self.root).unwrap();
+        let in_status = self
+            .service
+            .index_status(&repository)
+            .unwrap()
+            .pending_operations
+            .iter()
+            .any(|listed| listed.operation_id.as_deref() == Some(operation));
+        let in_list = self
+            .service
+            .list_operations(&repository)
+            .unwrap()
+            .items
+            .iter()
+            .any(|listed| listed.operation_id.as_deref() == Some(operation));
+        assert_eq!(
+            in_status, in_list,
+            "index status and operation list disagree"
+        );
+        in_status
+    }
+
     /// The state, step and owed contexts of the row of `operation`.
     fn row(&self, operation: &str) -> (String, Option<String>, Option<String>) {
         self.index()
@@ -483,43 +518,89 @@ fn a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it() {
 /// a write that owes only its hand-off): `index refresh` succeeds, with no
 /// wait, and indexes the save's dirty context as it indexes any other. It
 /// neither takes the row up nor changes it: the row stays open, owing its
-/// hand-off, for its own resume to close.
+/// hand-off and listed as pending, for its own resume to close.
+///
+/// A context stored from an observation that began after the row's commit
+/// reads current (design decision 32): `index status`, and a show of the
+/// ticket, read current while the row is open. One whose observation is not
+/// known to have followed the commit stays owed, and reads stale until the
+/// resume. A row's time is kept in whole seconds, so each case dates the
+/// crashed row by hand instead of waiting: a second before the refresh, as a
+/// refresh any later finds it; or after the refresh began.
 #[test]
 fn a_whole_refresh_proceeds_past_a_crashed_save_and_indexes_it() {
-    let fixture = Fixture::with_context();
-    fixture.fail_at(FailurePoint::AfterCheckpointBeforeIndexStep);
-    let crashed = fixture.save(RequestId::new(), &fixture.save_input("Crashed save"));
-    assert_eq!(crashed.code, ResultCode::DiscoveryPending, "{crashed:?}");
-    let commit = crashed.effects.commit_oid.clone().expect("a commit");
-    let operation = crashed.operation_id.clone().expect("an operation");
-    let owing = fixture.row(&operation);
-    assert_eq!(fixture.mark(TICKET), Some(1));
+    for (case, dated_by, after_refresh) in [
+        (
+            "the crash a second before the refresh",
+            -1,
+            IndexStatusState::Current,
+        ),
+        (
+            "the row's time after the refresh began",
+            60,
+            IndexStatusState::Stale,
+        ),
+    ] {
+        let fixture = Fixture::with_context();
+        fixture.fail_at(FailurePoint::AfterCheckpointBeforeIndexStep);
+        let crashed = fixture.save(RequestId::new(), &fixture.save_input("Crashed save"));
+        assert_eq!(
+            crashed.code,
+            ResultCode::DiscoveryPending,
+            "{case}: {crashed:?}"
+        );
+        let commit = crashed.effects.commit_oid.clone().expect("a commit");
+        let operation = crashed.operation_id.clone().expect("an operation");
+        let owing = fixture.row(&operation);
+        assert_eq!(fixture.mark(TICKET), Some(1), "{case}");
+        fixture
+            .index()
+            .execute(
+                "UPDATE operation_records SET observed_at = observed_at + ?2
+                  WHERE operation_ulid = ?1",
+                params![operation, dated_by],
+            )
+            .unwrap();
 
-    let refreshed = fixture.execute(
-        RequestId::new(),
-        Mutation::IndexRefresh(IndexRefreshInput {
-            root: fixture.root.clone(),
-        }),
-    );
-    assert_eq!(
-        (refreshed.code, refreshed.effects.discovery),
-        (ResultCode::Ok, DiscoveryEffect::Current),
-        "{refreshed:?}"
-    );
-    assert_eq!(fixture.title(TICKET), Some("Crashed save".to_owned()));
-    assert_eq!(fixture.mark(TICKET), Some(0));
-    assert_eq!(
-        fixture.row(&operation),
-        owing,
-        "the refresh changed the row"
-    );
-    assert_eq!(fixture.head(TICKET), commit);
+        let refreshed = fixture.execute(
+            RequestId::new(),
+            Mutation::IndexRefresh(IndexRefreshInput {
+                root: fixture.root.clone(),
+            }),
+        );
+        assert_eq!(
+            (refreshed.code, refreshed.effects.discovery),
+            (ResultCode::Ok, DiscoveryEffect::Current),
+            "{case}: {refreshed:?}"
+        );
+        assert_eq!(
+            fixture.title(TICKET),
+            Some("Crashed save".to_owned()),
+            "{case}"
+        );
+        assert_eq!(fixture.mark(TICKET), Some(0), "{case}");
+        assert_eq!(
+            fixture.row(&operation),
+            owing,
+            "{case}: the refresh changed the row"
+        );
+        assert_eq!(fixture.head(TICKET), commit, "{case}");
+        assert_eq!(fixture.status(), after_refresh, "{case}");
+        let shown = match after_refresh {
+            IndexStatusState::Current => IndexState::Current,
+            _ => IndexState::Stale,
+        };
+        assert_eq!(fixture.shown(TICKET), shown, "{case}");
+        assert!(fixture.listed_pending(&operation), "{case}");
 
-    let resumed = fixture.resume(&operation);
-    assert_eq!(resumed.code, ResultCode::Ok, "{resumed:?}");
-    assert_eq!(fixture.row(&operation).0, "completed");
-    assert_eq!(fixture.status(), IndexStatusState::Current);
-    assert_eq!(fixture.head(TICKET), commit);
+        let resumed = fixture.resume(&operation);
+        assert_eq!(resumed.code, ResultCode::Ok, "{case}: {resumed:?}");
+        assert_eq!(fixture.row(&operation).0, "completed", "{case}");
+        assert!(!fixture.listed_pending(&operation), "{case}");
+        assert_eq!(fixture.status(), IndexStatusState::Current, "{case}");
+        assert_eq!(fixture.shown(TICKET), IndexState::Current, "{case}");
+        assert_eq!(fixture.head(TICKET), commit, "{case}");
+    }
 }
 
 /// A save whose row records the context it owes, and that stops after

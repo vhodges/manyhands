@@ -731,6 +731,101 @@ fn a_context_owed_by_a_pending_row_reads_dirty() {
     }
 }
 
+/// A context a pending row owes stops being owed once the row's commit is
+/// observed and the context is stored from an observation known to have
+/// begun after it (design decision 32): in a later second than the row's
+/// time, which is kept in whole seconds. A row still mid-write, a row with a
+/// step but not handed off, and a context stored with no time stay owed.
+#[test]
+fn a_context_stored_after_a_pending_row_s_commit_reads_current() {
+    const ROW_AT: i64 = 1_700_000_000;
+    const AFTER: i64 = (ROW_AT + 1) * 1_000_000_000;
+    let fixture = Fixture::new();
+    fixture.refresh();
+    // (the case, the row's state and step, when the primary's observation
+    // began, and whether the primary is then owed)
+    for (case, state, step, indexed_at, owed) in [
+        (
+            "committed, stored in a later second",
+            "authoritative_observed",
+            Some("authoring_checkpoint_observed"),
+            Some(AFTER),
+            false,
+        ),
+        (
+            "committed at its checkpoint, stored in a later second",
+            "authoring_checkpoint_observed",
+            Some("authoring_checkpoint_observed"),
+            Some(AFTER),
+            false,
+        ),
+        (
+            "committed, its index step claimed, stored in a later second",
+            "indexing",
+            Some("authoring_checkpoint_observed"),
+            Some(AFTER),
+            false,
+        ),
+        (
+            "committed, stored within the row's second",
+            "authoritative_observed",
+            Some("authoring_checkpoint_observed"),
+            Some(AFTER - 1),
+            true,
+        ),
+        (
+            "committed, stored with no time",
+            "authoritative_observed",
+            Some("authoring_checkpoint_observed"),
+            None,
+            true,
+        ),
+        (
+            "mid-write, stored long after",
+            "authoring_destination_observed",
+            Some("authoring_destination_observed"),
+            Some(AFTER + 100_000_000_000),
+            true,
+        ),
+        (
+            "a step recorded but not handed off",
+            "initialization_committed",
+            Some("initialization_committed"),
+            Some(AFTER),
+            true,
+        ),
+    ] {
+        let index = fixture.index();
+        index
+            .execute(
+                "UPDATE contexts SET dirty = 0, indexed_at = ?1 WHERE item_id IS NULL",
+                [indexed_at],
+            )
+            .unwrap();
+        index
+            .execute(
+                "INSERT INTO operation_records (
+                    repository_id, root_path, operation_ulid, action, state, completed_step,
+                    observed_at, owed_contexts
+                 ) SELECT id, root_path, ?1, 'save_ticket', ?2, ?3, ?4, '[\"primary\"]'
+                     FROM repositories",
+                params![OperationId::new().to_string(), state, step, ROW_AT],
+            )
+            .unwrap();
+        let repository_id: i64 = index
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap();
+        let dirty = DirtyContexts::read(&index, repository_id).unwrap();
+        assert_eq!(dirty.any_of(&[ContextKey::Primary]), owed, "{case}");
+        index
+            .execute(
+                "DELETE FROM operation_records WHERE action = 'save_ticket'",
+                [],
+            )
+            .unwrap();
+    }
+}
+
 /// `index status`, the repository list and the snapshot read the index as
 /// stale while any context is dirty, whether the primary, an item's or one
 /// that is no valid item context, though the repository is not marked

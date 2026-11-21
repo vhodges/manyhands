@@ -2184,6 +2184,26 @@ const OWING_STATES: [&str; 6] = [
     "authoring_checkpoint_observed",
 ];
 
+/// Whether a pending row in `state` whose last step is `step` has its
+/// commit observed and owes nothing more than its index hand-off (Table B's
+/// "owes only its hand-off"): its last step says the operation's own work is
+/// done (`LocalStep::is_authoritative`), and its state is one of the
+/// `OWING_STATES`, or it is a comment's that waits for its registration.
+/// Any other pending row is mid-write. `holds` asks it, and so does a read
+/// of what a pending row owes an indexing (design decision 32).
+///
+/// The step is asked as well as the state: a refresh that failed is in one
+/// of these states with no work of its own recorded. It is wider than
+/// `LocalRow::owes_only_its_hand_off`, which asks a different question:
+/// whether a refresh under the row's ID may complete it. A write stopped at
+/// its checkpoint is completed by its own retry, which advances it to its
+/// hand-off, and a comment waiting for its registration by its own retry
+/// once the repository is registered.
+pub(super) fn is_committed_and_owing(state: &str, step: Option<&str>) -> bool {
+    listed(step).is_some_and(LocalStep::is_authoritative)
+        && (OWING_STATES.contains(&state) || waits_for_registration(state, step))
+}
+
 /// A pending row of the local journal, as `holds` reads it: what it is of
 /// (its action, target and item) and where it stands (its state and last
 /// step). A row that has ended holds nothing.
@@ -2203,21 +2223,9 @@ impl PendingRow {
         self.state != "completed" || waits_for_registration(&self.state, self.step())
     }
 
-    /// Whether the row's commit is observed and all it still owes is its
-    /// index hand-off: its last step says the operation's own work is done
-    /// (`LocalStep::is_authoritative`), and its state is one of the
-    /// `OWING_STATES`, or it is a comment's that waits for its registration.
-    /// Any other pending row is mid-write.
-    ///
-    /// The step is asked as well as the state: a refresh that failed is in
-    /// one of these states with no work of its own recorded. This is wider
-    /// than `LocalRow::owes_only_its_hand_off`, which says whether a refresh
-    /// under the row's ID may complete it: a write stopped at its checkpoint
-    /// is completed by its own retry, which advances it to its hand-off.
-    fn owes_only_its_hand_off(&self) -> bool {
-        listed(self.step()).is_some_and(LocalStep::is_authoritative)
-            && (OWING_STATES.contains(&self.state.as_str())
-                || waits_for_registration(&self.state, self.step()))
+    /// See `is_committed_and_owing`.
+    fn is_committed_and_owing(&self) -> bool {
+        is_committed_and_owing(&self.state, self.step())
     }
 
     fn step(&self) -> Option<&str> {
@@ -2233,7 +2241,7 @@ impl PendingRow {
             Scope::Repository => Standing::WholeRepository,
             Scope::Item(item) if call.own.as_deref() == Some(item.as_str()) => Standing::CallsItem,
             Scope::Item(_) => Standing::AnotherItem {
-                owes_only_its_hand_off: self.owes_only_its_hand_off(),
+                committed_and_owing: self.is_committed_and_owing(),
             },
         }
     }
@@ -2335,7 +2343,7 @@ enum Standing {
     /// The row is of the item the call is of.
     CallsItem,
     /// The row is of another item.
-    AnotherItem { owes_only_its_hand_off: bool },
+    AnotherItem { committed_and_owing: bool },
 }
 
 impl Standing {
@@ -2343,10 +2351,10 @@ impl Standing {
         Self::WholeRepository,
         Self::CallsItem,
         Self::AnotherItem {
-            owes_only_its_hand_off: false,
+            committed_and_owing: false,
         },
         Self::AnotherItem {
-            owes_only_its_hand_off: true,
+            committed_and_owing: true,
         },
     ];
 
@@ -2362,9 +2370,9 @@ impl Standing {
         match self {
             Self::WholeRepository | Self::CallsItem => true,
             Self::AnotherItem {
-                owes_only_its_hand_off,
+                committed_and_owing,
             } => {
-                !owes_only_its_hand_off
+                !committed_and_owing
                     && (call.repository_wide || call.reach == CallReach::OtherItems)
             }
         }
@@ -2404,11 +2412,11 @@ pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
             .as_ref()
             .map(|own| format!("({of_an_item} AND {c}item_id = {own})")),
         Standing::AnotherItem {
-            owes_only_its_hand_off,
+            committed_and_owing,
         } => Some(format!(
             "({of_an_item} AND {c}item_id IS NOT {} AND {}{owes})",
             own.as_deref().unwrap_or("NULL"),
-            if owes_only_its_hand_off { "" } else { "NOT " }
+            if committed_and_owing { "" } else { "NOT " }
         )),
     };
     format!(
@@ -2436,14 +2444,14 @@ pub(super) fn holds_remote_index_debt_sql(call: &CallScope, columns: &str) -> St
         Standing::WholeRepository => Some(format!("{item} IS NULL")),
         Standing::CallsItem => own.as_ref().map(|own| format!("{item} = {own}")),
         Standing::AnotherItem {
-            owes_only_its_hand_off: true,
+            committed_and_owing: true,
         } => Some(format!(
             "({item} IS NOT NULL AND {item} IS NOT {})",
             own.as_deref().unwrap_or("NULL")
         )),
         // An index debt is never mid-write.
         Standing::AnotherItem {
-            owes_only_its_hand_off: false,
+            committed_and_owing: false,
         } => None,
     };
     format!("({c}index_pending != 0 AND {})", held_sql(call, rows))
@@ -2543,7 +2551,8 @@ fn in_the_way(
         row: PendingRow,
     }
     // Each of the two kinds of row that has not ended, read by the index
-    // kept for it; a row is of one kind or the other.
+    // kept for it: a row that is not completed, and a completed comment's
+    // that waits for its registration. No row is of both.
     let pending = connection
         .prepare(
             "SELECT id, operation_ulid, action, target, item_id, state, completed_step
@@ -2552,6 +2561,7 @@ fn in_the_way(
              SELECT id, operation_ulid, action, target, item_id, state, completed_step
                FROM operation_records
               WHERE root_path = ?1 AND completed_step = 'comment_registration_pending'
+                AND state = 'completed'
              ORDER BY id",
         )
         .and_then(|mut statement| {
