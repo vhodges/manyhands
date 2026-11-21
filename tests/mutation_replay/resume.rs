@@ -41,6 +41,12 @@ const RESUME_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
 /// Another, for a request on the whole repository.
 const REMOTE_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
 
+/// Another, for a request of a pending row's own item.
+const OWN_ITEM_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX6";
+
+/// Another, for a refresh of the whole repository.
+const REFRESH_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX7";
+
 fn resume_in(root: &std::path::Path, operation_id: &str) -> Mutation {
     Mutation::OperationResume(OperationResumeInput {
         root: root.to_owned(),
@@ -222,9 +228,26 @@ fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss()
     world.reopen();
     assert_eq!(stored(&world, &operation_id), before);
 
+    // A refresh of the whole repository goes on past the fenced row (Table
+    // B) and indexes the ticket's commit, leaving the row as it was.
+    let refreshed = world.execute(
+        REFRESH_REQUEST,
+        Mutation::IndexRefresh(manyhands::repository::IndexRefreshInput {
+            root: world.root.clone(),
+        }),
+    );
+    assert_eq!(refreshed.code, ResultCode::Ok, "{refreshed:?}");
+    assert_eq!(stored(&world, &operation_id), before);
     // A request of the row's own item is refused for it (Table B: another
-    // item's request goes on).
-    let blocked = world.execute(REQUEST_2, world.save(TICKET_A, &token));
+    // item's request goes on): a save of the ticket as the refresh indexed
+    // it.
+    let later_token = world.token(TICKET_A);
+    let later = || {
+        let mut input = world.save_input(TICKET_A, &later_token);
+        input.draft = World::draft("A later title", "A later body.\n");
+        Mutation::TicketSave(input)
+    };
+    let blocked = world.execute(OWN_ITEM_REQUEST, later());
     assert_eq!(blocked.code, ResultCode::RecoveryRequired);
     assert_eq!(
         recovery_actions(&blocked),
@@ -239,7 +262,7 @@ fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss()
         blocked.recovery[0].operation_id.as_deref(),
         Some(&*operation_id)
     );
-    assert!(world.record(REQUEST_2).is_none());
+    assert!(world.record(OWN_ITEM_REQUEST).is_none());
 
     let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
     assert_eq!(
@@ -272,6 +295,14 @@ fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss()
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
         RequestState::Finished
+    );
+
+    // The request that was refused, sent again, succeeds.
+    let saved = world.execute(OWN_ITEM_REQUEST, later());
+    assert_eq!(
+        (saved.outcome, saved.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{saved:?}"
     );
 
     let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));

@@ -291,7 +291,14 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
             "authoring_checkpoint_observed",
         )]
     };
-    let save_x_owing = || vec![item_row(ROW_1, "save_ticket", ITEM_X, "failed")];
+    // A save of X whose commit is observed and whose hand-off failed: it
+    // owes only its hand-off.
+    let save_x_owing = || {
+        vec![Seed {
+            completed_step: Some("authoring_checkpoint_observed"),
+            ..item_row(ROW_1, "save_ticket", ITEM_X, "failed")
+        }]
+    };
     let cases: Vec<(&str, Vec<Seed>, Call, Answer)> = vec![
         // A row of item X, stopped before its hand-off or owing it, that
         // no index owner is at work under.
@@ -687,14 +694,14 @@ fn an_unfinished_operation_blocks_its_own_item_and_repository_wide_work_but_not_
         // A save that sets relationships was checked for cycles and kinds
         // against the other tickets the index holds, and a row mid-write may
         // hold a change the index has not been told of: such a row is in its
-        // way, while a save that sets none is not. (These rows record no
-        // step, so they are mid-write; Table B's tables pin a row that owes
-        // only its hand-off.)
+        // way. A row that owes only its hand-off has its commit on disk,
+        // where the check reads it, and is not; nor is either in the way of
+        // a save that sets none.
         (
             "owing item row, another item's save setting relationships",
             save_x_owing(),
             Call::Across(SaveTicket, CALL, Ticket(ITEM_Y)),
-            Refused(Some(ROW_1)),
+            Begun,
         ),
         (
             "stopped item row, another item's save setting relationships",

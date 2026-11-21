@@ -1159,7 +1159,8 @@ fn a_second_writer_held_off_by_the_lease_waits_for_the_live_peer_and_names_it() 
     }
     let rows = journal_rows(&world);
 
-    let second = world.execute(REQUEST_2, world.save(TICKET_A, &token));
+    // A save of the same ticket with its own content, which would write.
+    let second = world.execute(REQUEST_2, earlier_save(&world, &token));
     assert_eq!(
         (second.outcome, second.code, second.failure_class()),
         (
@@ -1216,7 +1217,8 @@ fn a_second_writer_waits_for_a_live_peer_then_answers_busy_naming_it() {
     let rows = journal_rows(&world);
     let commits = world.branch_commits(TICKET_A);
 
-    let second = world.execute(REQUEST_2, world.save(TICKET_A, &token));
+    // A save of the same ticket with its own content, which would write.
+    let second = world.execute(REQUEST_2, earlier_save(&world, &token));
     assert_eq!(
         (second.outcome, second.code, second.failure_class()),
         (
