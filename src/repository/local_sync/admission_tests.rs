@@ -429,20 +429,16 @@ fn every_later_closure_stage_refuses_and_terminal_history_grants_no_exception() 
 
 /// Table B of the fast-writes design ("Table B: what a pending row holds")
 /// at the `context sync-local` admission (`record.rs` `admit`, ~1008),
-/// through `begin_local_context_sync`. Written before the behaviour and
-/// ignored until the design checkpoint (Task 3). A local synchronization of
-/// an item is a sync on that item: a row of its own item holds it (Table
-/// B's first column), a row of another item does not unless it is of the
-/// whole repository (the second column); its own row keeps repository scope
+/// through `begin_local_context_sync`. Written before the behaviour (Task 3).
+/// A local synchronization of an item is a sync on that item that rewrites
+/// the index for the whole repository: a row of its own item holds it (Table
+/// B's first column), and so does any row mid-write (design decision 19,
+/// question 4), and the rows of the whole repository; a row of another item
+/// that owes only its hand-off does not. Its own row keeps repository scope
 /// as a row (decision 14), which the local begin's table pins.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
-    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
-    let mut mismatches = Vec::new();
-    // (row, whose: own item or another's, held)
-    for (row, own) in [
+    table_b_a_context_sync_local_admission_behind(&[
         ("R1/R2 mid-write", true),
         ("R1/R2 mid-write", false),
         (
@@ -459,15 +455,34 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
         ("R3 owes only its hand-off (indexing)", false),
         ("R3 owes only its hand-off (index_invalidated)", false),
         ("R3 owes only its hand-off (failed)", false),
-        ("R4 a sync's hand-off", true),
-        ("R4 a sync's hand-off", false),
-        ("R4/Q2 a primary sync's hand-off", false),
         ("R3 a comment waiting for its registration", true),
         ("R3 a comment waiting for its registration", false),
         ("R5 a running whole-repository refresh", false),
         ("R6 a crashed whole-repository refresh", false),
         ("R6 a rebuild", false),
-    ] {
+    ]);
+}
+
+/// `table_b_a_context_sync_local_admission_behind_each_pending_row`, behind
+/// the rows of a synchronization's index hand-off, which Task 16's hand-off
+/// rows (P-4) are written for.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_context_sync_local_admission_behind_each_synchronization_s_hand_off() {
+    table_b_a_context_sync_local_admission_behind(&[
+        ("R4 a sync's hand-off", true),
+        ("R4 a sync's hand-off", false),
+        ("R4/Q2 a primary sync's hand-off", false),
+    ]);
+}
+
+/// The admission table for `rows`: each row, of the synchronized item
+/// (`true`) or of another one, and whether it holds the admission.
+fn table_b_a_context_sync_local_admission_behind(rows: &[(&str, bool)]) {
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    let mut mismatches = Vec::new();
+    for &(row, own) in rows {
         let f = Fixture::new(AuthoringKind::Ticket);
         let item = if own {
             f.item.to_string()
@@ -499,8 +514,8 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
                 "authoring_destination_observed",
                 Some("authoring_destination_observed"),
             ),
-            // Its state not yet advanced: owing by the design's definition,
-            // mid-write by today's `owes_only_its_hand_off`.
+            // Its state not yet advanced: owing, by design decision 19,
+            // question 1.
             "R3 a committed write before its hand-off (authoring_checkpoint_observed)" => {
                 owing("authoring_checkpoint_observed")
             }
@@ -547,7 +562,8 @@ fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
                 rusqlite::params![OperationId::new().to_string(), action, target, row_item, state, step],
             )
             .unwrap();
-        let held = own || row.starts_with("R5") || row.starts_with("R6");
+        let held =
+            own || row.starts_with("R1/R2") || row.starts_with("R5") || row.starts_with("R6");
         let got = match f.begin(OperationId::new()) {
             Ok(_) => "proceeds".to_owned(),
             Err(error) if error.code() == ResultCode::RecoveryRequired => "held".to_owned(),

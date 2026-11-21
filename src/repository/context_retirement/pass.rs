@@ -378,8 +378,16 @@ pub(in super::super) fn is_parent(db: &Connection, ri: RequestId) -> Result<bool
     )
     .map_err(|_| recovery_required())
 }
+/// Whether debt blocks a poll's retirement pass before it retires anything:
+/// a local row that holds a call of the whole repository and of no one item
+/// (`holds`), which is what the pass is until each candidate's claim asks
+/// after its own item; or a remote operation's.
 pub(super) fn blocking_debt(db: &Connection, id: i64) -> Result<bool, RepositoryError> {
-    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE repository_id=?1 AND (state!='completed' OR completed_step='comment_registration_pending')) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let holds = crate::repository::recovery::holds_sql(
+        &crate::repository::recovery::CallScope::repository(),
+        "",
+    );
+    let pending:bool=db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE repository_id=?1 AND {holds}) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))"),[id],|r|r.get(0)).map_err(|_|recovery_required())?;
     Ok(pending || state::has_pending_conflict(db, id)?)
 }
 pub(in super::super) fn has_blocking_debt(

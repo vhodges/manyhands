@@ -1414,7 +1414,10 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
         .db()
         .query_row("SELECT id FROM repositories", [], |r| r.get::<_, i64>(0))
         .unwrap();
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_err());
+    // Asked by a call of the comment's own item, which the waiting comment
+    // holds.
+    let own = recovery::CallScope::item(&f.item);
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_err());
     let (again, state, indexing) = saved(
         f.service
             .retry_comment_publication(
@@ -1443,7 +1446,7 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
             .unwrap()
             .refresh_required
     );
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_ok());
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_ok());
 }
 
 #[test]

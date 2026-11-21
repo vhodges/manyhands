@@ -479,6 +479,49 @@ fn a_crash_after_the_commit_leaves_the_context_dirty_and_resume_completes_it() {
     assert_eq!(fixture.head(TICKET), commit);
 }
 
+/// The same crash does not hold a refresh of the whole repository (Table B:
+/// a write that owes only its hand-off): `index refresh` succeeds, with no
+/// wait, and indexes the save's dirty context as it indexes any other. It
+/// neither takes the row up nor changes it: the row stays open, owing its
+/// hand-off, for its own resume to close.
+#[test]
+fn a_whole_refresh_proceeds_past_a_crashed_save_and_indexes_it() {
+    let fixture = Fixture::with_context();
+    fixture.fail_at(FailurePoint::AfterCheckpointBeforeIndexStep);
+    let crashed = fixture.save(RequestId::new(), &fixture.save_input("Crashed save"));
+    assert_eq!(crashed.code, ResultCode::DiscoveryPending, "{crashed:?}");
+    let commit = crashed.effects.commit_oid.clone().expect("a commit");
+    let operation = crashed.operation_id.clone().expect("an operation");
+    let owing = fixture.row(&operation);
+    assert_eq!(fixture.mark(TICKET), Some(1));
+
+    let refreshed = fixture.execute(
+        RequestId::new(),
+        Mutation::IndexRefresh(IndexRefreshInput {
+            root: fixture.root.clone(),
+        }),
+    );
+    assert_eq!(
+        (refreshed.code, refreshed.effects.discovery),
+        (ResultCode::Ok, DiscoveryEffect::Current),
+        "{refreshed:?}"
+    );
+    assert_eq!(fixture.title(TICKET), Some("Crashed save".to_owned()));
+    assert_eq!(fixture.mark(TICKET), Some(0));
+    assert_eq!(
+        fixture.row(&operation),
+        owing,
+        "the refresh changed the row"
+    );
+    assert_eq!(fixture.head(TICKET), commit);
+
+    let resumed = fixture.resume(&operation);
+    assert_eq!(resumed.code, ResultCode::Ok, "{resumed:?}");
+    assert_eq!(fixture.row(&operation).0, "completed");
+    assert_eq!(fixture.status(), IndexStatusState::Current);
+    assert_eq!(fixture.head(TICKET), commit);
+}
+
 /// A save whose row records the context it owes, and that stops after
 /// writing its file and before its commit, leaves that context reading
 /// dirty though no mark was written and nothing committed. Its row is

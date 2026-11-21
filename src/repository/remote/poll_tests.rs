@@ -5811,32 +5811,34 @@ fn absent_target_is_classified_from_its_previous_evidence() {
     }
 }
 
+/// The item the rows of the poll guard's table are of.
+const TABLE_B_X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+/// A row of the poll guard's table: (row, action, target, item, state, step,
+/// held).
+type TableBSeeded = (
+    &'static str,
+    &'static str,
+    String,
+    Option<&'static str>,
+    &'static str,
+    Option<&'static str>,
+    bool,
+);
+
 /// Table B of the fast-writes design ("Table B: what a pending row holds")
 /// at a poll's guard (`require_no_pending_local`, poll.rs ~1674), through
-/// `poll_publication_remote`. Written before the behaviour and ignored
-/// until the design checkpoint (Task 3). The fixture's automatic poll still
-/// holds the reservation, so an explicit poll the guard lets through asks it
-/// to yield (`PollYielding`) before any transport; a held one is refused
-/// `recovery_required`. A whole-repository refresh, a poll and a rebuild wait
-/// for a row mid-write and for the rows of the whole repository, and go on
-/// past a row that owes only its hand-off.
+/// `poll_publication_remote`. Written before the behaviour (Task 3). The
+/// fixture's automatic poll still holds the reservation, so an explicit poll
+/// the guard lets through asks it to yield (`PollYielding`) before any
+/// transport; a held one is refused `recovery_required`. A whole-repository
+/// refresh, a poll and a rebuild wait for a row mid-write and for the rows of
+/// the whole repository, and go on past a row that owes only its hand-off.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_poll_s_guard_behind_each_pending_row() {
-    const X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    const X: &str = TABLE_B_X;
     let ticket = format!("authoring-context-v1/ticket/{X}/Edit\0.manyhands/tickets/{X}/ticket.md");
-    /// A row of the table: (row, action, target, item, state, step, held).
-    type Seeded = (
-        &'static str,
-        &'static str,
-        String,
-        Option<&'static str>,
-        &'static str,
-        Option<&'static str>,
-        bool,
-    );
-    let rows: Vec<Seeded> = vec![
+    let rows: Vec<TableBSeeded> = vec![
         (
             "R1/R2 mid-write",
             "save_ticket",
@@ -5847,8 +5849,8 @@ fn table_b_a_poll_s_guard_behind_each_pending_row() {
             true,
         ),
         (
-            // Its state not yet advanced: owing by the design's definition,
-            // mid-write by today's `owes_only_its_hand_off`.
+            // Its state not yet advanced: owing, by design decision 19,
+            // question 1.
             "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
             "save_ticket",
             ticket.clone(),
@@ -5894,24 +5896,6 @@ fn table_b_a_poll_s_guard_behind_each_pending_row() {
             false,
         ),
         (
-            "R4 a sync's hand-off",
-            "refresh",
-            format!("synchronization-index-v1/ticket/{X}/{OID}"),
-            Some(X),
-            "indexing",
-            Some("authoritative_observed"),
-            false,
-        ),
-        (
-            "R4/Q2 a primary sync's hand-off",
-            "refresh",
-            format!("synchronization-index-v1/primary/{OID}"),
-            None,
-            "indexing",
-            Some("authoritative_observed"),
-            false,
-        ),
-        (
             "R3 a comment waiting for its registration",
             "submit_comment",
             format!(
@@ -5950,6 +5934,41 @@ fn table_b_a_poll_s_guard_behind_each_pending_row() {
             true,
         ),
     ];
+    table_b_a_poll_s_guard_behind(rows);
+}
+
+/// `table_b_a_poll_s_guard_behind_each_pending_row`, behind the rows of a
+/// synchronization's index hand-off, which Task 16's hand-off rows (P-4) are
+/// written for.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_poll_s_guard_behind_each_synchronization_s_hand_off() {
+    const X: &str = TABLE_B_X;
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    let rows: Vec<TableBSeeded> = vec![
+        (
+            "R4 a sync's hand-off",
+            "refresh",
+            format!("synchronization-index-v1/ticket/{X}/{OID}"),
+            Some(X),
+            "indexing",
+            Some("authoritative_observed"),
+            false,
+        ),
+        (
+            "R4/Q2 a primary sync's hand-off",
+            "refresh",
+            format!("synchronization-index-v1/primary/{OID}"),
+            None,
+            "indexing",
+            Some("authoritative_observed"),
+            false,
+        ),
+    ];
+    table_b_a_poll_s_guard_behind(rows);
+}
+
+fn table_b_a_poll_s_guard_behind(rows: Vec<TableBSeeded>) {
     let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
     let mut mismatches = Vec::new();
     for (row, action, target, item, state, step, held) in rows {

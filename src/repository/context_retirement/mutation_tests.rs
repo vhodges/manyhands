@@ -3666,7 +3666,7 @@ fn table_b_poll_retirement_case(row: TableBRow, item: &'static str, dirty: bool)
 
 /// Table B of the fast-writes design ("Table B: what a pending row holds")
 /// at a poll's retirement pass (`poll --retire-completed`), written before
-/// the behaviour and ignored until the design checkpoint (Task 3). The pass
+/// the behaviour (Task 3). The pass
 /// runs the poll's guard (`poll.rs` ~1674), each candidate's capture
 /// (`source.rs` ~116), its blocking-debt question (`pass.rs` ~382) and then
 /// `retire_context_initial`: a clean present context is claimed through
@@ -3678,11 +3678,23 @@ fn table_b_poll_retirement_case(row: TableBRow, item: &'static str, dirty: bool)
 /// that item's retirement, its claim and its refusal alike; such a row of
 /// another item holds nothing.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_poll_retirement_pass_behind_each_pending_row() {
+    table_b_a_poll_retirement_pass_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_poll_retirement_pass_behind_each_pending_row`, behind the rows
+/// of a synchronization's hand-off, which Task 16's hand-off rows (P-4) are
+/// written for.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_poll_retirement_pass_behind_each_synchronization_s_hand_off() {
+    table_b_a_poll_retirement_pass_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_poll_retirement_pass_behind(keep: impl Fn(TableBRow) -> bool) {
     let mut mismatches = Vec::new();
     for dirty in [false, true] {
-        for row in TableBRow::all() {
+        for row in TableBRow::all().into_iter().filter(|row| keep(*row)) {
             for item in [ITEM, TABLE_B_OTHER] {
                 if item == ITEM && !row.of_an_item() {
                     continue;

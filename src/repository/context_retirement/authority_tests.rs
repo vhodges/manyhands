@@ -2332,8 +2332,9 @@ fn retirement_spec_s3_public_update_rejects_parent_and_observer_before_configura
 }
 
 // Table B of the fast-writes design ("Table B: what a pending row holds")
-// at a present context's retirement, written before the behaviour and
-// ignored until the design checkpoint (Task 3). The rows and what each holds
+// at a present context's retirement, written before the behaviour (Task 3);
+// the rows of a synchronization's hand-off stay ignored until Task 16 writes
+// them as rows of their item. The rows and what each holds
 // are `execution_tests::TableBRow`'s: a retirement waits for a row mid-write
 // of any item and for the rows of the whole repository, goes on past a row
 // of another item that owes only its hand-off, and is refused behind such a
@@ -2374,10 +2375,21 @@ fn table_b_label(row: TableBRow, item: &str) -> String {
 /// ~306), behind each row written before it: `Fixture::with_request(false)`
 /// with the rows seeded before its claim.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_present_context_s_claim_behind_each_pending_row() {
+    table_b_a_present_context_s_claim_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_present_context_s_claim_behind_each_pending_row`, behind the
+/// rows of a synchronization's hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_present_context_s_claim_behind_each_synchronization_s_hand_off() {
+    table_b_a_present_context_s_claim_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_present_context_s_claim_behind(keep: impl Fn(TableBRow) -> bool) {
     let mut mismatches = Vec::new();
-    for (row, item) in table_b_cases(|_| true) {
+    for (row, item) in table_b_cases(keep) {
         let root = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let git = git2::Repository::init(root.path()).unwrap();
@@ -2458,10 +2470,21 @@ fn table_b_a_present_context_s_claim_behind_each_pending_row() {
 /// retirement's observer holds the reservation, so a synchronization's
 /// hand-off row is seeded alone.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_claimed_retirement_s_next_write_behind_each_pending_row() {
+    table_b_a_claimed_retirement_s_next_write_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_claimed_retirement_s_next_write_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_claimed_retirement_s_next_write_behind_each_synchronization_s_hand_off() {
+    table_b_a_claimed_retirement_s_next_write_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_claimed_retirement_s_next_write_behind(keep: impl Fn(TableBRow) -> bool) {
     let mut mismatches = Vec::new();
-    for (row, item) in table_b_cases(|row| !row.is_remote_only()) {
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
         let f = Fixture::new();
         table_b_seed(&f.service, &f.request.root, row, item, false);
         let got = match f.service.remote_safe_point(
@@ -2492,10 +2515,21 @@ fn table_b_a_claimed_retirement_s_next_write_behind_each_pending_row() {
 /// reentry.rs ~144), behind each row written after its claim. A re-entry
 /// that goes on records its new owner epoch before it does anything else.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_retirement_s_reentry_behind_each_pending_row() {
+    table_b_a_retirement_s_reentry_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_retirement_s_reentry_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_retirement_s_reentry_behind_each_synchronization_s_hand_off() {
+    table_b_a_retirement_s_reentry_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_retirement_s_reentry_behind(keep: impl Fn(TableBRow) -> bool) {
     let mut mismatches = Vec::new();
-    for (row, item) in table_b_cases(|row| !row.is_remote_only()) {
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
         let f = Fixture::new();
         table_b_seed(&f.service, &f.request.root, row, item, false);
         let result = f.service.reenter_context_retirement_authenticated(
@@ -2541,10 +2575,21 @@ fn table_b_a_retirement_s_reentry_behind_each_pending_row() {
 /// `retire_context` under its ID), behind each row written after its claim.
 /// Recording the refusal ends the retirement with `external_change`.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_retirement_s_configuration_refusal_behind_each_pending_row() {
+    table_b_a_retirement_s_configuration_refusal_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_retirement_s_configuration_refusal_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_retirement_s_configuration_refusal_behind_each_synchronization_s_hand_off() {
+    table_b_a_retirement_s_configuration_refusal_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_retirement_s_configuration_refusal_behind(keep: impl Fn(TableBRow) -> bool) {
     let mut mismatches = Vec::new();
-    for (row, item) in table_b_cases(|row| !row.is_remote_only()) {
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
         let f = Fixture::new();
         let plan = f.owner.retirement_execution().unwrap().plan().clone();
         state::with_transaction(&f.service, &f.request.root, |tx, id| {

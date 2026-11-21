@@ -327,11 +327,15 @@ impl RepositoryService {
                 {
                     return Err(recovery_required());
                 }
-                recovery::require_no_pending_local(&tx, repository_id)?;
+                let call = recovery::CallScope::retirement(&request.item_id);
+                recovery::require_no_pending_local(&tx, repository_id, &call)?;
                 // A terminal remote row may still own discovery/reconciliation
                 // before a local handoff row exists. Its released reservation
                 // is not permission for a new retirement to settle that debt.
-                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [repository_id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+                // An index debt holds the retirement as a local row owing its
+                // hand-off would (`holds`): a synchronization's of this item,
+                // or a whole-repository operation's.
+                let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [repository_id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
                 if blocked {
                     return Err(recovery_required());
                 }

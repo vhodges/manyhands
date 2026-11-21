@@ -133,8 +133,22 @@ impl ObserverExecution {
             AND c.request_ulid IS ?11 AND c.batch_operation_ulid IS NULL AND a.request_attempt IS ?12 AND a.batch_attempt_epoch IS NULL
             AND c.configuration_generation=?7 AND c.remote_name=?8 AND c.primary_branch=?9 AND c.endpoint_digest=?10
             AND c.phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','local_absent','index_pending'))", params![self.operation.to_string(),id,self.root.to_str(),self.epoch,self.observer.map(|o|o.to_string()),self.observer_epoch,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice(),self.request_scope.request_id(),self.request_scope.attempt()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-        let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND (o.state!='completed' OR o.completed_step='comment_registration_pending'))
-          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR index_pending!=0 OR reconciliation_required!=0))", params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+        // Every other row that holds a retirement of the retired item.
+        let retired: Option<crate::canonical::ItemId> = tx
+            .query_row(
+                "SELECT item_id FROM context_retirement_records WHERE operation_ulid=?1",
+                [self.operation.to_string()],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(RepositoryError::sqlite)?
+            .and_then(|item| item.parse().ok());
+        let Some(retired) = retired.filter(|_| valid) else {
+            return Err(recovery_required());
+        };
+        let holds = recovery::holds_sql(&recovery::CallScope::retirement(&retired), "o.");
+        let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND {holds})
+          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR index_pending!=0 OR reconciliation_required!=0))"), params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
         if !valid || blocked {
             return Err(recovery_required());
         }
@@ -304,7 +318,11 @@ pub(in super::super) fn claim_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
+        recovery::require_no_pending_local(
+            tx,
+            id,
+            &recovery::CallScope::retirement(&request.item_id),
+        )?;
         let blocked: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
@@ -399,7 +417,11 @@ pub(in super::super) fn claim_initial(
         if !super::super::pass::unclaimed(tx, &request.operation_id.to_string(), scope)? {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
+        recovery::require_no_pending_local(
+            tx,
+            id,
+            &recovery::CallScope::retirement(&request.item_id),
+        )?;
         let c = &input.candidate;
         if super::super::pass::materialization(tx, id, c)? != c.materialization {
             return Err(recovery_required());
@@ -512,7 +534,11 @@ pub(in super::super) fn refuse_fresh_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
+        recovery::require_no_pending_local(
+            tx,
+            id,
+            &recovery::CallScope::retirement(&request.item_id),
+        )?;
         let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());

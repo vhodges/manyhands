@@ -143,7 +143,11 @@ impl RepositoryService {
             {
                 return Err(recovery_required());
             }
-            let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND (o.state!='completed' OR o.completed_step='comment_registration_pending')) OR EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=?1 AND ((o.operation_ulid IS NOT ?4 AND o.phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR o.index_pending!=0 OR o.reconciliation_required!=0))",params![id,request.root.to_str(),operation,old_observer],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+            let holds = crate::repository::recovery::holds_sql(
+                &crate::repository::recovery::CallScope::retirement(&request.item_id),
+                "o.",
+            );
+            let blocked:bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND {holds}) OR EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=?1 AND ((o.operation_ulid IS NOT ?4 AND o.phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR o.index_pending!=0 OR o.reconciliation_required!=0))"),params![id,request.root.to_str(),operation,old_observer],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
             if blocked {
                 return Err(recovery_required());
             }

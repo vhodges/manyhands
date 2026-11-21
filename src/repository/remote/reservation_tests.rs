@@ -1677,7 +1677,12 @@ fn local_recovery_guard_work_is_bounded_with_retained_history() {
             std::ptr::from_ref(&work).cast_mut().cast(),
         );
     }
-    let result = crate::repository::recovery::require_no_pending_local(&connection, 1);
+    // A poll's guard: a call of the whole repository.
+    let result = crate::repository::recovery::require_no_pending_local(
+        &connection,
+        1,
+        &crate::repository::recovery::CallScope::repository(),
+    );
     unsafe {
         rusqlite::ffi::sqlite3_progress_handler(connection.handle(), 0, None, std::ptr::null_mut());
     }
@@ -4850,8 +4855,9 @@ fn the_abandon_evidence_says_what_the_newest_look_saw_and_nothing_older() {
 // Table B of the fast-writes design ("Table B: what a pending row holds"),
 // at the reservation's checks: the guard `require_no_pending_local` as a new
 // reservation (`reserve_remote_operation_kind`), a held reservation's next
-// write (`owned`) and each restart ask it. Written before the behaviour and
-// ignored until the design checkpoint (Task 3). A held call is refused
+// write (`owned`) and each restart ask it. Written before the behaviour
+// (Task 3); the rows of a synchronization's hand-off stay ignored until
+// Task 16 writes them as rows of their item. A held call is refused
 // `recovery_required` naming the row; whether it would have waited first is
 // the caller's liveness judgement, after this check.
 
@@ -4869,8 +4875,7 @@ enum TableBRow {
     MidWrite,
     /// R3: a save of X whose commit is observed, owing only its hand-off in
     /// the state: `authoring_checkpoint_observed` (its state not yet advanced,
-    /// which today's `owes_only_its_hand_off` calls mid-write; the design's
-    /// definition makes it owing), or a hand-off state.
+    /// owing by design decision 19, question 1), or a hand-off state.
     Owing(&'static str),
     /// R4: a synchronization of X whose push landed and was classified (its
     /// remote row completed with `index_pending`), and its index hand-off
@@ -4892,6 +4897,7 @@ enum TableBRow {
     Rebuild,
 }
 
+/// Table B's rows of local operations.
 fn table_b_rows() -> Vec<TableBRow> {
     use TableBRow::*;
     vec![
@@ -4901,14 +4907,18 @@ fn table_b_rows() -> Vec<TableBRow> {
         Owing("indexing"),
         Owing("index_invalidated"),
         Owing("failed"),
-        SyncHandOff,
-        SyncIndexPendingOnly,
-        PrimaryHandOff,
         RegisteringComment,
         RunningRefresh,
         CrashedRefresh,
         Rebuild,
     ]
+}
+
+/// Table B's rows of a synchronization's index hand-off and its remote
+/// `index_pending` debt, which Task 16's hand-off rows (P-4) are written for.
+fn table_b_synchronization_rows() -> Vec<TableBRow> {
+    use TableBRow::*;
+    vec![SyncHandOff, SyncIndexPendingOnly, PrimaryHandOff]
 }
 
 fn table_b_context_target(item: &str) -> RemoteOperationTarget {
@@ -5184,10 +5194,21 @@ fn table_b_reservations() -> Vec<(
 /// `reserve_remote_operation_kind` (reservation.rs ~1557): a new reservation
 /// of a synchronization, a poll, a promotion or a close behind each row.
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_new_reservation_behind_each_pending_row() {
+    table_b_a_new_reservation_behind(table_b_rows());
+}
+
+/// `table_b_a_new_reservation_behind_each_pending_row`, behind each row of a
+/// synchronization's hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_new_reservation_behind_each_synchronization_s_hand_off() {
+    table_b_a_new_reservation_behind(table_b_synchronization_rows());
+}
+
+fn table_b_a_new_reservation_behind(rows: Vec<TableBRow>) {
     let mut mismatches = Vec::new();
-    for row in table_b_rows() {
+    for row in rows {
         for (call, target, own, wide) in table_b_reservations() {
             let (data, root, service) = fixture();
             let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -5213,10 +5234,21 @@ fn table_b_a_new_reservation_behind_each_pending_row() {
 /// of the synchronization's own item, or any row while a poll holds the
 /// reservation, cannot begin: the local begin refuses it.)
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_held_reservation_s_next_write_behind_each_pending_row() {
+    table_b_a_held_reservation_s_next_write_behind(table_b_rows());
+}
+
+/// `table_b_a_held_reservation_s_next_write_behind_each_pending_row`, behind
+/// each row of a synchronization's hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_held_reservation_s_next_write_behind_each_synchronization_s_hand_off() {
+    table_b_a_held_reservation_s_next_write_behind(table_b_synchronization_rows());
+}
+
+fn table_b_a_held_reservation_s_next_write_behind(rows: Vec<TableBRow>) {
     let mut mismatches = Vec::new();
-    for row in table_b_rows() {
+    for row in rows {
         let (data, root, service) = fixture();
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         let sync = table_b_seed_remote(&service, root.path(), row);
@@ -5257,8 +5289,19 @@ fn table_b_a_held_reservation_s_next_write_behind_each_pending_row() {
 /// (`restart_remote_operation_kind`, ~1970) and a promotion's
 /// (`restart_remote_lifecycle`, ~1308).
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_a_restart_behind_each_pending_row() {
+    table_b_a_restart_behind(table_b_rows());
+}
+
+/// `table_b_a_restart_behind_each_pending_row`, behind each row of a
+/// synchronization's hand-off.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_a_restart_behind_each_synchronization_s_hand_off() {
+    table_b_a_restart_behind(table_b_synchronization_rows());
+}
+
+fn table_b_a_restart_behind(rows: Vec<TableBRow>) {
     #[derive(Clone, Copy)]
     enum Restart {
         Sync,
@@ -5309,7 +5352,7 @@ fn table_b_a_restart_behind_each_pending_row() {
         ),
     ];
     let mut mismatches = Vec::new();
-    for row in table_b_rows() {
+    for row in rows {
         for (call, restart, target, own, wide) in &calls {
             // A row of X cannot stand while X's own sync is restarted from
             // a classified one: that sync replays.

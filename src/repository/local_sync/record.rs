@@ -1013,8 +1013,12 @@ fn admit(
     git: &git2::Repository,
     observation: &LocalContextSyncObservationDto,
 ) -> Result<Option<(OperationId, git2::Oid)>, ReadError> {
-    // Admission is intentionally one transaction with envelope creation.
-    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND (state!='completed' OR completed_step='comment_registration_pending')) OR EXISTS(SELECT 1 FROM document_promotions WHERE repository_id=?1 AND step NOT IN ('complete','abandoned','superseded'))",[repository_id],|r|r.get(0))?;
+    // Admission is intentionally one transaction with envelope creation. A
+    // local synchronization of the item rewrites the index for the whole
+    // repository (decision 14), so it is held by a row of its item, by any
+    // row mid-write, and by the rows of the whole repository (`holds`).
+    let holds = recovery::holds_sql(&recovery::CallScope::item(item).and_the_repository(), "");
+    let pending:bool=db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND {holds}) OR EXISTS(SELECT 1 FROM document_promotions WHERE repository_id=?1 AND step NOT IN ('complete','abandoned','superseded'))"),[repository_id],|r|r.get(0))?;
     if pending {
         return Err(ReadError::new(ResultCode::RecoveryRequired));
     }

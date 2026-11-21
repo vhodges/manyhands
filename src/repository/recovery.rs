@@ -1169,8 +1169,9 @@ pub(super) fn attribute_remote_row(
 /// The actions whose rows are each of one item: the authoring operations,
 /// which write the item's editing context and nothing of the primary
 /// worktree, of any other item's context or of the repository's
-/// configuration. A row of one of them that names its item holds only that
-/// item; see `Scope`.
+/// configuration. A row of one of them that names its item holds that item,
+/// and while it is mid-write the work of the whole repository; see `Scope`
+/// and `holds`.
 ///
 /// A local synchronization names its item too and is not one of them: its
 /// index step rewrites the whole index without an index claim, and its
@@ -1242,33 +1243,48 @@ pub(super) fn recorded_owed_contexts(
     })
 }
 
-/// Remote reservations cannot consume, replace or reinterpret local recovery.
+/// Refuses `call`, a call of the repository `repository_id` that begins
+/// no local row of its own (a remote operation's reservation, a
+/// retirement), while a pending local row `holds` it: remote operations and
+/// retirements cannot consume, replace or reinterpret local recovery. A
+/// row of the call's own item refuses it; see `holds` for the others.
 pub(super) fn require_no_pending_local(
     connection: &Connection,
     repository_id: i64,
+    call: &CallScope,
 ) -> Result<(), RepositoryError> {
-    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')
-        OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending')",
+    let holds = holds_sql(call, "");
+    let pending: bool = connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed' AND {holds})
+        OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending' AND {holds})"),
         [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if pending {
-        return Err(super::remote::state::recovery_required()
-            .with_blocker(first_pending_local(connection, repository_id)));
+        return Err(
+            super::remote::state::recovery_required().with_blocker(first_pending_local(
+                connection,
+                repository_id,
+                &holds,
+            )),
+        );
     }
     Ok(())
 }
 
 /// The operation of the oldest local row of the repository `repository_id`
-/// that `require_no_pending_local` is refused for, read by the two
-/// indexes the refusal itself reads. `None` when it names no operation or
-/// cannot be read: the refusal stands without a name.
-fn first_pending_local(connection: &Connection, repository_id: i64) -> Option<Blocker> {
+/// that `require_no_pending_local` is refused for, those `holds` selects,
+/// read by the two indexes the refusal itself reads. `None` when it names
+/// no operation or cannot be read: the refusal stands without a name.
+fn first_pending_local(
+    connection: &Connection,
+    repository_id: i64,
+    holds: &str,
+) -> Option<Blocker> {
     let first = |condition: &str| -> Option<(i64, Option<String>)> {
         connection
             .query_row(
                 &format!(
                     "SELECT id, operation_ulid FROM operation_records
                       WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1)
-                        AND {condition}
+                        AND {condition} AND {holds}
                       ORDER BY id LIMIT 1"
                 ),
                 [repository_id],
@@ -2116,10 +2132,11 @@ enum Pending {
     Another(Option<Blocker>),
 }
 
-/// What a row of the local journal holds while it is pending, and what a
-/// call that would begin or take up a row is of.
+/// What a row of the local journal is of while it is pending, and what a
+/// call that would begin or take up a row is of; `holds` decides what the
+/// row holds.
 ///
-/// The hold is per item for the `ITEM_ACTIONS`. Everything else is of
+/// The scope is per item for the `ITEM_ACTIONS`. Everything else is of
 /// the whole repository: the one discovery index, which a refresh or a
 /// rebuild rewrites for every context; the primary branch and its
 /// checkout, which an item's context is cut from; the registration and
@@ -2150,23 +2167,321 @@ impl Scope {
     }
 }
 
-/// The states of a row that an index owner may be at work under with no
-/// lease held: one that claimed it, or that a promotion fenced and that
-/// may claim it again. A claim fences only the row it claims, so no other
-/// row's claim stops that owner. Such a row is in every call's way, of
-/// whatever item: two index owners of one repository would each rewrite
-/// the whole index, and lose each other's work.
-const INDEX_OWNER_STATES: [&str; 2] = [INDEXING_STATE, "index_invalidated"];
+/// The states in which a pending row whose commit is observed owes only its
+/// index hand-off: the hand-off's own states (`HAND_OFF_STATES`), and the
+/// state a write records with its checkpoint, which a crash before the
+/// hand-off begins leaves (design decision 19, question 1). An index step
+/// that claimed a row (`indexing`), or that a promotion fenced
+/// (`index_invalidated`), stores only what a basis re-check under the lease
+/// still finds, so it rewrites no other context's rows and is in no other
+/// item's way.
+const OWING_STATES: [&str; 6] = [
+    "authoritative_observed",
+    INDEXING_STATE,
+    "index_invalidated",
+    "failed",
+    "retry",
+    "authoring_checkpoint_observed",
+];
 
-/// Whether a pending row of `scope` in `state` is in the way of a call of
-/// `call`, which may not take it up. Only a row of one item, in no index
-/// owner's state, is not in the way of a call of another item.
-fn is_in_the_way(state: &str, scope: &Scope, call: &Scope) -> bool {
-    INDEX_OWNER_STATES.contains(&state)
-        || match (scope, call) {
-            (Scope::Item(row), Scope::Item(call)) => row == call,
-            _ => true,
+/// A pending row of the local journal, as `holds` reads it: what it is of
+/// (its action, target and item) and where it stands (its state and last
+/// step). A row that has ended holds nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingRow {
+    pub(super) action: String,
+    pub(super) target: Option<String>,
+    pub(super) item_id: Option<String>,
+    pub(super) state: String,
+    pub(super) completed_step: Option<String>,
+}
+
+impl PendingRow {
+    /// Whether the row has not ended: it is not `completed`, or it is a
+    /// comment's that waits for its registration (see `NOT_ENDED`).
+    fn is_pending(&self) -> bool {
+        self.state != "completed" || waits_for_registration(&self.state, self.step())
+    }
+
+    /// Whether the row's commit is observed and all it still owes is its
+    /// index hand-off: its last step says the operation's own work is done
+    /// (`LocalStep::is_authoritative`), and its state is one of the
+    /// `OWING_STATES`, or it is a comment's that waits for its registration.
+    /// Any other pending row is mid-write.
+    ///
+    /// The step is asked as well as the state: a refresh that failed is in
+    /// one of these states with no work of its own recorded. This is wider
+    /// than `LocalRow::owes_only_its_hand_off`, which says whether a refresh
+    /// under the row's ID may complete it: a write stopped at its checkpoint
+    /// is completed by its own retry, which advances it to its hand-off.
+    fn owes_only_its_hand_off(&self) -> bool {
+        listed(self.step()).is_some_and(LocalStep::is_authoritative)
+            && (OWING_STATES.contains(&self.state.as_str())
+                || waits_for_registration(&self.state, self.step()))
+    }
+
+    fn step(&self) -> Option<&str> {
+        self.completed_step.as_deref()
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::of_row(&self.action, self.item_id.as_deref())
+    }
+
+    fn standing(&self, call: &CallScope) -> Standing {
+        match self.scope() {
+            Scope::Repository => Standing::WholeRepository,
+            Scope::Item(item) if call.own.as_deref() == Some(item.as_str()) => Standing::CallsItem,
+            Scope::Item(_) => Standing::AnotherItem {
+                owes_only_its_hand_off: self.owes_only_its_hand_off(),
+            },
         }
+    }
+}
+
+/// What a call is of, as `holds` reads it: the item it is of (its ID, or
+/// `primary` for the primary; none for a call of no one item), how far it
+/// reached before it began, and whether it is of the whole repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CallScope {
+    own: Option<String>,
+    reach: CallReach,
+    repository_wide: bool,
+}
+
+impl CallScope {
+    /// A write or a synchronization of `item`, which reads nothing of
+    /// another item.
+    pub(super) fn item(item: &crate::canonical::ItemId) -> Self {
+        Self::of_key(&super::discovery::ContextKey::Item(item.clone()))
+    }
+
+    /// A synchronization of the primary.
+    pub(super) fn primary() -> Self {
+        Self::of_key(&super::discovery::ContextKey::Primary)
+    }
+
+    /// A call of the whole repository and of no one item: a whole refresh,
+    /// a rebuild, a poll, a retirement pass before it has its candidates.
+    pub(super) fn repository() -> Self {
+        Self {
+            own: None,
+            reach: CallReach::OwnItem,
+            repository_wide: true,
+        }
+    }
+
+    /// A retirement of `item`'s context: of that item, and of the whole
+    /// repository, since it removes a context and claims the index for its
+    /// request (Table B's retirement column).
+    pub(super) fn retirement(item: &crate::canonical::ItemId) -> Self {
+        Self::item(item).and_the_repository()
+    }
+
+    /// The call of a remote operation of `target`. A poll is of the whole
+    /// repository; a synchronization of its item or of the primary; a close
+    /// or a promotion writes the primary, and is of the whole repository as
+    /// well. Their item's own rows are asked after by their own checks.
+    pub(super) fn of_remote(target: &super::RemoteOperationTarget) -> Self {
+        use super::RemoteOperationAction::{
+            Close, Poll, Promote, SynchronizeContext, SynchronizePrimary,
+        };
+        match (target.action(), target.item()) {
+            (SynchronizeContext, Some((_, item))) => Self::item(item),
+            (SynchronizePrimary, _) => Self::primary(),
+            (Promote | Close, _) => Self::primary().and_the_repository(),
+            (Poll | SynchronizeContext, _) => Self::repository(),
+        }
+    }
+
+    /// This call, of the whole repository as well as of its own item: one
+    /// that removes a context or rewrites the index for every context.
+    pub(super) fn and_the_repository(self) -> Self {
+        Self {
+            repository_wide: true,
+            ..self
+        }
+    }
+
+    fn of_key(key: &super::discovery::ContextKey) -> Self {
+        Self {
+            own: Some(key.encode()),
+            reach: CallReach::OwnItem,
+            repository_wide: false,
+        }
+    }
+
+    /// The call `begin_or_reconcile` makes of `scope`, the scope of the row
+    /// it takes up or would begin, having reached as far as `reach` says.
+    fn of_begin(scope: Scope, reach: CallReach) -> Self {
+        let call = match scope {
+            Scope::Item(item) => Self {
+                own: Some(item),
+                reach: CallReach::OwnItem,
+                repository_wide: false,
+            },
+            Scope::Repository => Self::repository(),
+        };
+        Self { reach, ..call }
+    }
+}
+
+/// How a pending row stands to a call: the two facts of it Table B decides
+/// on, whose it is and, for a row of another item, whether it is mid-write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Standing {
+    /// The row is of the whole repository; see `Scope`.
+    WholeRepository,
+    /// The row is of the item the call is of.
+    CallsItem,
+    /// The row is of another item.
+    AnotherItem { owes_only_its_hand_off: bool },
+}
+
+impl Standing {
+    const ALL: [Self; 4] = [
+        Self::WholeRepository,
+        Self::CallsItem,
+        Self::AnotherItem {
+            owes_only_its_hand_off: false,
+        },
+        Self::AnotherItem {
+            owes_only_its_hand_off: true,
+        },
+    ];
+
+    /// Table B: whether a pending row that stands so to `call` holds it.
+    /// A row of the call's own item holds it, and so does a row of the
+    /// whole repository. A row of another item holds it only while the row
+    /// is mid-write and the call is of the whole repository or was checked
+    /// against other items: a call that reads or rewrites what that row is
+    /// still writing. A row of another item that owes only its hand-off
+    /// holds nothing: its commit is there to be read, and a store of its
+    /// context checks its basis again under the lease.
+    fn holds(self, call: &CallScope) -> bool {
+        match self {
+            Self::WholeRepository | Self::CallsItem => true,
+            Self::AnotherItem {
+                owes_only_its_hand_off,
+            } => {
+                !owes_only_its_hand_off
+                    && (call.repository_wide || call.reach == CallReach::OtherItems)
+            }
+        }
+    }
+}
+
+/// Whether the pending row `row` holds `call`, which may not take it up:
+/// the one place Table B ("what a pending row holds") is decided. The SQL
+/// checks ask it through `holds_sql` and `holds_remote_index_debt_sql`.
+/// Whether a held call then waits (its holder live) or is refused at once
+/// (stale) is the liveness judgement's, after it.
+pub(super) fn holds(row: &PendingRow, call: &CallScope) -> bool {
+    row.is_pending() && row.standing(call).holds(call)
+}
+
+/// `holds` for a row of `operation_records`, as an SQL condition on its
+/// columns, each named `{columns}<column>`: `columns` is `""`, or an alias
+/// and a dot. It selects exactly the rows `holds` holds
+/// (`holds_agrees_with_table_b`).
+pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
+    let c = columns;
+    let of_an_item = format!(
+        "({c}item_id IS NOT NULL AND {c}action IN {})",
+        sql_list(&ITEM_ACTIONS)
+    );
+    let own = call.own.as_deref().map(sql_text);
+    let owes = format!(
+        "({c}completed_step IS NOT NULL AND {c}completed_step IN {steps}
+          AND ({c}state IN {states} OR ({c}state = 'completed' AND {c}completed_step = {registering})))",
+        steps = sql_list(&authoritative_steps()),
+        states = sql_list(&OWING_STATES),
+        registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
+    );
+    let rows = |standing: Standing| match standing {
+        Standing::WholeRepository => Some(format!("NOT {of_an_item}")),
+        Standing::CallsItem => own
+            .as_ref()
+            .map(|own| format!("({of_an_item} AND {c}item_id = {own})")),
+        Standing::AnotherItem {
+            owes_only_its_hand_off,
+        } => Some(format!(
+            "({of_an_item} AND {c}item_id IS NOT {} AND {}{owes})",
+            own.as_deref().unwrap_or("NULL"),
+            if owes_only_its_hand_off { "" } else { "NOT " }
+        )),
+    };
+    format!(
+        "(({c}state != 'completed' OR {c}completed_step IS {registering}) AND {held})",
+        registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
+        held = held_sql(call, rows)
+    )
+}
+
+/// `holds` for the index debt a remote operation's row keeps after it ended
+/// (`index_pending`), as an SQL condition on a row of
+/// `remote_operation_records`, its columns named as for `holds_sql`. Such a
+/// debt owes only its hand-off. A synchronization's is of its item, or of
+/// the primary (Table B's row of a synchronization's hand-off); any other
+/// remote operation's, a poll's, a promotion's or a close's, is handed off
+/// to a refresh of the whole repository, and is of the whole repository.
+pub(super) fn holds_remote_index_debt_sql(call: &CallScope, columns: &str) -> String {
+    let c = columns;
+    let item = format!(
+        "(CASE {c}action WHEN 'synchronize_context' THEN {c}item_id WHEN 'synchronize_primary' THEN {} END)",
+        sql_text(&super::discovery::ContextKey::Primary.encode())
+    );
+    let own = call.own.as_deref().map(sql_text);
+    let rows = |standing: Standing| match standing {
+        Standing::WholeRepository => Some(format!("{item} IS NULL")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{item} = {own}")),
+        Standing::AnotherItem {
+            owes_only_its_hand_off: true,
+        } => Some(format!(
+            "({item} IS NOT NULL AND {item} IS NOT {})",
+            own.as_deref().unwrap_or("NULL")
+        )),
+        // An index debt is never mid-write.
+        Standing::AnotherItem {
+            owes_only_its_hand_off: false,
+        } => None,
+    };
+    format!("({c}index_pending != 0 AND {})", held_sql(call, rows))
+}
+
+/// The rows of each `Standing` that holds `call`, as `rows` selects them,
+/// joined into one SQL condition: false when none does.
+fn held_sql(call: &CallScope, rows: impl Fn(Standing) -> Option<String>) -> String {
+    let held: Vec<String> = Standing::ALL
+        .into_iter()
+        .filter(|standing| standing.holds(call))
+        .filter_map(rows)
+        .collect();
+    if held.is_empty() {
+        "0".to_owned()
+    } else {
+        format!("({})", held.join(" OR "))
+    }
+}
+
+/// The steps `LocalStep::is_authoritative` accepts, as stored.
+fn authoritative_steps() -> Vec<&'static str> {
+    LocalStep::ALL
+        .into_iter()
+        .filter(|step| step.is_authoritative())
+        .map(LocalStep::as_str)
+        .collect()
+}
+
+/// `text` as an SQL string literal.
+fn sql_text(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// `items` as an SQL list of string literals.
+fn sql_list(items: &[&str]) -> String {
+    let items: Vec<String> = items.iter().map(|item| sql_text(item)).collect();
+    format!("({})", items.join(","))
 }
 
 /// How far a call that begins or takes up a row reached before it did.
@@ -2177,9 +2492,11 @@ pub(super) enum CallReach {
     OwnItem,
     /// It was checked against other items as the discovery index holds
     /// them, as a ticket save that sets `deps` or `parent` is for cycles
-    /// and kinds. Any unfinished row may hold a change the index does not
-    /// have yet, so the call is of the whole repository, whatever the
-    /// scope of the row it begins: every other pending row is in its way.
+    /// and kinds. A row of another item still mid-write may hold a change
+    /// that neither the index nor the disk has yet, so such a row holds the
+    /// call; one that owes only its hand-off has its commit on disk, where
+    /// the check reads every context whose basis moved, and does not. See
+    /// `holds`.
     OtherItems,
 }
 
@@ -2196,13 +2513,13 @@ pub(super) enum CallReach {
 /// `RepositoryService`'s checkpoint guard. Otherwise what the local
 /// journal holds pending, of what is in the call's way.
 ///
-/// A call that was checked against other items (`CallReach::OtherItems`)
-/// is of the whole repository. Any other call is of the scope of the row
-/// it would take up, when there is one: a refresh under a row's own ID,
-/// which is what `operation resume` runs for a row that owes only its
-/// hand-off, is of that row's item. Otherwise it is of the item its row
-/// would name, or of the whole repository; see `Scope`. A pending row of another item that no index
-/// owner may be at work under is not in its way, and is passed over.
+/// The call is of the scope of the row it would take up, when there is
+/// one: a refresh under a row's own ID, which is what `operation resume`
+/// runs for a row that owes only its hand-off, is of that row's item.
+/// Otherwise it is of the item its row would name, or of the whole
+/// repository; see `Scope`. It reached as far as `reach` says. Each other
+/// pending row, a comment's that waits for its registration among them, is
+/// in its way when it `holds` the call, and is passed over otherwise.
 fn in_the_way(
     connection: &Connection,
     root_path: &str,
@@ -2223,15 +2540,19 @@ fn in_the_way(
     struct Row {
         id: i64,
         operation_id: Option<String>,
-        action: String,
-        target: Option<String>,
-        item_id: Option<String>,
-        state: String,
+        row: PendingRow,
     }
+    // Each of the two kinds of row that has not ended, read by the index
+    // kept for it; a row is of one kind or the other.
     let pending = connection
         .prepare(
-            "SELECT id, operation_ulid, action, target, item_id, state FROM operation_records
-             WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
+            "SELECT id, operation_ulid, action, target, item_id, state, completed_step
+               FROM operation_records WHERE root_path = ?1 AND state != 'completed'
+             UNION ALL
+             SELECT id, operation_ulid, action, target, item_id, state, completed_step
+               FROM operation_records
+              WHERE root_path = ?1 AND completed_step = 'comment_registration_pending'
+             ORDER BY id",
         )
         .and_then(|mut statement| {
             statement
@@ -2239,50 +2560,58 @@ fn in_the_way(
                     Ok(Row {
                         id: row.get(0)?,
                         operation_id: row.get(1)?,
-                        action: row.get(2)?,
-                        target: row.get(3)?,
-                        item_id: row.get(4)?,
-                        state: row.get(5)?,
+                        row: PendingRow {
+                            action: row.get(2)?,
+                            target: row.get(3)?,
+                            item_id: row.get(4)?,
+                            state: row.get(5)?,
+                            completed_step: row.get(6)?,
+                        },
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(RepositoryError::sqlite)?;
-    // Whether the call takes the row up.
-    let compatible = |row: &Row| {
+    // Whether the row is the call's own: the row of its operation, or one
+    // it takes up.
+    let compatible = |Row {
+                          operation_id, row, ..
+                      }: &Row| {
         if tagged_local_binding {
-            row.operation_id.as_deref() == Some(requested)
+            operation_id.as_deref() == Some(requested)
                 && action == "refresh"
                 && row.action == action
                 && row.target.as_deref() == Some(target)
         } else {
-            row.operation_id.as_deref() == Some(requested)
+            operation_id.as_deref() == Some(requested)
                 && (same_lifecycle_action(&row.action, action)
                     || action == "refresh" && row.action != "refresh")
                 && (action == "refresh" || row.target.as_deref() == Some(target))
-                || row.operation_id.is_none()
+                || operation_id.is_none()
                     && matches!(
                         (row.action.as_str(), action),
                         ("refresh", "refresh") | ("rebuild", "rebuild")
                     )
         }
     };
-    let call = match reach {
-        CallReach::OtherItems => Scope::Repository,
-        CallReach::OwnItem => pending.iter().find(|row| compatible(row)).map_or_else(
-            || Scope::of_call(action, target),
-            |row| Scope::of_row(&row.action, row.item_id.as_deref()),
-        ),
-    };
+    // Whether the call takes the row up. A comment's row that waits for
+    // its registration is completed: its own call finds it as the row its
+    // ID has, below, as before.
+    let takes_up = |row: &Row| row.row.state != "completed" && compatible(row);
+    let call = CallScope::of_begin(
+        pending
+            .iter()
+            .find(|row| takes_up(row))
+            .map_or_else(|| Scope::of_call(action, target), |row| row.row.scope()),
+        reach,
+    );
     let mut matching = None;
     for row in &pending {
         if compatible(row) {
-            matching = Some(row.id);
-        } else if is_in_the_way(
-            &row.state,
-            &Scope::of_row(&row.action, row.item_id.as_deref()),
-            &call,
-        ) {
+            if takes_up(row) {
+                matching = Some(row.id);
+            }
+        } else if holds(&row.row, &call) {
             return Ok(Pending::Another(Blocker::local(
                 row.operation_id.as_deref(),
             )));
@@ -2298,7 +2627,8 @@ fn in_the_way(
 /// or a comment's synchronization whose hand-off is not yet due, with
 /// `RepositoryBusy` while an automatic poll holds the reservation, and
 /// with `RecoveryRequired` for any other remote operation that holds it,
-/// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
+/// or for a pending local row the refresh may not take up that `holds` it.
+/// It is the same test the refresh then makes,
 /// for a call that would otherwise change something first and find the
 /// refresh refused after. Nothing is written: the refresh, not this
 /// question, asks an automatic poll to yield.

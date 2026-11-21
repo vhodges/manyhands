@@ -314,7 +314,11 @@ pub(in super::super) fn owned(
                 owner.operation_id,
             )?;
         }
-        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+        crate::repository::recovery::require_no_pending_local(
+            tx,
+            repository_id,
+            &crate::repository::recovery::CallScope::of_remote(&record.target),
+        )?;
     }
     Ok(record)
 }
@@ -1305,7 +1309,11 @@ impl RepositoryService {
             if record.generation != state::generation(tx, id)? {
                 return Err(state::recovery_required());
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if let Some(other) = state::read_operation_rows(tx, id, true)?
                 .into_iter()
                 .find(|other| other.id != record.id)
@@ -1554,7 +1562,11 @@ impl RepositoryService {
             if local_id {
                 return Err(mismatch());
             }
-            crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                repository_id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if closure_holds_context(tx, repository_id, target)? {
                 return Ok(RemotePollReservationOutcome::Reservation(
                     RemoteReservationOutcome::Busy,
@@ -1967,7 +1979,11 @@ impl RepositoryService {
             ) {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if record.generation != state::generation(tx, id)?
                 || target.action() != RemoteOperationAction::Poll
                 || poll_kind == state::PollKind::Observe
@@ -3150,7 +3166,11 @@ impl RepositoryService {
             if foreign_conflict {
                 return Err(state::recovery_required());
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if record.generation != state::generation(tx, id)?
                 || record.sync_checkpoint.is_none()
                     && record.completed_step == Some(RemoteOperationSafePoint::BeforeLocalMutation)

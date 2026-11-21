@@ -1710,8 +1710,9 @@ pub(super) fn finish_configuration_refusal(
         epoch: i64,
         observer: Option<String>,
         observer_epoch: Option<i64>,
+        item_id: String,
     }
-    let row = tx.query_row("SELECT c.local_record_id,c.repository_id,c.owner_epoch,a.observer_operation_ulid,a.observer_owner_epoch
+    let row = tx.query_row("SELECT c.local_record_id,c.repository_id,c.owner_epoch,a.observer_operation_ulid,a.observer_owner_epoch,c.item_id
       FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id
       JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch
       JOIN remote_polling_state p ON p.repository_id=c.repository_id
@@ -1720,19 +1721,26 @@ pub(super) fn finish_configuration_refusal(
         AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL AND a.request_attempt IS NULL AND a.batch_attempt_epoch IS NULL
         AND c.worktree_removal='none' AND c.branch_removal='none' AND c.absence_basis='none'
         AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)",
-        params![operation,root.to_str()], |r| Ok(Selected { local_id: r.get(0)?, repository_id: r.get(1)?, epoch: r.get(2)?, observer: r.get(3)?, observer_epoch: r.get(4)? })).optional().map_err(RepositoryError::sqlite)?;
+        params![operation,root.to_str()], |r| Ok(Selected { local_id: r.get(0)?, repository_id: r.get(1)?, epoch: r.get(2)?, observer: r.get(3)?, observer_epoch: r.get(4)?, item_id: r.get(5)? })).optional().map_err(RepositoryError::sqlite)?;
     let Some(Selected {
         local_id,
         repository_id,
         epoch,
         observer,
         observer_epoch,
+        item_id,
     }) = row
     else {
         return Ok(None);
     };
-    let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=?1 AND id!=?2 AND (state!='completed' OR completed_step='comment_registration_pending'))
-      OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?3 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND operation_ulid IS NOT ?4)",
+    // Every other row that holds a retirement of the retired item.
+    let retired: crate::canonical::ItemId = item_id.parse().map_err(|_| recovery_required())?;
+    let holds = super::super::recovery::holds_sql(
+        &super::super::recovery::CallScope::retirement(&retired),
+        "",
+    );
+    let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=?1 AND id!=?2 AND {holds})
+      OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?3 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') AND operation_ulid IS NOT ?4)"),
       params![root.to_str(),local_id,repository_id,observer], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
     if blocked {
         return Err(recovery_required());

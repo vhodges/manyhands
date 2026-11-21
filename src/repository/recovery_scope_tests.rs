@@ -234,17 +234,17 @@ fn answer(seeds: &[Seed], call: Call) -> Answer {
             OperationId::parse(id).unwrap(),
         )
         .map(|()| Answer::Clear),
-        // Today's guard is asked with no call: it refuses behind any
-        // pending row. Task 14 passes it the call's scope (`CallScope`),
-        // and these arms pass the item each call is of.
+        // The guard is asked with the scope of the call: a poll is of the
+        // whole repository, a synchronization of its item or the primary, a
+        // retirement of its item and of the whole repository.
         Call::Poll | Call::Sync(_) | Call::Retire(_) => {
-            // The item the call is of, which today's guard is not given.
-            let _item: Option<&str> = match call {
-                Call::Sync(item) => item,
-                Call::Retire(item) => Some(item),
-                _ => None,
+            let scope = match call {
+                Call::Sync(Some(item)) => CallScope::item(&item.parse().unwrap()),
+                Call::Sync(None) => CallScope::primary(),
+                Call::Retire(item) => CallScope::retirement(&item.parse().unwrap()),
+                _ => CallScope::repository(),
             };
-            require_no_pending_local(&db, 1).map(|()| Answer::Clear)
+            require_no_pending_local(&db, 1, &scope).map(|()| Answer::Clear)
         }
     };
     match result {
@@ -783,9 +783,355 @@ fn a_row_begun_for_an_authoring_action_names_its_item() {
     }
 }
 
+/// Table B's rows, as the test of `holds` sorts a pending row into them.
+#[derive(Clone, Copy, Debug)]
+enum TableBRow {
+    /// R1, R2: a per-item write whose commit is not observed.
+    MidWrite,
+    /// R3, R4: a per-item write, or a synchronization, whose commit is
+    /// observed and that owes only its index hand-off.
+    OwesOnlyItsHandOff,
+    /// R5, R6: a row of the whole repository, which holds as today.
+    OfTheWholeRepository,
+}
+
+/// Table B's columns, as a call stands to a pending row of one item.
+#[derive(Clone, Copy, Debug)]
+enum TableBColumn {
+    /// C1: a write or synchronization of the row's own item, or its
+    /// retirement.
+    OwnItem,
+    /// C2: a write or synchronization of another item.
+    OtherItem,
+    /// C2, for a save of another item checked against the items the index
+    /// holds (`CallReach::OtherItems`), which waits for a row mid-write as
+    /// vh-bhepg's rule has it ("Reads that decide on other items").
+    OtherItemReachingOthers,
+    /// C3: a whole-repository refresh, a poll, a rebuild, or a call that
+    /// writes the primary as well (a close, a promotion).
+    WholeRepository,
+    /// C4: another item's retirement, and another item's `context
+    /// sync-local` (design decision 19, question 4).
+    OtherItemsRetirement,
+}
+
+/// Table B, cell by cell: whether a pending row holds a call.
+fn table_b(row: TableBRow, column: TableBColumn) -> bool {
+    use {TableBColumn::*, TableBRow::*};
+    match (row, column) {
+        // R5, R6: as today, in every call's way.
+        (OfTheWholeRepository, _) => true,
+        // C1: every row of the item holds its writes, syncs and retirement.
+        (_, OwnItem) => true,
+        // C2: another item's writes and syncs proceed.
+        (_, OtherItem) => false,
+        // C3, C4, and a save reaching other items: a row mid-write holds
+        // them, and one that owes only its hand-off does not.
+        (MidWrite, OtherItemReachingOthers | WholeRepository | OtherItemsRetirement) => true,
+        (OwesOnlyItsHandOff, OtherItemReachingOthers | WholeRepository | OtherItemsRetirement) => {
+            false
+        }
+    }
+}
+
+/// Where a local row in `state` whose last step is `step` stands in Table
+/// B, if it is pending: its commit observed, it owes only its hand-off
+/// ("`indexing`, `index_invalidated`, or a committed write before
+/// indexing", the states a hand-off that did not bring the index up to
+/// date leaves, and a comment that waits for its registration), or it is
+/// still mid-write. `None` for a row that has ended.
+fn table_b_row_of(state: &str, step: Option<&str>) -> Option<TableBRow> {
+    let registering = state == "completed" && step == Some("comment_registration_pending");
+    if state == "completed" && !registering {
+        return None;
+    }
+    // The steps after which the operation's own work is done and recorded.
+    let committed = matches!(
+        step,
+        Some(
+            "authoring_checkpoint_observed"
+                | "authoritative_observed"
+                | "initialization_committed"
+                | "publication_committed"
+                | "comment_registration_pending"
+                | "remote_changed"
+                | "context_branch_released"
+                | "context_retirement_absent"
+                | "context_retirement_preserved"
+        )
+    );
+    let handing_off = registering
+        || matches!(
+            state,
+            "authoring_checkpoint_observed"
+                | "authoritative_observed"
+                | "indexing"
+                | "index_invalidated"
+                | "failed"
+                | "retry"
+        );
+    Some(if committed && handing_off {
+        TableBRow::OwesOnlyItsHandOff
+    } else {
+        TableBRow::MidWrite
+    })
+}
+
+/// A call of the test of `holds`: its name, its scope, the item it is of
+/// (`primary` for the primary), and the column it is of for a row of
+/// another item.
+fn table_b_calls() -> Vec<(&'static str, CallScope, Option<&'static str>, TableBColumn)> {
+    use TableBColumn::*;
+    let x = ITEM_X.parse().unwrap();
+    let y = ITEM_Y.parse().unwrap();
+    vec![
+        (
+            "a write or sync of X",
+            CallScope::item(&x),
+            Some(ITEM_X),
+            OtherItem,
+        ),
+        (
+            "a write or sync of Y",
+            CallScope::item(&y),
+            Some(ITEM_Y),
+            OtherItem,
+        ),
+        (
+            "a save of X checked against other items",
+            CallScope {
+                reach: CallReach::OtherItems,
+                ..CallScope::item(&x)
+            },
+            Some(ITEM_X),
+            OtherItemReachingOthers,
+        ),
+        (
+            "a sync of the primary",
+            CallScope::primary(),
+            Some("primary"),
+            OtherItem,
+        ),
+        (
+            "a whole refresh, a poll, a rebuild or a retirement pass",
+            CallScope::repository(),
+            None,
+            WholeRepository,
+        ),
+        (
+            "a close or a promotion, which write the primary",
+            CallScope::primary().and_the_repository(),
+            Some("primary"),
+            WholeRepository,
+        ),
+        (
+            "a retirement of X",
+            CallScope::retirement(&x),
+            Some(ITEM_X),
+            OtherItemsRetirement,
+        ),
+        (
+            "context sync-local of X",
+            CallScope::item(&x).and_the_repository(),
+            Some(ITEM_X),
+            OtherItemsRetirement,
+        ),
+    ]
+}
+
+/// The one decision: `holds` gives Table B's answer for every state and
+/// step a row can hold, for a row of an item and of the whole repository,
+/// against every kind of call; `holds_sql` selects exactly the rows `holds`
+/// holds, its columns named alone or by an alias; and
+/// `holds_remote_index_debt_sql` holds a call behind a remote operation's
+/// index debt as `holds` holds it behind a row owing only its hand-off of
+/// the same item, or of the whole repository.
+#[test]
+fn holds_agrees_with_table_b() {
+    let states = [
+        "created",
+        "branch_observed",
+        "worktree_observed",
+        "comment_destination_prepared",
+        "authoring_destination_observed",
+        "comment_checkpoint_intent",
+        "authoring_checkpoint_observed",
+        "authoritative_observed",
+        "indexing",
+        "index_invalidated",
+        "failed",
+        "retry",
+        "observed",
+        "persisted",
+        "remote_changed",
+        "configuration_written",
+        "initialization_committed",
+        "publication_committed",
+        "local_sync_prepared",
+        "context_worktree_released",
+        "completed",
+        "a_state_of_a_later_build",
+    ];
+    let steps: Vec<Option<&str>> = std::iter::once(None)
+        .chain(LocalStep::ALL.into_iter().map(|step| Some(step.as_str())))
+        .chain([Some("a_step_of_a_later_build")])
+        .collect();
+    // (action, item, whose it is: the item's, or `None` for the whole
+    // repository's).
+    let mut rows: Vec<(&str, Option<&str>, Option<&str>)> = ITEM_ACTIONS
+        .into_iter()
+        .map(|action| (action, Some(ITEM_X), Some(ITEM_X)))
+        .collect();
+    rows.extend([
+        ("save_ticket", Some(ITEM_Y), Some(ITEM_Y)),
+        ("save_ticket", None, None),
+        ("refresh", None, None),
+        ("rebuild", None, None),
+        ("context_sync_local", Some(ITEM_X), None),
+        ("retire_context", None, None),
+        ("enable", None, None),
+        ("add_remote", None, None),
+    ]);
+
+    let db = Connection::open_in_memory().unwrap();
+    db.execute_batch(
+        "CREATE TABLE operation_records(id INTEGER PRIMARY KEY, action TEXT NOT NULL,
+             target TEXT, item_id TEXT, state TEXT NOT NULL, completed_step TEXT);
+         CREATE TABLE remote_operation_records(id INTEGER PRIMARY KEY, action TEXT NOT NULL,
+             item_id TEXT, index_pending INTEGER NOT NULL);",
+    )
+    .unwrap();
+    let mut seeded = Vec::new();
+    for &(action, item, whose) in &rows {
+        for state in states {
+            for &step in &steps {
+                db.execute(
+                    "INSERT INTO operation_records(action, target, item_id, state, completed_step)
+                     VALUES (?1, '', ?2, ?3, ?4)",
+                    params![action, item, state, step],
+                )
+                .unwrap();
+                let row = PendingRow {
+                    action: action.to_owned(),
+                    target: Some(String::new()),
+                    item_id: item.map(str::to_owned),
+                    state: state.to_owned(),
+                    completed_step: step.map(str::to_owned),
+                };
+                seeded.push((db.last_insert_rowid(), whose, row));
+            }
+        }
+    }
+    let selected = |sql: &str| -> std::collections::BTreeSet<i64> {
+        db.prepare(sql)
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+
+    for (call_name, call, of, column) in table_b_calls() {
+        let mut mismatches = Vec::new();
+        let mut held = std::collections::BTreeSet::new();
+        for (id, whose, row) in &seeded {
+            let expected = table_b_row_of(&row.state, row.completed_step.as_deref()).map(|cell| {
+                let cell = if whose.is_none() {
+                    TableBRow::OfTheWholeRepository
+                } else {
+                    cell
+                };
+                let column = if whose.is_some() && *whose == of {
+                    TableBColumn::OwnItem
+                } else {
+                    column
+                };
+                table_b(cell, column)
+            });
+            let got = holds(row, &call);
+            if got != expected.unwrap_or(false) {
+                mismatches.push(format!("{row:?}: Table B {expected:?}, holds {got}"));
+            }
+            if got {
+                held.insert(*id);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{call_name}:\n{}",
+            mismatches.join("\n")
+        );
+        assert_eq!(
+            selected(&format!(
+                "SELECT id FROM operation_records WHERE {}",
+                holds_sql(&call, "")
+            )),
+            held,
+            "{call_name}: holds_sql"
+        );
+        assert_eq!(
+            selected(&format!(
+                "SELECT o.id FROM operation_records o WHERE {}",
+                holds_sql(&call, "o.")
+            )),
+            held,
+            "{call_name}: holds_sql by an alias"
+        );
+    }
+
+    // A remote operation's index debt: a synchronization's owes only the
+    // hand-off of its item or of the primary; any other remote operation's
+    // is a whole-repository refresh. Each is held as `holds` holds a row
+    // of the same scope owing only its hand-off.
+    let owing = |item: Option<&str>| PendingRow {
+        action: "save_ticket".to_owned(),
+        target: None,
+        item_id: item.map(str::to_owned),
+        state: "authoritative_observed".to_owned(),
+        completed_step: Some("authoring_checkpoint_observed".to_owned()),
+    };
+    let mut remote = Vec::new();
+    for (action, item, scope) in [
+        ("synchronize_context", Some(ITEM_X), Some(ITEM_X)),
+        ("synchronize_context", Some(ITEM_Y), Some(ITEM_Y)),
+        ("synchronize_primary", None, Some("primary")),
+        ("poll", None, None),
+        ("promote", Some(ITEM_Z), None),
+        ("close", Some(ITEM_Z), None),
+    ] {
+        for index_pending in [0, 1] {
+            db.execute(
+                "INSERT INTO remote_operation_records(action, item_id, index_pending)
+                 VALUES (?1, ?2, ?3)",
+                params![action, item, index_pending],
+            )
+            .unwrap();
+            remote.push((db.last_insert_rowid(), scope, index_pending != 0));
+        }
+    }
+    for (call_name, call, _, _) in table_b_calls() {
+        let held: std::collections::BTreeSet<i64> = remote
+            .iter()
+            .filter(|(_, scope, debt)| *debt && holds(&owing(*scope), &call))
+            .map(|(id, _, _)| *id)
+            .collect();
+        for columns in ["", "r."] {
+            assert_eq!(
+                selected(&format!(
+                    "SELECT r.id FROM remote_operation_records r WHERE {}",
+                    holds_remote_index_debt_sql(&call, columns)
+                )),
+                held,
+                "{call_name}: holds_remote_index_debt_sql ({columns:?})"
+            );
+        }
+    }
+}
+
 // Table B of the fast-writes design (`docs/plans/2026-11-19-fast-writes-design.md`,
 // "Table B: what a pending row holds"), written before the behaviour it
-// pins and ignored until the design checkpoint (Task 3). A row holds a call
+// pins (Task 3). The rows of a synchronization's index hand-off stay
+// ignored until Task 16 writes them as rows of their item. A row holds a call
 // when it is of the call's own item, or of the whole repository; or when the
 // call is of the whole repository and the row does not owe only its
 // hand-off; or when the call reached other items and the row is mid-write.
@@ -810,15 +1156,14 @@ fn owing(item: &'static str, state: &'static str) -> Seed {
     }
 }
 
-/// The states of a row that owes only its hand-off, its commit observed:
-/// a committed write whose state has not advanced yet (state and step
-/// `authoring_checkpoint_observed`, which a crash between the checkpoint and
-/// the hand-off leaves; today's `owes_only_its_hand_off` calls it mid-write,
-/// the design's definition makes it owing, to be confirmed at the
-/// checkpoint), the hand-off begun before indexing, a claim by an index
+/// The states of Table B's R3 rows, a write that owes only its hand-off,
+/// its commit observed: a committed write whose state has not advanced yet
+/// (state and step `authoring_checkpoint_observed`, which a crash between
+/// the checkpoint and the hand-off leaves; owing, by design decision 19,
+/// question 1), the hand-off begun before indexing, a claim by an index
 /// owner (live or crashed), a fence, and what a hand-off that did not bring
 /// the index up to date leaves.
-const OWING_STATES: [&str; 5] = [
+const R3_STATES: [&str; 5] = [
     "authoring_checkpoint_observed",
     "authoritative_observed",
     "indexing",
@@ -918,25 +1263,65 @@ fn repository_wide_rows() -> Vec<(&'static str, Seed, bool)> {
     ]
 }
 
+/// The calls of Table B's columns, for a row of item X.
+const OWN_WRITE: Call = Call::Begin(SaveTicket, CALL, Target::Ticket(ITEM_X));
+const OTHER_WRITE: Call = Call::Begin(SaveTicket, CALL, Target::Ticket(ITEM_Y));
+const OTHER_ACROSS: Call = Call::Across(SaveTicket, CALL, Target::Ticket(ITEM_Y));
+const REFRESH: Call = Call::Begin(RefreshRepository, CALL, Target::Empty);
+const REBUILD: Call = Call::Begin(RebuildRepository, CALL, Target::Empty);
+const FOLDER: Call = Call::RefreshCanBegin(CALL);
+const RESUME: Call = Call::Begin(RefreshRepository, ROW_1, Target::Empty);
+
+/// The answer of a call a row holds: refused, naming the row.
+fn held() -> Answer {
+    Answer::Refused(Some(ROW_1))
+}
+
+/// The cells of a Table B table: each one's name, the rows it seeds, its
+/// call and the answer Table B gives it.
+#[derive(Default)]
+struct Cells(Vec<(String, Vec<Seed>, Call, Answer)>);
+
+impl Cells {
+    fn cell(
+        &mut self,
+        row: &str,
+        seed: &dyn Fn() -> Seed,
+        column: &str,
+        call: Call,
+        expected: Answer,
+    ) {
+        self.0
+            .push((format!("{row} | {column}"), vec![seed()], call, expected));
+    }
+
+    /// Asks each cell's call, and fails listing every cell whose answer is
+    /// not Table B's.
+    fn assert_answers(self) {
+        let mismatches: Vec<String> = self
+            .0
+            .into_iter()
+            .filter_map(|(what, seeds, call, expected)| {
+                let got = answer(&seeds, call);
+                (got != expected).then(|| format!("{what}: expected {expected:?}, got {got:?}"))
+            })
+            .collect();
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+}
+
+/// Table B's rows of local operations: a per-item write mid-write (R1, R2),
+/// one that owes only its hand-off (R3), a comment waiting for its
+/// registration (R3), and the rows of the whole repository (R5, R6).
 #[test]
-#[ignore = "fast writes: design checkpoint"]
 fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
     use Answer::{Begun, Clear, Refused, TakenUp};
-    use Target::{Empty, PrimaryIndex, SyncIndex, Ticket};
-
-    let held = || Refused(Some(ROW_1));
-    // The calls of Table B's columns, for a row of item X.
-    let own_write = Call::Begin(SaveTicket, CALL, Ticket(ITEM_X));
-    let other_write = Call::Begin(SaveTicket, CALL, Ticket(ITEM_Y));
-    let other_across = Call::Across(SaveTicket, CALL, Ticket(ITEM_Y));
-    let refresh = Call::Begin(RefreshRepository, CALL, Empty);
-    let rebuild = Call::Begin(RebuildRepository, CALL, Empty);
-    let folder = Call::RefreshCanBegin(CALL);
-    let resume = Call::Begin(RefreshRepository, ROW_1, Empty);
-
-    let mut cases: Vec<(String, Vec<Seed>, Call, Answer)> = Vec::new();
+    use Target::Ticket;
+    let (own_write, other_write, other_across) = (OWN_WRITE, OTHER_WRITE, OTHER_ACROSS);
+    let (refresh, rebuild, folder, resume) = (REFRESH, REBUILD, FOLDER, RESUME);
+    let mut cells = Cells::default();
     let mut cell = |row: &str, seed: &dyn Fn() -> Seed, column: &str, call: Call, expected| {
-        cases.push((format!("{row} | {column}"), vec![seed()], call, expected));
+        cells.cell(row, seed, column, call, expected);
     };
 
     // R1, R2: a per-item write mid-write. The lease tells live from stale.
@@ -993,7 +1378,7 @@ fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
     );
 
     // R3: a per-item write that owes only its hand-off, live or crashed.
-    for state in OWING_STATES {
+    for state in R3_STATES {
         let row = format!("R3 owes only its hand-off ({state})");
         let row = row.as_str();
         let seed = || owing(ITEM_X, state);
@@ -1041,6 +1426,104 @@ fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
         );
         cell(row, &seed, "C5 its own resume", resume, TakenUp);
     }
+
+    // A comment in `comment_registration_pending` owes only its hand-off:
+    // it holds its own item and nothing else.
+    let row = "R3 a comment waiting for its registration";
+    let seed = || registering_comment(ITEM_X);
+    cell(row, &seed, "C1 a write on its item", own_write, held());
+    cell(
+        row,
+        &seed,
+        "C1 its item's sync",
+        Call::Sync(Some(ITEM_X)),
+        held(),
+    );
+    cell(row, &seed, "C2 another item's write", other_write, Begun);
+    cell(
+        row,
+        &seed,
+        "C2 another item's write reaching other items",
+        other_across,
+        Begun,
+    );
+    cell(
+        row,
+        &seed,
+        "C2 another item's sync",
+        Call::Sync(Some(ITEM_Y)),
+        Clear,
+    );
+    cell(row, &seed, "C2 the primary's sync", Call::Sync(None), Clear);
+    cell(row, &seed, "C3 a whole refresh", refresh, Begun);
+    cell(row, &seed, "C3 a folder's refresh", folder, Clear);
+    cell(row, &seed, "C3 a poll", Call::Poll, Clear);
+    cell(
+        row,
+        &seed,
+        "C4 another item's retirement",
+        Call::Retire(ITEM_Y),
+        Clear,
+    );
+    cell(
+        row,
+        &seed,
+        "C4 its item's retirement",
+        Call::Retire(ITEM_X),
+        held(),
+    );
+
+    // R5, R6: the rows of the whole repository hold every call, as today.
+    for index in 0..repository_wide_rows().len() {
+        let seed = || repository_wide_rows().swap_remove(index).1;
+        let (row, _, named) = repository_wide_rows().swap_remove(index);
+        let refresh_held = || Refused(named.then_some(ROW_1));
+        cell(row, &seed, "C1/C2 an item's write", other_write, held());
+        cell(
+            row,
+            &seed,
+            "C2 an item's write reaching other items",
+            other_across,
+            held(),
+        );
+        cell(
+            row,
+            &seed,
+            "C2 an item's sync",
+            Call::Sync(Some(ITEM_Y)),
+            held(),
+        );
+        cell(
+            row,
+            &seed,
+            "C2 the primary's sync",
+            Call::Sync(None),
+            held(),
+        );
+        cell(row, &seed, "C3 a whole refresh", refresh, refresh_held());
+        cell(row, &seed, "C3 a rebuild", rebuild, held());
+        cell(row, &seed, "C3 a folder's refresh", folder, refresh_held());
+        cell(row, &seed, "C3 a poll", Call::Poll, held());
+        cell(row, &seed, "C4 a retirement", Call::Retire(ITEM_Y), held());
+    }
+
+    cells.assert_answers();
+}
+
+/// Table B's rows of a synchronization's index hand-off (R4, and R4 with
+/// Owner question 2 for the primary's), which Task 16's hand-off rows
+/// (P-4) are written for.
+#[test]
+#[ignore = "fast writes: design checkpoint"]
+fn table_b_what_a_synchronization_s_hand_off_holds_at_the_local_begin_and_the_remote_guard() {
+    use Answer::{Begun, Clear, TakenUp};
+    use Target::{PrimaryIndex, SyncIndex};
+    let (own_write, other_write, other_across) = (OWN_WRITE, OTHER_WRITE, OTHER_ACROSS);
+    let (refresh, rebuild, folder) = (REFRESH, REBUILD, FOLDER);
+    let mut cells = Cells::default();
+    let mut cell = |row: &str, seed: &dyn Fn() -> Seed, column: &str, call: Call, expected| {
+        cells.cell(row, seed, column, call, expected);
+    };
 
     // R4: a sync whose only debt is its per-item index hand-off.
     for state in ["indexing", "failed"] {
@@ -1150,92 +1633,5 @@ fn table_b_what_a_pending_row_holds_at_the_local_begin_and_the_remote_guard() {
         TakenUp,
     );
 
-    // A comment in `comment_registration_pending` owes only its hand-off:
-    // it holds its own item and nothing else.
-    let row = "R3 a comment waiting for its registration";
-    let seed = || registering_comment(ITEM_X);
-    cell(row, &seed, "C1 a write on its item", own_write, held());
-    cell(
-        row,
-        &seed,
-        "C1 its item's sync",
-        Call::Sync(Some(ITEM_X)),
-        held(),
-    );
-    cell(row, &seed, "C2 another item's write", other_write, Begun);
-    cell(
-        row,
-        &seed,
-        "C2 another item's write reaching other items",
-        other_across,
-        Begun,
-    );
-    cell(
-        row,
-        &seed,
-        "C2 another item's sync",
-        Call::Sync(Some(ITEM_Y)),
-        Clear,
-    );
-    cell(row, &seed, "C2 the primary's sync", Call::Sync(None), Clear);
-    cell(row, &seed, "C3 a whole refresh", refresh, Begun);
-    cell(row, &seed, "C3 a folder's refresh", folder, Clear);
-    cell(row, &seed, "C3 a poll", Call::Poll, Clear);
-    cell(
-        row,
-        &seed,
-        "C4 another item's retirement",
-        Call::Retire(ITEM_Y),
-        Clear,
-    );
-    cell(
-        row,
-        &seed,
-        "C4 its item's retirement",
-        Call::Retire(ITEM_X),
-        held(),
-    );
-
-    // R5, R6: the rows of the whole repository hold every call, as today.
-    for index in 0..repository_wide_rows().len() {
-        let seed = || repository_wide_rows().swap_remove(index).1;
-        let (row, _, named) = repository_wide_rows().swap_remove(index);
-        let refresh_held = || Refused(named.then_some(ROW_1));
-        cell(row, &seed, "C1/C2 an item's write", other_write, held());
-        cell(
-            row,
-            &seed,
-            "C2 an item's write reaching other items",
-            other_across,
-            held(),
-        );
-        cell(
-            row,
-            &seed,
-            "C2 an item's sync",
-            Call::Sync(Some(ITEM_Y)),
-            held(),
-        );
-        cell(
-            row,
-            &seed,
-            "C2 the primary's sync",
-            Call::Sync(None),
-            held(),
-        );
-        cell(row, &seed, "C3 a whole refresh", refresh, refresh_held());
-        cell(row, &seed, "C3 a rebuild", rebuild, held());
-        cell(row, &seed, "C3 a folder's refresh", folder, refresh_held());
-        cell(row, &seed, "C3 a poll", Call::Poll, held());
-        cell(row, &seed, "C4 a retirement", Call::Retire(ITEM_Y), held());
-    }
-
-    let mismatches: Vec<String> = cases
-        .into_iter()
-        .filter_map(|(what, seeds, call, expected)| {
-            let got = answer(&seeds, call);
-            (got != expected).then(|| format!("{what}: expected {expected:?}, today {got:?}"))
-        })
-        .collect();
-    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    cells.assert_answers();
 }

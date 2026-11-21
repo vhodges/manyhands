@@ -1671,7 +1671,11 @@ impl RepositoryService {
                 request.operation_id,
                 priority,
             )?;
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(&target),
+            )?;
             if state::has_pending_conflict(tx, id)? {
                 return Ok(false);
             }

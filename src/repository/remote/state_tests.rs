@@ -4746,7 +4746,11 @@ fn an_invalid_context_row_does_not_refuse_poll_remote_snapshot_or_history_reads(
         assert!(active.is_empty(), "{case}: {active:?}");
         // The poll's admission, and its record of a completed observation.
         with_transaction(&service, root.path(), |tx, id| {
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::repository(),
+            )?;
             complete_batch(tx, id, &plan(), 0, &[], 123)
         })
         .unwrap_or_else(|error| panic!("{case}: poll: {error}"));
