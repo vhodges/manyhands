@@ -220,10 +220,13 @@ fn refreshed_at_is_set_only_when_a_refresh_completes() {
     assert_eq!(refresh_required(data), [false]);
 
     // A later refresh that fails, and one that must be retried, leave the
-    // time of the last completed one alone.
+    // time of the last completed one alone. So does a write of one item,
+    // which indexes only the context it changed.
     index(data)
         .execute("UPDATE repositories SET refreshed_at = 17", [])
         .unwrap();
+    create_document_context(&never.service, root, DOCUMENT_A, "docs/written.md");
+    assert_eq!(refreshed_at(data), [Some(17)]);
     let operation_id = support::operation_id();
     let failing =
         support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data);
@@ -238,6 +241,7 @@ fn refreshed_at_is_set_only_when_a_refresh_completes() {
         RepositoryErrorKind::InjectedFailure
     );
     assert_eq!(refreshed_at(data), [Some(17)]);
+    support::items::write_again(&document);
     never.service.set_observation_hook_for_testing({
         let document = document.clone();
         move || fs::write(document, "changed again\n").unwrap()
@@ -1043,6 +1047,7 @@ fn a_migrated_index_lists_what_it_has_and_says_it_is_stale() {
             .any(|item| !item.unknown_metadata.is_empty())
     );
     let document = root.join("docs/a.md");
+    support::items::write_again(&root.join("docs/a.md"));
     service.set_observation_hook_for_testing(move || fs::write(document, "plain\n").unwrap());
     assert!(matches!(
         refresh(&service, root),
@@ -1811,6 +1816,7 @@ fn empty_never_refreshed_stale_and_degraded_are_four_results_and_one_failure() {
         &document_source(DOCUMENT_A, "A", ""),
     );
     refresh_completely(&stale_enabled.service, &stale_fixture.root);
+    support::items::write_again(&document);
     stale_enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, "plain\n").unwrap());
@@ -4977,6 +4983,7 @@ fn a_folder_made_while_a_refresh_observes_makes_the_refresh_try_again() {
     let repo = enabled.service.resolve_repository(root).unwrap();
 
     let second = root.join("docs/second");
+    support::items::write_again(&root.join(".manyhands/config.toml"));
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::create_dir_all(second).unwrap());

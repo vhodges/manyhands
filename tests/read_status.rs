@@ -172,6 +172,7 @@ fn index_status_of_an_interrupted_refresh_is_stale_and_says_why() {
         &document_source(DOCUMENT_A, "A", ""),
     );
     refresh_completely(&enabled.service, &fixture.root);
+    items::write_again(&document);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, "plain\n").unwrap());
