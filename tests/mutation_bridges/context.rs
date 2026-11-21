@@ -1359,10 +1359,17 @@ fn release_whose_refresh_fails_is_discovery_pending_and_resume_completes_it() {
     assert_eq!(contexts(&world), (vec![], vec![]));
     assert!(indexed(&world, &World::branch(items::TICKET_A)));
     world.reopen();
-    // Work on the whole repository waits for the row; another item's work
-    // does not.
+    // The row owes only its hand-off, so neither work on the whole
+    // repository nor another item's work waits for it (Table B, R3 x C3
+    // and C2): a whole refresh goes on, and the row stays pending for its
+    // own resume.
     let other = world.execute(REQUEST_3, refresh(&world));
-    assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
+    assert_eq!(
+        (other.outcome, other.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{other:?}"
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
     let made = world.execute(REQUEST_5, create_ticket(&world, TICKET_NEW));
     assert_ok(&made);
     assert_eq!(world.pending_journal_rows(), 1);

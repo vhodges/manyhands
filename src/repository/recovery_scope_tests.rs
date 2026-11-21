@@ -950,6 +950,16 @@ fn table_b_calls() -> Vec<(&'static str, CallScope, Option<&'static str>, TableB
     ]
 }
 
+/// A row the test of `holds` seeds, in every state and step: its action, the
+/// item it names, its target, and whose it is (the item's, `primary`, or
+/// `None` for the whole repository's).
+type HeldRow = (
+    &'static str,
+    Option<&'static str>,
+    Option<String>,
+    Option<&'static str>,
+);
+
 /// The one decision: `holds` gives Table B's answer for every state and
 /// step a row can hold, for a row of an item, of the primary (a
 /// synchronization's hand-off, P-4) and of the whole repository, against
@@ -988,10 +998,8 @@ fn holds_agrees_with_table_b() {
         .chain(LocalStep::ALL.into_iter().map(|step| Some(step.as_str())))
         .chain([Some("a_step_of_a_later_build")])
         .collect();
-    // (action, item, target, whose it is: the item's, `primary`, or `None`
-    // for the whole repository's).
     let empty = || Some(String::new());
-    let mut rows: Vec<(&str, Option<&str>, Option<String>, Option<&str>)> = ITEM_ACTIONS
+    let mut rows: Vec<HeldRow> = ITEM_ACTIONS
         .into_iter()
         .map(|action| (action, Some(ITEM_X), empty(), Some(ITEM_X)))
         .collect();
