@@ -179,17 +179,42 @@ pub(super) fn validate_comment_bindings(connection: &Connection) -> Result<(), R
         {
             return Err(failure());
         }
+        // The one local row under the synchronization's ID is its index
+        // hand-off: a refresh with the bound context's hand-off target at
+        // the authoritative commit (P-4), or with no target, as older builds
+        // began it.
+        let authoritative: Option<String> = connection
+            .query_row(
+                "SELECT r.authoritative_oid FROM remote_operation_records r
+                   JOIN repositories p ON p.id=r.repository_id
+                  WHERE r.operation_ulid=?1 AND p.root_path=?2",
+                params![binding.synchronization_id.to_string(), root],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| failure())?
+            .flatten();
+        let hand_off = authoritative.map(|oid| {
+            hand_off_target(
+                &format!(
+                    "{}/{}",
+                    super::authoring_kind_segment(&binding.kind),
+                    binding.item_id
+                ),
+                &oid,
+            )
+        });
         let invalid: bool = connection.query_row("SELECT
             NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
                 WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR target!='' OR root_path!=?3))
+            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?6) OR root_path!=?3))
             OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
             OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
                 AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
             OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
                 SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
             OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
-            params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string()], |r| r.get(0)).map_err(|_| failure())?;
+            params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string(),hand_off], |r| r.get(0)).map_err(|_| failure())?;
         if invalid {
             return Err(failure());
         }

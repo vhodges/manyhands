@@ -1270,37 +1270,76 @@ fn comment_publication_competing_plausible_checkpoints_require_recovery() {
 #[test]
 fn comment_publication_authoritative_child_allows_only_its_plain_refresh_and_reopen() {
     // Durable-authority shape is arranged here; actual SSH authority is Task 5.
-    let f = Fixture::new();
-    let (receipt, _, _) = saved(
-        f.service
-            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
-            .unwrap(),
-    );
-    f.configure_remote();
-    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
-    let target = RemoteOperationTarget::for_context(
-        &plan,
-        RemoteOperationAction::SynchronizeContext,
-        receipt.kind,
-        receipt.item_id.clone(),
-    )
-    .unwrap();
-    f.service
-        .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+    // The child's hand-off is its synchronization's replay, which refreshes
+    // under a row of the comment's item at the authoritative commit (P-4);
+    // a plain refresh under its ID with no target, as an older build began
+    // the hand-off, is still allowed.
+    for by_replay in [true, false] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        f.configure_remote();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            receipt.kind,
+            receipt.item_id.clone(),
+        )
         .unwrap();
-    f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
-        params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
-    assert!(matches!(
         f.service
-            .refresh_repository(RefreshRepositoryRequest {
-                root: f.root.path().into(),
-                operation_id: receipt.synchronization_id
-            })
-            .unwrap(),
-        RefreshOutcome::Refreshed { .. }
-    ));
-    RepositoryService::open_at(f.data.path()).unwrap();
-    assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=''", [receipt.synchronization_id.to_string()], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+            .unwrap();
+        f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
+            params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
+        let hand_off = if by_replay {
+            let synchronized = SynchronizationTarget::Context {
+                kind: receipt.kind,
+                item_id: receipt.item_id.clone(),
+            };
+            assert_eq!(
+                f.service
+                    .synchronize_remote(
+                        SynchronizeRemoteRequest {
+                            root: f.root.path().into(),
+                            operation_id: receipt.synchronization_id,
+                            target: synchronized.clone(),
+                            approval: None,
+                            confirmed_identity: None,
+                            restart: false,
+                        },
+                        &mut SessionCredentials::new(NoPrompt),
+                    )
+                    .unwrap(),
+                SynchronizationResult::Complete(SynchronizationOutcome::AlreadyCurrent {
+                    target: synchronized,
+                    oid: receipt.checkpoint_oid,
+                })
+            );
+            format!(
+                "synchronization-index-v1/{}/{}/{}",
+                authoring_kind_segment(&receipt.kind),
+                receipt.item_id,
+                receipt.checkpoint_oid
+            )
+        } else {
+            assert!(matches!(
+                f.service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: f.root.path().into(),
+                        operation_id: receipt.synchronization_id
+                    })
+                    .unwrap(),
+                RefreshOutcome::Refreshed { .. }
+            ));
+            String::new()
+        };
+        RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=?2", params![receipt.synchronization_id.to_string(), hand_off], |r| r.get::<_, i64>(0)).unwrap(), 1, "by replay: {by_replay}");
+    }
 }
 
 #[test]
