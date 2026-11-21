@@ -583,12 +583,27 @@ pub(super) struct ObservedRows {
 /// row a positive one), so a comment the index stores under the row it
 /// replaces is not presented with it. The rows of a context gone from disk,
 /// which no observation is given for, stay as they are stored.
+///
+/// The observations were made before `connection`'s session began, and a
+/// store can land between the two. A context whose stored indexed time is
+/// later than the start of its observation was stored from an observation
+/// begun after this one: its stored rows are newer than what was read, and
+/// they stay in place of it.
 pub(super) fn substitute_observed(
     connection: &Connection,
     repo: &ResolvedRepository,
     stored: &mut Vec<StoredItem>,
     observed: &[(ContextKey, ContextObservation)],
 ) -> Result<ObservedRows, ReadError> {
+    let indexed_at = stored_indexed_times(connection, repo.registration_id())?;
+    let observed: Vec<&(ContextKey, ContextObservation)> = observed
+        .iter()
+        .filter(|(key, observation)| {
+            indexed_at
+                .get(key)
+                .is_none_or(|indexed_at| *indexed_at <= observation.started_at_ns)
+        })
+        .collect();
     let replaced: BTreeSet<&ContextKey> = observed.iter().map(|(key, _)| key).collect();
     stored.retain(|row| {
         stored_context_key(repo, &row.context.worktree).is_none_or(|key| !replaced.contains(&key))
@@ -611,6 +626,34 @@ pub(super) fn substitute_observed(
         }
     }
     Ok(put)
+}
+
+/// When each context of the registration `registration_id` was last stored,
+/// in nanoseconds, by its key. A context stored with no indexed time, as an
+/// older build stored it, is not here.
+fn stored_indexed_times(
+    connection: &Connection,
+    registration_id: i64,
+) -> Result<BTreeMap<ContextKey, i64>, ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT item_id, indexed_at FROM contexts
+          WHERE repository_id = ?1 AND indexed_at IS NOT NULL",
+    )?;
+    let rows = statement
+        .query_map([registration_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(item_id, indexed_at)| {
+            let key = match item_id {
+                None => ContextKey::Primary,
+                Some(item_id) => ContextKey::Item(item_id.parse().ok()?),
+            };
+            Some((key, indexed_at))
+        })
+        .collect())
 }
 
 /// Each comment of `threads`, replies included, with the key `row_id` of the

@@ -934,7 +934,9 @@ impl RepositoryService {
     /// they are on disk, stand in for what the index holds of that context,
     /// before the effective copy of each item is chosen: the read sees them
     /// as it would see them stored by a refresh. The IDs their edges name are
-    /// known as comments as those of `named` are.
+    /// known as comments as those of `named` are. A context stored again from
+    /// a later observation since it was read keeps its stored rows
+    /// (`substitute_observed`).
     pub(super) fn read_tickets_naming<T>(
         &self,
         repo: &ResolvedRepository,
