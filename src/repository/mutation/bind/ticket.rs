@@ -384,6 +384,12 @@ impl TicketBinding {
     /// leaves the relationships alone is not refused for what they
     /// already are.
     ///
+    /// The check is against the index and, read from disk, each context
+    /// whose basis moved since the index stored it, so a relationship
+    /// committed outside Manyhands since the last refresh is seen. It runs
+    /// with no lease held: before a request is accepted, and on re-entry
+    /// before the domain call.
+    ///
     /// A request that is re-entered was checked when it was accepted, and
     /// another request may have written a relationship since that closes
     /// a cycle with this one's. Its relationships are checked again, and
