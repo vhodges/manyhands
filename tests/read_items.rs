@@ -1136,6 +1136,45 @@ fn an_item_with_an_active_worktree_is_read_from_it_and_an_unrefreshed_edit_is_st
 }
 
 #[test]
+fn an_items_own_worktree_is_its_context_with_or_without_the_file() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    write(
+        root,
+        "docs/primary.md",
+        &document_source(DOCUMENT_B, "Primary only", ""),
+    );
+    create_document_context(&enabled.service, root, DOCUMENT_A, "docs/active.md");
+    refresh_completely(&enabled.service, root);
+    let repo = enabled.service.resolve_repository(root).unwrap();
+    let has_context = |id: &str| enabled.service.item_has_context(&repo, &item_id(id));
+
+    assert!(has_context(DOCUMENT_A).unwrap());
+    assert!(!has_context(DOCUMENT_B).unwrap());
+    // An ID no context holds has none: that is an answer, not a failure.
+    assert!(!has_context(DOCUMENT_C).unwrap());
+
+    // The item's worktree loses the file. The index still holds it as an
+    // active context until a refresh sees the file gone, and then as one
+    // that is no valid item context. The answer does not change.
+    let worktree = context_worktree(root, DOCUMENT_A);
+    fs::remove_file(worktree.join("docs/active.md")).unwrap();
+    assert!(has_context(DOCUMENT_A).unwrap());
+    refresh_completely(&enabled.service, root);
+    assert!(has_context(DOCUMENT_A).unwrap());
+    assert_eq!(
+        enabled
+            .service
+            .show_item(&repo, &item_id(DOCUMENT_A))
+            .unwrap_err()
+            .code(),
+        ResultCode::ItemNotFound
+    );
+    assert!(!has_context(DOCUMENT_B).unwrap());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn an_edit_that_changes_only_the_body_is_stale_once_the_file_is_newer_than_the_refresh() {
     let (fixture, enabled) = enabled();
     let root = &fixture.root;

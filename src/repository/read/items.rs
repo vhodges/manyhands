@@ -2144,6 +2144,45 @@ impl RepositoryService {
         })
     }
 
+    /// Whether the index holds a context of this item's own: the worktree
+    /// and authoring branch made to edit it, at `.manyhands/worktrees/<ID>`.
+    /// An unknown ID has none.
+    ///
+    /// This is about the context, not about the copy `show_item` presents.
+    /// That copy is the primary's whenever the item's own worktree no longer
+    /// holds the file, so a copy of the primary's says nothing of whether
+    /// the item has a context. An item worktree counts here whether the
+    /// index holds it as an active context, as it does until a refresh sees
+    /// the file gone, or as one that is no valid item context, as it does
+    /// after (see `presents_context`): either way the item has a worktree of
+    /// its own, which a save would not be making.
+    ///
+    /// This reads the index and nothing else: a worktree removed outside
+    /// Manyhands is still one until the next refresh.
+    pub fn item_has_context(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+    ) -> Result<bool, ReadError> {
+        let item_id = id.to_string();
+        self.read_session(RepositoryOperation::Read, |connection| {
+            // A registration removed since the repository was resolved is
+            // `repository_not_registered`.
+            stored_index_state(connection, repo)?;
+            Ok(connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM contexts
+                                WHERE repository_id = ?1 AND item_id = ?2)",
+                rusqlite::params![repo.registration_id(), item_id],
+                |row| row.get(0),
+            )?)
+        })
+        .map_err(|error| {
+            let mut error = repo.failure(error);
+            error.scope.item_id = Some(item_id.clone());
+            error
+        })
+    }
+
     /// The file at exactly `path`, whether or not it is an item: the way to
     /// read a nonconforming entry, which has no ID.
     ///
