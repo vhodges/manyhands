@@ -438,7 +438,9 @@ impl TicketBinding {
             {
                 Err(ReadError::new(ResultCode::IndexUnavailable))
             } else {
-                service.check_ticket_relationships(repository, &self.id, &proposed)
+                service.check_ticket_relationships_reading_moved_contexts(
+                    repository, &self.id, &proposed,
+                )
             };
             let check = match (check, checking) {
                 (Ok(check), _) => Some(check),

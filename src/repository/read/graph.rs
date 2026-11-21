@@ -11,6 +11,9 @@
 //! graph from the effective copy of every ticket the index holds, and
 //! answers from that one snapshot. Nothing is stored: what a dependency
 //! resolves to and whether a ticket is ready are decided on every read.
+//! The relationship check a save makes also reads from disk, before its
+//! session, each context whose basis moved since the index stored it, and
+//! that context's tickets stand in for its stored ones (`MovedContexts`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -21,14 +24,20 @@ use super::{
     ReadinessState, ResolvedRepository, TicketFilter, UnplannableReasonCode, UnplannableReasonDto,
     UnplannableTicketDto,
     items::{
-        Related, StoredItem, behind, effective_rows, is_completely_observed, item_not_found,
-        stored_comment_targets, stored_comments_among, stored_index_state, stored_item_dto,
-        stored_items, stored_problems, ticket_list_order,
+        ObservedRows, Related, StoredItem, behind, effective_rows, is_completely_observed,
+        item_not_found, presented_comments, stored_comment_targets, stored_comments_among,
+        stored_index_state, stored_item_dto, stored_items, stored_problems, substitute_observed,
+        ticket_list_order,
     },
 };
 use crate::{
     canonical::ItemId,
-    repository::{RepositoryOperation, RepositoryService},
+    repository::{
+        RepositoryOperation, RepositoryService, StoredContexts,
+        activity::PrimaryActivityMap,
+        discovery::{self, ContextKey, ContextObservation},
+        load_activity_map,
+    },
 };
 
 /// How many of a cycle's IDs a reason names. Every ticket on a cycle
@@ -859,6 +868,52 @@ impl Tickets<'_> {
     }
 }
 
+/// The contexts whose basis moved since the index stored them, each as it is
+/// on disk now: what a save's relationship check reads in place of what the
+/// index holds of them. Nothing of it is stored.
+pub(super) struct MovedContexts(Vec<(ContextKey, ContextObservation)>);
+
+impl MovedContexts {
+    /// Compares the basis of every context of `repo`, the primary included,
+    /// with the one the index stores, by stat (`discovery::moved_contexts`),
+    /// and observes each that moved, as a refresh would. A context the index
+    /// owes an indexing, a dirty one among them, is taken to have moved. An
+    /// observation left dirty, of a context that changed while it was read,
+    /// is kept all the same: it is nearer what is on disk than the index is.
+    ///
+    /// The index is read and nothing is written to it, and the observation
+    /// hook a refresh runs before it stores is not run.
+    pub(super) fn observe(
+        service: &RepositoryService,
+        repo: &ResolvedRepository,
+    ) -> Result<Self, ReadError> {
+        let observe = || -> Result<Self, ReadError> {
+            let stored = service.read_session(RepositoryOperation::Read, |connection| {
+                Ok(StoredContexts::of(connection, repo.registration_id())?.bases())
+            })?;
+            let git = repo.open()?;
+            let mut observed = Vec::new();
+            for listed in discovery::moved_contexts(&git, repo.root(), &stored) {
+                // The primary's items take their commits from the map the
+                // index holds, brought to its head here and not stored.
+                let mut activity = match listed.key {
+                    ContextKey::Primary => load_activity_map(
+                        &service.registry_path,
+                        repo.root(),
+                        RepositoryOperation::Read,
+                    )?,
+                    ContextKey::Item(_) => PrimaryActivityMap::default(),
+                };
+                let observation =
+                    discovery::observe_context(&git, repo.root(), &listed, &mut activity);
+                observed.push((listed.key, observation));
+            }
+            Ok(Self(observed))
+        };
+        observe().map_err(|error| repo.failure(error))
+    }
+}
+
 impl RepositoryService {
     /// Runs `read` over the tickets the index holds, in one read session,
     /// so that the tickets and their edges are of one moment.
@@ -867,25 +922,40 @@ impl RepositoryService {
         repo: &ResolvedRepository,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
-        self.read_tickets_naming(repo, &[], read)
+        self.read_tickets_naming(repo, &[], None, read)
     }
 
     /// `read_tickets` for a read that is given IDs no stored edge may
     /// name: those of `named` that are the ID of a comment of a presented
-    /// copy are known as comments too. Nothing else differs, and with no
-    /// `named` nothing does.
+    /// copy are known as comments too. With no `named` nothing differs.
+    ///
+    /// With `moved`, the tickets and comments of each of its contexts, as
+    /// they are on disk, stand in for what the index holds of that context,
+    /// before the effective copy of each item is chosen: the read sees them
+    /// as it would see them stored by a refresh. The IDs their edges name are
+    /// known as comments as those of `named` are.
     pub(super) fn read_tickets_naming<T>(
         &self,
         repo: &ResolvedRepository,
         named: &[String],
+        moved: Option<&MovedContexts>,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
-            let stored = stored_items(connection, repo)?;
+            let mut stored = stored_items(connection, repo)?;
+            let observed = match moved {
+                Some(MovedContexts(moved)) => {
+                    substitute_observed(connection, repo, &mut stored, moved)?
+                }
+                None => ObservedRows::default(),
+            };
             let (rows, is_behind) = effective_rows(repo, &stored);
             let mut comments = stored_comment_targets(connection, repo, &rows)?;
-            comments.extend(stored_comments_among(connection, repo, &rows, named)?);
+            let named: BTreeSet<&String> = named.iter().chain(&observed.targets).collect();
+            let named: Vec<String> = named.into_iter().cloned().collect();
+            comments.extend(stored_comments_among(connection, repo, &rows, &named)?);
+            comments.extend(presented_comments(&rows, observed.comments));
             let related = Related::of(&rows, &comments);
             let complete =
                 is_completely_observed(ItemDtoKind::Ticket, &stored_problems(connection, repo)?);

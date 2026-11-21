@@ -7444,27 +7444,29 @@ impl StoredContexts {
             .map_err(|error| error.for_operation(operation, root))?;
         // One read of the marks, the rows and their problems.
         let transaction = connection.transaction().map_err(sqlite)?;
-        let owing = DirtyContexts::read(&transaction, repository_id).map_err(sqlite)?;
-        let valid: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM configuration_observations
-                                WHERE repository_id = ?1 AND state = 'valid')",
-                [repository_id],
-                |row| row.get(0),
-            )
-            .map_err(sqlite)?;
-        let mut statement = transaction
-            .prepare(&format!(
-                "SELECT item_id, basis, indexed_at, dirty != 0,
-                        EXISTS(SELECT 1 FROM problems
-                                WHERE problems.context_id = contexts.id
-                                  AND ({TRANSIENT_PROBLEM}
-                                       OR (contexts.item_id IS NULL
-                                           AND (problems.path = '.manyhands/worktrees'
-                                                OR problems.path LIKE '.manyhands/worktrees/%'))))
-                   FROM contexts WHERE repository_id = ?1"
-            ))
-            .map_err(sqlite)?;
+        Self::of(&transaction, repository_id).map_err(sqlite)
+    }
+
+    /// What `connection` stores of each context of the registration
+    /// `repository_id`, read in whatever transaction the caller holds it in.
+    fn of(connection: &rusqlite::Connection, repository_id: i64) -> rusqlite::Result<Self> {
+        let owing = DirtyContexts::read(connection, repository_id)?;
+        let valid: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM configuration_observations
+                            WHERE repository_id = ?1 AND state = 'valid')",
+            [repository_id],
+            |row| row.get(0),
+        )?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT item_id, basis, indexed_at, dirty != 0,
+                    EXISTS(SELECT 1 FROM problems
+                            WHERE problems.context_id = contexts.id
+                              AND ({TRANSIENT_PROBLEM}
+                                   OR (contexts.item_id IS NULL
+                                       AND (problems.path = '.manyhands/worktrees'
+                                            OR problems.path LIKE '.manyhands/worktrees/%'))))
+               FROM contexts WHERE repository_id = ?1"
+        ))?;
         let rows = statement
             .query_map([repository_id], |row| {
                 Ok((
@@ -7474,10 +7476,8 @@ impl StoredContexts {
                     row.get::<_, bool>(3)?,
                     row.get::<_, bool>(4)?,
                 ))
-            })
-            .map_err(sqlite)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sqlite)?;
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         let mut contexts = BTreeMap::new();
         for (item_id, basis, indexed_at, dirty, transient) in rows {
             let key = match item_id.map(|item_id| item_id.parse()) {
@@ -7505,6 +7505,21 @@ impl StoredContexts {
             contexts,
             every: owing.every,
         })
+    }
+
+    /// Each stored context with its basis and indexed time, as
+    /// `discovery::moved_contexts` compares them: with neither for one owed an
+    /// indexing, whatever its basis says, which is so taken to have moved.
+    fn bases(&self) -> Vec<(ContextKey, Option<(Basis, i64)>)> {
+        self.contexts
+            .iter()
+            .map(|(key, stored)| {
+                let basis = (!self.every && !stored.owed)
+                    .then(|| stored.basis.clone().zip(stored.indexed_at))
+                    .flatten();
+                (key.clone(), basis)
+            })
+            .collect()
     }
 
     /// Whether `context` may have changed since it was stored, and is to be

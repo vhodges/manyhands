@@ -785,6 +785,56 @@ pub(super) fn basis_holds(
     }
 }
 
+/// The contexts of the repository at `root` that may have changed since the
+/// index stored them, found by stat alone: what a read that decides on other
+/// items reads from disk instead of from the index. `stored` holds each
+/// context the index stores, with its basis and the time it was indexed at,
+/// or `None` for one with no basis, or one owed an indexing whatever its basis
+/// says (marked dirty, say).
+///
+/// Every context listing finds is compared, the primary included. One with no
+/// stored row or no stored basis has moved, and so has one whose stat basis
+/// differs from the stored one or holds a file modified too close to its
+/// indexed time for its stat to be trusted (`check`'s `Racy`). No file is
+/// hashed to settle that: reading such a context costs one read, and taking
+/// it as unchanged could pass what it holds now. A context the index stores
+/// that is gone from disk is not listed, and is not returned.
+///
+/// When the worktree base cannot be listed whole, the primary and each
+/// stored context that is still there (`listed_context`) are compared, so a
+/// context the index has never stored and that the listing missed is missed
+/// here too.
+pub(super) fn moved_contexts(
+    repository: &Repository,
+    root: &Path,
+    stored: &[(ContextKey, Option<(Basis, i64)>)],
+) -> Vec<ListedContext> {
+    let stored: BTreeMap<&ContextKey, Option<&(Basis, i64)>> = stored
+        .iter()
+        .map(|(key, basis)| (key, basis.as_ref()))
+        .collect();
+    let listed = list_contexts(repository, root).unwrap_or_else(|_| {
+        std::iter::once(ListedContext::primary(root))
+            .chain(
+                stored
+                    .keys()
+                    .filter(|key| ***key != ContextKey::Primary)
+                    .filter_map(|key| listed_context(root, key)),
+            )
+            .collect()
+    });
+    listed
+        .into_iter()
+        .filter(|listed| match stored.get(&listed.key).copied().flatten() {
+            Some((basis, indexed_at)) => {
+                let current = stat_basis(repository, root, listed, Some(basis), *indexed_at);
+                !matches!(check(basis, &current, *indexed_at), BasisCheck::Same)
+            }
+            None => true,
+        })
+        .collect()
+}
+
 /// Observes one context: stat, read and parse, stat again. When the second
 /// stat differs from the first (an editor or Git wrote while it read), it
 /// observes once more, and when that differs too, the observation it gives

@@ -20,14 +20,17 @@ use super::{
     DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
     ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto, ReadError, ReadinessState,
     RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
-    graph::{TicketGraph, TicketNode},
+    graph::{MovedContexts, TicketGraph, TicketNode},
     index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
     repository::{
-        DirtyContexts, GuardedFile, RepositoryOperation, RepositoryService,
-        discovery::{ContextKey, UnknownMetadata},
+        DirtyContexts, GuardedFile, RepositoryOperation, RepositoryService, activity_source_name,
+        authoring_kind_name, context_kind_name,
+        discovery::{
+            ContextKey, ContextObservation, ObservedCommentThread, ObservedItem, UnknownMetadata,
+        },
         mutation::absent_token,
     },
     results::{
@@ -237,6 +240,43 @@ impl From<&canonical::TicketRelationships> for Relationships {
                 })
                 .collect(),
         }
+    }
+}
+
+impl StoredItem {
+    /// The row a store of the context `observation` writes for its `item`,
+    /// as `stored_items` reads it back, under the key `row_id`. Each value
+    /// goes by the name the index stores it under, so the row is the one a
+    /// refresh would store.
+    fn observed(
+        observation: &ContextObservation,
+        item: &ObservedItem,
+        row_id: i64,
+    ) -> Result<Self, ReadError> {
+        Ok(Self {
+            row_id,
+            context: StoredContext {
+                kind: stored_context_kind(context_kind_name(observation.context.kind))?,
+                branch: observation.context.branch.clone(),
+                worktree: observation.context.worktree.to_string_lossy().into_owned(),
+                head_oid: observation.head.oid.map(|oid| oid.to_string()),
+            },
+            id: item.id.to_string(),
+            kind: ItemDtoKind::from_stored(authoring_kind_name(item.kind))
+                .ok_or_else(invalid_stored_data)?,
+            path: item.path.to_string_lossy().into_owned(),
+            title: item.title.clone(),
+            ticket_type: item.ticket_type.clone(),
+            status: item.status.clone(),
+            project: item.project.clone(),
+            team: item.team.clone(),
+            closed_at: item.closed_at.map(OffsetDateTime::unix_timestamp),
+            closed_by: item.closed_by.clone(),
+            unknown: item.unknown_metadata.clone(),
+            relationships: Relationships::from(&item.relationships),
+            activity_at: item.activity_at.unix_timestamp(),
+            change_source: stored_change_source(activity_source_name(item.activity_source))?,
+        })
     }
 }
 
@@ -476,7 +516,7 @@ pub(super) fn stored_comment_targets(
 /// Of `found`, each a comment's ID with the row of the item copy that holds
 /// it, the IDs of the comments a copy in `rows` holds and no item in `rows`
 /// has, each once.
-fn presented_comments(rows: &[&StoredItem], found: Vec<(i64, String)>) -> Vec<String> {
+pub(super) fn presented_comments(rows: &[&StoredItem], found: Vec<(i64, String)>) -> Vec<String> {
     let copies: BTreeSet<i64> = rows.iter().map(|row| row.row_id).collect();
     let items: BTreeSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
     let ids: BTreeSet<String> = found
@@ -520,6 +560,81 @@ pub(super) fn stored_comments_among(
         }
     }
     Ok(presented_comments(rows, found))
+}
+
+/// What `substitute_observed` put among the stored rows.
+#[derive(Default)]
+pub(super) struct ObservedRows {
+    /// The ID of each comment of a row it put in, with that row's key, as
+    /// `presented_comments` takes them.
+    pub(super) comments: Vec<(i64, String)>,
+    /// The `parent` and the `deps` of every row it put in, which may name a
+    /// comment no stored edge names.
+    pub(super) targets: Vec<String>,
+}
+
+/// Puts in `stored`, in place of what the index holds of each context of
+/// `observed`, the rows a store of that context's observation would write,
+/// as `stored_items` reads them back: none for a context the reads do not
+/// present (see `presents_context`), such as an item worktree that is not a
+/// valid item context. Nothing is written to the index.
+///
+/// A row put in has a negative key, which no stored row has (SQLite gives a
+/// row a positive one), so a comment the index stores under the row it
+/// replaces is not presented with it. The rows of a context gone from disk,
+/// which no observation is given for, stay as they are stored.
+pub(super) fn substitute_observed(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    stored: &mut Vec<StoredItem>,
+    observed: &[(ContextKey, ContextObservation)],
+) -> Result<ObservedRows, ReadError> {
+    let replaced: BTreeSet<&ContextKey> = observed.iter().map(|(key, _)| key).collect();
+    stored.retain(|row| {
+        stored_context_key(repo, &row.context.worktree).is_none_or(|key| !replaced.contains(&key))
+    });
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let mut put = ObservedRows::default();
+    let mut row_id = 0;
+    for (_, observation) in observed {
+        if !presents_context(context_kind_name(observation.context.kind), item_contexts) {
+            continue;
+        }
+        for item in &observation.items {
+            row_id -= 1;
+            let row = StoredItem::observed(observation, item, row_id)?;
+            let edges = &row.relationships;
+            put.targets
+                .extend(edges.parent.iter().chain(&edges.deps).cloned());
+            observed_comments(row_id, &item.comments, &mut put.comments);
+            stored.push(row);
+        }
+    }
+    Ok(put)
+}
+
+/// Each comment of `threads`, replies included, with the key `row_id` of the
+/// item row they are stored under.
+fn observed_comments(
+    row_id: i64,
+    threads: &[ObservedCommentThread],
+    into: &mut Vec<(i64, String)>,
+) {
+    for thread in threads {
+        into.push((row_id, thread.id.to_string()));
+        observed_comments(row_id, &thread.replies, into);
+    }
+}
+
+/// The context whose worktree a stored row names: the primary for the
+/// root, and an item's for its worktree under `.manyhands/worktrees/`.
+/// `None` for any other path.
+fn stored_context_key(repo: &ResolvedRepository, worktree: &str) -> Option<ContextKey> {
+    let directory = context_directory(repo, worktree)?;
+    match directory.file_name() {
+        None => Some(ContextKey::Primary),
+        Some(id) => id.to_str()?.parse().ok().map(ContextKey::Item),
+    }
 }
 
 /// The comments a complete read of the file `source` reads relationships
@@ -2390,6 +2505,43 @@ impl RepositoryService {
         id: &ItemId,
         proposed: &ProposedRelationships,
     ) -> Result<RelationshipCheckDto, ReadError> {
+        self.check_relationships_over(repo, id, proposed, None)
+    }
+
+    /// `check_ticket_relationships` as a save makes it, before it writes a
+    /// ticket's `deps` or `parent`: the basis of every context, the primary
+    /// included, is first compared by stat with the one the index stores,
+    /// and each context whose basis moved is read from disk, its tickets and
+    /// comments standing in the check for what the index holds of it. So a
+    /// cycle that a commit made outside Manyhands closes is found before the
+    /// next refresh. Nothing is written to the index: what was read is not
+    /// stored, and no context is marked.
+    ///
+    /// No lease is taken, and none is to be held by the caller: reading a
+    /// context is a scan, and no scan runs under the lease.
+    pub(crate) fn check_ticket_relationships_reading_moved_contexts(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+    ) -> Result<RelationshipCheckDto, ReadError> {
+        let moved = MovedContexts::observe(self, repo).map_err(|mut error| {
+            error.scope.item_id = Some(id.to_string());
+            error
+        })?;
+        self.check_relationships_over(repo, id, proposed, Some(&moved))
+    }
+
+    /// The check both of those make: over the index, with the contexts of
+    /// `moved`, when it is given, read from disk in place of what the index
+    /// holds of them.
+    fn check_relationships_over(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+        moved: Option<&MovedContexts>,
+    ) -> Result<RelationshipCheckDto, ReadError> {
         let id = id.to_string();
         let deps: BTreeSet<String> = proposed.deps.iter().map(ToString::to_string).collect();
         let parent = proposed.parent.as_ref().map(ToString::to_string);
@@ -2397,7 +2549,7 @@ impl RepositoryService {
         // has them, and the ones only the proposal names.
         let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
         let named: Vec<String> = named.into_iter().cloned().collect();
-        self.read_tickets_naming(repo, &named, |tickets| {
+        self.read_tickets_naming(repo, &named, moved, |tickets| {
             Ok(tickets
                 .related
                 .check(&id, deps, parent, tickets.index.clone(), tickets.complete))

@@ -1,4 +1,17 @@
+use git2::Repository;
+
 use super::*;
+use crate::{
+    repository::{
+        Mutation, MutationDataDto, ProposedRelationships, RelationshipWrite, TicketDraft,
+        TicketSaveInput,
+        basis::RACY_WINDOW_NS,
+        command_index_tests::{
+            Fixture, OTHER, TICKET, commit, item, ticket_path, ticket_source, write,
+        },
+    },
+    results::ResultCode,
+};
 
 /// A ticket of the graph. IDs here are short names: the graph compares
 /// them and nothing more.
@@ -872,4 +885,109 @@ fn made_ready_is_empty_with_no_dependents() {
         graph([closed("t", &[])]).made_ready("t"),
         Some((vec![], true))
     );
+}
+
+/// A comment on B, which only a commit made outside Manyhands adds.
+const COMMENT_ON_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD9";
+
+/// A save that sets a ticket's relationships checks them against every
+/// context, and reads from disk each one whose basis moved since the index
+/// stored it, writing nothing to the index; `ticket check` reads the index
+/// alone. A is the fixture's `TICKET` and B its `OTHER`, each in a worktree
+/// of its own. In each case a commit made in B's worktree with Git alone
+/// changes what B holds, so the index still holds B as it was.
+///
+/// Every context's indexed time is put past the racy window first, as if the
+/// index had been refreshed a while after the files were written, so that a
+/// context reads as moved only when its stat does.
+#[test]
+fn a_relationship_check_reads_a_moved_context_from_disk() {
+    // (case, the file committed in B's worktree and its text, what a save of
+    // A sets as its one dependency, and the code and IDs it is refused with)
+    let cases = [
+        (
+            "B comes to depend on A",
+            ticket_path(OTHER),
+            ticket_source(OTHER, "Other", &format!("deps:\n- {TICKET}\n")),
+            OTHER,
+            ResultCode::RelationshipCycle,
+            vec![TICKET, OTHER],
+        ),
+        (
+            "a comment on B is added",
+            format!(".manyhands/comments/{OTHER}/{COMMENT_ON_OTHER}.md"),
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
+                 id: {COMMENT_ON_OTHER}\nitem_id: {OTHER}\n\
+                 created_at: 2026-11-01T00:00:00Z\n---\nA comment.\n"
+            ),
+            COMMENT_ON_OTHER,
+            ResultCode::InvalidRelationship,
+            vec![COMMENT_ON_OTHER],
+        ),
+    ];
+    for (case, path, text, target, code, rejected) in cases {
+        let f = Fixture::new();
+        f.index()
+            .execute(
+                "UPDATE contexts SET indexed_at = indexed_at + ?1",
+                [5 * RACY_WINDOW_NS],
+            )
+            .unwrap();
+        let repo = f.service.resolve_repository(&f.root).unwrap();
+        let proposed = ProposedRelationships {
+            deps: vec![item(target)],
+            parent: None,
+        };
+
+        // With nothing changed since it was stored, no context is read.
+        let unmoved = f.watch(|| {
+            let check = f
+                .service
+                .check_ticket_relationships_reading_moved_contexts(&repo, &item(TICKET), &proposed)
+                .unwrap();
+            assert_eq!(check.rejection, None, "{case}");
+        });
+        assert!(unmoved.observed.is_empty(), "{case}: {:?}", unmoved.counts);
+
+        write(&f.worktree(OTHER), &path, &text);
+        commit(&Repository::open(f.worktree(OTHER)).unwrap(), &[&path]);
+        let index_only = f
+            .service
+            .check_ticket_relationships(&repo, &item(TICKET), &proposed)
+            .unwrap();
+        assert_eq!(index_only.rejection, None, "{case}");
+
+        let observation = f
+            .service
+            .show_item(&repo, &item(TICKET))
+            .unwrap()
+            .observation
+            .unwrap();
+        let saved = f.watch(|| {
+            let envelope = f.execute(Mutation::TicketSave(TicketSaveInput {
+                root: f.root.clone(),
+                id: item(TICKET),
+                draft: TicketDraft {
+                    title: "Ticket".to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: "open".to_owned(),
+                    project: None,
+                    team: None,
+                    body: "Body of Ticket.\n".to_owned(),
+                },
+                deps: RelationshipWrite::Set(vec![target.to_owned()]),
+                parent: RelationshipWrite::Unchanged,
+                observation,
+            }));
+            assert_eq!(envelope.code, code, "{case}: {envelope:?}");
+            let Some(MutationDataDto::Ticket(data)) = &envelope.data else {
+                panic!("{case}: no ticket data: {envelope:?}");
+            };
+            assert_eq!(data.rejected, rejected, "{case}");
+        });
+        // B alone moved, and was read; the index is as it was.
+        assert_eq!(saved.observed, BTreeSet::from(["OTHER"]), "{case}");
+        assert_eq!(saved.after, saved.before, "{case}");
+    }
 }
