@@ -3473,9 +3473,22 @@ fn sync_privacy_covers_live_wal_backup_rows_and_formatted_replay() {
     }
 }
 
+/// The one local row an authoritative synchronization's ID may hold is its
+/// index hand-off: a refresh with the primary's hand-off target at the
+/// authoritative commit (P-4), or with no target, as older builds began it.
+/// A row of any other action, target, root or registration under the ID is
+/// another operation's use of it.
 #[test]
 fn sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity() {
-    for refresh_state in ["created", "indexing", "failed", "completed"] {
+    let oid = sync_evidence().push_oid.unwrap();
+    let hand_offs = [
+        String::new(),
+        format!("synchronization-index-v1/primary/{oid}"),
+    ];
+    for (refresh_state, hand_off) in ["created", "indexing", "failed", "completed"]
+        .into_iter()
+        .flat_map(|state| hand_offs.iter().map(move |target| (state, target)))
+    {
         let (data, root, service) = fixture();
         let owner = sync_owner(&service, root.path());
         sync_push_prepared(&service, root.path(), &owner);
@@ -3494,7 +3507,7 @@ fn sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity(
             .classify_synchronization(root.path(), &owner, authority)
             .unwrap();
         let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-        connection.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'refresh','',?2,123 FROM repositories",params![owner.operation_id().to_string(),refresh_state]).unwrap();
+        connection.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'refresh',?3,?2,123 FROM repositories",params![owner.operation_id().to_string(),refresh_state,hand_off]).unwrap();
         assert!(
             matches!(service.reserve_remote_operation(root.path(),owner.operation_id(),&sync_target()).unwrap(),RemoteReservationOutcome::Replay(record) if record.authority()==Some(authority) && record.index_pending())
         );
@@ -3508,11 +3521,17 @@ fn sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity(
                 .is_none()
         );
         for corruption in [
-            "action='close'",
-            "target='other'",
-            "target=NULL",
-            "root_path='other-root'",
-            "repository_id=NULL",
+            "action='close'".to_owned(),
+            "target='other'".to_owned(),
+            "target=NULL".to_owned(),
+            "root_path='other-root'".to_owned(),
+            "repository_id=NULL".to_owned(),
+            // The hand-off of another commit, or of an item.
+            format!(
+                "target='synchronization-index-v1/primary/{}'",
+                git2::Oid::zero()
+            ),
+            format!("target='synchronization-index-v1/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV/{oid}'"),
         ] {
             connection
                 .execute(
@@ -3537,7 +3556,7 @@ fn sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity(
                     .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())
                     .is_err()
             );
-            connection.execute("UPDATE operation_records SET action='refresh',target='',root_path=(SELECT root_path FROM repositories WHERE id=1),repository_id=1 WHERE operation_ulid=?1",[owner.operation_id().to_string()]).unwrap();
+            connection.execute("UPDATE operation_records SET action='refresh',target=?2,root_path=(SELECT root_path FROM repositories WHERE id=1),repository_id=1 WHERE operation_ulid=?1",params![owner.operation_id().to_string(),hand_off]).unwrap();
         }
         service
             .finish_synchronization_index(root.path(), owner.operation_id(), &sync_target())

@@ -77,6 +77,26 @@ impl Entry {
     }
 }
 
+/// Whose synchronization holds the reservation a case meets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Peer {
+    /// A peer's publication of a comment on another item, the document.
+    Document,
+    /// A peer's synchronization of the entry's own item: a comment's on
+    /// `TICKET_A`, or for a repo sync the peer's own repo sync.
+    OwnItem,
+}
+
+impl Peer {
+    /// The action of the peer's synchronization, for `entry`.
+    fn action(self, entry: Entry) -> &'static str {
+        match (self, entry) {
+            (Self::OwnItem, Entry::RepoSync) => "synchronize_primary",
+            _ => "synchronize_context",
+        }
+    }
+}
+
 /// A world with a publication remote, ready for `entry`, whose reservation
 /// a peer's publication of a comment on another item, the document, holds:
 /// its synchronization reserved and stopped at the transport, and its row,
@@ -85,6 +105,11 @@ impl Entry {
 /// only `LIVE_PID` in the process table. Returns the peer's
 /// synchronization as well.
 fn held(entry: Entry, pid: u32) -> (World, Arc<StepClock>, String) {
+    held_by(entry, pid, Peer::Document)
+}
+
+/// `held`, with the reservation held by `peer`'s synchronization.
+fn held_by(entry: Entry, pid: u32, peer: Peer) -> (World, Arc<StepClock>, String) {
     let mut world = World::new();
     let added = world.execute(
         REQUEST_1,
@@ -109,32 +134,55 @@ fn held(entry: Entry, pid: u32) -> (World, Arc<StepClock>, String) {
         let saved = world.execute(REQUEST_3, world.save(TICKET_A, &token));
         assert_eq!(saved.code, ResultCode::Ok, "{saved:?}");
     }
-    let peer = world.execute(
-        PEER_REQUEST,
+    let comment_on = |kind, id: &str| {
         Mutation::CommentAdd(CommentAddInput {
             root: world.root.clone(),
-            kind: AuthoringKind::Document,
-            id: items::item_id(mutation::DOCUMENT),
+            kind,
+            id: items::item_id(id),
             comment_id: items::item_id(items::COMMENT_B),
             parent_id: None,
             body: "The peer's comment.\n".to_owned(),
             created_by: None,
-        }),
-    );
-    assert_eq!(
-        (peer.outcome, peer.code),
-        (Outcome::Partial, ResultCode::InternalError),
-        "{peer:?}"
-    );
-    let Some(MutationDataDto::Comment(comment)) = peer.data.as_ref() else {
-        panic!("the peer's comment: {peer:?}");
+        })
     };
-    let holder = comment.synchronization_id.clone();
+    let (mutation, command) = match (peer, entry) {
+        (Peer::Document, _) => (
+            comment_on(AuthoringKind::Document, mutation::DOCUMENT),
+            "comment add",
+        ),
+        (Peer::OwnItem, Entry::RepoSync) => (
+            Mutation::RepoSync(RepoSyncInput {
+                root: world.root.clone(),
+            }),
+            "repo sync",
+        ),
+        (Peer::OwnItem, _) => (comment_on(AuthoringKind::Ticket, TICKET_A), "comment add"),
+    };
+    let peer_answer = world.execute(PEER_REQUEST, mutation);
+    assert_eq!(
+        peer_answer.code,
+        ResultCode::InternalError,
+        "{peer_answer:?}"
+    );
+    let holder: String = items::index(world.data.path())
+        .query_row(
+            "SELECT operation_ulid FROM remote_operation_records",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if command == "comment add" {
+        assert_eq!(peer_answer.outcome, Outcome::Partial, "{peer_answer:?}");
+        let Some(MutationDataDto::Comment(comment)) = peer_answer.data.as_ref() else {
+            panic!("the peer's comment: {peer_answer:?}");
+        };
+        assert_eq!(comment.synchronization_id, holder);
+    }
     assert_eq!(
         left(&world, &holder).remote,
         [(
             true,
-            "synchronize_context".to_owned(),
+            peer.action(entry).to_owned(),
             "fetch_prepared".to_owned()
         )]
     );
@@ -143,7 +191,7 @@ fn held(entry: Entry, pid: u32) -> (World, Arc<StepClock>, String) {
         &holder,
         &operations::Attribution {
             request: Some(PEER_REQUEST),
-            command: Some("comment add"),
+            command: Some(command),
             author: None,
             host: Some(&manyhands::repository::this_host()),
             pid: Some(i64::from(pid)),
@@ -337,8 +385,9 @@ fn a_publication_whose_reservation_holder_finishes_inside_the_wait_goes_on() {
 /// owed (as `classify_synchronization` writes it), and its local
 /// `refresh` row under the same operation is `indexing` under its index
 /// owner's first epoch, with a heartbeat fresh by the waiting service's
-/// clock, for the process `pid` of this host. `data` is the world's data
-/// directory.
+/// clock, for the process `pid` of this host. The row is the
+/// synchronization's item's, or the primary's, at the published commit,
+/// and owes only its hand-off (P-4). `data` is the world's data directory.
 fn hand_off(data: &Path, holder: &str, pid: u32) {
     let changed = items::index(data)
         .execute(
@@ -353,12 +402,38 @@ fn hand_off(data: &Path, holder: &str, pid: u32) {
         )
         .unwrap();
     assert_eq!(changed, 1);
-    operations::insert_local(data, Some(holder), "refresh", "indexing", None);
+    let (kind, item): (Option<String>, Option<String>) = items::index(data)
+        .query_row(
+            "SELECT kind, item_id FROM remote_operation_records WHERE operation_ulid = ?1",
+            [holder],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let (target, owed) = match (&kind, &item) {
+        (Some(kind), Some(item)) => (format!("{kind}/{item}"), item.clone()),
+        _ => ("primary".to_owned(), "primary".to_owned()),
+    };
+    operations::insert_local(
+        data,
+        Some(holder),
+        "refresh",
+        "indexing",
+        Some("authoritative_observed"),
+    );
     let claimed = items::index(data)
         .execute(
-            "UPDATE operation_records SET target = '', index_owner_epoch = 1
+            "UPDATE operation_records
+                SET target = ?2, item_id = ?3, owed_contexts = ?4, index_owner_epoch = 1
               WHERE operation_ulid = ?1",
-            [holder],
+            rusqlite::params![
+                holder,
+                format!(
+                    "synchronization-index-v1/{target}/{}",
+                    operations::PUBLISHED_OID
+                ),
+                item,
+                format!(r#"["{owed}"]"#),
+            ],
         )
         .unwrap();
     assert_eq!(claimed, 1);
@@ -384,7 +459,9 @@ fn hand_off_begins(world: &World, holder: &str, pid: u32) -> impl FnOnce() + Sen
     move || hand_off(&data, &holder, pid)
 }
 
-/// What ends the peer's hand-off, to run inside a sleep of the waiting call.
+/// What ends the peer's hand-off, to run inside a sleep of the waiting call:
+/// its row completes, and its remote row owes its hand-off no more, as
+/// `finish_synchronization_index` records.
 fn hand_off_ends(world: &World, holder: &str) -> impl FnOnce() + Send + 'static {
     let data = world.data.path().to_owned();
     let holder = holder.to_owned();
@@ -397,6 +474,13 @@ fn hand_off_ends(world: &World, holder: &str) -> impl FnOnce() + Send + 'static 
             )
             .unwrap();
         assert_eq!(changed, 1);
+        let told = items::index(&data)
+            .execute(
+                "UPDATE remote_operation_records SET index_pending = 0 WHERE operation_ulid = ?1",
+                [&holder],
+            )
+            .unwrap();
+        assert_eq!(told, 1);
     }
 }
 
@@ -419,12 +503,15 @@ fn assert_names_the_hand_off(
 }
 
 /// A publication whose reservation is refused because a peer's local row is
-/// unfinished, here the index hand-off of a peer's synchronization just
-/// after it let the reservation go, waits for it as a writer's begin waits
-/// for a live row: it goes on once the hand-off ends inside its first
-/// sleep; while the hand-off stays live it answers `busy` naming the row
-/// after the whole budget, reserving nothing; and behind a row whose holder
-/// is gone it is answered `recovery_required` at once, naming it stale.
+/// unfinished, here the index hand-off of a peer's synchronization of the
+/// publication's own item just after it let the reservation go (Table B's
+/// first column: the hand-off is a row of its item, or of the primary,
+/// P-4), waits for it as a writer's begin waits for a live row: it goes on
+/// once the hand-off ends inside its first sleep; while the hand-off stays
+/// live it answers `busy` naming the row after the whole budget, reserving
+/// nothing; and behind a row whose holder is gone it is answered
+/// `recovery_required` at once, naming it stale. Behind another item's
+/// hand-off, the document's, it does not wait: it goes on at once.
 #[test]
 fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() {
     for entry in [Entry::ItemSync, Entry::RepoSync] {
@@ -432,21 +519,18 @@ fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() 
             Entry::CommentAdd | Entry::ItemSync => "synchronize_context",
             Entry::RepoSync => "synchronize_primary",
         };
+        let peer = Peer::OwnItem.action(entry);
         let holder_only = |world: &World, holder: &str| {
             assert_eq!(
                 left(world, holder).remote,
-                [(
-                    true,
-                    "synchronize_context".to_owned(),
-                    "completed".to_owned()
-                )],
+                [(true, peer.to_owned(), "completed".to_owned())],
                 "{entry:?}: nothing reserved"
             );
         };
 
         // The hand-off ends inside the first sleep: the call goes on, past
         // the reservation, to the transport.
-        let (world, clock, holder) = held(entry, LIVE_PID);
+        let (world, clock, holder) = held_by(entry, LIVE_PID, Peer::OwnItem);
         hand_off(world.data.path(), &holder, LIVE_PID);
         clock.at_sleep(1, hand_off_ends(&world, &holder));
         let answer = world.execute(REQUEST, entry.mutation(&world));
@@ -460,17 +544,13 @@ fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() 
             left(&world, &holder).remote,
             [
                 (false, action.to_owned(), "fetch_prepared".to_owned()),
-                (
-                    true,
-                    "synchronize_context".to_owned(),
-                    "completed".to_owned()
-                ),
+                (true, peer.to_owned(), "completed".to_owned()),
             ],
             "{entry:?}"
         );
 
         // The hand-off stays live: `busy` after the whole budget.
-        let (world, clock, holder) = held(entry, LIVE_PID);
+        let (world, clock, holder) = held_by(entry, LIVE_PID, Peer::OwnItem);
         hand_off(world.data.path(), &holder, LIVE_PID);
         let busy = world.execute(REQUEST, entry.mutation(&world));
         assert_eq!(clock.slept(), 5, "{entry:?}: {busy:?}");
@@ -489,7 +569,7 @@ fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() 
         holder_only(&world, &holder);
 
         // The hand-off's holder is gone: `recovery_required` at once.
-        let (world, clock, holder) = held(entry, LIVE_PID);
+        let (world, clock, holder) = held_by(entry, LIVE_PID, Peer::OwnItem);
         hand_off(world.data.path(), &holder, DEAD_PID);
         let refused = world.execute(REQUEST, entry.mutation(&world));
         assert_eq!(clock.slept(), 0, "{entry:?}: {refused:?}");
@@ -504,36 +584,56 @@ fn a_publication_refused_for_a_peer_s_hand_off_waits_while_its_holder_is_live() 
         );
         assert_names_the_hand_off(&refused, &holder, DEAD_PID, false, "stale");
         holder_only(&world, &holder);
+
+        // The document's hand-off, live, is another item's: the call goes
+        // on at once, past it, to the transport.
+        let (world, clock, holder) = held(entry, LIVE_PID);
+        hand_off(world.data.path(), &holder, LIVE_PID);
+        let answer = world.execute(REQUEST, entry.mutation(&world));
+        assert_eq!(clock.slept(), 0, "{entry:?}: {answer:?}");
+        assert_eq!(
+            answer.code,
+            ResultCode::InternalError,
+            "{entry:?}: {answer:?}"
+        );
+        assert_eq!(
+            left(&world, &holder).remote,
+            [
+                (false, action.to_owned(), "fetch_prepared".to_owned()),
+                (
+                    true,
+                    "synchronize_context".to_owned(),
+                    "completed".to_owned()
+                ),
+            ],
+            "{entry:?}"
+        );
     }
 }
 
 /// The incident, in full: two writers comment on two items, and the second
 /// one's publication meets the first one's synchronization. It waits while
 /// that synchronization holds the reservation; inside its first sleep the
-/// peer lets the reservation go and begins its index hand-off, and the next
-/// look is refused for the hand-off's row, which it waits for in turn, on
-/// the same budget. If the hand-off ends inside the second sleep the
-/// publication goes on; if it stays live the comment is answered `partial`
-/// / `busy` naming the hand-off, after five sleeps in all. Sent again, the
-/// same request (as the CLI's retry, or a person, sends it) waits the same
-/// way and goes on once the hand-off ends, and the comment is written once.
+/// peer lets the reservation go and begins its index hand-off, a row of the
+/// document (P-4), and the next look goes on past it to the transport: a
+/// publication waits for no other item's hand-off, live as it is. The
+/// comment is written once; sent again (as the CLI's retry, or a person,
+/// sends it), the same request writes nothing again.
 #[test]
-fn a_comment_s_publication_waits_through_a_peer_s_synchronization_and_its_hand_off() {
+fn a_comment_s_publication_waits_for_a_peer_s_synchronization_and_not_its_hand_off() {
     let entry = Entry::CommentAdd;
-
-    // The hand-off ends inside the second sleep.
-    let (world, clock, holder) = held(entry, LIVE_PID);
+    let (mut world, clock, holder) = held(entry, LIVE_PID);
     clock.at_sleep(1, hand_off_begins(&world, &holder, LIVE_PID));
-    clock.at_sleep(2, hand_off_ends(&world, &holder));
     let answer = world.execute(REQUEST, entry.mutation(&world));
-    assert_eq!(clock.slept(), 2, "{answer:?}");
+    assert_eq!(clock.slept(), 1, "{answer:?}");
     assert_eq!(
         (answer.outcome, answer.code),
         (Outcome::Partial, ResultCode::InternalError),
         "{answer:?}"
     );
+    let saved = left(&world, &holder);
     assert_eq!(
-        left(&world, &holder).remote,
+        saved.remote,
         [
             (
                 false,
@@ -547,31 +647,23 @@ fn a_comment_s_publication_waits_through_a_peer_s_synchronization_and_its_hand_o
             ),
         ]
     );
-
-    // The hand-off stays live: `partial` / `busy` naming it.
-    let (mut world, clock, holder) = held(entry, LIVE_PID);
-    clock.at_sleep(1, hand_off_begins(&world, &holder, LIVE_PID));
-    let busy = world.execute(REQUEST, entry.mutation(&world));
-    assert_eq!(clock.slept(), 5, "{busy:?}");
-    assert_eq!(
-        (busy.outcome, busy.code),
-        (Outcome::Partial, ResultCode::Busy),
-        "{busy:?}"
-    );
-    assert_eq!(recovery_actions(&busy), ["request.retry", "operation.show"]);
-    assert_names_the_hand_off(&busy, &holder, LIVE_PID, true, "live");
-    let saved = left(&world, &holder);
     assert_eq!(saved.commits, 1, "the comment is saved");
-    assert_eq!(saved.record, Some(RequestState::Accepted));
+    // The peer's hand-off is still at work: nothing ended it.
+    assert!(
+        saved.local.contains(&(
+            "refresh".to_owned(),
+            "indexing".to_owned(),
+            Some("authoritative_observed".to_owned())
+        )),
+        "{saved:?}"
+    );
 
-    // Sent again: it waits for the hand-off, which ends inside its first
-    // sleep, and goes on; nothing is written again.
+    // Sent again: nothing is written again.
     let again = StepClock::new();
     world.service = mutation::waiting_service(world.data.path(), &again)
         .with_process_probe_for_testing(Arc::new(operations::ProcessTable(vec![LIVE_PID])));
-    again.at_sleep(1, hand_off_ends(&world, &holder));
     let resent = world.execute(REQUEST, entry.mutation(&world));
-    assert_eq!(again.slept(), 1, "{resent:?}");
+    assert_eq!(again.slept(), 0, "{resent:?}");
     assert_eq!(
         (resent.outcome, resent.code),
         (Outcome::Partial, ResultCode::InternalError),

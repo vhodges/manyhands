@@ -1470,13 +1470,29 @@ fn a_synchronization_and_its_index_refresh_share_an_id_and_are_both_listed() {
     assert_eq!(alone.items[0].family, OperationFamily::Remote);
     assert_eq!(service.show_operation(&repo, id).unwrap(), alone.items[0]);
 
-    // The refresh that hands it to the index, as synchronization begins it.
-    insert_local(data, Some(OPERATION_A), "refresh", "indexing", None);
+    // The refresh that hands it to the index, as synchronization begins it:
+    // the primary's hand-off at the published commit (P-4), owing only its
+    // hand-off.
+    insert_local(
+        data,
+        Some(OPERATION_A),
+        "refresh",
+        "indexing",
+        Some("authoritative_observed"),
+    );
     items::index(data)
-        .execute("UPDATE operation_records SET target = ''", [])
+        .execute(
+            "UPDATE operation_records SET target = ?1",
+            [format!(
+                "synchronization-index-v1/primary/{}",
+                operations::PUBLISHED_OID
+            )],
+        )
         .unwrap();
 
     let list = service.list_operations(&repo).unwrap();
+    // It is reported as a refresh, of no item: the primary's.
+    assert_eq!(list.items[0].item_id, None);
     let pair: Vec<_> = list
         .items
         .iter()

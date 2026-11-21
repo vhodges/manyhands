@@ -1416,8 +1416,9 @@ fn authoritative_replay_remote_removed() -> Result<(), FixtureError> {
         fixed(case.service.synchronize_remote(req.clone(), &mut session))?,
         expected
     );
-    // A completed empty-target remote handoff still replays, without scan or
-    // new tagged local authority, even after removal/another clean local commit.
+    // A completed remote handoff still replays, without scan or new tagged
+    // local authority, even after removal/another clean local commit. Its
+    // row is the primary's handoff at the published commit (P-4).
     case.service.set_observation_hook_for_testing(|| {
         panic!("completed authoritative replay scanned discovery")
     });
@@ -1427,13 +1428,18 @@ fn authoritative_replay_remote_removed() -> Result<(), FixtureError> {
     );
     assert_eq!(case.fixture.accepted_keys().len(), effects);
     assert_eq!(target_state(&case.root, &case.root)?, before);
+    let (SynchronizationOutcome::Published { oid, .. }
+    | SynchronizationOutcome::AlreadyCurrent { oid, .. }) = pending.authoritative
+    else {
+        return Err(FixtureError);
+    };
     assert_eq!(
         fixed(db.query_row(
             "SELECT target FROM operation_records WHERE operation_ulid=?1",
             [req.operation_id.to_string()],
             |r| r.get::<_, String>(0)
         ))?,
-        ""
+        format!("synchronization-index-v1/primary/{oid}")
     );
     Ok(())
 }
