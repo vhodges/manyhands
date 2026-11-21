@@ -414,7 +414,9 @@ impl RepositoryService {
     /// rows of each of them that is gone are deleted and the retirement is
     /// finalized. Nothing is observed or stored. A context that is still
     /// there, as a preserving abandon's may be, keeps its rows and the mark
-    /// the retirement gave them, for the next refresh. A promotion's fence of
+    /// the retirement gave them, for the next refresh. One that is there with
+    /// nothing stored for it read as owed only by this row's list, so the
+    /// repository is marked behind as a whole. A promotion's fence of
     /// the claim is met as a refresh meets it, with one more pass under a
     /// fresh epoch of the row.
     pub(in super::super) fn index_retirement_claimed(
@@ -432,8 +434,10 @@ impl RepositoryService {
         })
     }
 
-    /// One pass of `index_retirement_claimed`. A failure before its
-    /// transaction leaves the row `failed`, as a refresh's does.
+    /// One pass of `index_retirement_claimed`. The test hook
+    /// `set_refresh_persist_hook_for_testing` runs before its store, as a
+    /// refresh's does. A failure before its transaction leaves the row
+    /// `failed`, as a refresh's does.
     fn delete_retired_contexts(
         &self,
         root: &std::path::Path,
@@ -443,6 +447,7 @@ impl RepositoryService {
     ) -> Result<(), RepositoryError> {
         use crate::repository::{FailurePoint, RepositoryOperation, discovery, recovery};
         let operation = RepositoryOperation::RefreshRepository;
+        self.run_refresh_persist_hook(operation, root)?;
         if let Err(error) =
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, root)
         {
@@ -468,6 +473,10 @@ impl RepositoryService {
             if discovery::listed_context(root, context).is_none() {
                 crate::repository::delete_context_rows(&transaction, repository_id, context)
                     .map_err(sqlite)?;
+            } else if !stored_context(&transaction, repository_id, context).map_err(sqlite)? {
+                // Only this row's list made it read as owed: once the row
+                // completes, the repository is what says so.
+                crate::repository::mark_repository_behind(&transaction, repository_id)?;
             }
         }
         if !record::finalize_index(&transaction, owner.clone(), repository_id, root)?
@@ -477,6 +486,28 @@ impl RepositoryService {
             return Err(crate::repository::nonowner_error(root));
         }
         transaction.commit().map_err(sqlite)
+    }
+}
+
+/// Whether the index stores anything for the context `key` of the
+/// registration `repository_id`.
+fn stored_context(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    key: &crate::repository::discovery::ContextKey,
+) -> rusqlite::Result<bool> {
+    use crate::repository::discovery::ContextKey;
+    match key {
+        ContextKey::Primary => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM contexts WHERE repository_id = ?1 AND item_id IS NULL)",
+            [repository_id],
+            |row| row.get(0),
+        ),
+        ContextKey::Item(item_id) => connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM contexts WHERE repository_id = ?1 AND item_id = ?2)",
+            params![repository_id, item_id.to_string()],
+            |row| row.get(0),
+        ),
     }
 }
 

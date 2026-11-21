@@ -2575,3 +2575,86 @@ fn table_b_a_retirement_s_configuration_refusal_behind_each_pending_row() {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+/// A preserving abandon of a retirement whose context is there with nothing
+/// stored for it (its worktree made outside Manyhands) leaves the index
+/// reading stale: only the retirement's row made that context read as owed,
+/// and the row completes, so the repository is marked behind instead.
+#[test]
+fn a_preserving_retirement_of_a_live_context_with_nothing_stored_leaves_the_index_stale() {
+    let f = Fixture::with_request(true);
+    let git = git2::Repository::open(&f.request.root).unwrap();
+    let worktree = f
+        .request
+        .root
+        .join(".manyhands/worktrees")
+        .join(f.request.item_id.to_string());
+    std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+    let branch = git
+        .find_reference(&format!(
+            "refs/heads/manyhands/ticket/{}",
+            f.request.item_id
+        ))
+        .unwrap();
+    git.worktree(
+        &f.request.item_id.to_string(),
+        &worktree,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&branch))),
+    )
+    .unwrap();
+    let stored = || -> i64 {
+        f.db()
+            .query_row(
+                "SELECT count(*) FROM contexts WHERE item_id = ?1",
+                [f.request.item_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let behind = || -> bool {
+        f.db()
+            .query_row("SELECT refresh_required FROM repositories", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(stored(), 0);
+    assert!(!behind());
+    let mutation = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: f.request.root.clone(),
+            operation_id: f.request.operation_id,
+        })
+    };
+    let preview = f.service.prepare(&mutation());
+    assert_eq!(preview.code, crate::results::ResultCode::Ok, "{preview:?}");
+    let preview = preview.data.unwrap().into_preview().unwrap();
+
+    let abandon = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+            mutation: mutation(),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+
+    assert_eq!(abandon.code, crate::results::ResultCode::Ok, "{abandon:?}");
+    let phase: String = f
+        .db()
+        .query_row("SELECT phase FROM context_retirement_records", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(phase, "abandoned");
+    assert!(worktree.is_dir(), "the context is preserved");
+    assert_eq!(stored(), 0);
+    assert!(behind());
+    let repository = f.service.resolve_repository(&f.request.root).unwrap();
+    assert_eq!(
+        f.service.index_status(&repository).unwrap().state,
+        IndexStatusState::Stale
+    );
+}
