@@ -1372,28 +1372,36 @@ fn depends(world: &World, id: &str, token: &str, on: &str) -> Mutation {
 }
 
 /// A save that sets relationships is checked for cycles and kinds against
-/// the other tickets as the index holds them. One ticket, `TICKET_A`, is
-/// saved to depend on another, `TICKET_NEW`: it commits, and its index
-/// hand-off fails, so the index does not hold the dependency. A save
-/// making `TICKET_NEW` depend on `TICKET_A`, checked against that index,
-/// sees no cycle; it is refused for the unfinished row, which it names,
-/// and writes nothing. Once the first request finishes its hand-off, the
-/// same save is rejected as the cycle it is.
+/// the other tickets as the index holds them, and as each context whose
+/// basis moved since it was indexed is on disk. One ticket, `TICKET_A`, is
+/// saved to depend on another, `TICKET_NEW`, and a save making
+/// `TICKET_NEW` depend on `TICKET_A` is then sent while A's save is
+/// unfinished:
+///
+/// - A's save stopped mid-write, before its file was written: no cycle is
+///   on disk to see, and the save is refused for the unfinished row, which
+///   it names, and writes nothing.
+/// - A's save, sent again, committed and its index hand-off failed, so its
+///   row owes only that hand-off and the index does not hold the
+///   dependency. A's worktree does: the save is checked against it, and is
+///   rejected as the cycle it is, writing nothing.
+///
+/// Once the first request finishes its hand-off, the same save is still
+/// rejected as that cycle.
 #[test]
 fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_save() {
     let mut world = World::new();
     let made = world.execute(REQUEST_3, world.create(TICKET_NEW));
     assert_eq!(made.code, ResultCode::Ok, "{made:?}");
-    world.service =
-        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
     let token = world.token(TICKET_A);
-    let first = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
-    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
-    let unfinished = first.operation_id.clone().expect("an operation");
-    world.reopen();
-
     let commits = world.branch_commits(TICKET_NEW);
     let other = world.token(TICKET_NEW);
+
+    world.service = FailOnce::at(FailurePoint::BeforeItemWrite).open_service(world.data.path());
+    let stopped = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    let unfinished = stopped.operation_id.clone().expect("an operation");
+    assert!(world.journal_row(&unfinished).in_flight(), "{stopped:?}");
+    world.reopen();
     let refused = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
     assert_eq!(
         (refused.outcome, refused.code),
@@ -1401,6 +1409,22 @@ fn a_save_that_sets_relationships_is_refused_behind_another_item_s_unfinished_sa
         "{refused:?}"
     );
     assert_eq!(blocker_of(&refused)["operation_id"], unfinished.as_str());
+    assert_eq!(world.branch_commits(TICKET_NEW), commits);
+    assert!(world.record(REQUEST_2).is_none());
+    assert_eq!(world.pending_journal_rows(), 1);
+
+    world.service =
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(world.data.path());
+    let first = world.execute(REQUEST_1, depends(&world, TICKET_A, &token, TICKET_NEW));
+    assert_eq!(first.code, ResultCode::DiscoveryPending, "{first:?}");
+    assert_eq!(first.operation_id.as_deref(), Some(unfinished.as_str()));
+    world.reopen();
+    let read_from_disk = world.execute(REQUEST_2, depends(&world, TICKET_NEW, &other, TICKET_A));
+    assert_eq!(
+        (read_from_disk.outcome, read_from_disk.code),
+        (Outcome::Error, ResultCode::RelationshipCycle),
+        "{read_from_disk:?}"
+    );
     assert_eq!(world.branch_commits(TICKET_NEW), commits);
     assert!(world.record(REQUEST_2).is_none());
     assert_eq!(world.pending_journal_rows(), 1);
