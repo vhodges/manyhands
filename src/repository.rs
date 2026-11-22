@@ -11276,6 +11276,20 @@ fn validate_context_tree_items(
     validate_context_tree_at(repository, &tree, context, require_target, operation)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many context trees this thread walked (`validate_context_tree_at`),
+    /// through the service's cache or not: what a test of a lifecycle's
+    /// cleanup counts (P-1).
+    static CONTEXT_TREE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many context trees this thread has walked; see `CONTEXT_TREE_WALKS`.
+#[cfg(test)]
+pub(super) fn context_tree_walks_for_testing() -> usize {
+    CONTEXT_TREE_WALKS.with(std::cell::Cell::get)
+}
+
 /// The canonical items of `tree`, walked, checked for `context`'s item.
 fn validate_context_tree_at(
     repository: &Repository,
@@ -11284,6 +11298,8 @@ fn validate_context_tree_at(
     require_target: bool,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    #[cfg(test)]
+    CONTEXT_TREE_WALKS.with(|walks| walks.set(walks.get() + 1));
     let inspect = || -> Result<CanonicalContext, ()> {
         let snapshot =
             RepositoryService::canonical_tree_sources(repository, tree).map_err(|_| ())?;

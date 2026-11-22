@@ -67,6 +67,30 @@ enum Finding {
     NotClean(Precheck),
     Locked,
 }
+/// How much of a context `inspect` reads, and how it reads the item's tree.
+#[derive(Clone, Copy)]
+enum Depth<'a> {
+    /// All of it. With a service, the tree is read through the service's
+    /// cache of the trees it accepted; without one, it is walked.
+    Full(Option<&'a super::RepositoryService>),
+    /// All but the walk of ignored directories, the tree read through the
+    /// service's cache: the cheap check before a lifecycle's remote delete
+    /// (P-1).
+    HeadAndStatus(&'a super::RepositoryService),
+}
+impl<'a> Depth<'a> {
+    fn service(self) -> Option<&'a super::RepositoryService> {
+        match self {
+            Self::Full(service) => service,
+            Self::HeadAndStatus(service) => Some(service),
+        }
+    }
+    /// Whether ignored directories are walked for a repository nested in
+    /// one, or one that cannot be read (`ignored_dirs_hold_no_repository`).
+    fn walks_ignored(self) -> bool {
+        matches!(self, Self::Full(_))
+    }
+}
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum TrackingDeletion {
     Changed,
@@ -163,7 +187,27 @@ impl ContextCleanup {
         Ok(worktree? || registration?)
     }
     pub(super) fn precheck_context(&self, kind: AuthoringKind, id: &ItemId, oid: Oid) -> Precheck {
-        match self.inspect(kind, id, oid, true) {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(None)))
+    }
+    /// The cheap check of a lifecycle's context before its remote branch is
+    /// deleted (P-1): as `precheck_context`, the tree read through
+    /// `service`'s cache of accepted trees, except that no ignored
+    /// directory is walked. So it finds the worktree's head moved, a change,
+    /// an untracked file, a hidden index bit, a submodule's change, a lock
+    /// or a context that is not the one registered, and not a repository
+    /// nested in an ignored directory nor one that cannot be read, which
+    /// only the full check in `remove_context_worktree` finds.
+    pub(super) fn precheck_head_and_status(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> Precheck {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::HeadAndStatus(service)))
+    }
+    fn precheck(found: Result<(), Finding>) -> Precheck {
+        match found {
             Ok(()) => Precheck::Ok,
             Err(Finding::Mismatch) => Precheck::Changed,
             Err(Finding::NotClean(reason)) => reason,
@@ -180,7 +224,7 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
     ) -> ReleaseCheck {
-        match self.inspect(kind, id, oid, false) {
+        match self.inspect(kind, id, oid, false, Depth::Full(None)) {
             Ok(()) => ReleaseCheck::Clean,
             Err(Finding::NotClean(_)) => ReleaseCheck::NotClean,
             Err(Finding::Mismatch | Finding::Locked) => ReleaseCheck::RecoveryRequired,
@@ -192,6 +236,7 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
         require_item: bool,
+        depth: Depth<'_>,
     ) -> Result<(), Finding> {
         let target = super::SynchronizationTarget::Context {
             kind,
@@ -231,15 +276,25 @@ impl ContextCleanup {
         }
         // The recorded clean OID is canonical authority. Do not invoke the
         // filesystem canonical-context scanner while this capability owns the
-        // common lease; materialization/status checks remain below.
-        if super::validate_context_tree_items(
-            &linked,
-            &context,
-            require_item,
-            RepositoryOperation::RepositorySnapshot,
-        )
-        .is_err()
-        {
+        // common lease; materialization/status checks remain below. With the
+        // item required the rule is `validate_context_tree`'s, so a service's
+        // cache of the trees it accepted answers for it (R-SDD-52): the key
+        // is the tree, the item's kind and ID, its configuration blob, the
+        // build and the item required, and HEAD is `oid`, checked above.
+        let tree = match depth.service() {
+            Some(service) if require_item => service.validate_context_tree(
+                &linked,
+                &context,
+                RepositoryOperation::RepositorySnapshot,
+            ),
+            _ => super::validate_context_tree_items(
+                &linked,
+                &context,
+                require_item,
+                RepositoryOperation::RepositorySnapshot,
+            ),
+        };
+        if tree.is_err() {
             return Err(Finding::Mismatch);
         }
         // This stronger proof is deletion-only. Do not change synchronization's
@@ -250,8 +305,15 @@ impl ContextCleanup {
             return Err(Finding::Mismatch);
         };
         let removal_roots = [worktree_root, admin_root];
-        require_cleanup_clean(&linked, &target, &removal_roots, &mut BTreeSet::new(), 0)
-            .map_err(Finding::NotClean)?;
+        require_cleanup_clean(
+            &linked,
+            &target,
+            &removal_roots,
+            &mut BTreeSet::new(),
+            0,
+            depth.walks_ignored(),
+        )
+        .map_err(Finding::NotClean)?;
         match self
             .repository
             .find_worktree(&id.to_string())
@@ -262,14 +324,19 @@ impl ContextCleanup {
             Err(_) => Err(Finding::Mismatch),
         }
     }
+    /// A lifecycle's removal of its context's worktree, under the one full
+    /// check the cleanup makes (P-1): as `precheck_context`'s, the tree read
+    /// through `service`'s cache of accepted trees.
     pub(super) fn remove_context_worktree(
         &self,
+        service: &super::RepositoryService,
         kind: AuthoringKind,
         id: &ItemId,
         oid: Oid,
     ) -> WorktreeRemoval {
         let refusal = || {
-            (self.precheck_context(kind, id, oid) != Precheck::Ok)
+            (Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(Some(service))))
+                != Precheck::Ok)
                 .then_some(WorktreeRelease::NotClean)
         };
         match self.remove_worktree(kind, id, refusal, || true) {
@@ -532,13 +599,16 @@ impl ContextCleanup {
 /// Called only while ContextCleanup owns the superproject lease. Recursion never
 /// acquires another lease/reservation, opens a transport, changes configuration
 /// or writes an index. Each populated gitlink gets its own full proof regardless
-/// of its parent's submodule ignore configuration.
+/// of its parent's submodule ignore configuration. Without `walk_ignored` no
+/// ignored directory is walked, in it or in any gitlink: the cheap check of
+/// P-1, which leaves a nested repository there to the full one.
 fn require_cleanup_clean(
     repository: &git2::Repository,
     target: &super::SynchronizationTarget,
     removal_roots: &[PathBuf; 2],
     visited: &mut BTreeSet<PathBuf>,
     depth: usize,
+    walk_ignored: bool,
 ) -> Result<(), Precheck> {
     const MAX_REPOSITORIES: usize = 64;
     // Git's on-disk CE_VALID (assume-unchanged) and extended SKIP_WORKTREE bits.
@@ -578,7 +648,9 @@ fn require_cleanup_clean(
         return Err(Precheck::Changed);
     }
     drop(statuses);
-    ignored_dirs_hold_no_repository(repository)?;
+    if walk_ignored {
+        ignored_dirs_hold_no_repository(repository)?;
+    }
     let workdir = repository.workdir().ok_or(Precheck::Changed)?;
     for entry in gitlinks {
         let path = std::str::from_utf8(&entry.path).map_err(|_| Precheck::Changed)?;
@@ -614,7 +686,14 @@ fn require_cleanup_clean(
             // A foreign linked-worktree registration is not ours to remove.
             return Err(Precheck::Changed);
         }
-        require_cleanup_clean(&child, target, removal_roots, visited, depth + 1)?;
+        require_cleanup_clean(
+            &child,
+            target,
+            removal_roots,
+            visited,
+            depth + 1,
+            walk_ignored,
+        )?;
         let common = child
             .commondir()
             .canonicalize()

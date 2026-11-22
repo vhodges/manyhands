@@ -185,7 +185,7 @@ impl Fixture {
         c.precheck_context(self.kind, &ID.parse().unwrap(), self.oid)
     }
     fn remove(&self, c: &ContextCleanup) -> WorktreeRemoval {
-        c.remove_context_worktree(self.kind, &ID.parse().unwrap(), self.oid)
+        c.remove_context_worktree(&self.service, self.kind, &ID.parse().unwrap(), self.oid)
     }
     fn branch(&self) -> String {
         format!(

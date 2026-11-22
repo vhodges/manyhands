@@ -3788,7 +3788,12 @@ fn spec5_cleanup_symlink_front_matter_and_gitlink_cannot_fulfill_target() {
             "mode {mode:o}"
         );
         assert_eq!(
-            cleanup.remove_context_worktree(AuthoringKind::Document, &ITEM.parse().unwrap(), oid),
+            cleanup.remove_context_worktree(
+                &f.service,
+                AuthoringKind::Document,
+                &ITEM.parse().unwrap(),
+                oid
+            ),
             crate::repository::cleanup::WorktreeRemoval::Changed
         );
         assert!(before == spec5_mode_image(&f));
@@ -5810,5 +5815,406 @@ fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
         wrong.push(format!("{exit}: the context's rows are {stored:?}"));
     }
 
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+// --- Task 22b: P-1's cleanup checks and decision 34's wait ----------------
+
+/// What a person leaves in a context's worktree, which its cleanup keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dirt {
+    /// A tracked file edited.
+    Tracked,
+    /// A file Git does not track.
+    Untracked,
+    /// A commit of the person's: the worktree's HEAD moved.
+    Moved,
+    /// The worktree locked.
+    Locked,
+    /// A tracked file edited under an assume-unchanged index entry, which
+    /// no status shows.
+    Hidden,
+    /// A tracked file removed.
+    Removed,
+    /// A repository of its own in an ignored directory: commits only it may
+    /// hold.
+    NestedRepository,
+    /// An ignored directory that cannot be read.
+    Unreadable,
+}
+
+/// The context worktree of the fixture at `root`.
+fn worktree_of(root: &std::path::Path) -> PathBuf {
+    root.join(".manyhands/worktrees").join(ITEM)
+}
+
+/// Leaves `dirt` in the context worktree of the fixture at `root`.
+fn make_dirt(root: &std::path::Path, dirt: Dirt) {
+    let worktree = worktree_of(root);
+    let linked = git2::Repository::open(&worktree).unwrap();
+    let exclude = |pattern: &str| {
+        let path = git2::Repository::open(root)
+            .unwrap()
+            .path()
+            .join("info/exclude");
+        let mut text = fs::read_to_string(&path).unwrap_or_default();
+        text.push_str(&format!("\n{pattern}\n"));
+        fs::write(path, text).unwrap();
+    };
+    match dirt {
+        Dirt::Tracked => write(&linked, DOC, "a person's edit\n"),
+        Dirt::Untracked => write(&linked, "untracked", "keep\n"),
+        Dirt::Moved => {
+            write(&linked, "moved", "a person's commit\n");
+            commit(&linked);
+        }
+        Dirt::Locked => git2::Repository::open(root)
+            .unwrap()
+            .find_worktree(ITEM)
+            .unwrap()
+            .lock(Some("a person's lock"))
+            .unwrap(),
+        Dirt::Hidden => {
+            let set = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args(["update-index", "--assume-unchanged", "--", DOC])
+                .output()
+                .unwrap();
+            assert!(set.status.success(), "fixture index flag setup");
+            write(&linked, DOC, "a hidden edit\n");
+            assert!(linked.statuses(None).unwrap().is_empty());
+        }
+        Dirt::Removed => fs::remove_file(worktree.join(DOC)).unwrap(),
+        Dirt::NestedRepository => {
+            exclude("vendor/");
+            fs::create_dir_all(worktree.join("vendor")).unwrap();
+            git2::Repository::init(worktree.join("vendor/clone")).unwrap();
+        }
+        Dirt::Unreadable => {
+            exclude("target/");
+            let closed = worktree.join("target/closed");
+            fs::create_dir_all(&closed).unwrap();
+            fs::write(closed.join("x"), b"ignored").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+            }
+        }
+    }
+}
+
+/// Takes `dirt` back out of the context worktree at `root`, as the person
+/// would, so that the cleanup can go on.
+fn clear_dirt(root: &std::path::Path, dirt: Dirt) {
+    let worktree = worktree_of(root);
+    match dirt {
+        Dirt::Tracked | Dirt::Removed => git2::Repository::open(&worktree)
+            .unwrap()
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap(),
+        Dirt::Untracked => fs::remove_file(worktree.join("untracked")).unwrap(),
+        Dirt::Locked => git2::Repository::open(root)
+            .unwrap()
+            .find_worktree(ITEM)
+            .unwrap()
+            .unlock()
+            .unwrap(),
+        Dirt::NestedRepository => fs::remove_dir_all(worktree.join("vendor")).unwrap(),
+        Dirt::Unreadable => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    worktree.join("target/closed"),
+                    fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            fs::remove_dir_all(worktree.join("target")).unwrap();
+        }
+        Dirt::Moved | Dirt::Hidden => unreachable!("not cleared by these tests"),
+    }
+}
+
+/// The context worktree's files, or an empty image once it is gone.
+fn worktree_image(root: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let worktree = worktree_of(root);
+    if worktree.exists() {
+        directory_image(&worktree)
+    } else {
+        BTreeMap::new()
+    }
+}
+
+/// How many remote rows are under `operation`.
+fn remote_rows(f: &Fixture, operation: OperationId) -> i64 {
+    f.db()
+        .query_row(
+            "SELECT count(*) FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// P-1 (design, Phase 3, "One full cleanup check and one cheap one"): the
+/// full check runs once, inside the worktree's removal; before the remote
+/// delete only a cheap check of the worktree's head and status runs, so a
+/// dirty worktree still stops the delete. The cheap check is asked before
+/// the cleanup reserves, so dirt that was there by then stops it with
+/// nothing reserved and its exit indexes as before, and again just before
+/// the delete, for dirt that came after the reservation. Whatever stops it,
+/// the worktree is kept as the person left it, and the delete is not sent.
+/// No check walks the item's tree but through the service's cache: the
+/// whole cleanup walks it once at most.
+#[test]
+fn a_dirty_worktree_stops_the_remote_delete() {
+    let mut wrong = Vec::new();
+    let walks = crate::repository::context_tree_walks_for_testing;
+    for at in [
+        FailurePoint::AfterPublication,
+        FailurePoint::BeforeRemoteDeletion,
+    ] {
+        for dirt in [
+            Dirt::Tracked,
+            Dirt::Untracked,
+            Dirt::Moved,
+            Dirt::Locked,
+            Dirt::Hidden,
+        ] {
+            let case = format!("{dirt:?} at {at:?}");
+            let f = Fixture::new();
+            f.remote();
+            let req = f.request();
+            let root = f.root.path().to_owned();
+            let left = Rc::new(RefCell::new(None));
+            let image = left.clone();
+            hook(&f, move |_, point| {
+                if point == at && image.borrow().is_none() {
+                    make_dirt(&root, dirt);
+                    *image.borrow_mut() = Some(worktree_image(&root));
+                }
+            });
+            let mut io = FakeIo::default();
+            let before = walks();
+            let result = f.run_io(req.clone(), &mut io).unwrap();
+            let walked = walks() - before;
+            HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+            let reserved = remote_rows(&f, req.operation_id);
+            let complete = matches!(result, DocumentPromotionResult::Complete(_));
+            let cleanup = authoritative(result).cleanup();
+            if cleanup
+                != (PromotionCleanup::Pending {
+                    reason: PromotionCleanupPending::ContextChanged,
+                })
+            {
+                wrong.push(format!("{case}: cleanup {cleanup:?}"));
+            }
+            if io.calls.borrow().deletes != 0 {
+                wrong.push(format!("{case}: the remote delete was sent"));
+            }
+            let step = f.stored(req.operation_id).step;
+            if step != record::PromotionStep::Published {
+                wrong.push(format!("{case}: stopped at {step:?}"));
+            }
+            if Some(worktree_image(f.root.path())) != *left.borrow() {
+                wrong.push(format!("{case}: the worktree was not kept"));
+            }
+            if walked > 1 {
+                wrong.push(format!("{case}: the item's tree walked {walked} times"));
+            }
+            // Before the reservation: nothing reserved, and the exit's index
+            // step runs. After it: the cleanup's reservation is held.
+            let expected = if at == FailurePoint::AfterPublication {
+                if !complete {
+                    wrong.push(format!("{case}: its exit did not index"));
+                }
+                0
+            } else {
+                1
+            };
+            if reserved != expected {
+                wrong.push(format!("{case}: {reserved} cleanup reservations"));
+            }
+        }
+    }
+    // A clean worktree: the delete is sent and the cleanup finishes, its
+    // tree walked once at most.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let before = walks();
+    let result = outcome(f.run_io(req, &mut io).unwrap());
+    let walked = walks() - before;
+    if result.cleanup() != PromotionCleanup::Complete || io.calls.borrow().deletes != 1 {
+        wrong.push(format!(
+            "clean: cleanup {:?}, {} deletes",
+            result.cleanup(),
+            io.calls.borrow().deletes
+        ));
+    }
+    if walked > 1 {
+        wrong.push(format!("clean: the item's tree walked {walked} times"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// P-1's first changed outcome (design, Phase 3): what only the full check
+/// finds, a repository nested in an ignored directory or a directory that
+/// cannot be read, stops the close after the remote branch is deleted when
+/// it appears after the check before the delete; and, since a check of the
+/// head and status cannot see one, when it was there before that check
+/// too. The work is merged and the remote branch is gone; the cleanup is
+/// pending, `context_changed`, and recorded at `worktree_removing` (P-1's
+/// second changed outcome); what was there is kept. Once it is gone the
+/// same request finishes, and deletes nothing more.
+#[test]
+fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remote_deleted() {
+    let mut wrong = Vec::new();
+    let rows = [
+        (
+            "a nested repository made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            Dirt::NestedRepository,
+        ),
+        (
+            "an unreadable directory made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            Dirt::Unreadable,
+        ),
+        (
+            "a nested repository there before the head-and-status check",
+            FailurePoint::AfterPublication,
+            Dirt::NestedRepository,
+        ),
+    ];
+    for (case, at, dirt) in rows {
+        if cfg!(not(unix)) && dirt == Dirt::Unreadable {
+            continue;
+        }
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let mut made = false;
+        hook(&f, move |_, point| {
+            if point == at && !made {
+                made = true;
+                make_dirt(&root, dirt);
+            }
+        });
+        let mut io = FakeIo::default();
+        let stopped = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        if stopped.cleanup()
+            != (PromotionCleanup::Pending {
+                reason: PromotionCleanupPending::ContextChanged,
+            })
+        {
+            wrong.push(format!("{case}: cleanup {:?}", stopped.cleanup()));
+        }
+        let merged = match stopped.integration() {
+            PromotionIntegration::Merged { oid } => oid,
+            other => {
+                wrong.push(format!("{case}: integration {other:?}"));
+                continue;
+            }
+        };
+        if f.primary() != merged {
+            wrong.push(format!("{case}: the primary does not hold the work"));
+        }
+        if io.calls.borrow().deletes != 1 {
+            wrong.push(format!(
+                "{case}: {} remote deletes",
+                io.calls.borrow().deletes
+            ));
+        }
+        let step = f.stored(req.operation_id).step;
+        if step != record::PromotionStep::WorktreeRemoving {
+            wrong.push(format!("{case}: stopped at {step:?}"));
+        }
+        let kept = match dirt {
+            Dirt::NestedRepository => worktree_of(f.root.path()).join("vendor/clone/.git"),
+            _ => worktree_of(f.root.path()).join("target/closed"),
+        };
+        if !kept.exists() {
+            wrong.push(format!("{case}: what was nested is gone"));
+        }
+        clear_dirt(f.root.path(), dirt);
+        let finished = authoritative(f.run_io(req, &mut io).unwrap());
+        if finished.cleanup() != PromotionCleanup::Complete {
+            wrong.push(format!(
+                "{case}: its retry: cleanup {:?}",
+                finished.cleanup()
+            ));
+        } else {
+            f.assert_cleaned();
+        }
+        if io.calls.borrow().deletes != 1 {
+            wrong.push(format!("{case}: its retry deleted again"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// P-1's second changed outcome (design, Phase 3): with no check before the
+/// removal of the worktree but the full one inside it, a close records
+/// `worktree_removing` before that check refuses. What the person left is
+/// kept, the cleanup is pending, and the same request finishes once it is
+/// gone. A tracked file that is missing reads there as a removal that may
+/// have begun, `recovery_required`, as it must at that step; it too
+/// finishes once the file is back.
+#[test]
+fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
+    let mut wrong = Vec::new();
+    let rows = [
+        (Dirt::Untracked, PromotionCleanupPending::ContextChanged),
+        (Dirt::Tracked, PromotionCleanupPending::ContextChanged),
+        (Dirt::Locked, PromotionCleanupPending::ContextChanged),
+        (
+            Dirt::NestedRepository,
+            PromotionCleanupPending::ContextChanged,
+        ),
+        (Dirt::Removed, PromotionCleanupPending::RecoveryRequired),
+    ];
+    for (dirt, reason) in rows {
+        let case = format!("{dirt:?}");
+        let f = Fixture::new();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let left = Rc::new(RefCell::new(None));
+        let image = left.clone();
+        hook(&f, move |_, point| {
+            if point == FailurePoint::AfterPublication && image.borrow().is_none() {
+                make_dirt(&root, dirt);
+                *image.borrow_mut() = Some(worktree_image(&root));
+            }
+        });
+        let stopped = authoritative(f.run(req.clone()).unwrap());
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        if stopped.cleanup() != (PromotionCleanup::Pending { reason }) {
+            wrong.push(format!("{case}: cleanup {:?}", stopped.cleanup()));
+        }
+        let step = f.stored(req.operation_id).step;
+        if step != record::PromotionStep::WorktreeRemoving {
+            wrong.push(format!("{case}: stopped at {step:?}"));
+        }
+        if Some(worktree_image(f.root.path())) != *left.borrow() {
+            wrong.push(format!("{case}: the worktree was not kept"));
+        }
+        clear_dirt(f.root.path(), dirt);
+        let finished = authoritative(f.run(req).unwrap());
+        if finished.cleanup() != PromotionCleanup::Complete {
+            wrong.push(format!(
+                "{case}: its retry: cleanup {:?}",
+                finished.cleanup()
+            ));
+        } else {
+            f.assert_cleaned();
+        }
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
