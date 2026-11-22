@@ -17888,7 +17888,10 @@ fn an_operation_resume_of_a_sync_s_hand_off_indexes_only_its_context() {
     };
     use crate::results::{DiscoveryEffect, ResultCode};
     for (case, dirty) in [
-        ("its context's basis holds and it is not marked dirty", false),
+        (
+            "its context's basis holds and it is not marked dirty",
+            false,
+        ),
         ("its context marked dirty", true),
     ] {
         let (root, data, service) = fixture();

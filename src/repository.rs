@@ -444,11 +444,16 @@ pub struct RepositoryService {
     sleeper: Arc<dyn Sleeper>,
 }
 
+/// What a registry open runs on the registry's path between its migration
+/// and its audits (`set_registry_open_hook_for_testing`).
+#[cfg(test)]
+type RegistryOpenHook = Box<dyn FnOnce(&Path)>;
+
 #[cfg(test)]
 thread_local! {
     /// What the next registry open on this thread runs between its
     /// migration and its audits (`set_registry_open_hook_for_testing`).
-    static REGISTRY_OPEN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+    static REGISTRY_OPEN_HOOK: std::cell::RefCell<Option<RegistryOpenHook>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1624,11 +1629,7 @@ impl RepositoryService {
     /// it owed stays marked, and the next refresh, under any ID, indexes it.
     /// A lifecycle's child taken up under its own ID runs the same step
     /// (`index_lifecycle_child`).
-    fn index_lifecycle_exit(
-        &self,
-        root: &Path,
-        contexts: &[ContextKey],
-    ) -> LifecycleIndexStep {
+    fn index_lifecycle_exit(&self, root: &Path, contexts: &[ContextKey]) -> LifecycleIndexStep {
         let operation_id = OperationId::new();
         if matches!(
             self.index_lifecycle_exit_under(root, operation_id, contexts),

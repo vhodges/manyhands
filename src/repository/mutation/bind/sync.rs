@@ -71,9 +71,8 @@ use super::{
     super::{
         super::{
             AuthoringKind, ConfigurationInspection, IndexPending, LifecycleIndexStep,
-            OperationFamily, OperationId, ReadError, RemoteOperationSafePoint,
-            RepositoryOperation, RepositoryService,
-            SafePointRequest, SynchronizationError, SynchronizationObserver,
+            OperationFamily, OperationId, ReadError, RemoteOperationSafePoint, RepositoryOperation,
+            RepositoryService, SafePointRequest, SynchronizationError, SynchronizationObserver,
             SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
             SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
             read_configuration_for,

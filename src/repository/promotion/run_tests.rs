@@ -5901,7 +5901,9 @@ fn a_failed_exit_index_step_leaves_no_row_in_the_way() {
         if f.service
             .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
         {
-            wrong.push(format!("{case}: read as indexed while its contexts are owed"));
+            wrong.push(format!(
+                "{case}: read as indexed while its contexts are owed"
+            ));
         }
         if then_retry {
             match f.run(req) {
@@ -6373,7 +6375,10 @@ fn remote_row_image(f: &Fixture, operation: OperationId) -> Vec<String> {
     query
         .query_row([operation.to_string()], |row| {
             (0..columns)
-                .map(|i| row.get::<_, rusqlite::types::Value>(i).map(|v| format!("{v:?}")))
+                .map(|i| {
+                    row.get::<_, rusqlite::types::Value>(i)
+                        .map(|v| format!("{v:?}"))
+                })
                 .collect::<Result<Vec<_>, _>>()
         })
         .unwrap()
@@ -6522,8 +6527,8 @@ fn a_stop_after_the_remote_delete_holds_the_repository_until_it_finishes() {
         // the reservation go: the save and the refresh go on.
         clear_dirt(f.root.path(), Dirt::NestedRepository);
         match f.run_io(req.clone(), &mut io) {
-            Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => {
-            }
+            Ok(DocumentPromotionResult::Complete(o))
+                if o.cleanup() == PromotionCleanup::Complete => {}
             other => wrong.push(format!("{case}: its retry: {other:?}")),
         }
         if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
@@ -6573,9 +6578,21 @@ fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
     let mut wrong = Vec::new();
     // (what the person leaves, what follows, where they leave it)
     let rows = [
-        (Dirt::Untracked, Then::ClearAndRetry, FailurePoint::AfterPublication),
-        (Dirt::Tracked, Then::ClearAndRetry, FailurePoint::AfterPublication),
-        (Dirt::Locked, Then::ClearAndRetry, FailurePoint::AfterPublication),
+        (
+            Dirt::Untracked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Tracked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Locked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
         (
             Dirt::NestedRepository,
             Then::ClearAndRetry,
@@ -6586,7 +6603,11 @@ fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
             Then::ClearAndSupersede,
             FailurePoint::AfterPublication,
         ),
-        (Dirt::Gone, Then::RetryCompletes, FailurePoint::AfterPublication),
+        (
+            Dirt::Gone,
+            Then::RetryCompletes,
+            FailurePoint::AfterPublication,
+        ),
         (
             Dirt::HalfGone,
             Then::RetryRecoveryRequired,
