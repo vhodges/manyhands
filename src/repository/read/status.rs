@@ -304,7 +304,14 @@ fn local_operations(
     holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
-    crate::repository::local_sync::record::audit(connection)
+    // The unfinished local synchronizations are what the list shows; one
+    // shown by its ID is used whatever its state, so it is audited too.
+    crate::repository::local_sync::record::audit_unfinished(connection)
+        .and_then(|()| {
+            id.map_or(Ok(()), |id| {
+                crate::repository::local_sync::record::audit_record(connection, id)
+            })
+        })
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,

@@ -33,15 +33,18 @@ impl RepositoryLease {
     }
 }
 
+/// The identity of an open file: its device and inode, or on Windows its
+/// volume serial number and file ID. A file put in place of another at the
+/// same path has another identity.
 #[cfg(unix)]
-fn file_identity(file: &File) -> io::Result<(u64, u128)> {
+pub(super) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     use std::os::unix::fs::MetadataExt;
     let metadata = file.metadata()?;
     Ok((metadata.dev(), u128::from(metadata.ino())))
 }
 
 #[cfg(windows)]
-fn file_identity(file: &File) -> io::Result<(u64, u128)> {
+pub(super) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,

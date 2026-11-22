@@ -9,7 +9,7 @@ use super::super::{
     AuthoringKind, OperationId, RefreshOutcome, RefreshRepositoryRequest, RepositoryError,
     RepositoryErrorKind, RepositoryOperation, RepositoryService, authoring_kind_segment,
     cache_write_guard, canonical_repository_root,
-    discovery::{ContextKey, migrate_registry, open_registry},
+    discovery::{ContextKey, open_registry},
     item_context, local_sync, mark_registered_contexts_dirty, recovery,
     remote::state::recovery_required,
     repository_lease,
@@ -269,8 +269,7 @@ impl RepositoryService {
         let origin = recovery::RowOrigin::here(&root, self.clock.now().unix_timestamp());
         {
             let _guard = cache_write_guard(&self.registry_path, &root, OP)?;
-            let mut db = open_registry(&self.registry_path, &mut |_| {})?;
-            migrate_registry(&mut db)?;
+            let mut db = self.open_migrated_registry(OP)?;
             let tx = db
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(RepositoryError::sqlite)?;

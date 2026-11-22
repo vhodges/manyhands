@@ -2539,7 +2539,22 @@ pub(super) fn open_registry_read_only(registry_path: &Path) -> Result<Connection
     Ok(connection)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `migrate_registry` began on this thread: what a test
+    /// counts to see that a call made after registry open migrates nothing.
+    static MIGRATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `migrate_registry` has begun on this thread.
+#[cfg(test)]
+pub(super) fn migrations_for_testing() -> usize {
+    MIGRATIONS.with(std::cell::Cell::get)
+}
+
 pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), RepositoryError> {
+    #[cfg(test)]
+    MIGRATIONS.with(|count| count.set(count.get() + 1));
     let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
     let repositories_exist = transaction
         .query_row(

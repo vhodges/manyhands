@@ -713,3 +713,87 @@ fn accepted_reentry_cannot_borrow_a_different_registered_root() {
         crate::results::ResultCode::RepositoryNotRegistered
     );
 }
+
+#[test]
+fn a_guard_refuses_a_malformed_unfinished_row_of_another_item() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    f.begin(OperationId::new()).unwrap();
+    // No constraint covers the candidate; only the row's audit refuses it.
+    f.db()
+        .execute(
+            "UPDATE local_context_sync_records SET candidate_oid='bad'",
+            [],
+        )
+        .unwrap();
+    let db = f.db();
+    let registration = f.repo.registration_id();
+    let other_item = ItemId::generate();
+    let other_operation = OperationId::new().to_string();
+    // Each guard asks about an item, a repository or an operation that the
+    // malformed row is not of, and concludes only after auditing that row.
+    let answers = [
+        (
+            "unfinished_context",
+            record::unfinished_context(&db, registration, &other_item).map(|_| ()),
+        ),
+        (
+            "require_no_pending",
+            record::require_no_pending(&db, registration + 1),
+        ),
+        (
+            "refresh_allowed",
+            record::refresh_allowed(&db, &other_operation, f.root.path()).map(|_| ()),
+        ),
+    ];
+    for (guard, answer) in answers {
+        assert_eq!(
+            answer.unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "{guard}"
+        );
+    }
+}
+
+#[test]
+fn registry_open_audits_unfinished_rows_and_not_completed_ones() {
+    use crate::results::ResultCode;
+    for completed in [false, true] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        let id = OperationId::new();
+        f.begin(id).unwrap();
+        if completed {
+            // What a cancellation of a prepared synchronization leaves.
+            f.db()
+                .execute_batch(
+                    "UPDATE local_context_sync_records SET state='cancelled';
+                     UPDATE operation_records SET state='completed',completed_step='completed'
+                      WHERE action='context_sync_local';",
+                )
+                .unwrap();
+            RepositoryService::open_at(f.data.path()).unwrap();
+        }
+        f.db()
+            .execute(
+                "UPDATE local_context_sync_records SET candidate_oid='bad'",
+                [],
+            )
+            .unwrap();
+        if !completed {
+            assert!(RepositoryService::open_at(f.data.path()).is_err());
+            continue;
+        }
+        // The completed row is audited by the reads that use it.
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(
+            reopened
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap_err()
+                .code(),
+            ResultCode::RecoveryRequired
+        );
+        assert_eq!(
+            reopened.show_operation(&f.repo, id).unwrap_err().code(),
+            ResultCode::RecoveryRequired
+        );
+    }
+}

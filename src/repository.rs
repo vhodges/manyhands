@@ -401,6 +401,10 @@ impl<T> IndexPending<T> {
 
 pub struct RepositoryService {
     registry_path: PathBuf,
+    /// The registry file as this service last migrated it: a call that
+    /// opens the same file with the same schema does not migrate it again
+    /// (`open_migrated_registry`). Registry open sets it.
+    registry_memo: Mutex<Option<RegistryMemo>>,
     /// The ssh-agent socket (SSH_AUTH_SOCK as the process had it when the
     /// service opened), used only to sign for the selected key.
     agent_socket: Option<PathBuf>,
@@ -438,6 +442,33 @@ pub struct RepositoryService {
     wait_policy: WaitPolicy,
     /// What that wait lets its time pass with.
     sleeper: Arc<dyn Sleeper>,
+}
+
+/// A registry file as a service migrated it: the file's identity (its
+/// device and inode, or volume and file ID) and its `PRAGMA
+/// schema_version` once migrated. A file put in place of it has another
+/// identity, and a change to its schema another version; either is
+/// migrated again (design decision 9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RegistryMemo {
+    file: (u64, u128),
+    schema_version: i64,
+}
+
+impl RegistryMemo {
+    /// The memo of the registry file at `path`, which `connection` has
+    /// open; `None` when either part cannot be read, and the file is then
+    /// migrated by every call that opens it, as before there was a memo.
+    fn of(connection: &rusqlite::Connection, path: &Path) -> Option<Self> {
+        let file = coordination::file_identity(&std::fs::File::open(path).ok()?).ok()?;
+        let schema_version = connection
+            .query_row("PRAGMA schema_version", [], |row| row.get(0))
+            .ok()?;
+        Some(Self {
+            file,
+            schema_version,
+        })
+    }
 }
 
 struct IndexOwnerHeartbeat {
@@ -3802,7 +3833,7 @@ impl RepositoryService {
         {
             hook();
         }
-        reconcile_registration(&self.registry_path, repository, root)?;
+        reconcile_registration(self, repository, root)?;
         if operation == RepositoryOperation::SetPublicationRemote {
             let plan = match read_configuration(root)? {
                 ConfigurationInspection::Valid(config) => config
@@ -3918,9 +3949,9 @@ impl RepositoryService {
             });
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let record = recovery::begin_or_reconcile_operation_reaching(
             &mut connection,
             root,
@@ -3944,9 +3975,9 @@ impl RepositoryService {
             return Ok(());
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         advance_after_observation(&connection, record.id, "completed", None, None)
             .map_err(|error| error.for_operation(operation, root))
     }
@@ -3963,9 +3994,9 @@ impl RepositoryService {
             return Ok(());
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         discard_operation(&connection, record.id)
             .map_err(|error| error.for_operation(operation, root))
     }
@@ -4039,9 +4070,9 @@ impl RepositoryService {
             return Ok(false);
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let step: Option<Option<String>> = connection
             .query_row(
                 "SELECT completed_step FROM operation_records WHERE id = ?1",
@@ -4110,9 +4141,9 @@ impl RepositoryService {
             ));
         }
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         advance_after_observation(&connection, record.id, step.as_str(), None, None)
             .map_err(|error| error.for_operation(operation, root))
     }
@@ -4225,9 +4256,9 @@ impl RepositoryService {
         operation: RepositoryOperation,
     ) -> Result<(), RepositoryError> {
         let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let root_path = registry_root_key(root, operation)?;
         let repository_id = connection
             .query_row(
@@ -4501,9 +4532,8 @@ impl RepositoryService {
             let _repository_lease = repository_lease(&repository, &root, operation)?;
             registered_repository_id(&self.registry_path, &root, operation)?;
             let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
-            let mut connection = open_registry(&self.registry_path, &mut |_| {})
-                .map_err(|error| error.for_operation(operation, &root))?;
-            migrate_registry(&mut connection)
+            let mut connection = self
+                .open_migrated_registry(operation)
                 .map_err(|error| error.for_operation(operation, &root))?;
             begin_or_reconcile_operation(
                 &mut connection,
@@ -4728,9 +4758,9 @@ impl RepositoryService {
         record: RecoveryRecord,
     ) -> Result<Option<(IndexOwner, OwedContexts)>, RepositoryError> {
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let Some(owner) = claim_indexing(
             &connection,
             record.id,
@@ -4759,9 +4789,9 @@ impl RepositoryService {
     ) -> Result<Option<ClaimedRefresh>, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, root))?;
         let begin = if authored {
             begin_or_reconcile_operation
         } else {
@@ -4925,6 +4955,42 @@ impl RepositoryService {
         Ok(())
     }
 
+    /// Opens the registry for a call made after registry open. The
+    /// registry is migrated, as registry open migrates it, only when it is
+    /// not the file this service migrated last with the schema it had then
+    /// (`RegistryMemo`): a file put in its place, or one whose schema has
+    /// changed. Otherwise it is opened as it is, and neither its schema nor
+    /// its records are audited here; what a caller reads, it audits by use
+    /// (design decision 9).
+    ///
+    /// The caller holds the cache guard, which a replacement of the file
+    /// waits for, so the file whose identity is read is the one opened.
+    /// What fails to open or migrate answers as it did when every call
+    /// migrated.
+    fn open_migrated_registry(
+        &self,
+        operation: RepositoryOperation,
+    ) -> Result<rusqlite::Connection, RepositoryError> {
+        let memo_unavailable = || {
+            RepositoryError::new(
+                operation,
+                None,
+                RepositoryErrorKind::InjectedFailure,
+                "the registry migration memo is unavailable",
+            )
+        };
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})?;
+        let current = RegistryMemo::of(&connection, &self.registry_path);
+        let migrated = *self.registry_memo.lock().map_err(|_| memo_unavailable())?;
+        if current.is_some() && current == migrated {
+            return Ok(connection);
+        }
+        migrate_registry(&mut connection)?;
+        *self.registry_memo.lock().map_err(|_| memo_unavailable())? =
+            RegistryMemo::of(&connection, &self.registry_path);
+        Ok(connection)
+    }
+
     #[doc(hidden)]
     pub fn open_at_with_registry_phase_observer(
         data_directory: &Path,
@@ -4945,11 +5011,18 @@ impl RepositoryService {
             data_directory,
             RepositoryOperation::OpenRegistry,
         )?;
+        // Registry open migrates, and so audits the schema and the
+        // unfinished records (design decision 9). The calls after it open
+        // through `open_migrated_registry`, which migrates again only a
+        // file that is no longer this one.
+        let mut registry_memo = None;
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
                 remote::state::audit_registry(&mut connection)?;
-                context_retirement::record::audit_registry(&mut connection)
+                context_retirement::record::audit_registry(&mut connection)?;
+                registry_memo = RegistryMemo::of(&connection, &registry_path);
+                Ok(())
             }) {
                 Ok(()) => IndexAvailability::Ready,
                 Err(error) if is_structural_sqlite_corruption(&error) => {
@@ -4960,6 +5033,7 @@ impl RepositoryService {
 
         Ok(Self {
             registry_path,
+            registry_memo: Mutex::new(registry_memo),
             agent_socket: std::env::var_os("SSH_AUTH_SOCK")
                 .filter(|socket| !socket.is_empty())
                 .map(PathBuf::from),
@@ -12912,7 +12986,7 @@ fn registry_refresh_pending(
 }
 
 fn reconcile_registration(
-    registry_path: &Path,
+    service: &RepositoryService,
     repository: &Repository,
     root: &Path,
 ) -> Result<(), RepositoryError> {
@@ -12929,10 +13003,9 @@ fn reconcile_registration(
         })?
         .as_secs() as i64;
     let root_path = registry_root_key(root, RepositoryOperation::Enable)?;
-    let _cache_guard = cache_read_guard(registry_path, root, RepositoryOperation::Enable)?;
-    let mut connection = open_registry(registry_path, &mut |_| {})
-        .map_err(|error| error.for_operation(RepositoryOperation::Enable, root))?;
-    migrate_registry(&mut connection)
+    let _cache_guard = cache_read_guard(&service.registry_path, root, RepositoryOperation::Enable)?;
+    let mut connection = service
+        .open_migrated_registry(RepositoryOperation::Enable)
         .map_err(|error| error.for_operation(RepositoryOperation::Enable, root))?;
     let transaction = connection.transaction().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::Enable, root)
