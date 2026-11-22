@@ -73,6 +73,27 @@ fn indexing_row(side: &Side, operation: OperationId) -> Result<OwnerRow, Fixture
     fixed(side.db()?.query_row("SELECT id,operation_ulid,state,index_owner_epoch,completed_step FROM operation_records WHERE state='indexing' AND operation_ulid=?1", [operation.to_string()],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))))
 }
+/// The one row of `side`'s root that is indexing, other than `foreign`'s:
+/// an exit's own index step, whose fresh ID the test does not know.
+fn exit_indexing_row(side: &Side, foreign: OperationId) -> Result<OwnerRow, FixtureError> {
+    let root = fixed(side.root.canonicalize())?;
+    let ids = fixed(
+        fixed(side.db()?.prepare(
+            "SELECT operation_ulid FROM operation_records
+              WHERE state='indexing' AND action='refresh' AND operation_ulid!=?1
+                AND root_path=?2",
+        ))?
+        .query_map(
+            rusqlite::params![foreign.to_string(), root.to_string_lossy()],
+            |r| r.get::<_, String>(0),
+        )
+        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>()),
+    )?;
+    let [id] = ids.as_slice() else {
+        return Err(FixtureError);
+    };
+    indexing_row(side, fixed(OperationId::parse(id))?)
+}
 fn owner_row(side: &Side, id: i64) -> Result<OwnerRow, FixtureError> {
     fixed(side.db()?.query_row("SELECT id,operation_ulid,state,index_owner_epoch,completed_step FROM operation_records WHERE id=?1", [id],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))))
@@ -156,7 +177,18 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
         },
     )?;
     ssh_harness::observation(&[2110, 1]);
-    let older = fixed(RepositoryService::open_at(&p.a.data))?;
+    // E-73: a lifecycle's child begins no index hand-off of its own (Task
+    // 22), so the compound run's active index step is its exit's: the older
+    // executor finishes the cleanup but stops before completion, and its
+    // exit's one index step is the owner the F11 completion fences.
+    let older = fixed(if compound {
+        RepositoryService::open_at_with_failure_point_for_testing(
+            &p.a.data,
+            FailurePoint::BeforeCompletion,
+        )
+    } else {
+        RepositoryService::open_at(&p.a.data)
+    })?;
     // The foreign root deliberately shares A's registry: an unscoped fence
     // would invalidate it too, even though its own filesystem is independent.
     let foreign = Side {
@@ -195,7 +227,9 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
                 let result=p.execute(&older,request.clone());
                 ssh_harness::observation(&[2110, 4, promotion_category(&result)]);
                 let r=fixed(result)?;
-                Ok(matches!(r,DocumentPromotionResult::Complete(ref o) if o.cleanup()==PromotionCleanup::Complete))
+                // Its exit's index step completed once it reclaimed the fenced
+                // claim; its cleanup stopped before completion.
+                Ok(matches!(r,DocumentPromotionResult::Complete(ref o) if o.cleanup()==PromotionCleanup::Pending{reason:PromotionCleanupPending::RecoveryRequired}))
             } else {
                 Ok(matches!(fixed(older.refresh_repository(RefreshRepositoryRequest{root:p.a.root.clone(),operation_id:ordinary_id}))?,RefreshOutcome::Refreshed{..}))
             }
@@ -213,17 +247,12 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
             ssh_harness::observation(&[2110, 5]);
             fixed(b_held.recv_timeout(Duration::from_secs(30)))?;
             ssh_harness::observation(&[2110, 6]);
-            let id = if compound {
-                let child: String = fixed(p.a.db()?.query_row(
-                    "SELECT primary_sync_id FROM document_promotions WHERE operation_id=?1",
-                    [request.operation_id.to_string()],
-                    |r| r.get(0),
-                ))?;
-                fixed(OperationId::parse(&child))?
+            let owner = if compound {
+                exit_indexing_row(&p.a, foreign_id)?
             } else {
-                ordinary_id
+                indexing_row(&p.a, ordinary_id)?
             };
-            Ok((indexing_row(&p.a, id)?, indexing_row(&foreign, foreign_id)?))
+            Ok((owner, indexing_row(&foreign, foreign_id)?))
         })();
         ssh_harness::observation(&[2110, 7, captures.is_ok() as u128]);
         let completed = (|| -> Result<(OwnerRow, OwnerRow, Behind), FixtureError> {
@@ -291,10 +320,25 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
         assert_eq!(untouched, before_b);
         assert_eq!(owner_row(&foreign, before_b.0)?.3, before_b.3);
         if compound {
+            // The primary's child owes nothing and began no row of its own:
+            // its hand-off was the exit's.
+            let child: String = fixed(p.a.db()?.query_row(
+                "SELECT primary_sync_id FROM document_promotions WHERE operation_id=?1",
+                [request.operation_id.to_string()],
+                |r| r.get(0),
+            ))?;
             assert_eq!(
                 fixed(p.a.db()?.query_row(
                     "SELECT index_pending FROM remote_operation_records WHERE operation_ulid=?1",
-                    [after.1],
+                    [&child],
+                    |r| r.get::<_, i64>(0)
+                ))?,
+                0
+            );
+            assert_eq!(
+                fixed(p.a.db()?.query_row(
+                    "SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1",
+                    [&child],
                     |r| r.get::<_, i64>(0)
                 ))?,
                 0
