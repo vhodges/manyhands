@@ -6101,7 +6101,7 @@ fn remote_rows(f: &Fixture, operation: OperationId) -> i64 {
         .unwrap()
 }
 
-/// P-1 (design, Phase 3, "One full cleanup check and one cheap one"): the
+/// P-1 (design, Phase 3, "Cleanup checks"): the
 /// full check runs inside the worktree's removal; just before the remote
 /// delete only a cheap check of the worktree's head and status runs, so a
 /// dirty worktree still stops the delete. When a remote delete is due the
