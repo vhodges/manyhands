@@ -17872,6 +17872,144 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
     }
 }
 
+/// `operation resume` of a plain synchronization's index hand-off, by the
+/// synchronization's ID, not a retry of its request (`docs/RFC/
+/// cli-contract.md`, `operation resume`, amended 2026-11-22): the hand-off
+/// stopped once its row of its item was begun. The resume is answered by
+/// the synchronization's own binding, which runs that hand-off alone: it
+/// completes the row with nothing observed while the context's stored basis
+/// holds and it is not marked dirty, and otherwise indexes that one context.
+/// Either way the remote row's debt is cleared and no other context is
+/// touched.
+#[test]
+fn an_operation_resume_of_a_sync_s_hand_off_indexes_only_its_context() {
+    use crate::repository::{
+        CancellationToken, Mutation, MutationCall, NoProgress, OperationResumeInput, RequestId,
+    };
+    use crate::results::{DiscoveryEffect, ResultCode};
+    for (case, dirty) in [
+        ("its context's basis holds and it is not marked dirty", false),
+        ("its context marked dirty", true),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let (replay, outcome) =
+            unchanged_synchronization(&service, root, &target, oid, Unchanged::Current);
+        let operation = replay.operation_id;
+        // The hand-off stops once its row of its item is begun.
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::AfterCheckpointBeforeIndexStep);
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome)),
+            "{case}"
+        );
+        *service.failure_point.lock().unwrap() = None;
+        let owing = format!(r#"["{HAND_OFF_X}"]"#);
+        assert!(
+            matches!(
+                rows_under(data, operation).as_slice(),
+                [(_, _, Some(owed), state, _)] if *owed == owing && state != "completed"
+            ),
+            "{case}: {:?}",
+            rows_under(data, operation)
+        );
+        assert_eq!(index_debt(data, operation), Some(true), "{case}");
+        if dirty {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+                    [HAND_OFF_X],
+                )
+                .unwrap();
+        }
+        let context = stored_context(data, Some(HAND_OFF_X));
+        let other = stored_context(data, Some(HAND_OFF_Y));
+        let primary = stored_context(data, None);
+        let mut taken_up = None;
+        let observed = observations_while(
+            &[
+                root.to_owned(),
+                ticket_worktree(root, HAND_OFF_X),
+                ticket_worktree(root, HAND_OFF_Y),
+            ],
+            || {
+                taken_up = Some(service.execute(
+                    MutationCall {
+                        request_id: RequestId::new(),
+                        confirmation: None,
+                        mutation: Mutation::OperationResume(OperationResumeInput {
+                            root: root.to_owned(),
+                            operation_id: operation,
+                        }),
+                    },
+                    &mut SessionCredentials::new(NoPrompt),
+                    &mut NoProgress,
+                    &CancellationToken::new(),
+                ));
+            },
+        );
+        let taken_up = taken_up.unwrap();
+        assert_eq!(taken_up.command, "operation resume", "{case}");
+        assert_eq!(
+            taken_up.code,
+            ResultCode::AlreadyApplied,
+            "{case}: {taken_up:?}"
+        );
+        assert_eq!(
+            taken_up.effects.discovery,
+            DiscoveryEffect::Current,
+            "{case}"
+        );
+        assert_eq!(observed, [0, usize::from(dirty), 0], "{case}: observations");
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert_eq!(index_debt(data, operation), Some(false), "{case}");
+        if dirty {
+            assert_eq!(
+                stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+                Some(0),
+                "{case}: the context"
+            );
+        } else {
+            assert_eq!(
+                stored_context(data, Some(HAND_OFF_X)),
+                context,
+                "{case}: the context's rows"
+            );
+        }
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_Y)),
+            other,
+            "{case}: Y's rows"
+        );
+        assert_eq!(
+            stored_context(data, None),
+            primary,
+            "{case}: the primary's rows"
+        );
+    }
+}
+
 /// Whether a synchronization taken up under its own ID owes its context's
 /// indexing to a lifecycle parent (`lifecycle_child_owes_its_parent`): it
 /// does while it is a child, as its parent's record says, and the index does
