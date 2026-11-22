@@ -1146,6 +1146,17 @@ fn published(
     };
     let (standing, recovery) = match code {
         ResultCode::Ok | ResultCode::Cancelled => (Standing::Final, Vec::new()),
+        // A lifecycle's child owes no resume: the indexing of its resolved
+        // context is its parent's exit's, and the synchronization's binding
+        // offers the refresh in its place (`owed_to_its_parent`).
+        ResultCode::DiscoveryPending
+            if answer
+                .recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::IndexRefresh) =>
+        {
+            (Standing::Final, answer.recovery)
+        }
         // The publication's hand-off is owed, which a resume does.
         ResultCode::DiscoveryPending => (
             Standing::Final,
@@ -1305,3 +1316,7 @@ impl Binding for ConflictResolveBinding {
         self.call(call, accepted)
     }
 }
+
+#[cfg(test)]
+#[path = "conflict_tests.rs"]
+mod tests;
