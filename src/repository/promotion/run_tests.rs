@@ -382,9 +382,19 @@ impl run::PromotionIo for FakeIo {
         let plan = RemoteRefPlan::from_configuration("origin", &config.primary_branch).unwrap();
         let target = req.target.operation_target(&plan);
         // A refused reservation is the child's answer, as a real child's is
-        // (E-78).
-        let reservation =
-            service.reserve_promotion_child(&req.root, req.operation_id, &target, execution)?;
+        // (E-78). Whether the child is new is read first, as a real child's
+        // `open_synchronization` reads it (E-81).
+        let new = state::with_transaction(service, &req.root, |tx, id| {
+            Ok(state::read_operation(tx, id, req.operation_id)?.is_none())
+        })
+        .unwrap();
+        let reservation = service.reserve_promotion_child(
+            &req.root,
+            req.operation_id,
+            &target,
+            execution,
+            new,
+        )?;
         if matches!(reservation, RemoteReservationOutcome::Replay(_)) {
             service
                 .restart_promotion_child(&req.root, req.operation_id, &target, execution)
@@ -928,7 +938,7 @@ impl run::PromotionIo for MatrixIo {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let target = req.target.operation_target(&plan);
         let RemoteReservationOutcome::Reserved(owner) = s
-            .reserve_promotion_child(&req.root, req.operation_id, &target, execution)
+            .reserve_promotion_child(&req.root, req.operation_id, &target, execution, true)
             .unwrap()
         else {
             panic!("expected reserved child")
@@ -6427,7 +6437,8 @@ pub(in super::super) fn end_hand_off(data: &std::path::Path, id: OperationId) {
 
 /// The time of a call waiting behind a hand-off: a clock that moves only
 /// when the call sleeps on it, by the sleep's length, and that ends the
-/// hand-off at the second sleep when it is to be `Released`.
+/// hand-off at the second sleep when it is to be `Released`, letting go of
+/// any registry cache lock the test holds as well.
 pub(in super::super) struct HandOffTime {
     at: time::OffsetDateTime,
     nanos: std::sync::atomic::AtomicU64,
@@ -6460,6 +6471,7 @@ impl Sleeper for HandOffTime {
         let slept = self.slept.fetch_add(1, Ordering::SeqCst) + 1;
         if self.holder == HandOff::Released && slept == 2 {
             end_hand_off(&self.data, self.hand_off);
+            state::release_registries_for_testing();
         }
     }
 }
@@ -6635,6 +6647,159 @@ fn a_close_or_promotion_behind_a_live_hand_off_waits() {
                 {
                     wrong.push(format!("{case}: its retry ended as {finished:?}"));
                 }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Children run by `FakeIo`, whose child of the primary (`primary`) or of
+/// the item finds the registry's cache lock held from the first attempt of
+/// its reservation on (`hold_registry_for_testing`), until the call's time
+/// lets it go or the child returns.
+struct HeldAtReservation {
+    inner: FakeIo,
+    primary: bool,
+}
+impl run::PromotionIo for HeldAtReservation {
+    fn synchronize(
+        &mut self,
+        s: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &record::ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        if (req.target == SynchronizationTarget::Primary) == self.primary {
+            let root = req.root.clone();
+            crate::repository::remote::reservation::set_promotion_reservation_hook(
+                req.operation_id,
+                move || state::hold_registry_for_testing(&root, true),
+            );
+        }
+        let result = self.inner.synchronize(s, req, observer, execution);
+        state::release_registries_for_testing();
+        result
+    }
+    fn delete(
+        &mut self,
+        s: &RepositoryService,
+        req: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        config: &ObservationConfiguration,
+        oid: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner.delete(s, req, plan, owner, config, oid, item)
+    }
+}
+
+/// Decision 34 with R-SDD-70, for what refuses a child's reservation and
+/// names no operation: the registry's cache lock, held while another
+/// operation is at work, which `cache_read_guard` answers `RepositoryBusy`
+/// once its own wait is spent. A new child, one with no row of its own yet,
+/// waits for the operation at work (`waited_holding` names it, live): it
+/// goes on once the lock is let go within the wait, or answers `busy`
+/// naming it, and the primary child's publication is then `busy`, not
+/// `recovery_required`. A child that takes up its own row, a retained one
+/// restarted, is answered at once, with no sleep, as a synchronization that
+/// takes up its own row is. The same request finishes once the lock is let
+/// go. The lock here holds only the transactions of remote operations, and
+/// the clock and sleeps are the test's.
+#[test]
+fn a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not() {
+    use HandOff::*;
+    let mut wrong = Vec::new();
+    // (the primary's child or the item's, a restarting child, how the
+    // holder stands)
+    let rows = [
+        (true, false, Released),
+        (true, false, Live),
+        (false, false, Released),
+        (false, false, Live),
+        (true, true, Live),
+        (false, true, Live),
+    ];
+    for (primary, restarting, holder) in rows {
+        let case = format!("primary {primary}, restarting {restarting}, {holder:?}");
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        if restarting {
+            // A first attempt leaves the child retained: reserved, prepared
+            // and interrupted, its row kept for its restart.
+            let mut io = MatrixIo {
+                inner: FakeIo::default(),
+                mode: ChildMode::RetainedInterrupted,
+                primary,
+                injected: false,
+            };
+            let _ = f.run_io(req.clone(), &mut io);
+        }
+        // Another item's hand-off, at work: what the lock's holder is seen
+        // as. It owes only its hand-off, so it is in no child's way itself.
+        let at_work = OperationId::new();
+        let (service, time, at) = behind_hand_off(f.data.path(), at_work, holder);
+        begin_hand_off(
+            f.data.path(),
+            at_work,
+            &SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+            },
+            f.primary(),
+            holder,
+            at,
+        );
+        let mut io = HeldAtReservation {
+            inner: FakeIo::default(),
+            primary,
+        };
+        let result = run::promote_with_io(&service, req.clone(), &mut io);
+        let sleeps = match (restarting, holder) {
+            (true, _) => 0,
+            (false, Released) => 2,
+            _ => SPENT_WAIT,
+        };
+        if time.slept() != sleeps {
+            wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+        }
+        let publication = |category| PromotionPublication::Pending {
+            reason: PromotionPublicationPending::Synchronization(category),
+        };
+        let ended = match (primary, restarting, holder, &result) {
+            (_, false, Released, Ok(DocumentPromotionResult::Complete(o))) => {
+                o.cleanup() == PromotionCleanup::Complete
+                    && matches!(o.publication(), PromotionPublication::Published { .. })
+            }
+            (true, false, Live, Ok(result)) => {
+                authoritative(result.clone()).publication()
+                    == publication(PromotionSynchronizationCategory::Busy)
+            }
+            (false, false, Live, Err(DocumentPromotionError::ContextSynchronization(e))) => {
+                names_hand_off(e, RepositoryErrorKind::RepositoryBusy, at_work, true)
+            }
+            (true, true, _, Ok(result)) => {
+                authoritative(result.clone()).publication()
+                    == publication(PromotionSynchronizationCategory::RecoveryRequired)
+            }
+            (false, true, _, Err(DocumentPromotionError::ContextSynchronization(e))) => matches!(
+                &**e,
+                SynchronizationError::Repository(error)
+                    if error.kind == RepositoryErrorKind::RepositoryBusy
+                        && error.blocker().is_none()
+            ),
+            _ => false,
+        };
+        if !ended {
+            wrong.push(format!("{case}: ended as {result:?}"));
+        }
+        if holder != Released || restarting {
+            end_hand_off(f.data.path(), at_work);
+            let finished = f.run_io(req, &mut FakeIo::default());
+            if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+            {
+                wrong.push(format!("{case}: its retry ended as {finished:?}"));
             }
         }
     }

@@ -3955,7 +3955,13 @@ fn promotion_test_drive_local_inner(
     let reservation = if existing.is_some() {
         service.synchronization_restart_owned(root, request.operation_id, &target, execution)?
     } else {
-        service.synchronization_reserve_owned(root, request.operation_id, &target, execution)?
+        service.synchronization_reserve_owned(
+            root,
+            request.operation_id,
+            &target,
+            execution,
+            true,
+        )?
     };
     let RemoteReservationOutcome::Reserved(owner) = reservation else {
         return Err(SynchronizationError::RecoveryRequired);
@@ -4142,15 +4148,25 @@ impl RepositoryService {
         }
         error
     }
+    /// The reservation of the operation `op`, a synchronization's or a
+    /// lifecycle child's (`execution`). A new one (`new`: no row under its
+    /// ID, as the caller read it before) has done nothing yet that a refusal
+    /// would leave half done, and waits for a live holder in its way
+    /// (`reserving`; a child's wait is decision 34's). One that takes up its
+    /// own row, which holds what an earlier call did, is answered at once.
     fn synchronization_reserve_owned(
         &self,
         root: &Path,
         op: OperationId,
         target: &RemoteOperationTarget,
         execution: Option<&ChildExecution>,
+        new: bool,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         match execution {
-            Some(execution) => self.reserve_promotion_child(root, op, target, execution),
+            Some(execution) => self.reserve_promotion_child(root, op, target, execution, new),
+            None if new => {
+                self.reserving(root, op, || self.reserve_remote_operation(root, op, target))
+            }
             None => self.reserve_remote_operation(root, op, target),
         }
     }
@@ -6178,18 +6194,17 @@ impl RepositoryService {
             }
             prior = Some(record.clone().into());
             RemoteReservationOutcome::Reserved(owner)
-        } else if existing.is_none() && execution.is_none() {
-            // A new synchronization has done nothing yet that a refusal
-            // would leave half done: it waits for a live holder of the
-            // reservation. One that takes up its own row, which holds what
-            // an earlier call did, is answered at once. A new child of a
-            // promotion or a closure waits in its own reservation
-            // (`reserve_promotion_child`, decision 34).
-            self.reserving(&root, request.operation_id, || {
-                self.synchronization_reserve_owned(&root, request.operation_id, &target, None)
-            })?
         } else {
-            self.synchronization_reserve_owned(&root, request.operation_id, &target, execution)?
+            // A new synchronization, a lifecycle child among them, waits for
+            // a live holder of the reservation; one that takes up its own
+            // row is answered at once (`synchronization_reserve_owned`).
+            self.synchronization_reserve_owned(
+                &root,
+                request.operation_id,
+                &target,
+                execution,
+                existing.is_none(),
+            )?
         };
         let reservation = match reservation {
             RemoteReservationOutcome::Replay(record) => {
@@ -8127,9 +8142,13 @@ impl RepositoryService {
         let reservation = match &existing {
             // A new operation waits for a live holder of the reservation,
             // as a new synchronization does.
-            None => self.reserving(&root, request.operation_id, || {
-                self.synchronization_reserve_owned(&root, request.operation_id, &target, None)
-            })?,
+            None => self.synchronization_reserve_owned(
+                &root,
+                request.operation_id,
+                &target,
+                None,
+                true,
+            )?,
             Some(record) => {
                 if record.target != target {
                     return Err(SynchronizationError::RecoveryRequired);
@@ -8431,6 +8450,7 @@ impl RepositoryService {
                 request.operation_id,
                 &record.target,
                 execution,
+                false,
             )?
             else {
                 return Err(SynchronizationError::RecoveryRequired);
@@ -8456,6 +8476,7 @@ impl RepositoryService {
                 request.operation_id,
                 &record.target,
                 execution,
+                false,
             )?;
             return Err(SynchronizationError::Interrupted);
         }
@@ -8467,6 +8488,7 @@ impl RepositoryService {
                 request.operation_id,
                 &record.target,
                 execution,
+                false,
             )?;
             return Err(SynchronizationError::RecoveryRequired);
         }

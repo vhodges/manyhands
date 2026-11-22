@@ -7299,6 +7299,38 @@ pub(in super::super) fn update_remote_polling(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The roots whose registry cache lock a test holds for this thread's
+    /// transactions (`hold_registry_for_testing`).
+    static HELD_REGISTRIES: std::cell::RefCell<std::collections::BTreeSet<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Holds (`held`) or lets go of the registry cache lock of `root` for this
+/// thread's `with_transaction` calls: while held, each answers as
+/// `cache_read_guard` does once its wait for a writer that holds the lock is
+/// spent, `RepositoryBusy` naming no operation. Reads that are not
+/// transactions of a remote operation, as a waiting call's look at who is at
+/// work, are not held.
+#[cfg(test)]
+pub(in super::super) fn hold_registry_for_testing(root: &Path, held: bool) {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    HELD_REGISTRIES.with(|roots| {
+        if held {
+            roots.borrow_mut().insert(root);
+        } else {
+            roots.borrow_mut().remove(&root);
+        }
+    });
+}
+
+/// Lets go of every registry cache lock this thread's test holds.
+#[cfg(test)]
+pub(in super::super) fn release_registries_for_testing() {
+    HELD_REGISTRIES.with(|roots| roots.borrow_mut().clear());
+}
+
 /// A short cache-recovery-guarded transaction, never held across Git or network
 /// work. The registry is an observation cache, not a repository mutation lock.
 pub(in super::super) fn with_transaction<T>(
@@ -7310,6 +7342,15 @@ pub(in super::super) fn with_transaction<T>(
     let operation = RepositoryOperation::RepositorySnapshot;
     service.require_index_available(operation, Some(root))?;
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    #[cfg(test)]
+    if HELD_REGISTRIES.with(|roots| roots.borrow().contains(&root)) {
+        return Err(RepositoryError::new(
+            operation,
+            Some(root),
+            RepositoryErrorKind::RepositoryBusy,
+            "another repository operation is in progress",
+        ));
+    }
     let _guard = cache_read_guard(&service.registry_path, &root, operation)?;
     let mut connection =
         open_registry(&service.registry_path, &mut |_| {}).map_err(|_| recovery_required())?;

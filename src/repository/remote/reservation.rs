@@ -1415,21 +1415,22 @@ impl RepositoryService {
     }
 
     /// The reservation of a promotion's or a closure's child. A new child,
-    /// one with no row under its ID yet, waits for a live operation in its
-    /// way as a new synchronization does (`reserving`): a live sync
-    /// hand-off of its item or of the primary, which a close or a promotion
-    /// waits for (decision 34), or a live holder of the reservation. Its
-    /// parent holds nothing while it waits. A child whose row is there is
-    /// answered at once, as a synchronization that takes up its own row is
-    /// (the plain synchronization waits only when it has none), and so is
-    /// its restart (`restart_promotion_child`). Whether the row is there is
-    /// read only once the first attempt is refused.
+    /// one with no row under its ID yet (`new`, as its caller read it before
+    /// this call, as a synchronization reads `existing`), always waits in
+    /// `reserving` for a live operation in its way, whatever refused it: a
+    /// live sync hand-off of its item or of the primary, which a close or a
+    /// promotion waits for (decision 34), a live holder of the reservation,
+    /// or a lease or the registry's lock held while an operation is at work.
+    /// Its parent holds nothing while it waits. A child whose row is there
+    /// makes one attempt and is answered at once, as a synchronization that
+    /// takes up its own row is.
     pub(in super::super) fn reserve_promotion_child(
         &self,
         root: &Path,
         operation_id: OperationId,
         target: &RemoteOperationTarget,
         execution: &crate::repository::promotion::record::ChildExecution,
+        new: bool,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         let reserve = || match self.reserve_remote_operation_kind(
             root,
@@ -1442,18 +1443,10 @@ impl RepositoryService {
             RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
             RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
         };
-        let first = reserve();
-        if !matches!(first, Ok(RemoteReservationOutcome::Busy) | Err(_)) {
-            return first;
-        }
-        let new = state::with_transaction(self, root, |tx, id| {
-            Ok(state::read_operation(tx, id, operation_id)?.is_none())
-        })
-        .unwrap_or(false);
         if new {
             self.reserving(root, operation_id, reserve)
         } else {
-            first
+            reserve()
         }
     }
 
@@ -3145,6 +3138,9 @@ impl RepositoryService {
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         self.restart_synchronization_guarded(root, operation_id, target, None)
     }
+    /// The restart of a promotion's or a closure's child, which takes up its
+    /// own row: answered at once, with no wait, as a synchronization's
+    /// restart is.
     pub(in super::super) fn restart_promotion_child(
         &self,
         root: &Path,

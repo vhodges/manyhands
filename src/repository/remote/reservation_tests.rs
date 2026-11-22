@@ -4188,6 +4188,7 @@ fn child_fence_accepts_ticket_target_only_for_closure_parent() {
             child,
             &context_sync_target(AuthoringKind::Ticket),
             &execution,
+            true,
         )
         .unwrap()
     {
@@ -4248,6 +4249,7 @@ fn child_fence_accepts_ticket_target_only_for_closure_parent() {
                 child,
                 &context_sync_target(AuthoringKind::Ticket),
                 &execution,
+                true,
             )
             .is_err()
     );
@@ -4289,6 +4291,7 @@ fn child_fence_refuses_document_target_for_closure_parent() {
                 child,
                 &context_sync_target(AuthoringKind::Document),
                 &execution,
+                true,
             )
             .unwrap_err()
             .kind,
@@ -4435,6 +4438,7 @@ fn child_fence_admits_closure_primary_only_while_integrated_or_publication_pendi
                 child,
                 &RemoteOperationTarget::for_primary_synchronization(&plan()),
                 &execution,
+                true,
             )
             .unwrap_err()
             .kind,
@@ -4482,6 +4486,7 @@ fn child_fence_refuses_unreserved_closure_children_after_cancellation() {
                 child,
                 &context_sync_target(crate::repository::AuthoringKind::Ticket),
                 &execution,
+                true,
             )
             .is_err()
     );
