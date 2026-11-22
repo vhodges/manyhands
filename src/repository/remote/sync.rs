@@ -515,20 +515,25 @@ fn decision(value: RemoteSafePointOutcome) -> Result<(), SynchronizationError> {
 
 // Worktree paths are derived here and never enter requests, records or errors.
 fn local_target(
+    service: &RepositoryService,
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
 ) -> Result<git2::Repository, SynchronizationError> {
-    checked_target(root, primary, target, false)
+    checked_target(service, root, primary, target, false)
 }
 fn inspected_target(
+    service: &RepositoryService,
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
 ) -> Result<git2::Repository, SynchronizationError> {
-    checked_target(root, primary, target, true)
+    checked_target(service, root, primary, target, true)
 }
+/// A context is validated from its worktree's files with `filesystem`, and
+/// otherwise from its committed tree, which `service` remembers it accepted.
 fn checked_target(
+    service: &RepositoryService,
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
@@ -550,7 +555,7 @@ fn checked_target(
             validate_context_worktree(&repository, &context, true, operation)
         } else {
             validate_context_worktree_identity(&repository, &context, operation)
-                .and_then(|()| validate_context_tree(&linked, &context, operation))
+                .and_then(|()| service.validate_context_tree(&linked, &context, operation))
         }
         .map_err(|_| SynchronizationError::TargetNotMaterialized)?;
     }
@@ -3320,7 +3325,7 @@ fn reconcile_pending_candidate(
         return Err(SynchronizationError::RecoveryRequired);
     }
     if step.phase == state::IntegrationStepPhase::Prepared {
-        let fresh = local_target(root, primary_branch, target)
+        let fresh = local_target(service, root, primary_branch, target)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         if local_oid(&fresh)? != step.intent.local_oid {
             return Err(SynchronizationError::RecoveryRequired);
@@ -3559,7 +3564,7 @@ fn integrate_divergence(
         primary,
         ..
     } = input;
-    let target_repository = local_target(root, primary_branch, target)?;
+    let target_repository = local_target(service, root, primary_branch, target)?;
     let path = target_repository
         .workdir()
         .ok_or(SynchronizationError::RecoveryRequired)?
@@ -4144,11 +4149,11 @@ impl RepositoryService {
         primary: &str,
         target: &SynchronizationTarget,
     ) -> Result<git2::Oid, SynchronizationError> {
-        let observed = local_oid(&inspected_target(root, primary, target)?)?;
+        let observed = local_oid(&inspected_target(self, root, primary, target)?)?;
         let repository =
             git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
         let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
-        let current = local_oid(&local_target(root, primary, target)?)?;
+        let current = local_oid(&local_target(self, root, primary, target)?)?;
         if current != observed {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -6624,7 +6629,7 @@ impl RepositoryService {
                         return Err(SynchronizationError::ExternalChange);
                     }
                 }
-                let linked = local_target(&root, &config.primary_branch, &request.target)?;
+                let linked = local_target(self, &root, &config.primary_branch, &request.target)?;
                 let local = local_oid(&linked)?;
                 // The reconcile records where a restarted row began. A row
                 // that took no reconcile on this pass has still none to compare
@@ -6685,7 +6690,8 @@ impl RepositoryService {
                         observer,
                     )?;
                     // Reopen at the actual mutation boundary after durable intent.
-                    let fresh = local_target(&root, &config.primary_branch, &request.target)?;
+                    let fresh =
+                        local_target(self, &root, &config.primary_branch, &request.target)?;
                     if local_oid(&fresh)? != local {
                         return Err(SynchronizationError::ExternalChange);
                     }
@@ -6693,7 +6699,7 @@ impl RepositoryService {
                     fast_forward(&fresh, selected.remote_ref(), local, integration.final_oid)?;
                     let _ = mark_local_update(self, &root, &request.target);
                     updated = vec![hand_off_context(&request.target)];
-                    local_target(&root, &config.primary_branch, &request.target)
+                    local_target(self, &root, &config.primary_branch, &request.target)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
                     if local_oid(&fresh)? != integration.final_oid {
                         return Err(SynchronizationError::RecoveryRequired);
@@ -7068,13 +7074,14 @@ impl RepositoryService {
         tests::run_local_binding_hook(request.operation_id);
         let repository = git2::Repository::open(&request.root)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let observed = local_oid(&inspected_target(&request.root, primary, &request.target)?)?;
+        let observed =
+            local_oid(&inspected_target(self, &request.root, primary, &request.target)?)?;
         let _lease = repository_lease(
             &repository,
             &request.root,
             RepositoryOperation::RefreshRepository,
         )?;
-        let oid = local_oid(&local_target(&request.root, primary, &request.target)?)?;
+        let oid = local_oid(&local_target(self, &request.root, primary, &request.target)?)?;
         if oid != observed {
             return Err(SynchronizationError::ExternalChange);
         }

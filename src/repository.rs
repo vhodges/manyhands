@@ -429,6 +429,9 @@ pub struct RepositoryService {
     identity_lock_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// What the request records read the time from.
     clock: Arc<dyn mutation::Clock>,
+    /// The context trees `validate_context_tree` accepted, so that one it
+    /// accepted is not walked again in this process.
+    context_tree_validations: Mutex<ContextTreeValidations>,
     /// What an operation read asks whether a holder's process exists.
     process_probe: Arc<dyn liveness::ProcessProbe>,
     /// How long a writer waits for a live holder of the row in its way.
@@ -4978,6 +4981,7 @@ impl RepositoryService {
             acceptance_hook: Mutex::new(None),
             identity_lock_hook: Mutex::new(None),
             clock: Arc::new(mutation::SystemClock),
+            context_tree_validations: Mutex::new(ContextTreeValidations::default()),
             process_probe: Arc::new(liveness::SystemProbe),
             wait_policy: WaitPolicy::default(),
             sleeper: Arc::new(blocker::SystemSleeper),
@@ -10828,33 +10832,142 @@ fn validate_context_worktree(
     let worktree_context = canonical_context_at(&context.worktree, operation)?;
     validate_context_items(context, worktree_context, require_target, operation)
 }
-/// Same canonical policy as filesystem inspection, using immutable commit data
-/// for lease-held revalidation. No directory walk or working-tree scan occurs.
-fn validate_context_tree(
-    repository: &Repository,
-    context: &ItemContext,
-    operation: RepositoryOperation,
-) -> Result<(), RepositoryError> {
-    validate_context_tree_items(repository, context, true, operation)
+/// The context trees a service's `validate_context_tree` accepted (design
+/// Phase 2, "Fewer inspections"; R-SDD-52). One synchronization validates
+/// its target's tree at every inspection, and a first edit's branch shares
+/// main's tree, so the same tree comes back again and again. Only accepted
+/// trees are held, the oldest leaving first past `CONTEXT_TREE_VALIDATIONS`;
+/// a refused tree is walked again each time. It lives in the service, not
+/// the registry, so no other process shares it.
+#[derive(Default)]
+struct ContextTreeValidations {
+    accepted: std::collections::VecDeque<ContextTreeValidation>,
+    /// How many trees the service walked.
+    #[cfg(test)]
+    walks: usize,
 }
 
-/// `validate_context_tree`, with the item required in the tree only when
-/// `require_target` says so: a context made for an item that does not
-/// exist yet holds none, and is still checked for an item of another
-/// kind, or two, under the ID.
+/// Every input of a context tree's validation: the tree, the item's kind
+/// and ID, the configuration blob in the tree, the validator's build, and
+/// whether the item must be in the tree. The tree's OID already names its
+/// configuration blob, and in one process the build is constant; both keep
+/// the key sound should accepted trees ever be kept across processes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContextTreeValidation {
+    tree: git2::Oid,
+    kind: AuthoringKind,
+    item_id: canonical::ItemId,
+    configuration: Option<git2::Oid>,
+    build: &'static str,
+    require_target: bool,
+}
+
+/// How many accepted context trees a service keeps.
+const CONTEXT_TREE_VALIDATIONS: usize = 64;
+
+/// The build of the validator, for its key. The crate's version is the only
+/// build identity the crate has.
+const CONTEXT_TREE_VALIDATOR_BUILD: &str = env!("CARGO_PKG_VERSION");
+
+impl ContextTreeValidations {
+    fn accepted(&self, key: &ContextTreeValidation) -> bool {
+        self.accepted.contains(key)
+    }
+
+    fn accept(&mut self, key: ContextTreeValidation) {
+        if self.accepted.contains(&key) {
+            return;
+        }
+        if self.accepted.len() == CONTEXT_TREE_VALIDATIONS {
+            self.accepted.pop_front();
+        }
+        self.accepted.push_back(key);
+    }
+}
+
+impl RepositoryService {
+    /// Same canonical policy as filesystem inspection, using immutable commit
+    /// data for lease-held revalidation. No directory walk or working-tree
+    /// scan occurs, and a tree this service already accepted for the same
+    /// item is not walked again.
+    fn validate_context_tree(
+        &self,
+        repository: &Repository,
+        context: &ItemContext,
+        operation: RepositoryOperation,
+    ) -> Result<(), RepositoryError> {
+        let tree = repository
+            .head()
+            .and_then(|head| head.peel_to_tree())
+            .map_err(|_| uninspectable_context_tree(context, operation))?;
+        let key = ContextTreeValidation {
+            tree: tree.id(),
+            kind: context.kind,
+            item_id: context.item_id.clone(),
+            configuration: tree
+                .get_path(Path::new(canonical::CONFIG_PATH))
+                .ok()
+                .map(|entry| entry.id()),
+            build: CONTEXT_TREE_VALIDATOR_BUILD,
+            require_target: true,
+        };
+        // A poisoned cache answers nothing: the tree is walked as before.
+        if self
+            .context_tree_validations
+            .lock()
+            .is_ok_and(|validations| validations.accepted(&key))
+        {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if let Ok(mut validations) = self.context_tree_validations.lock() {
+            validations.walks += 1;
+        }
+        validate_context_tree_at(repository, &tree, context, true, operation)?;
+        if let Ok(mut validations) = self.context_tree_validations.lock() {
+            validations.accept(key);
+        }
+        Ok(())
+    }
+}
+
+fn uninspectable_context_tree(context: &ItemContext, operation: RepositoryOperation) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        Some(context.root.clone()),
+        RepositoryErrorKind::MismatchedAuthoringContext,
+        "the canonical target commit cannot be inspected",
+    )
+}
+
+/// `validate_context_tree` of the head's tree, with the item required in
+/// the tree only when `require_target` says so: a context made for an item
+/// that does not exist yet holds none, and is still checked for an item of
+/// another kind, or two, under the ID.
 fn validate_context_tree_items(
     repository: &Repository,
     context: &ItemContext,
     require_target: bool,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    let tree = repository
+        .head()
+        .and_then(|head| head.peel_to_tree())
+        .map_err(|_| uninspectable_context_tree(context, operation))?;
+    validate_context_tree_at(repository, &tree, context, require_target, operation)
+}
+
+/// The canonical items of `tree`, walked, checked for `context`'s item.
+fn validate_context_tree_at(
+    repository: &Repository,
+    tree: &git2::Tree<'_>,
+    context: &ItemContext,
+    require_target: bool,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
     let inspect = || -> Result<CanonicalContext, ()> {
-        let tree = repository
-            .head()
-            .and_then(|h| h.peel_to_tree())
-            .map_err(|_| ())?;
         let snapshot =
-            RepositoryService::canonical_tree_sources(repository, &tree).map_err(|_| ())?;
+            RepositoryService::canonical_tree_sources(repository, tree).map_err(|_| ())?;
         let sources = snapshot
             .sources
             .iter()
@@ -10876,14 +10989,7 @@ fn validate_context_tree_items(
             .collect();
         Ok(canonical_context_from_sources(sources))
     };
-    let canonical = inspect().map_err(|_| {
-        RepositoryError::new(
-            operation,
-            Some(context.root.clone()),
-            RepositoryErrorKind::MismatchedAuthoringContext,
-            "the canonical target commit cannot be inspected",
-        )
-    })?;
+    let canonical = inspect().map_err(|_| uninspectable_context_tree(context, operation))?;
     validate_context_items(context, canonical, require_target, operation)
 }
 fn validate_context_items(

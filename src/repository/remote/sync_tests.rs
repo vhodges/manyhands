@@ -217,18 +217,18 @@ fn wrong_branch_and_unmaterialized_context_are_nonmutating() {
 }
 #[test]
 fn foreign_merge_rebase_and_cherry_pick_metadata_are_refused_without_adoption() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     let head = repo.head().unwrap().target().unwrap().to_string();
     for metadata in ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"] {
         fs::write(repo.path().join(metadata), format!("{head}\n")).unwrap();
         assert!(matches!(
-            local_target(root.path(), "main", &SynchronizationTarget::Primary),
+            local_target(&service, root.path(), "main", &SynchronizationTarget::Primary),
             Err(SynchronizationError::WorktreeConflicted { .. })
         ));
         fs::remove_file(repo.path().join(metadata)).unwrap();
     }
-    assert!(local_target(root.path(), "main", &SynchronizationTarget::Primary).is_ok());
+    assert!(local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).is_ok());
 }
 
 #[test]
@@ -625,6 +625,149 @@ fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation
     }
 }
 
+/// R-SDD-53: the head and status check that stays before a local update.
+/// After the inspection a synchronization keeps before its ordered pass
+/// (`inspect_synchronization_local`), another writer moves the target's
+/// head or dirties its status, before the pass begins or under its lease
+/// just before the update. The pass answers as it does today, and nothing
+/// of it reaches the branch, the index or the files. (The push's own check
+/// runs on the push call's connection, which only the transport makes: the
+/// SSH-harness cases reach it, a library test cannot.)
+#[test]
+fn a_head_or_status_change_after_the_kept_inspection_refuses_the_local_update() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Change {
+        Head,
+        Status,
+    }
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum When {
+        BeforeThePass,
+        UnderTheLease,
+    }
+    // (incoming fast-forwards local, change, when)
+    let rows = [
+        (true, Change::Head, When::UnderTheLease),
+        (false, Change::Head, When::UnderTheLease),
+        (true, Change::Status, When::BeforeThePass),
+        (false, Change::Status, When::BeforeThePass),
+        (true, Change::Status, When::UnderTheLease),
+        (false, Change::Status, When::UnderTheLease),
+    ];
+    for (fast_forward, change, when) in rows {
+        let row = format!("fast_forward={fast_forward} {change:?} {when:?}");
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let parent = if fast_forward {
+            fixture.local
+        } else {
+            fixture.base
+        };
+        let incoming = child(&repository, parent, b"incoming\n");
+        fixture.fetch(incoming, 1);
+        let inspected = fixture
+            .service
+            .inspect_synchronization_local(
+                fixture.root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+            )
+            .unwrap();
+        assert_eq!(inspected, fixture.local, "{row}");
+        fixture.append_window(1, incoming).unwrap();
+        let root = fixture.root.path().to_owned();
+        let local = fixture.local;
+        // Another writer: a commit of the same tree moves the head and leaves
+        // the index and files as they are; an edit dirties the status only.
+        let write = move || {
+            let repository = git2::Repository::open(&root).unwrap();
+            match change {
+                Change::Head => {
+                    let parent = repository.find_commit(local).unwrap();
+                    let signature = repository.signature().unwrap();
+                    repository
+                        .commit(
+                            Some("HEAD"),
+                            &signature,
+                            &signature,
+                            "another writer",
+                            &parent.tree().unwrap(),
+                            &[&parent],
+                        )
+                        .unwrap();
+                }
+                Change::Status => {
+                    fs::write(root.join("fixture.txt"), b"another writer\n").unwrap();
+                }
+            }
+        };
+        let hook = match when {
+            When::BeforeThePass => {
+                write();
+                None
+            }
+            When::UnderTheLease => {
+                let mut write = Some(write);
+                Some(super::super::observation_tests::install_hook(move |point| {
+                    if point == RemoteOperationSafePoint::BeforeLocalMutation
+                        && let Some(write) = write.take()
+                    {
+                        write();
+                    }
+                }))
+            }
+        };
+        let head = |repository: &git2::Repository| repository.refname_to_id("refs/heads/main");
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let result = fixture.integrate(incoming);
+        drop(hook);
+        let after = repository.head().unwrap().target().unwrap();
+        match change {
+            Change::Head => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::ExternalChange)),
+                    "{row}: {result:?}"
+                );
+                assert_ne!(after, local, "{row}");
+                assert_eq!(
+                    repository.find_commit(after).unwrap().parent_id(0).unwrap(),
+                    local,
+                    "{row}: only the other writer's commit is on the branch"
+                );
+                assert_eq!(fs::read(fixture.root.path().join("fixture.txt")).unwrap(), b"original\n", "{row}");
+            }
+            Change::Status => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::WorktreeNotClean { .. })),
+                    "{row}: {result:?}"
+                );
+                assert_eq!(after, local, "{row}");
+                assert_eq!(
+                    fs::read(fixture.root.path().join("fixture.txt")).unwrap(),
+                    b"another writer\n",
+                    "{row}"
+                );
+            }
+        }
+        assert_eq!(head(&repository).unwrap(), after, "{row}");
+        assert_eq!(
+            fs::read(fixture.root.path().join("local.txt")).unwrap(),
+            b"local\n",
+            "{row}"
+        );
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index, "{row}");
+        let applied: i64 = fixture
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM remote_integration_steps WHERE phase='applied'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 0, "{row}");
+    }
+}
+
 #[test]
 fn no_remote_index_pending_retains_exact_outcome_and_replays_refresh_only() {
     let (root, _data, service) = fixture();
@@ -757,7 +900,7 @@ fn actual_commit_graph_rejections_preserve_ref_index_and_worktree_bytes() {
 }
 #[test]
 fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     let old = repo.head().unwrap().target().unwrap();
     let new = child(&repo, old, b"advanced\n");
@@ -767,7 +910,7 @@ fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
         fs::read(root.path().join("fixture.txt")).unwrap(),
         b"advanced\n"
     );
-    local_target(root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).unwrap();
     assert!(matches!(
         fast_forward(&repo, "refs/heads/main", old, new),
         Err(SynchronizationError::ExternalChange)
@@ -792,7 +935,7 @@ fn fixture_pins_autocrlf_locally_before_initial_staging() {
 
 #[test]
 fn fast_forward_respects_local_autocrlf_checkout_policy() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     repo.config()
         .unwrap()
@@ -803,7 +946,7 @@ fn fast_forward_respects_local_autocrlf_checkout_policy() {
     fast_forward(&repo, "refs/heads/main", old, new).unwrap();
     assert_eq!(repo.head().unwrap().target(), Some(new));
     assert!(fs::read(root.path().join("fixture.txt")).unwrap() == b"advanced\r\n");
-    local_target(root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).unwrap();
 }
 
 #[test]
@@ -952,6 +1095,155 @@ fn materialized_context_uses_existing_authoring_identity_and_checks_its_own_work
         fs::read(context.worktree.join("fixture.txt")).unwrap(),
         b"context dirty"
     );
+}
+/// R-SDD-52: a context tree the service accepted is not walked again for
+/// the same item. Another item, another kind or another tree is walked; a
+/// refused tree is walked each time; and the key also holds the tree's
+/// configuration blob, the validator's build and whether the item must be
+/// there, with the oldest accepted tree leaving first.
+#[test]
+fn a_tree_validation_is_cached_by_tree_kind_item_configuration_and_build() {
+    let (root, _data, service) = fixture();
+    let item_id: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+    let saved = service.save_ticket(SaveTicketRequest {
+        target: AuthoringTarget {
+            root: root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: item_id.clone(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        },
+        draft: TicketDraft {
+            title: "Fixture".into(),
+            body: "fixture".into(),
+            ticket_type: "task".into(),
+            status: "open".into(),
+            project: None,
+            team: None,
+        },
+        expected_path: ExpectedPathObservation::Missing,
+    });
+    let context = match saved.unwrap() {
+        SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
+        _ => panic!("missing context"),
+    };
+    let linked = git2::Repository::open(&context.worktree).unwrap();
+    let walks = || service.context_tree_validations.lock().unwrap().walks;
+    let validate = |context: &ItemContext| {
+        service.validate_context_tree(&linked, context, RepositoryOperation::RepositorySnapshot)
+    };
+    let other_kind = ItemContext {
+        kind: AuthoringKind::Document,
+        ..context.clone()
+    };
+    let other_item = ItemContext {
+        item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+        ..context.clone()
+    };
+    // (row, context, accepted, walks after the row)
+    let rows: [(&str, &ItemContext, bool, usize); 6] = [
+        ("first validation walks", &context, true, 1),
+        ("the same tree and item is not walked again", &context, true, 1),
+        ("another kind under the ID is walked, and refused", &other_kind, false, 2),
+        ("a refused tree is walked again", &other_kind, false, 3),
+        ("another item is walked, and refused", &other_item, false, 4),
+        ("the accepted item still is not walked", &context, true, 4),
+    ];
+    for (row, context, accepted, after) in rows {
+        assert_eq!(validate(context).is_ok(), accepted, "{row}");
+        assert_eq!(walks(), after, "{row}");
+    }
+    // A new commit is a new tree, walked once.
+    fs::write(context.worktree.join("new.txt"), b"new\n").unwrap();
+    commit_all(&linked);
+    assert!(validate(&context).is_ok());
+    assert_eq!(walks(), 5, "a new tree is walked");
+    assert!(validate(&context).is_ok());
+    assert_eq!(walks(), 5, "and then remembered");
+
+    // Every part of the key decides: an accepted key answers for no key that
+    // differs from it in one part.
+    let tree = linked.head().unwrap().peel_to_tree().unwrap();
+    let key = ContextTreeValidation {
+        tree: tree.id(),
+        kind: AuthoringKind::Ticket,
+        item_id: item_id.clone(),
+        configuration: Some(
+            tree.get_path(Path::new(crate::canonical::CONFIG_PATH))
+                .unwrap()
+                .id(),
+        ),
+        build: CONTEXT_TREE_VALIDATOR_BUILD,
+        require_target: true,
+    };
+    assert!(
+        service
+            .context_tree_validations
+            .lock()
+            .unwrap()
+            .accepted(&key),
+        "the service keyed what it accepted by tree, kind, item, configuration blob and build"
+    );
+    let variants = [
+        (
+            "tree",
+            ContextTreeValidation {
+                tree: git2::Oid::from_bytes(&[7; 20]).unwrap(),
+                ..key.clone()
+            },
+        ),
+        (
+            "kind",
+            ContextTreeValidation {
+                kind: AuthoringKind::Document,
+                ..key.clone()
+            },
+        ),
+        (
+            "item",
+            ContextTreeValidation {
+                item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+                ..key.clone()
+            },
+        ),
+        (
+            "configuration blob",
+            ContextTreeValidation {
+                configuration: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
+                ..key.clone()
+            },
+        ),
+        (
+            "build",
+            ContextTreeValidation {
+                build: "another build",
+                ..key.clone()
+            },
+        ),
+        (
+            "required target",
+            ContextTreeValidation {
+                require_target: false,
+                ..key.clone()
+            },
+        ),
+    ];
+    let mut validations = ContextTreeValidations::default();
+    validations.accept(key.clone());
+    for (part, variant) in &variants {
+        assert!(!validations.accepted(variant), "{part}");
+    }
+    // Bounded: the oldest accepted tree leaves first.
+    for n in 0..CONTEXT_TREE_VALIDATIONS {
+        let mut bytes = [0; 20];
+        bytes[..8].copy_from_slice(&(n as u64 + 1).to_be_bytes());
+        validations.accept(ContextTreeValidation {
+            tree: git2::Oid::from_bytes(&bytes).unwrap(),
+            ..key.clone()
+        });
+    }
+    assert_eq!(validations.accepted.len(), CONTEXT_TREE_VALIDATIONS);
+    assert!(!validations.accepted(&key), "the oldest left first");
 }
 #[test]
 fn ref_lock_rejects_before_checkout_and_post_checkout_mismatch_is_not_rolled_back() {
