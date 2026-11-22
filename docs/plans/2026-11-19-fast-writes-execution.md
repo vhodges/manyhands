@@ -347,3 +347,13 @@ Entries for Tasks 1 to 10 follow, from the per-task reports, the reviewers' file
 - Review: spec not met, 1 Critical: a close's or promotion's child resumed under its own ID could never complete its hand-off, and the refusal was swallowed into `IndexPending` (`c5_made_ready_pending_child` and `c5_resume_pending_child_promote` went red). Fixed in `603f1bfe` and re-reviewed: addressed. 9 Minor deferred to the final review (M-a to M-i in the ledger), among them that a refusal of a hand-off's ID now answers `internal_error` for every caller.
 - Found here, an earlier task's regression: `document_promotion quality2_f11_preserves_active_child_handoff` passes on main `790a71ed` and fails at `e6959641` (`tests/document_promotion/quality.rs:258`). It is an SSH case, so no between-task run reached it. Being bisected.
 - Not run, due at review-ready: the SSH tier and the whole fast tier. Task 16a does not ship without 16b (concern 7).
+
+### Carry fix: the F11 promotion cases after Task 8's dirty marks (R-SDD-48)
+
+- Found in Task 16a: `document_promotion quality2_f11_preserves_active_child_handoff` passes on main `790a71ed` and fails on this branch. A bisect over `790a71ed..e6959641` put the first failure at Task 8's `552d1c40` (writes mark the contexts they changed dirty). Its two siblings share the test function and failed at the same assertion.
+- Commit: `471fbddf` (test only).
+- Conclusion: Task 8's premise change, not a defect. Promotion completion (`complete_record`, `promotion/lifecycle_record.rs` ~970-973) marks the primary and the document's context dirty in the same transaction as the fence, instead of setting the repository's `refresh_required`, so the flag the test read is 0 while the index still reads behind.
+- Named edit E-39 (decision 31): `tests/document_promotion/quality.rs` `refresh_f11_inner`, shared by `quality2_f11_fences_older_refresh`, `quality2_f11_preserves_active_child_handoff` and `quality2_f11_does_not_adopt_reclaimed_owner`. It now pins that after the F11 exit, with the older refresh paused and fenced, both contexts' rows are dirty and `repository_snapshot` reads the index as behind (what `index status` reads as stale). Every other assertion is unchanged; `discovery_primary_once`'s `!refresh_required` now also requires the marks cleared.
+- Tests run: the three `quality2_f11_*` cases singly, each ok; fmt, check and clippy clean.
+- Review: spec met, Approved (sonnet), 0 Critical or Important. The reviewer's probe showed both marks clear before the completion, so the new assertion discriminates as the old one did.
+- Not run, due at review-ready: the rest of `document_promotion` and the SSH tier. Task 8's reviewer had already listed the promotion, closure, sync and mutation SSH cases for review-ready.
