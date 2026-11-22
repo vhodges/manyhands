@@ -491,6 +491,29 @@ Entries for Tasks 1 to 10 follow, from the per-task reports, the reviewers' file
   - minors deferred to the final review.
 - Not run, due at review-ready: the fast tier and every SSH-harness target.
 
+### Task 23: Phase 3 close
+
+- Base and commits: base `4c207f90`; `b58413b8` (cli-contract: the `operation resume` row for a sync's per-item hand-off and a lifecycle exit's row, the `document promote`, `ticket close` row for decision 34's wait and P-1's cleanup outcomes, C5 follow-up candidate 1 settled by this ticket), `4863ac5e` (skills: a vh-f3wts column and a "What a write indexes" row in cli-conventions' build table; finding-work, polling-and-index and recovery), `4cac3c51` (design: the comment hand-off repair's row is per item; the P-1 bullet's stop is at `worktree_removing`; the Windows registry limit under Risks). The review's fixes are the next entry.
+- Docs checked with this branch's debug CLI on scratch registries (isolated `HOME`, `MANYHANDS_DATA_DIR` and `GIT_CONFIG_GLOBAL`), or by the test that pins each claim. No cheap way was found to tell a vh-f3wts build from a vh-bhepg one; the skills say so and give guidance safe on either.
+- Measurement (R-SDD-57's form: a new root whose build directory is Phase 1's, the Phase 1 throwaway key imported by reference, the owner-approved host fingerprint). Three SSH runs, release build, medians in seconds, at `f03d4e91` and again at `0886503e` after the review's fixes; Phase 2, Phase 1 and the baseline in brackets:
+  - ticket save 0.137, 0.134 [0.181, 0.189, 13.9]; document save 0.172, 0.188 [0.213, 0.228, 14.1]; ticket create 0.448, 0.503 [0.538, 0.523, 14.2]; comment add's local checkpoint 0.576, 0.600 [0.620, 0.942, 14.4];
+  - item sync 2.144, 1.938 [2.466, 7.791, 20.9]; comment add 1.572, 1.630 [1.970, 8.035, 35.2];
+  - promote --prepare 0.432, 0.427 [0.784, 0.799, 7.0] and --confirm 4.870, 4.586 [10.334, 16.439, 94.3]; close --prepare 0.431, 0.404 [0.777, 0.759, 7.1] and --confirm 5.055, 4.877 [10.337, 16.503, 94.9];
+  - index refresh 0.104, 0.108 [0.129, 0.120, 14.0]; poll once 2.859, 2.801 [3.441, 3.532, 17.2].
+
+  Every target in decision 1 is met, so R-SDD-63's fallback is not needed. Connections, from sshd's journal against the timeline, the same at both builds and as in Phase 2: item sync 4, 5, 5 (runs 2 and 3 merged main), comment add 4, promote and close 10 each, poll once 1.
+- Profiles (gdb sampling of the release build at `f03d4e91`) of a save, a sync, a promote and a close:
+  - `image_proof`'s audit runs once per process, at registry open, and appears in no sample;
+  - `latest_commit_touching` and `observe_root` are test-only;
+  - a confirmed close or promotion previews three times, all item-level (the verb's, then the runner's two);
+  - a close makes no whole-repository observation (Phase 2: 6), 7 full tree walks (13), one full cleanup check (as built at `f03d4e91`) and one index step.
+
+  What remains in a close is the same tree walked 5 times by the result checks (`result_ticket`, `result_document_path`), which bypass the validation cache (about 1.3 s), and 10 connections (about 1.2 s). Follow-on candidates, not in this plan: those uncached walks; registry opens outside the key reads (103 per sync, 289 per close); `inspect_synchronization_local`'s checks repeated in every remote call; the index step's per-file status passes. TCP_NODELAY is vh-fx67e.
+- Review (Step 4): a fresh reviewer (opus) over `b1c98993..4cac3c51`, in seven passes, found 0 Critical, 1 Important, 13 Minor. I-1: under R-SDD-68 a nested repository or unreadable directory already in an ignored directory stopped a close with a remote after the remote delete, holding the cleanup's reservation, which refuses the repository's writes, refreshes and polls until a person acts; R-SDD-73 restores base's answer, and only a race reaches the post-delete stop. I-1 and M-2 to M-8, M-10 and M-13's rename and message were fixed (R-SDD-74; next entry) and re-reviewed: all addressed, no new Critical or Important. M-1 (three previews where decision 5 counted two, R-SDD-63) and M-12 (a close behind a stale primary hand-off merges, then stops at publication `recovery_required`) go to the owner at review-ready. M-9, M-11, the rest of M-13 and the re-review's Minors are deferred to the final review.
+- Rulings: R-SDD-73 (supersedes R-SDD-68), R-SDD-74, R-SDD-75.
+- Tests run: Steps 1-2, 17 library tests by exact name, `cli` `documents::interrupted_saves_follow_the_required_outcomes`, `mutation_replay` 2, and the drift run `cli` `skills::` 8; the review fixes' runs are in the next entry.
+- Not run, due at review-ready: the fast tier and every SSH-harness target.
+
 ### Phase 3 review fixes (Task 23, Step 4)
 
 - Base and commits: base `4cac3c51`; `a04f8f53` (R-SDD-73, superseding R-SDD-68: when a remote delete is due, the check before the cleanup's reservation is the full check again, `ContextCleanup::full_check`, the tree still read through the validation cache; the check just before the delete stays head-and-status), `57b16f4d` (M-2, M-3: `index_lifecycle_exit` closes the fresh-ID row a step that did not complete left pending, through `close_pending_refresh`, and answers `LifecycleIndexStep`; the exit and the own-ID child share it), `9e260e88` (M-4: an unreadable parent record reads as a child's, under the `contexts_indexed` guard), `c9681ecc` (M-5: registry open takes its memo right after `migrate_registry`), `84f8515c` (M-8), `24dc6cbb` (the hold test's second row), `5b5d1c9d` (cli-contract), `702b0fa6` (skills), `02ba093a` (the design's P-1 bullet, M-6), `aa8ce4a8` (clippy and rustfmt).
