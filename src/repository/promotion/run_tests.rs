@@ -6387,114 +6387,151 @@ fn remote_row_image(f: &Fixture, operation: OperationId) -> Vec<String> {
 /// `index refresh` is refused at once, `recovery_required`, naming it with
 /// no judgment; a `poll once` is `busy`. None of them changes the
 /// reservation. Once the same request has finished, the save and the
-/// refresh go on.
+/// refresh go on. A nested repository that was there before the cleanup's
+/// first check stops it before the reservation, and that stop holds none of
+/// them: the save and the refresh go on while it stands.
 #[test]
 fn a_stop_after_the_remote_delete_holds_the_repository_until_it_finishes() {
     const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
-    let f = Fixture::new();
-    f.remote();
-    let req = f.request();
-    let root = f.root.path().to_owned();
-    let mut made = false;
-    hook(&f, move |_, point| {
-        if point == FailurePoint::AfterRemoteDeletion && !made {
-            made = true;
-            make_dirt(&root, Dirt::NestedRepository);
-        }
-    });
-    let mut io = FakeIo::default();
-    let stopped = f.run_io(req.clone(), &mut io).unwrap();
-    HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
-    assert!(
-        matches!(stopped, DocumentPromotionResult::IndexPending(_)),
-        "{stopped:?}"
-    );
-    assert_eq!(
-        f.stored(req.operation_id).step,
-        record::PromotionStep::WorktreeRemoving
-    );
-    let held = remote_row_image(&f, req.operation_id);
-    // The calls after it, made once the process that stopped is gone: no
-    // process of this host but one that is not this one is there.
-    let after = RepositoryService::open_at(f.data.path())
-        .unwrap()
-        .with_sleeper_for_testing(std::sync::Arc::new(NoSleep))
-        .with_wait_policy_for_testing(WAIT_POLICY)
-        .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
-    let save = |service: &RepositoryService| {
-        service.save_document(SaveDocumentRequest {
-            target: AuthoringTarget {
-                root: f.root.path().into(),
-                kind: AuthoringKind::Document,
-                item_id: OTHER.parse().unwrap(),
-                intent: ContextIntent::Create,
-                operation_id: OperationId::new(),
-            },
-            source_path: None,
-            destination_path: "docs/other.md".into(),
-            draft: DocumentDraft {
-                title: "another document".into(),
-                body: "another body\n".into(),
-            },
-            expected_source: None,
-            expected_destination: ExpectedPathObservation::Missing,
-        })
-    };
-    let refresh = |service: &RepositoryService| {
-        service.refresh_repository(RefreshRepositoryRequest {
-            root: f.root.path().into(),
-            operation_id: OperationId::new(),
-        })
-    };
-    // Refused, naming the close's operation, judged as `live` says.
-    let names_the_close = |error: &RepositoryError, live: Option<bool>| {
-        error.kind == RepositoryErrorKind::RecoveryRequired
-            && error
-                .blocker()
-                .is_some_and(|b| b.operation_id == req.operation_id && b.live == live)
-    };
     let mut wrong = Vec::new();
-    match save(&after) {
-        Err(error) if names_the_close(&error, Some(false)) => (),
-        Err(error) => wrong.push(format!("another item's save: {error:?}")),
-        Ok(_) => wrong.push("another item's save went on".into()),
-    }
-    match refresh(&after) {
-        Err(error) if names_the_close(&error, None) => (),
-        other => wrong.push(format!("an index refresh: {other:?}")),
-    }
-    let polled = after.poll_publication_remote(
-        PollPublicationRemoteRequest {
-            root: f.root.path().into(),
-            operation_id: OperationId::new(),
-            invocation: RemotePollInvocation::Explicit,
-            approval: None,
-            restart: false,
-        },
-        &mut SessionCredentials::new(NoCredentials),
-    );
-    if !matches!(polled, Err(RemotePollError::Busy)) {
-        wrong.push(format!("a poll once: {polled:?}"));
-    }
-    if remote_row_image(&f, req.operation_id) != held {
-        wrong.push("the cleanup's reservation changed".into());
-    }
-    if f.stored(req.operation_id).step != record::PromotionStep::WorktreeRemoving {
-        wrong.push("the close moved on".into());
-    }
-    // The same request finishes once what was nested is gone, and lets the
-    // reservation go: the save and the refresh go on.
-    clear_dirt(f.root.path(), Dirt::NestedRepository);
-    match f.run_io(req.clone(), &mut io) {
-        Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => {
+    for (case, at, held) in [
+        (
+            "made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            true,
+        ),
+        (
+            "there before the first check",
+            FailurePoint::AfterPublication,
+            false,
+        ),
+    ] {
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let mut made = false;
+        hook(&f, move |_, point| {
+            if point == at && !made {
+                made = true;
+                make_dirt(&root, Dirt::NestedRepository);
+            }
+        });
+        let mut io = FakeIo::default();
+        let stopped = f.run_io(req.clone(), &mut io).unwrap();
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        let (indexed, step) = if held {
+            (false, record::PromotionStep::WorktreeRemoving)
+        } else {
+            (true, record::PromotionStep::Published)
+        };
+        if matches!(stopped, DocumentPromotionResult::Complete(_)) != indexed
+            || f.stored(req.operation_id).step != step
+            || remote_rows(&f, req.operation_id) != i64::from(held)
+        {
+            wrong.push(format!(
+                "{case}: stopped as {stopped:?} at {:?}",
+                f.stored(req.operation_id).step
+            ));
+            continue;
         }
-        other => wrong.push(format!("its retry: {other:?}")),
-    }
-    if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
-        wrong.push("another item's save after the retry".into());
-    }
-    if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
-        wrong.push("an index refresh after the retry".into());
+        let reservation = held.then(|| remote_row_image(&f, req.operation_id));
+        // The calls after it, made once the process that stopped is gone: no
+        // process of this host but one that is not this one is there.
+        let after = RepositoryService::open_at(f.data.path())
+            .unwrap()
+            .with_sleeper_for_testing(std::sync::Arc::new(NoSleep))
+            .with_wait_policy_for_testing(WAIT_POLICY)
+            .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
+        let save = |service: &RepositoryService| {
+            service.save_document(SaveDocumentRequest {
+                target: AuthoringTarget {
+                    root: f.root.path().into(),
+                    kind: AuthoringKind::Document,
+                    item_id: OTHER.parse().unwrap(),
+                    intent: ContextIntent::Create,
+                    operation_id: OperationId::new(),
+                },
+                source_path: None,
+                destination_path: "docs/other.md".into(),
+                draft: DocumentDraft {
+                    title: "another document".into(),
+                    body: "another body\n".into(),
+                },
+                expected_source: None,
+                expected_destination: ExpectedPathObservation::Missing,
+            })
+        };
+        let refresh = |service: &RepositoryService| {
+            service.refresh_repository(RefreshRepositoryRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+            })
+        };
+        // Refused, naming the close's operation, judged as `live` says.
+        let names_the_close = |error: &RepositoryError, live: Option<bool>| {
+            error.kind == RepositoryErrorKind::RecoveryRequired
+                && error
+                    .blocker()
+                    .is_some_and(|b| b.operation_id == req.operation_id && b.live == live)
+        };
+        if !held {
+            if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
+                wrong.push(format!("{case}: another item's save"));
+            }
+            if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
+                wrong.push(format!("{case}: an index refresh"));
+            }
+            clear_dirt(f.root.path(), Dirt::NestedRepository);
+            match f.run_io(req, &mut io) {
+                Ok(DocumentPromotionResult::Complete(o))
+                    if o.cleanup() == PromotionCleanup::Complete => {}
+                other => wrong.push(format!("{case}: its retry: {other:?}")),
+            }
+            continue;
+        }
+        match save(&after) {
+            Err(error) if names_the_close(&error, Some(false)) => (),
+            Err(error) => wrong.push(format!("{case}: another item's save: {error:?}")),
+            Ok(_) => wrong.push(format!("{case}: another item's save went on")),
+        }
+        match refresh(&after) {
+            Err(error) if names_the_close(&error, None) => (),
+            other => wrong.push(format!("{case}: an index refresh: {other:?}")),
+        }
+        let polled = after.poll_publication_remote(
+            PollPublicationRemoteRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+                invocation: RemotePollInvocation::Explicit,
+                approval: None,
+                restart: false,
+            },
+            &mut SessionCredentials::new(NoCredentials),
+        );
+        if !matches!(polled, Err(RemotePollError::Busy)) {
+            wrong.push(format!("{case}: a poll once: {polled:?}"));
+        }
+        if Some(remote_row_image(&f, req.operation_id)) != reservation {
+            wrong.push(format!("{case}: the cleanup's reservation changed"));
+        }
+        if f.stored(req.operation_id).step != record::PromotionStep::WorktreeRemoving {
+            wrong.push(format!("{case}: the close moved on"));
+        }
+        // The same request finishes once what was nested is gone, and lets
+        // the reservation go: the save and the refresh go on.
+        clear_dirt(f.root.path(), Dirt::NestedRepository);
+        match f.run_io(req.clone(), &mut io) {
+            Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => {
+            }
+            other => wrong.push(format!("{case}: its retry: {other:?}")),
+        }
+        if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
+            wrong.push(format!("{case}: another item's save after the retry"));
+        }
+        if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
+            wrong.push(format!("{case}: an index refresh after the retry"));
+        }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
