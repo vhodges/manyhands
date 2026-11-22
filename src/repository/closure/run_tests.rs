@@ -22,7 +22,9 @@ use crate::repository::{
         lifecycle::LifecycleError,
         record::ChildExecution,
         run::{self, PromotionIo},
-        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS, Told},
+        run_tests::{
+            COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, PreviewCount, TRACKING_HOOKS, Told,
+        },
     },
     remote::{observation::ObservationConfiguration, reservation::RemoteReservation, state},
     transport::{DeleteObservation, VerifySshTransportRequest},
@@ -2368,4 +2370,89 @@ fn a_closure_the_ticket_holds_is_not_reported_as_recording() {
         stages_of(false, true),
         [S::Observing, S::Integrating, S::CleaningUp]
     );
+}
+
+/// Task 21 (design, "Two previews per attempt"): a confirmed close previews
+/// once against the consent digest and once at integration, and no preview
+/// observes the whole repository. With a remote, the context child runs
+/// between the two.
+#[test]
+fn a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation() {
+    for remote in [false, true] {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let count = PreviewCount::start(f.root());
+        let mut io = FakeIo::default();
+        let result = if remote {
+            f.run_io(&f.service, req, &mut io)
+        } else {
+            f.close(&f.service, req)
+        };
+        outcome(result.unwrap());
+        let children = io.calls.borrow().children.len();
+        assert_eq!(children, if remote { 2 } else { 0 }, "remote: {remote}");
+        assert_eq!(count.taken(), (2, 0), "remote: {remote}");
+    }
+}
+
+/// Task 21 (design, "Two previews per attempt"): a resumed attempt has no
+/// consent preview and re-checks under the integration lease. Stopped before
+/// its context synchronized, it previews at integration only, and with a
+/// remote once more, to decide whether a context child runs. Stopped after,
+/// it previews at integration only, and that preview's revalidation under
+/// the lease still refuses a context changed meanwhile. With its checkpoint
+/// written it takes no preview: the written effect resumes under the lease,
+/// and only a `closing` record whose checkpoint moved nothing observes, as
+/// it is not resumed. No preview observes the whole repository.
+#[test]
+fn a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview() {
+    // (stopped at, with a remote, the context made dirty while stopped,
+    // previews of the resumed attempt)
+    let rows = [
+        (FailurePoint::AfterConfirmed, false, false, 1),
+        (FailurePoint::AfterConfirmed, true, false, 2),
+        (FailurePoint::AfterContextSync, false, false, 1),
+        (FailurePoint::AfterContextSync, false, true, 1),
+        (FailurePoint::ClosureAfterClosingRecorded, false, false, 1),
+        (FailurePoint::AfterClosureCheckpoint, false, false, 0),
+        (FailurePoint::BeforeIntegrationRef, false, false, 0),
+    ];
+    for (stop, remote, dirty, previews) in rows {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let mut io = FakeIo::default();
+        assert!(
+            f.run_io(&f.failing(stop), req.clone(), &mut io).is_err(),
+            "{stop:?}"
+        );
+        if dirty {
+            write(&f.context, "draft.txt", "draft\n");
+        }
+        let count = PreviewCount::start(f.root());
+        let result = f.run_io(&f.reopened(), req.clone(), &mut io);
+        if dirty {
+            assert!(
+                matches!(result, Err(TicketClosureError::ReconfirmationRequired)),
+                "{stop:?}: {result:?}"
+            );
+            let r = f.stored(req.operation_id);
+            assert_eq!(r.step, ClosureStep::Abandoned, "{stop:?}");
+            assert_eq!(r.refusal, Some(record::Refusal::ReconfirmationRequired));
+        } else {
+            outcome(result.unwrap());
+        }
+        assert_eq!(
+            count.taken(),
+            (previews, 0),
+            "{stop:?}, remote {remote}, dirty {dirty}"
+        );
+    }
 }

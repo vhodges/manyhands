@@ -159,6 +159,30 @@ impl ObservationSeal {
     }
 }
 
+#[cfg(test)]
+type PreviewFactsHook = Box<dyn FnMut()>;
+#[cfg(test)]
+thread_local! { static PREVIEW_FACTS_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf, PreviewFactsHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
+/// Runs `hook` each time a preview of an item of the repository at `root`
+/// reads the item's facts: once per preview, of either lifecycle.
+#[cfg(test)]
+pub(in super::super) fn set_preview_facts_hook(root: PathBuf, hook: impl FnMut() + 'static) {
+    PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().insert(root, Box::new(hook)));
+}
+/// Removes the hook `set_preview_facts_hook` set for `root`.
+#[cfg(test)]
+pub(in super::super) fn clear_preview_facts_hook(root: &Path) {
+    PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().remove(root));
+}
+#[cfg(test)]
+pub(in super::super) fn preview_facts_checkpoint(root: &Path) {
+    let hook = PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().remove(root));
+    if let Some(mut hook) = hook {
+        hook();
+        PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().insert(root.into(), hook));
+    }
+}
+
 /// The canonical repository and its valid configuration, opened for an
 /// unleased observation.
 pub(in super::super) fn open_observation(
@@ -190,6 +214,129 @@ pub(in super::super) fn open_observation(
     Ok((repository, root, config))
 }
 
+/// What a preview's discovery yields (P-5): whether the item is of the other
+/// kind than the lifecycle's (closure's `not_ticket`, promotion's
+/// `not_document`), and the item's path in its own context, on the
+/// lifecycle's branch (`ticket_path`, `document_path`). A preview takes
+/// nothing else from beyond the item's context and the primary branch.
+pub(in super::super) struct PreviewFacts {
+    pub(in super::super) kind_mismatch: bool,
+    pub(in super::super) item_path: Option<PathBuf>,
+}
+
+/// The item's preview facts, as a whole-repository observation gave them,
+/// read from the item's own context and the primary's index rows. The
+/// item's context, while it is a valid one, holds both facts: it is
+/// observed on its own, so duplicates in its worktree are found as before.
+/// Without one, the item is of the other kind when the primary holds it so.
+/// That is read from the primary's index rows after the primary's basis
+/// check (`discovery::moved_contexts`, as "Reads that decide on other items"
+/// compares it), or from the primary on disk when its basis moved, so an
+/// outside change is read from disk. Nothing is stored. Runs outside the
+/// repository lease.
+pub(in super::super) fn item_preview_facts(
+    kind: LifecycleKind,
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<PreviewFacts, RepositoryError> {
+    #[cfg(test)]
+    preview_facts_checkpoint(root);
+    let repository = git2::Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        &[] as &[&std::ffi::OsStr],
+    )
+    .map_err(|_| unavailable(root))?;
+    let of_kind = |items: &[discovery::ObservedItem], same: bool| {
+        items
+            .iter()
+            .filter(move |i| i.id == *item && (i.kind == kind.authoring()) == same)
+            .map(|i| i.path.clone())
+            .collect::<Vec<_>>()
+    };
+    // Its context as the whole observation listed it: a directory under the
+    // worktree base named for it, read when the base is listed whole and
+    // otherwise when the base is a directory, as the listing reads one.
+    let key = ContextKey::Item(item.clone());
+    let listed = match discovery::list_contexts(&repository, root) {
+        Ok(listed) => listed.into_iter().find(|listed| listed.key == key),
+        Err(_) => std::fs::symlink_metadata(root.join(".manyhands/worktrees"))
+            .is_ok_and(|metadata| metadata.is_dir())
+            .then(|| discovery::listed_context(root, &key))
+            .flatten(),
+    };
+    let own = listed
+        .map(|listed| {
+            discovery::observe_context(
+                &repository,
+                root,
+                &listed,
+                &mut crate::repository::activity::PrimaryActivityMap::default(),
+            )
+        })
+        .filter(|observation| observation.valid);
+    if let Some(own) = own {
+        let on_branch = own.context.branch.as_deref() == Some(kind.context_branch(item).as_str());
+        return Ok(PreviewFacts {
+            kind_mismatch: !of_kind(&own.items, false).is_empty(),
+            item_path: on_branch
+                .then(|| of_kind(&own.items, true).into_iter().next())
+                .flatten(),
+        });
+    }
+    let (primary, kinds) = read_registered(service, root, |tx, id| {
+        let primary = StoredContexts::of(tx, id)
+            .map_err(RepositoryError::sqlite)?
+            .bases()
+            .into_iter()
+            .filter(|(key, _)| *key == ContextKey::Primary)
+            .collect::<Vec<_>>();
+        let mut statement = tx
+            .prepare(
+                "SELECT items.kind FROM discovered_items AS items
+                   JOIN contexts ON contexts.id = items.context_id
+                  WHERE contexts.repository_id = ?1 AND contexts.item_id IS NULL
+                    AND items.item_id = ?2",
+            )
+            .map_err(RepositoryError::sqlite)?;
+        let kinds = statement
+            .query_map(rusqlite::params![id, item.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(RepositoryError::sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RepositoryError::sqlite)?;
+        Ok((primary, kinds))
+    })?;
+    let moved = discovery::moved_contexts(&repository, root, &primary)
+        .iter()
+        .any(|listed| listed.key == ContextKey::Primary);
+    let kind_mismatch = if moved {
+        // As a read that decides on other items observes it: its items take
+        // their commits from the map the index holds, which is not stored.
+        let mut activity = crate::repository::load_activity_map(
+            &service.registry_path,
+            root,
+            RepositoryOperation::Read,
+        )?;
+        let primary = discovery::observe_context(
+            &repository,
+            root,
+            &ListedContext::primary(root),
+            &mut activity,
+        );
+        !of_kind(&primary.items, false).is_empty()
+    } else {
+        let name = crate::repository::authoring_kind_name(kind.authoring());
+        kinds.iter().any(|stored| stored != name)
+    };
+    Ok(PreviewFacts {
+        kind_mismatch,
+        item_path: None,
+    })
+}
+
 pub(super) fn prepare(
     service: &RepositoryService,
     request: PreviewDocumentPromotionRequest,
@@ -212,35 +359,17 @@ pub(super) fn prepare_for(
     let (repository_id, snapshot, pending) = read_view(service, &root)?;
     let (facts, seal) =
         ObservationSeal::discover(kind, &repository, &root, &config, &request.item_id, || {
-            let discovered = discovery::observe_root(&repository, &root);
-            let active = discovered
-                .active_contexts
-                .iter()
-                .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
-            DiscoveryFacts {
-                kind,
-                not_document: active.is_some_and(|a| {
-                    a.items
-                        .iter()
-                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)
-                }) || (active.is_none()
-                    && discovered
-                        .items
-                        .iter()
-                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
-                document_path: active
-                    .filter(|a| {
-                        a.context.branch.as_deref()
-                            == Some(kind.context_branch(&request.item_id).as_str())
-                    })
-                    .and_then(|a| {
-                        a.items
-                            .iter()
-                            .find(|i| i.id == request.item_id && i.kind == kind.authoring())
-                    })
-                    .map(|i| i.path.clone()),
-            }
+            item_preview_facts(kind, service, &root, &request.item_id)
         })?;
+    let PreviewFacts {
+        kind_mismatch,
+        item_path,
+    } = facts?;
+    let facts = DiscoveryFacts {
+        kind,
+        not_document: kind_mismatch,
+        document_path: item_path,
+    };
     let preflight = observe_git(
         &repository,
         &root,
@@ -276,33 +405,41 @@ pub(in super::super) fn read_view_with<T>(
     root: &Path,
     extra: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<T, RepositoryError>,
 ) -> Result<(i64, RemoteSnapshot, bool, T), RepositoryError> {
+    read_registered(service, root, |transaction, id| {
+        let snapshot = state::read_snapshot(transaction, id)?;
+        let pending = state::has_pending_conflict(transaction, id)?;
+        let extra = extra(transaction, id)?;
+        Ok((id, snapshot, pending, extra))
+    })
+}
+/// `read` in one read-only SQLite transaction, given the registration of
+/// the repository at `root`.
+fn read_registered<T>(
+    service: &RepositoryService,
+    root: &Path,
+    read: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
     let operation = RepositoryOperation::Read;
-    let (id, snapshot, pending, extra) = {
-        let _guard = cache_read_guard(&service.registry_path, root, operation)?;
-        let mut connection = open_registry_read_only(&service.registry_path)?;
-        let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
-        let id = transaction
-            .query_row(
-                "SELECT id FROM repositories WHERE root_path=?1",
-                [registry_root_key(root, operation)?],
-                |row| row.get::<_, i64>(0),
+    let _guard = cache_read_guard(&service.registry_path, root, operation)?;
+    let mut connection = open_registry_read_only(&service.registry_path)?;
+    let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
+    let id = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [registry_root_key(root, operation)?],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "promotion requires a registered repository",
             )
-            .optional()
-            .map_err(RepositoryError::sqlite)?
-            .ok_or_else(|| {
-                RepositoryError::new(
-                    operation,
-                    Some(root.to_owned()),
-                    RepositoryErrorKind::RepositoryNotRegistered,
-                    "promotion requires a registered repository",
-                )
-            })?;
-        let snapshot = state::read_snapshot(&transaction, id)?;
-        let pending = state::has_pending_conflict(&transaction, id)?;
-        let extra = extra(&transaction, id)?;
-        (id, snapshot, pending, extra)
-    };
-    Ok((id, snapshot, pending, extra))
+        })?;
+    read(&transaction, id)
 }
 fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(&(bytes.len() as u64).to_be_bytes());

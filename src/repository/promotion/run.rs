@@ -658,15 +658,22 @@ fn promote_inner<L: Lifecycle>(
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
-        let cleanup_only = preview::<L>(
-            service,
-            &root,
-            r.item_id(),
-            request.confirmed_identity.as_ref(),
-        )
-        .ok()
-        .and_then(|p| L::ready(p).ok())
-        .is_some_and(|p| !p.runs_context_child());
+        // Two previews per attempt: the consent preview, which this call took
+        // when it inserted the record, says whether a context child runs. A
+        // resumed attempt has none, so with a remote it previews for that.
+        let cleanup_only = r.remote_name().is_some()
+            && match &observed {
+                Some(p) => !p.runs_context_child(),
+                None => preview::<L>(
+                    service,
+                    &root,
+                    r.item_id(),
+                    request.confirmed_identity.as_ref(),
+                )
+                .ok()
+                .and_then(|p| L::ready(p).ok())
+                .is_some_and(|p| !p.runs_context_child()),
+            };
         if r.remote_name().is_some()
             && !cleanup_only
             && let Err(error) =
@@ -678,24 +685,22 @@ fn promote_inner<L: Lifecycle>(
             }
             return Err(L::Error::context_synchronization(Box::new(error)));
         }
-        let p = match L::ready(preview::<L>(
-            service,
-            &root,
-            r.item_id(),
-            request.confirmed_identity.as_ref(),
-        )?) {
-            Ok(p) if p.expectation() == r.expectation() => p,
-            _ => {
-                return Err(abandon::<L>(
-                    service,
-                    &root,
-                    &mut r,
-                    L::Refusal::reconfirmation_required(),
-                ));
-            }
+        // The synchronized context as Git holds it. The integration preview
+        // checks it, and the consent, under the integration lease
+        // (`prepare_integration_for`); a refusal there abandons as one here
+        // did. A context branch that is gone cannot be consented.
+        let Some((context, tracking)) =
+            synchronized_context::<L>(&root, &r, &config.primary_branch)?
+        else {
+            return Err(abandon::<L>(
+                service,
+                &root,
+                &mut r,
+                L::Refusal::reconfirmation_required(),
+            ));
         };
-        r.set_context_oid(Some(p.context_oid()));
-        r.set_remote_context_oid(p.tracking_context());
+        r.set_context_oid(Some(context));
+        r.set_remote_context_oid(tracking);
         r.set_step(Step::ContextSynchronized);
         save::<L>(service, &root, &r)?;
         boundary(service, &root, FailurePoint::AfterContextSync)?;
@@ -703,12 +708,16 @@ fn promote_inner<L: Lifecycle>(
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
+    // The exact synchronized context, not a later edit, is integrated.
+    let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
     let input = if r.effect_written() {
         // A written effect is never re-previewed or abandoned here: the
         // lifecycle reconciles it under the integration lease (C9).
-        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         written_request::<L>(&root, &r, &bound_primary, context)?
-    } else {
+    } else if r.step() == Step::Integrating {
+        // A resumed integration that wrote no effect keeps its preview: one
+        // that is not ready abandons it, which a refusal under the lease does
+        // not at `integrating`.
         let p = match L::ready(preview::<L>(
             service,
             &root,
@@ -725,9 +734,22 @@ fn promote_inner<L: Lifecycle>(
                 ));
             }
         };
-        // The exact synchronized context, not a later edit, is integrated.
-        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         L::integration_request(&p, r.expectation(), context)
+    } else {
+        // No preview of its own: the integration preview checks this request
+        // and the consent, and a refusal there abandons as one here did. A
+        // primary branch that is gone cannot be consented.
+        match synchronized_request::<L>(&root, &r, &bound_primary, context)? {
+            Some(input) => input,
+            None => {
+                return Err(abandon::<L>(
+                    service,
+                    &root,
+                    &mut r,
+                    L::Refusal::reconfirmation_required(),
+                ));
+            }
+        }
     };
     // A closure's checkpoint is written in the integration's hook, unless an
     // earlier run wrote it. Whether the closure is new is the boundary's to
@@ -822,6 +844,56 @@ fn promote_inner<L: Lifecycle>(
     ))
 }
 
+/// The context branch's tip and, with a remote, its tracking ref, as a
+/// preview reads them (`observe::context_presence`, `observe::remote_facts`);
+/// `None` when the context branch is gone.
+fn synchronized_context<L: Lifecycle>(
+    root: &Path,
+    r: &L::Record,
+    primary: &str,
+) -> Result<Option<(Oid, Option<Oid>)>, L::Error> {
+    let (repo, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let Some(context) = observe::reference_oid(&repo, &L::KIND.context_ref(r.item_id()), root)?
+    else {
+        return Ok(None);
+    };
+    let tracking = match r.remote_name() {
+        Some(remote) => {
+            let plan = RemoteRefPlan::from_configuration(remote, primary)
+                .map_err(|_| observe::unavailable(root))?;
+            let tracking = plan.context(L::KIND.authoring(), r.item_id());
+            observe::reference_oid(&repo, tracking.tracking_ref(), root)?
+        }
+        None => None,
+    };
+    Ok(Some((context, tracking)))
+}
+/// The integration request of a synchronized context whose effect is not
+/// written: bound to the record and the local primary as a preview reads it
+/// (`observe::primary_presence`), with no preview; `None` when the local
+/// primary is gone.
+fn synchronized_request<L: Lifecycle>(
+    root: &Path,
+    r: &L::Record,
+    primary: &str,
+    context: Oid,
+) -> Result<Option<integrate::IntegrationRequest<L::Expectation>>, L::Error> {
+    let (repo, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let primary_ref = format!("refs/heads/{primary}");
+    let Some(primary_oid) = observe::reference_oid(&repo, &primary_ref, root)? else {
+        return Ok(None);
+    };
+    Ok(Some(integrate::IntegrationRequest {
+        expected: r.expectation(),
+        context: integrate::IntegrationContext {
+            item_id: r.item_id().clone(),
+            primary_branch: primary.into(),
+            oid: context,
+        },
+        primary_oid,
+        publication_remote: r.remote_name().map(str::to_owned),
+    }))
+}
 /// The integration request of a record whose effect may be written: bound to
 /// the record and the local primary as it is now, with no preview.
 fn written_request<L: Lifecycle>(

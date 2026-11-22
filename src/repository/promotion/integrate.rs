@@ -116,39 +116,58 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
     parent: Option<&L::Record>,
 ) -> Result<PreparedIntegration, L::Error> {
     let (repository, root) = canonical_repository_root(root, RepositoryOperation::Read)?;
-    let observation = L::prepare(
-        service,
-        L::preview_request(root.clone(), record.context.item_id.clone(), identity),
-    )?;
-    let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
+    let prepare = || {
+        L::prepare(
+            service,
+            L::preview_request(root.clone(), record.context.item_id.clone(), identity),
+        )
+    };
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
     let context_ref = L::KIND.context_ref(&record.context.item_id);
-    if let Some(parent) = parent
-        && let Some(old_primary) =
-            written_primary::<L::Error>(&repository, &primary_ref, parent.effect_written())?
-        && let Some(checkpoint) = lifecycle.resume_written(
-            service,
-            &mut LeasedIntegration {
-                repository: &repository,
-                root: &root,
-                context: &record.context,
-                base: old_primary,
-                record: Some(parent),
-            },
-        )?
-    {
-        // Consent is not re-checked: the written checkpoint is the consented
-        // effect (C9). Only the primary's own safety checks remain.
-        return prepare_checkpoint_integration(
-            L::KIND,
-            repository,
-            root,
-            lease,
-            record.context.clone(),
-            old_primary,
-            checkpoint,
-        );
-    }
+    // The integration preview is taken just before the lease, unless a
+    // written effect may resume: that needs none. Only when it does not
+    // resume is the preview taken, outside the lease, and the resume asked
+    // again under the lease taken after it.
+    let mut observation = match parent {
+        Some(parent) if parent.effect_written() => None,
+        _ => Some(prepare()?),
+    };
+    let (observation, lease) = loop {
+        let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
+        if let Some(parent) = parent
+            && let Some(old_primary) =
+                written_primary::<L::Error>(&repository, &primary_ref, parent.effect_written())?
+            && let Some(checkpoint) = lifecycle.resume_written(
+                service,
+                &mut LeasedIntegration {
+                    repository: &repository,
+                    root: &root,
+                    context: &record.context,
+                    base: old_primary,
+                    record: Some(parent),
+                },
+            )?
+        {
+            // Consent is not re-checked: the written checkpoint is the consented
+            // effect (C9). Only the primary's own safety checks remain.
+            return prepare_checkpoint_integration(
+                L::KIND,
+                repository,
+                root,
+                lease,
+                record.context.clone(),
+                old_primary,
+                checkpoint,
+            );
+        }
+        match observation.take() {
+            Some(observation) => break (observation, lease),
+            None => {
+                drop(lease);
+                observation = Some(prepare()?);
+            }
+        }
+    };
     if repository.refname_to_id(&primary_ref).ok() != Some(record.primary_oid)
         || repository.refname_to_id(&context_ref).ok() != Some(record.context.oid)
     {

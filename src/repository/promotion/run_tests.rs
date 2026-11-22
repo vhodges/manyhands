@@ -49,6 +49,61 @@ pub(super) fn tracking_deleted(service: &RepositoryService, root: &std::path::Pa
         hook(service);
     }
 }
+/// What the previews of a lifecycle run at `root` read: how many times a
+/// preview read the item's facts (`observe::set_preview_facts_hook`), and
+/// how many whole-repository observations ran (`discovery::set_scan_hook`).
+/// Both are taken when the run reaches its index step (the `RefreshFailure`
+/// boundary, before the refresh an exit runs, which Task 22 replaces), or
+/// as they stand if it reaches none. It holds the root's boundary hook.
+pub(in super::super) struct PreviewCount {
+    root: PathBuf,
+    previews: Rc<std::cell::Cell<usize>>,
+    scans: Rc<std::cell::Cell<usize>>,
+    at_index_step: Rc<std::cell::Cell<Option<(usize, usize)>>>,
+}
+impl PreviewCount {
+    pub(in super::super) fn start(root: &std::path::Path) -> Self {
+        let count = Self {
+            root: root.to_owned(),
+            previews: Rc::default(),
+            scans: Rc::default(),
+            at_index_step: Rc::default(),
+        };
+        let previews = count.previews.clone();
+        observe::set_preview_facts_hook(root.to_owned(), move || previews.set(previews.get() + 1));
+        let scans = count.scans.clone();
+        discovery::set_scan_hook(root.to_owned(), move || scans.set(scans.get() + 1));
+        let (previews, scans, taken) = (
+            count.previews.clone(),
+            count.scans.clone(),
+            count.at_index_step.clone(),
+        );
+        HOOKS.with(|h| {
+            h.borrow_mut().insert(
+                root.to_owned(),
+                Box::new(move |_, point| {
+                    if point == FailurePoint::RefreshFailure && taken.get().is_none() {
+                        taken.set(Some((previews.get(), scans.get())));
+                    }
+                }),
+            )
+        });
+        count
+    }
+    /// `(previews, whole-repository observations)`.
+    pub(in super::super) fn taken(&self) -> (usize, usize) {
+        self.at_index_step
+            .get()
+            .unwrap_or((self.previews.get(), self.scans.get()))
+    }
+}
+impl Drop for PreviewCount {
+    fn drop(&mut self) {
+        observe::clear_preview_facts_hook(&self.root);
+        discovery::clear_scan_hook(&self.root);
+        HOOKS.with(|h| h.borrow_mut().remove(&self.root));
+    }
+}
 fn hook(f: &Fixture, callback: impl FnMut(&RepositoryService, FailurePoint) + 'static) {
     HOOKS.with(|h| {
         h.borrow_mut()
@@ -3604,6 +3659,27 @@ fn spec4_outside_inside_races_refuse_without_superseding_the_old_owner() {
         );
         assert_eq!(counts, effect_counts(&f));
         assert!(history == history_image(&f));
+    }
+}
+
+/// Task 21 (design, "Two previews per attempt"): a confirmed promotion
+/// previews once against the consent digest and once at integration, and
+/// no preview observes the whole repository. With a remote, the context
+/// child runs between the two.
+#[test]
+fn a_confirmed_promotion_takes_at_most_two_previews_and_no_whole_repository_observation() {
+    for remote in [false, true] {
+        let f = Fixture::new();
+        if remote {
+            f.remote();
+        }
+        let req = f.request();
+        let count = PreviewCount::start(f.root.path());
+        let mut io = FakeIo::default();
+        outcome(f.run_io(req, &mut io).unwrap());
+        let children = io.calls.borrow().children.len();
+        assert_eq!(children, if remote { 2 } else { 0 }, "remote: {remote}");
+        assert_eq!(count.taken(), (2, 0), "remote: {remote}");
     }
 }
 

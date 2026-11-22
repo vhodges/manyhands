@@ -465,11 +465,13 @@ fn context_scan_checkpoint(worktree: &Path) {
 /// `active_contexts`: its problem is the primary's. A primary whose
 /// configuration is not valid has no item contexts.
 ///
-/// This is what a preview reads. The index stores `observe_contexts`
-/// instead, each context as it is.
+/// What a preview read until it took the item's own facts
+/// (`promotion::observe::item_preview_facts`); tests compare with it. The
+/// index stores `observe_contexts` instead, each context as it is.
+#[cfg(test)]
 pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
-    // A preview stores nothing, so it builds a map of its own with one walk
-    // of the primary's history.
+    // It stores nothing, so it builds a map of its own with one walk of the
+    // primary's history.
     let ObservedContexts {
         primary,
         items: item_contexts,
@@ -1496,6 +1498,7 @@ fn item_comment_directory(item_id: &canonical::ItemId) -> PathBuf {
 /// Only those directories are attributed by path. A primary document that
 /// cannot be parsed carries no ID, so it cannot be attributed to an item and
 /// stays a primary problem.
+#[cfg(test)]
 fn leave_active_items_to_their_contexts(
     root: &Path,
     active_contexts: &[ActiveContextObservation],
