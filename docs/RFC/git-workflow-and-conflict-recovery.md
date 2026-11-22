@@ -221,20 +221,28 @@ non-conflicted context worktree. After fetching, it re-observes `C`, `T(C)`, and
    ticket vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`), Phase 2 of the
    [fast-writes design](../plans/2026-11-19-fast-writes-design.md): the
    hand-off indexes what the synchronization changed, not the whole
-   repository. A merge or fast-forward it made is indexed with no basis check
-   (`index_contexts` of the changed contexts); the only context an item
-   synchronization changes is `C`'s. A synchronization that only pushed, or
-   found the remote current, completes its hand-off without observing anything
-   (`complete_hand_off_unobserved`), unless `C`'s context is marked dirty or
-   its stored basis no longer holds, and then indexes that context alone. The
-   hand-off is a local `refresh` row under the synchronization's ID with
-   target `synchronization-index-v1/<kind>/<item>/<oid>`, `<oid>` being the
-   commit published or found current. The row is of that item, so a crashed
-   hand-off holds only its own item, and a refresh, a poll and other items'
-   writes and synchronizations go on past it. A synchronization with no
-   publication remote, one that a promotion or closure runs as its child, and
-   a row that an older build began with target `''` still hand off to a
-   refresh of the whole repository. A hand-off that fails answers index
+   repository. A merge or fast-forward it made is indexed with no basis
+   comparison before it is observed (`index_contexts` of the changed
+   contexts): the context is observed with no lease held, and its basis is
+   checked again under the lease before it is stored, as every write's index
+   step checks it. The only context an item synchronization changes is `C`'s.
+   A synchronization that only pushed, or found the remote current, completes
+   its hand-off without observing anything (`complete_hand_off_unobserved`),
+   unless `C`'s context is marked dirty or its stored basis no longer holds,
+   and then indexes that context alone. The hand-off is a local `refresh` row
+   under the synchronization's ID with target
+   `synchronization-index-v1/<kind>/<item>/<oid>`, `<oid>` being the commit
+   published or found current. The row is of that item, so a crashed hand-off
+   holds only its own item, and a refresh, a poll and other items' writes and
+   synchronizations go on past it. A synchronization with no publication
+   remote, which the CLI and the desktop refuse before it begins
+   (`publication_remote_required`), still runs in the library: it binds its
+   local head under the same row, at that head, when it begins, and hands off
+   as one that found the remote current does. One that a promotion or closure
+   runs as its child, and a row that an older build began, with target `''`
+   or, for a synchronization with no publication remote, with a
+   `synchronization-local-v1/` target, still hand off to a refresh of the
+   whole repository. A hand-off that fails answers index
    pending, and its resume or retry runs only the hand-off: it never repeats
    an observed push or merge. A refusal of the operation's own ID is answered
    as itself. The local update marks `C`'s context dirty under the repository
@@ -253,17 +261,20 @@ moved-remote check (`git-upload-pack`); the push, which lists and pushes
 push's return is not taken as proof of publication. That is two
 `git-upload-pack` and two `git-receive-pack` commands. When a local update (a
 merge or fast-forward of `C`) comes before the push of an item that a
-synchronization pushed before, or such an item's synchronization takes up an
-earlier row of its own, the push-absence check, a listing of its own
+synchronization pushed before, the push-absence check, a listing of its own
 (`git-receive-pack`), comes after the fetch and before any local update: five
 connections, two `git-upload-pack` and three `git-receive-pack` commands. A
-synchronization that finds the remote current pushes nothing and makes no
-verification listing. A key with a passphrase, when no SSH agent holds it and
-the session has not unlocked it yet, adds one refused connection before its
-prompt, once per session; that connection runs no Git command. A push endpoint
-distinct from the fetch endpoint that advertises a commit not here adds a
-download of that commit on connections of its own, after which the push's call
-is made again.
+synchronization that takes up an earlier row of its own makes that absence
+check whenever the item was pushed before, and may list the push endpoint once
+more, on a call of its own, to reconcile its row's earlier publication before
+it pushes: up to six connections, two `git-upload-pack` and four
+`git-receive-pack` commands. A synchronization that finds the remote current
+pushes nothing and makes no verification listing. A key with a passphrase, when
+no SSH agent holds it and the session has not unlocked it yet, adds one refused
+connection before its prompt, once per session; that connection runs no Git
+command. A push endpoint distinct from the fetch endpoint that advertises a
+commit not here adds a download of that commit on connections of its own, after
+which the push's call is made again.
 
 Merge commits use deterministic subjects that do not include user-authored
 titles:
@@ -323,11 +334,12 @@ merge when they diverge. It pushes `P:P` with an ordinary non-force refspec.
 Once the push is observed it hands off to the index by item synchronization's
 step 5, for the primary's context (amended 2026-11-22 by ticket vh-f3wts). A
 merge or fast-forward of `P` is indexed as the primary's context alone, with
-no basis check. A synchronization that only pushed, or found the remote
-current, completes its hand-off without observing unless the primary is marked
-dirty or its stored basis no longer holds. The row's target is
-`synchronization-index-v1/primary/<oid>`, and the row is of the primary, so a
-crashed hand-off holds only the primary's own writers: a new primary
+no basis comparison before it is observed; its basis is checked again under
+the lease before it is stored. A synchronization that only pushed, or found
+the remote current, completes its hand-off without observing unless the
+primary is marked dirty or its stored basis no longer holds. The row's target
+is `synchronization-index-v1/primary/<oid>`, and the row is of the primary, so
+a crashed hand-off holds only the primary's own writers: a new primary
 synchronization, and `ticket close`, `document promote` and `folder create`,
 which write the primary. Other items' writes, a refresh and a poll go on past
 it. Step 5's exceptions, its answer to a failed hand-off and its dirty marks
@@ -483,7 +495,17 @@ Cancellation follows the same safe-point rule. A cancelled operation reports
 whether it stopped before a durable transition or completed the current atomic
 step into a recoverable state. Every operation reacquires the short repository
 lease and re-observes refs, worktrees, and canonical paths after each network
-step and before changing local state.
+step and before changing local state. Amended 2026-11-22 by ticket vh-f3wts:
+a synchronization, and so each synchronization a promotion or a closure runs
+as its child, does not re-observe after each network step. Its fetch, which
+writes only the fetched objects and tracking refs, and the listing after it
+are followed by no inspection of its context's worktree or canonical paths;
+the moved-remote check compares the two listings with each other and with the
+tracking refs. It re-observes where it changes or publishes its context:
+under the lease, immediately before each local update (a fast-forward or a
+merge), it checks the context's head and clean status again, and on its
+push's call it checks them after that call's listing and again after the safe
+point before the push.
 
 ## Conflict and Interruption Recovery
 
