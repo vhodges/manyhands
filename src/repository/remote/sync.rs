@@ -7295,7 +7295,7 @@ impl RepositoryService {
     /// owing only its index hand-off, with no local row under its ID. The
     /// publication remote's plan is `origin`'s, recorded in the index. The
     /// request that replays it, which runs that hand-off, is returned.
-    pub(in crate::repository) fn classified_synchronization_for_testing(
+    pub(in super::super) fn classified_synchronization_for_testing(
         &self,
         root: &Path,
         target: &SynchronizationTarget,

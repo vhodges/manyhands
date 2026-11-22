@@ -17270,7 +17270,10 @@ fn a_hand_off_step_answers_a_refusal_of_its_id_and_owes_any_other_failure() {
 /// A synchronization admitted while another item's save is mid-write
 /// completes its hand-off past it (carry C-4): its row is of its own item,
 /// which that save does not hold, where an older build's whole-repository
-/// row was held by it. The save's row is left as it was.
+/// row was held by it. The save's row is left as it was, and so is what
+/// the index stores of the save's context: the hand-off indexes its own
+/// context only, so it neither observes nor stores the file the save has
+/// written and not yet committed.
 #[test]
 fn a_sync_s_hand_off_completes_while_another_item_s_write_is_mid_write() {
     let (root, data, service) = fixture();
@@ -17297,14 +17300,30 @@ fn a_sync_s_hand_off_completes_while_another_item_s_write_is_mid_write() {
         ],
     )
     .unwrap();
+    // The file the save has written, as a save at that step leaves it.
+    let written = ticket_worktree(root, HAND_OFF_Y)
+        .join(format!(".manyhands/tickets/{HAND_OFF_Y}/ticket.md"));
+    let text = fs::read_to_string(&written).unwrap();
+    fs::write(
+        &written,
+        text.replace(&format!("title: Ticket {HAND_OFF_Y}"), "title: Mid-write"),
+    )
+    .unwrap();
+    let stored = stored_context(data.path(), Some(HAND_OFF_Y));
+    let titles = stored_titles(data.path(), HAND_OFF_Y);
     let before = rows_under(data.path(), writing);
     let operation = replay.operation_id;
-    assert_eq!(
-        service
-            .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
-            .unwrap(),
-        SynchronizationResult::Complete(outcome)
-    );
+    let observed = observations_while(&[ticket_worktree(root, HAND_OFF_Y)], || {
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome)
+        );
+    });
+    assert_eq!(observed, [0], "the mid-write context's observations");
+    assert_eq!(stored_context(data.path(), Some(HAND_OFF_Y)), stored);
+    assert_eq!(stored_titles(data.path(), HAND_OFF_Y), titles);
     assert_eq!(
         rows_under(data.path(), operation)
             .into_iter()
