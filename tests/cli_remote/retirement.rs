@@ -111,9 +111,11 @@ fn retirement_cli_authenticated_live_pass() -> Result<(), FixtureError> {
     let before_default = uploads(&p);
     let default = polling::polled(&p.b, &request());
     let default_uploads = uploads(&p) - before_default;
+    // Named edit E-62: a remote call lists and downloads on the one connection
+    // it authenticated (was 2: the download reconnected for its advertisement).
     assert_eq!(
-        default_uploads, 2,
-        "ordinary Fetch authenticates, then reconnects for its authoritative download advertisement"
+        default_uploads, 1,
+        "ordinary Fetch lists and downloads on its one authenticated connection"
     );
     schema::check_published("poll_mutation.schema.json", &default["data"]).unwrap();
     assert_eq!(default["data"].as_object().unwrap().len(), 5);
