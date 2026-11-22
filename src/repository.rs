@@ -444,6 +444,29 @@ pub struct RepositoryService {
     sleeper: Arc<dyn Sleeper>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// What the next registry open on this thread runs between its
+    /// migration and its audits (`set_registry_open_hook_for_testing`).
+    static REGISTRY_OPEN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Has the next registry open on this thread run `hook` on the registry's
+/// path once it has migrated and before it audits, as a newer build's
+/// change of the schema committed then would come.
+#[cfg(test)]
+fn set_registry_open_hook_for_testing(hook: impl FnOnce(&Path) + 'static) {
+    REGISTRY_OPEN_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_registry_open_hook(path: &Path) {
+    if let Some(hook) = REGISTRY_OPEN_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook(path);
+    }
+}
+
 /// A registry file as a service migrated it: the file's identity (its
 /// device and inode, or volume and file ID) and its `PRAGMA
 /// schema_version` once migrated. A file put in place of it has another
@@ -5264,14 +5287,20 @@ impl RepositoryService {
         // Registry open migrates, and so audits the schema and the
         // unfinished records (design decision 9). The calls after it open
         // through `open_migrated_registry`, which migrates again only a
-        // file that is no longer this one.
+        // file that is no longer this one. The memo is of the schema the
+        // migration left, taken before the audits, so a change another
+        // build commits while they run is migrated by the next call; it is
+        // kept only once the audits pass.
         let mut registry_memo = None;
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
+                let migrated = RegistryMemo::of(&connection, &registry_path);
+                #[cfg(test)]
+                run_registry_open_hook(&registry_path);
                 remote::state::audit_registry(&mut connection)?;
                 context_retirement::record::audit_registry(&mut connection)?;
-                registry_memo = RegistryMemo::of(&connection, &registry_path);
+                registry_memo = migrated;
                 Ok(())
             }) {
                 Ok(()) => IndexAvailability::Ready,

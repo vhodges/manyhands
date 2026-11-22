@@ -49,3 +49,28 @@ fn a_replaced_registry_file_migrates_again() {
         assert_eq!(migrations_for_testing() - before, 1, "{change}");
     }
 }
+
+/// The open's memo is of the schema its migration left, taken before its
+/// audits: a change of the schema committed by another build while they
+/// run is not read as one this service migrated, and the next call that
+/// opens the registry migrates it, once.
+#[test]
+fn a_schema_changed_during_the_open_s_audits_migrates_again() {
+    let data = tempfile::tempdir().unwrap();
+    let registry = data.path().join(REGISTRY_FILE);
+    // A first open makes the registry.
+    RepositoryService::open_at(data.path()).unwrap();
+    crate::repository::set_registry_open_hook_for_testing(move |path| {
+        assert_eq!(path, registry);
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute_batch("CREATE TABLE unrelated_fixture(value)")
+            .unwrap();
+    });
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let before = migrations_for_testing();
+    assert!(service.list_shared_keys().unwrap().is_empty());
+    assert_eq!(migrations_for_testing() - before, 1);
+    service.list_shared_keys().unwrap();
+    assert_eq!(migrations_for_testing() - before, 1);
+}
