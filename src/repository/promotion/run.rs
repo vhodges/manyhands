@@ -1146,6 +1146,13 @@ fn publication_error(error: &SynchronizationError) -> Pub {
         SynchronizationError::Transport(_) => Pub::Transport,
         SynchronizationError::IdentityRequired { .. } => Pub::Identity,
         SynchronizationError::Busy => Pub::Busy,
+        // The child waited for a live operation in its way, its primary's
+        // sync hand-off among them, until the wait was spent (decision 34).
+        SynchronizationError::Repository(error)
+            if error.kind == RepositoryErrorKind::RepositoryBusy && error.blocker().is_some() =>
+        {
+            Pub::Busy
+        }
         SynchronizationError::PollYielding => Pub::Yielding,
         SynchronizationError::Interrupted => Pub::Cancelled,
         _ => Pub::RecoveryRequired,
@@ -1388,11 +1395,18 @@ fn finish_steps<L: Lifecycle>(
             Ok(state::read_operation(tx, id, r.operation_id())?.is_some())
         })
         .map_err(recovery)?;
+        // A new reservation waits for a live holder in its way, a live sync
+        // hand-off of its item or of the primary among them, as a new
+        // synchronization does (decision 34), holding nothing. A restart takes
+        // up its own row and is answered at once. Its `busy` once the wait is
+        // spent has no cleanup category of its own: it stops as a refusal.
         owner = Some(
             match if exists {
                 service.restart_remote_lifecycle(L::KIND, root, r.operation_id(), &target)
             } else {
-                service.reserve_remote_operation(root, r.operation_id(), &target)
+                service.reserving(root, r.operation_id(), || {
+                    service.reserve_remote_operation(root, r.operation_id(), &target)
+                })
             }
             .map_err(recovery)?
             {

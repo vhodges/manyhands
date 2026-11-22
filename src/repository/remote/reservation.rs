@@ -1414,6 +1414,13 @@ impl RepositoryService {
         }
     }
 
+    /// The reservation of a promotion's or a closure's child. It waits for a
+    /// live operation in its way, as a new synchronization does
+    /// (`reserving`): a live sync hand-off of its item or of the primary,
+    /// which a close or a promotion waits for (decision 34), or a live
+    /// holder of the reservation. Its parent holds nothing while it waits.
+    /// A child that takes up its own row (`restart_promotion_child`) is
+    /// answered at once.
     pub(in super::super) fn reserve_promotion_child(
         &self,
         root: &Path,
@@ -1421,17 +1428,19 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         execution: &crate::repository::promotion::record::ChildExecution,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
-        match self.reserve_remote_operation_kind(
-            root,
-            operation_id,
-            target,
-            RemoteOperationPriority::Manual,
-            None,
-            Some(execution),
-        )? {
-            RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
-            RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
-        }
+        self.reserving(root, operation_id, || {
+            match self.reserve_remote_operation_kind(
+                root,
+                operation_id,
+                target,
+                RemoteOperationPriority::Manual,
+                None,
+                Some(execution),
+            )? {
+                RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
+                RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
+            }
+        })
     }
 
     fn reserve_remote_operation_kind(

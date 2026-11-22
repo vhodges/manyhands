@@ -6182,8 +6182,9 @@ impl RepositoryService {
             // A new synchronization has done nothing yet that a refusal
             // would leave half done: it waits for a live holder of the
             // reservation. One that takes up its own row, which holds what
-            // an earlier call did, and a promotion's child, which answers
-            // for its parent, are answered at once.
+            // an earlier call did, is answered at once. A new child of a
+            // promotion or a closure waits in its own reservation
+            // (`reserve_promotion_child`, decision 34).
             self.reserving(&root, request.operation_id, || {
                 self.synchronization_reserve_owned(&root, request.operation_id, &target, None)
             })?

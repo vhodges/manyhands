@@ -381,9 +381,10 @@ impl run::PromotionIo for FakeIo {
         };
         let plan = RemoteRefPlan::from_configuration("origin", &config.primary_branch).unwrap();
         let target = req.target.operation_target(&plan);
-        let reservation = service
-            .reserve_promotion_child(&req.root, req.operation_id, &target, execution)
-            .unwrap();
+        // A refused reservation is the child's answer, as a real child's is
+        // (E-78).
+        let reservation =
+            service.reserve_promotion_child(&req.root, req.operation_id, &target, execution)?;
         if matches!(reservation, RemoteReservationOutcome::Replay(_)) {
             service
                 .restart_promotion_child(&req.root, req.operation_id, &target, execution)
@@ -6214,6 +6215,312 @@ fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
             ));
         } else {
             f.assert_cleaned();
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The process of this host that a live hand-off's holder is, and one that
+/// is gone (`OnlyTheHandOff`).
+const HAND_OFF_LIVE_PID: u32 = 4242;
+const HAND_OFF_GONE_PID: u32 = 4243;
+
+/// A process table that holds only `HAND_OFF_LIVE_PID`.
+struct OnlyTheHandOff;
+impl ProcessProbe for OnlyTheHandOff {
+    fn exists(&self, pid: u32) -> bool {
+        pid == HAND_OFF_LIVE_PID
+    }
+}
+
+/// How a synchronization's hand-off stands while a lifecycle waits behind
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum HandOff {
+    /// Its holder works, and it finishes after the waiting call's second
+    /// sleep.
+    Released,
+    /// Its holder works until the wait is spent.
+    Live,
+    /// Its holder is gone.
+    Stale,
+}
+
+/// The sleeps of a wait (`WAIT_POLICY`) that the hand-off outlives.
+pub(in super::super) const SPENT_WAIT: u64 = 5;
+
+/// The wait a lifecycle behind a hand-off is given in these tests: five
+/// looks, fifty milliseconds apart.
+const WAIT_POLICY: WaitPolicy = WaitPolicy {
+    budget: std::time::Duration::from_millis(250),
+    poll: std::time::Duration::from_millis(50),
+};
+
+/// The index hand-off (P-4) of a synchronization of `of` under way in the
+/// registry at `data`, under `id`, as its row stands while it indexes: a
+/// `refresh` of the target P-4 writes, owing only its hand-off, its
+/// heartbeat beaten at `at`, by a process of this host that `holder` says
+/// is there or gone.
+pub(in super::super) fn begin_hand_off(
+    data: &std::path::Path,
+    id: OperationId,
+    of: &SynchronizationTarget,
+    oid: Oid,
+    holder: HandOff,
+    at: i64,
+) {
+    let (item, owed) = match of {
+        SynchronizationTarget::Primary => (None, discovery::ContextKey::Primary),
+        SynchronizationTarget::Context { item_id, .. } => (
+            Some(item_id.to_string()),
+            discovery::ContextKey::Item(item_id.clone()),
+        ),
+    };
+    let pid = if holder == HandOff::Stale {
+        HAND_OFF_GONE_PID
+    } else {
+        HAND_OFF_LIVE_PID
+    };
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .execute(
+            "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,owed_contexts,state,completed_step,observed_at,index_owner_epoch,host,pid)
+             SELECT id,root_path,?1,'refresh',?2,?3,?4,'indexing','authoritative_observed',?5,1,?6,?7 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                crate::repository::recovery::synchronization_index_target(of, oid),
+                item,
+                crate::repository::encode_owed_contexts(&[owed]),
+                at,
+                this_host(),
+                pid,
+            ],
+        )
+        .unwrap();
+}
+
+/// Ends the hand-off `id` in the registry at `data`, as its own call does.
+pub(in super::super) fn end_hand_off(data: &std::path::Path, id: OperationId) {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .execute(
+            "UPDATE operation_records SET state='completed' WHERE operation_ulid=?1",
+            [id.to_string()],
+        )
+        .unwrap();
+}
+
+/// The time of a call waiting behind a hand-off: a clock that moves only
+/// when the call sleeps on it, by the sleep's length, and that ends the
+/// hand-off at the second sleep when it is to be `Released`.
+pub(in super::super) struct HandOffTime {
+    at: time::OffsetDateTime,
+    nanos: std::sync::atomic::AtomicU64,
+    slept: std::sync::atomic::AtomicU64,
+    data: PathBuf,
+    hand_off: OperationId,
+    holder: HandOff,
+}
+impl HandOffTime {
+    /// How many times the waiting call slept.
+    pub(in super::super) fn slept(&self) -> u64 {
+        self.slept.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl Clock for HandOffTime {
+    fn now(&self) -> time::OffsetDateTime {
+        self.at
+            + time::Duration::nanoseconds(
+                i64::try_from(self.nanos.load(std::sync::atomic::Ordering::SeqCst)).unwrap(),
+            )
+    }
+}
+impl Sleeper for HandOffTime {
+    fn sleep(&self, duration: std::time::Duration) {
+        use std::sync::atomic::Ordering;
+        self.nanos.fetch_add(
+            u64::try_from(duration.as_nanos()).unwrap(),
+            Ordering::SeqCst,
+        );
+        let slept = self.slept.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.holder == HandOff::Released && slept == 2 {
+            end_hand_off(&self.data, self.hand_off);
+        }
+    }
+}
+
+/// A service over the registry at `data` for a call behind the hand-off
+/// `hand_off`, which stands as `holder` says: its clock and sleeps are a
+/// `HandOffTime`, its processes `OnlyTheHandOff`, and it waits as the
+/// default one does for five looks. Returns it with its time, and the time
+/// the hand-off's heartbeat is fresh at.
+pub(in super::super) fn behind_hand_off(
+    data: &std::path::Path,
+    hand_off: OperationId,
+    holder: HandOff,
+) -> (RepositoryService, std::sync::Arc<HandOffTime>, i64) {
+    let now = time::OffsetDateTime::now_utc();
+    let at = now - time::Duration::nanoseconds(i64::from(now.nanosecond()));
+    let time = std::sync::Arc::new(HandOffTime {
+        at,
+        nanos: Default::default(),
+        slept: Default::default(),
+        data: data.to_owned(),
+        hand_off,
+        holder,
+    });
+    let service = RepositoryService::open_at(data)
+        .unwrap()
+        .with_clock_for_testing(time.clone())
+        .with_sleeper_for_testing(time.clone())
+        .with_wait_policy_for_testing(WAIT_POLICY)
+        .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
+    (service, time, at.unix_timestamp())
+}
+
+/// Where a lifecycle meets a synchronization's hand-off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum Meets {
+    /// Its own item's, under way when it starts: at its context child.
+    Item,
+    /// The primary's, under way when it starts: at its primary child.
+    Primary,
+    /// The primary's, begun once its children are done: at its cleanup's
+    /// reservation.
+    PrimaryAtCleanup,
+}
+
+/// Whether `error`, the repository error a lifecycle's child stopped on, is
+/// `kind`, naming the hand-off `id` judged `live`.
+pub(in super::super) fn names_hand_off(
+    error: &SynchronizationError,
+    kind: RepositoryErrorKind,
+    id: OperationId,
+    live: bool,
+) -> bool {
+    matches!(
+        error,
+        SynchronizationError::Repository(error)
+            if error.kind == kind
+                && error.blocker().map(|blocker| (blocker.operation_id, blocker.live))
+                    == Some((id, Some(live)))
+    )
+}
+
+/// Decision 34 (design; it supersedes R-SDD-46): a promotion behind its own
+/// item's live synchronization hand-off, or the primary's, waits as the
+/// other per-item writers wait (vh-bhepg, `RepositoryService::reserving`),
+/// holding nothing, and once the hand-off ends within the wait goes on as it
+/// would have had the hand-off been gone. Still live when the wait is spent,
+/// it answers `busy`, naming it; a stale hand-off is answered at once,
+/// `recovery_required`. It meets its item's hand-off at its context child,
+/// the primary's at its primary child, and one begun after its children at
+/// its cleanup's reservation, where the wait's end has no category of its
+/// own and the cleanup stays pending as when it is refused. The same request
+/// finishes once the hand-off is done. The tests' clock and sleeps are their
+/// own.
+#[test]
+fn a_close_or_promotion_behind_a_live_hand_off_waits() {
+    use HandOff::*;
+    let mut wrong = Vec::new();
+    for meets in [Meets::Item, Meets::Primary, Meets::PrimaryAtCleanup] {
+        for holder in [Released, Live, Stale] {
+            let case = format!("{meets:?}, {holder:?}");
+            let f = Fixture::new();
+            f.remote();
+            let req = f.request();
+            let hand_off = OperationId::new();
+            let (service, time, at) = behind_hand_off(f.data.path(), hand_off, holder);
+            let of = match meets {
+                Meets::Item => SynchronizationTarget::Context {
+                    kind: AuthoringKind::Document,
+                    item_id: ITEM.parse().unwrap(),
+                },
+                Meets::Primary | Meets::PrimaryAtCleanup => SynchronizationTarget::Primary,
+            };
+            let oid = f.primary();
+            if meets == Meets::PrimaryAtCleanup {
+                let data = f.data.path().to_owned();
+                let mut begun = false;
+                hook(&f, move |_, point| {
+                    if point == FailurePoint::AfterPublication && !begun {
+                        begun = true;
+                        begin_hand_off(&data, hand_off, &of, oid, holder, at);
+                    }
+                });
+            } else {
+                begin_hand_off(f.data.path(), hand_off, &of, oid, holder, at);
+            }
+            let mut io = FakeIo::default();
+            let result = run::promote_with_io(&service, req.clone(), &mut io);
+            HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+            let sleeps = match holder {
+                Released => 2,
+                Live => SPENT_WAIT,
+                Stale => 0,
+            };
+            if time.slept() != sleeps {
+                wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+            }
+            let pending = |reason| PromotionCleanup::Pending { reason };
+            let ended = match (meets, holder, &result) {
+                (_, Released, Ok(DocumentPromotionResult::Complete(o))) => {
+                    o.cleanup() == PromotionCleanup::Complete
+                        && matches!(o.publication(), PromotionPublication::Published { .. })
+                        && io.calls.borrow().children.len() == 2
+                        && io.calls.borrow().deletes == 1
+                }
+                (
+                    Meets::Item,
+                    Live | Stale,
+                    Err(DocumentPromotionError::ContextSynchronization(e)),
+                ) => {
+                    let (kind, live) = if holder == Live {
+                        (RepositoryErrorKind::RepositoryBusy, true)
+                    } else {
+                        (RepositoryErrorKind::RecoveryRequired, false)
+                    };
+                    // Nothing was begun on the remote for it.
+                    names_hand_off(e, kind, hand_off, live)
+                        && f.db()
+                            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| {
+                                r.get::<_, i64>(0)
+                            })
+                            .unwrap()
+                            == 0
+                }
+                (Meets::Primary, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    let category = if holder == Live {
+                        PromotionSynchronizationCategory::Busy
+                    } else {
+                        PromotionSynchronizationCategory::RecoveryRequired
+                    };
+                    o.publication()
+                        == PromotionPublication::Pending {
+                            reason: PromotionPublicationPending::Synchronization(category),
+                        }
+                        && o.cleanup() == pending(PromotionCleanupPending::AwaitingPublication)
+                }
+                (Meets::PrimaryAtCleanup, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    matches!(o.publication(), PromotionPublication::Published { .. })
+                        && o.cleanup() == pending(PromotionCleanupPending::RecoveryRequired)
+                        && io.calls.borrow().deletes == 0
+                }
+                _ => false,
+            };
+            if !ended {
+                wrong.push(format!("{case}: ended as {result:?}"));
+            }
+            if holder != Released {
+                end_hand_off(f.data.path(), hand_off);
+                let finished = f.run_io(req, &mut io);
+                if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+                {
+                    wrong.push(format!("{case}: its retry ended as {finished:?}"));
+                }
+            }
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

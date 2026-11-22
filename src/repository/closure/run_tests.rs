@@ -2456,3 +2456,103 @@ fn a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview() {
         );
     }
 }
+
+/// Decision 34 (design; it supersedes R-SDD-46), for a close: behind its own
+/// ticket's live synchronization hand-off, which its context child meets,
+/// or the primary's, which its primary child meets, it waits as the other
+/// per-item writers wait (vh-bhepg), holding nothing, and once the hand-off
+/// ends within the wait goes on as it would have had the hand-off been
+/// gone. Still live when the wait is spent, it answers `busy`, naming it; a
+/// stale hand-off is answered at once, `recovery_required`. The same
+/// request finishes once the hand-off is done. The cleanup's own wait is
+/// the runner's, shared with promotion, and tested there.
+#[test]
+fn a_close_or_promotion_behind_a_live_hand_off_waits() {
+    use crate::repository::promotion::run_tests::{
+        HandOff::{self, *},
+        SPENT_WAIT, begin_hand_off, behind_hand_off, end_hand_off, names_hand_off,
+    };
+    use crate::repository::{PromotionSynchronizationCategory, RepositoryService};
+    let mut wrong = Vec::new();
+    for item in [true, false] {
+        for holder in [Released, Live, Stale] {
+            let case = format!("item {item}, {holder:?}");
+            let f = Fixture::remote();
+            let req = f.request();
+            let hand_off = OperationId::new();
+            let (service, time, at): (RepositoryService, _, _) =
+                behind_hand_off(f.data.path(), hand_off, holder);
+            let of = if item {
+                SynchronizationTarget::Context {
+                    kind: AuthoringKind::Ticket,
+                    item_id: id(),
+                }
+            } else {
+                SynchronizationTarget::Primary
+            };
+            begin_hand_off(f.data.path(), hand_off, &of, f.primary(), holder, at);
+            let mut io = FakeIo::default();
+            let result = f.run_io(&service, req.clone(), &mut io);
+            let sleeps = match holder {
+                Released => 2,
+                Live => SPENT_WAIT,
+                Stale => 0,
+            };
+            if time.slept() != sleeps {
+                wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+            }
+            let busy = holder == HandOff::Live;
+            let ended = match (item, holder, &result) {
+                (_, Released, Ok(TicketClosureResult::Complete(o))) => {
+                    o.cleanup() == PromotionCleanup::Complete
+                        && matches!(o.publication(), PromotionPublication::Published { .. })
+                        && io.calls.borrow().children.len() == 2
+                        && io.calls.borrow().deletes == 1
+                }
+                (true, Live | Stale, Err(TicketClosureError::ContextSynchronization(e))) => {
+                    let kind = if busy {
+                        RepositoryErrorKind::RepositoryBusy
+                    } else {
+                        RepositoryErrorKind::RecoveryRequired
+                    };
+                    names_hand_off(e, kind, hand_off, busy)
+                        && f.db()
+                            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| {
+                                r.get::<_, i64>(0)
+                            })
+                            .unwrap()
+                            == 0
+                }
+                (false, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    let category = if busy {
+                        PromotionSynchronizationCategory::Busy
+                    } else {
+                        PromotionSynchronizationCategory::RecoveryRequired
+                    };
+                    o.publication()
+                        == PromotionPublication::Pending {
+                            reason: PromotionPublicationPending::Synchronization(category),
+                        }
+                        && o.cleanup()
+                            == PromotionCleanup::Pending {
+                                reason: PromotionCleanupPending::AwaitingPublication,
+                            }
+                }
+                _ => false,
+            };
+            if !ended {
+                wrong.push(format!("{case}: ended as {result:?}"));
+            }
+            if holder != Released {
+                end_hand_off(f.data.path(), hand_off);
+                let finished = f.run_io(&f.service, req, &mut io);
+                if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+                {
+                    wrong.push(format!("{case}: its retry ended as {finished:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
