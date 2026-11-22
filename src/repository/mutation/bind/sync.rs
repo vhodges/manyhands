@@ -957,9 +957,12 @@ impl SyncBinding {
 
     /// The call of an operation taken up under its own ID, by `operation
     /// resume` (`resumed`) or by the continuation of `conflict resolve`
-    /// (`continued`), as `call` makes it; except that a lifecycle's child
-    /// that completed while the index does not hold the context its local
-    /// update changed is answered as `owed_to_its_parent` says (decision 8).
+    /// (`continued`), as `call` makes it. A lifecycle's child that completed
+    /// while the index does not hold the context its local update changed
+    /// indexes that context itself, since its parent is not running in this
+    /// call (R-SDD-66), and is answered as a completed child is; only when
+    /// that step does not complete is it answered as `owed_to_its_parent`
+    /// says (decision 8). Nothing of the call is held by then.
     fn taken_up(
         &self,
         call: &CallContext<'_>,
@@ -977,7 +980,14 @@ impl SyncBinding {
                     &self.target,
                 ) =>
             {
-                self.owed_to_its_parent(call.service, accepted, came_to)
+                if call
+                    .service
+                    .index_lifecycle_child(&accepted.root(), &self.target)
+                {
+                    ran
+                } else {
+                    self.owed_to_its_parent(call.service, accepted, came_to)
+                }
             }
             _ => ran,
         }
@@ -985,9 +995,10 @@ impl SyncBinding {
 
     /// The answer of a lifecycle's child taken up under its own ID
     /// (`operation resume <child>`, or `conflict resolve`'s continuation of
-    /// it) that completed while the index does not
-    /// hold the context its local update changed: that indexing is its
-    /// parent's exit (Task 22), and no operation owes it. It is answered as
+    /// it) that completed while the index does not hold the context its
+    /// local update changed, and whose own index step of it did not
+    /// complete (`taken_up`): that indexing is its parent's exit's (Task
+    /// 22) or any refresh's, and no operation owes it. It is answered as
     /// a completed save's replay is (R-SDD-16): `discovery_pending`,
     /// offering the refresh that brings the index up to date, and final, so
     /// that no resume is offered for what no resume would do.

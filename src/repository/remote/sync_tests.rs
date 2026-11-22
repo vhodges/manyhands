@@ -17638,15 +17638,18 @@ fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
 }
 
 /// `operation resume <child>` of a lifecycle's child is answered by the
-/// synchronization's binding. Once the child completed while the index does
-/// not hold the context its local update changed, whose indexing is its
-/// parent's exit (Task 22), it is answered as a completed save's replay is
-/// (R-SDD-16): `discovery_pending`, offering `index refresh` and no resume,
-/// with no row written. With its context indexed it is answered as any
-/// completed synchronization is; and after the refresh it offered, a resume
-/// again is a no-op, so nothing offers a resume that no resume would do.
+/// synchronization's binding. Its parent is not running in that call, so a
+/// child that completed while the index does not hold the context its local
+/// update changed indexes that context itself, in the one step its parent's
+/// exit runs (`index_lifecycle_exit`, R-SDD-66), and is answered as a
+/// completed child was: `already_applied` here, discovery current. A child
+/// whose context is indexed takes no step. When the step fails, it is
+/// answered as a completed save's replay is (R-SDD-16): `discovery_pending`
+/// offering only `index refresh`, with no row left pending, so that refresh
+/// is not refused, and nothing owed. No row is ever begun under the child's
+/// ID.
 #[test]
-fn an_own_id_resume_of_a_lifecycle_child_owing_its_context_offers_a_refresh() {
+fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
     use crate::repository::{
         CancellationToken, ClosureExpectation, Mutation, MutationCall, NoProgress,
         OperationResumeInput, RequestId,
@@ -17654,12 +17657,30 @@ fn an_own_id_resume_of_a_lifecycle_child_owing_its_context_offers_a_refresh() {
         promotion::record::ChildRole,
     };
     use crate::results::{DiscoveryEffect, RecoveryActionKind, ResultCode};
-    for owed in [true, false] {
+    /// The local refresh rows: `(ID, state, owed contexts)`.
+    fn refresh_rows(data: &Path) -> Vec<(i64, String, Option<String>)> {
+        rusqlite::Connection::open(data.join(REGISTRY_FILE))
+            .unwrap()
+            .prepare(
+                "SELECT id, state, owed_contexts FROM operation_records WHERE action = 'refresh'",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    for (case, owed, failing) in [
+        ("its context owed", true, false),
+        ("its context indexed", false, false),
+        ("its index step failing", true, true),
+    ] {
         let (root, data, service) = fixture();
         let root = root.path();
         save_new_ticket(&service, root, HAND_OFF_X).unwrap();
         let plan = configure_hand_off_plan(&service, root);
         let target = ticket_target(HAND_OFF_X);
+        let context = hand_off_context(&target);
         let child = state::with_transaction(&service, root, |tx, id| {
             let r = closure::begin_record(
                 tx,
@@ -17680,65 +17701,108 @@ fn an_own_id_resume_of_a_lifecycle_child_owing_its_context_offers_a_refresh() {
             crate::repository::mark_contexts_dirty(
                 &service.registry_path,
                 root,
-                &[hand_off_context(&target)],
+                std::slice::from_ref(&context),
                 RepositoryOperation::RepositorySnapshot,
             )
             .unwrap();
         }
-        let resume = || {
-            service.execute(
-                MutationCall {
-                    request_id: RequestId::new(),
-                    confirmation: None,
-                    mutation: Mutation::OperationResume(OperationResumeInput {
-                        root: root.to_owned(),
-                        operation_id: child,
-                    }),
-                },
-                &mut SessionCredentials::new(NoPrompt),
-                &mut NoProgress,
-                &CancellationToken::new(),
+        let before = refresh_rows(data.path());
+        let resuming = if failing {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                FailurePoint::BeforeIndexTransactionCommit,
             )
-        };
-        let actions = |answer: &crate::results::Envelope<_>| {
-            answer
-                .recovery
-                .iter()
-                .map(|action: &crate::results::RecoveryAction| action.action)
-                .collect::<Vec<_>>()
-        };
-        let taken_up = resume();
-        assert_eq!(taken_up.command, "operation resume");
-        if owed {
-            assert_eq!(taken_up.code, ResultCode::DiscoveryPending, "{taken_up:?}");
-            assert_eq!(taken_up.effects.discovery, DiscoveryEffect::Pending);
-            assert_eq!(actions(&taken_up), [RecoveryActionKind::IndexRefresh]);
+            .unwrap()
         } else {
-            assert_eq!(taken_up.code, ResultCode::AlreadyApplied, "{taken_up:?}");
-            assert_eq!(taken_up.effects.discovery, DiscoveryEffect::Current);
-            assert!(actions(&taken_up).is_empty(), "{taken_up:?}");
+            RepositoryService::open_at(data.path()).unwrap()
+        };
+        let taken_up = resuming.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation: Mutation::OperationResume(OperationResumeInput {
+                    root: root.to_owned(),
+                    operation_id: child,
+                }),
+            },
+            &mut SessionCredentials::new(NoPrompt),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        let actions = taken_up
+            .recovery
+            .iter()
+            .map(|action| action.action)
+            .collect::<Vec<_>>();
+        let begun = refresh_rows(data.path())
+            .into_iter()
+            .filter(|row| !before.contains(row))
+            .collect::<Vec<_>>();
+        assert_eq!(taken_up.command, "operation resume", "{case}");
+        if failing {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::DiscoveryPending,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Pending,
+                "{case}"
+            );
+            assert_eq!(actions, [RecoveryActionKind::IndexRefresh], "{case}");
+            assert!(
+                begun.iter().all(|(_, state, _)| state == "completed"),
+                "{case}: a row left pending: {begun:?}"
+            );
+            assert!(
+                !service.contexts_indexed(root, std::slice::from_ref(&context)),
+                "{case}"
+            );
+            // The refresh it offers is not refused, and indexes the context.
+            assert!(
+                matches!(
+                    service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: root.to_owned(),
+                            operation_id: OperationId::new(),
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ),
+                "{case}"
+            );
+        } else {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::AlreadyApplied,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Current,
+                "{case}"
+            );
+            assert!(actions.is_empty(), "{case}: {taken_up:?}");
+            let owing = format!("[\"{HAND_OFF_X}\"]");
+            if owed {
+                assert!(
+                    matches!(begun.as_slice(), [(_, state, Some(recorded))] if state == "completed" && *recorded == owing),
+                    "{case}: index steps {begun:?}"
+                );
+            } else {
+                assert!(begun.is_empty(), "{case}: index steps {begun:?}");
+            }
         }
         assert!(
-            rows_under(data.path(), child).is_empty(),
-            "rows under its ID"
+            service.contexts_indexed(root, std::slice::from_ref(&context)),
+            "{case}: the context reads owed"
         );
-        assert!(!index_pending(data.path(), child));
-        if owed {
-            assert!(matches!(
-                service
-                    .refresh_repository(RefreshRepositoryRequest {
-                        root: root.to_owned(),
-                        operation_id: OperationId::new(),
-                    })
-                    .unwrap(),
-                RefreshOutcome::Refreshed { .. }
-            ));
-            // The operation owes nothing now: a resume again is a no-op.
-            let again = resume();
-            assert_eq!(again.code, ResultCode::AlreadyApplied, "{again:?}");
-            assert_ne!(again.effects.discovery, DiscoveryEffect::Pending);
-            assert!(actions(&again).is_empty(), "{again:?}");
-        }
+        assert!(
+            rows_under(data.path(), child).is_empty(),
+            "{case}: rows under its ID"
+        );
+        assert!(!index_pending(data.path(), child), "{case}");
     }
 }
 

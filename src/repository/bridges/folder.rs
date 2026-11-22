@@ -48,17 +48,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::TransactionBehavior;
-
 use super::super::{
-    FailurePoint, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES, OperationId,
-    RefreshOutcome, RefreshRepositoryRequest, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService,
-    bridges::abandon::stale_heartbeat,
-    cache_read_guard, cache_write_guard, canonical_repository_root, discovery,
-    ensure_safe_owned_parent, mark_contexts_dirty, open_registry,
-    recovery::{self, LocalStanding},
-    registered_repository_id, registry_root_key, repository_lease,
+    ClosedRefresh, FailurePoint, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES,
+    OperationId, RefreshOutcome, RefreshRepositoryRequest, RepositoryError, RepositoryErrorKind,
+    RepositoryOperation, RepositoryService, cache_read_guard, canonical_repository_root, discovery,
+    ensure_safe_owned_parent, mark_contexts_dirty, open_registry, recovery,
+    registered_repository_id, repository_lease,
 };
 
 const OPERATION: RepositoryOperation = RepositoryOperation::CreateFolder;
@@ -593,11 +588,11 @@ impl RepositoryService {
         }
         match self.close_refresh(root, operation_id) {
             // Another call under the same ID completed the refresh.
-            Ok(Closed::Completed) => FolderDiscovery::Current,
-            Ok(Closed::NothingPending) => FolderDiscovery::Pending,
+            Ok(ClosedRefresh::Completed) => FolderDiscovery::Current,
+            Ok(ClosedRefresh::NothingPending) => FolderDiscovery::Pending,
             // The row is, or may be, pending still: a call under the
             // same ID is what takes it up.
-            Ok(Closed::AtWork) | Err(_) => FolderDiscovery::PendingUnderOperation,
+            Ok(ClosedRefresh::AtWork) | Err(_) => FolderDiscovery::PendingUnderOperation,
         }
     }
 
@@ -607,51 +602,10 @@ impl RepositoryService {
         &self,
         root: &Path,
         operation_id: OperationId,
-    ) -> Result<Closed, RepositoryError> {
+    ) -> Result<ClosedRefresh, RepositoryError> {
         self.check_failure(FailurePoint::BeforeFolderRefreshClose, OPERATION, root)?;
-        let _cache_guard = cache_write_guard(&self.registry_path, root, OPERATION)?;
-        let root_path = registry_root_key(root, OPERATION)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|error| error.for_operation(OPERATION, root))?;
-        let sqlite = |error| RepositoryError::sqlite(error).for_operation(OPERATION, root);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite)?;
-        let row = recovery::local_row(&transaction, root_path, operation_id).map_err(sqlite)?;
-        let closed = match row {
-            None => Closed::NothingPending,
-            Some(row) => match row.standing() {
-                LocalStanding::Completed => Closed::Completed,
-                LocalStanding::Rejected | LocalStanding::Abandoned => Closed::NothingPending,
-                // An index owner whose heartbeat is fresh is at work,
-                // with no lease held: another call of the same request.
-                // Its row is not closed under it.
-                LocalStanding::Pending if row.has_live_heartbeat(stale_heartbeat()) => {
-                    Closed::AtWork
-                }
-                LocalStanding::Pending => {
-                    recovery::discard_operation(&transaction, row.id)
-                        .map_err(|error| error.for_operation(OPERATION, root))?;
-                    Closed::NothingPending
-                }
-            },
-        };
-        transaction.commit().map_err(sqlite)?;
-        Ok(closed)
+        self.close_pending_refresh(root, operation_id, OPERATION)
     }
-}
-
-/// What `close_refresh` found of the refresh's row.
-enum Closed {
-    /// The row has completed: the index was brought up to date under
-    /// the ID, by another call.
-    Completed,
-    /// No row is pending under the ID: there was none, or it was closed
-    /// here or before.
-    NothingPending,
-    /// The row is pending and a call is at work under it. It was left
-    /// as it is.
-    AtWork,
 }
 
 /// What `make_directories` came to.

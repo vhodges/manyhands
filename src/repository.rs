@@ -1598,15 +1598,75 @@ impl RepositoryService {
         root: &Path,
         contexts: &[ContextKey],
     ) -> Result<RefreshOutcome, RepositoryError> {
+        self.index_lifecycle_exit_under(root, OperationId::new(), contexts)
+    }
+
+    /// `index_lifecycle_exit`, under the fresh ID `operation_id` its caller
+    /// chose, so that it can close the row the step leaves pending
+    /// (`close_pending_refresh`).
+    fn index_lifecycle_exit_under(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        contexts: &[ContextKey],
+    ) -> Result<RefreshOutcome, RepositoryError> {
         self.refresh_repository_as(
             RefreshRepositoryRequest {
                 root: root.to_owned(),
-                operation_id: OperationId::new(),
+                operation_id,
             },
             "",
             false,
             RefreshScope::Owing(contexts),
         )
+    }
+
+    /// Closes the row a refresh under `operation_id` left pending, unless a
+    /// call is at work under it: what a call that indexes under a fresh ID
+    /// of its own, which nothing else would take up, does once its step did
+    /// not complete (folder create, a lifecycle's child taken up under its
+    /// own ID). The row is closed as that of a call that left nothing
+    /// behind; what it owed stays marked, and the next refresh, under any
+    /// ID, brings the index up to date.
+    fn close_pending_refresh(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        operation: RepositoryOperation,
+    ) -> Result<ClosedRefresh, RepositoryError> {
+        let _cache_guard = cache_write_guard(&self.registry_path, root, operation)?;
+        let root_path = registry_root_key(root, operation)?;
+        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+            .map_err(|error| error.for_operation(operation, root))?;
+        let sqlite = |error| RepositoryError::sqlite(error).for_operation(operation, root);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite)?;
+        let row = recovery::local_row(&transaction, root_path, operation_id).map_err(sqlite)?;
+        let closed = match row {
+            None => ClosedRefresh::NothingPending,
+            Some(row) => match row.standing() {
+                recovery::LocalStanding::Completed => ClosedRefresh::Completed,
+                recovery::LocalStanding::Rejected | recovery::LocalStanding::Abandoned => {
+                    ClosedRefresh::NothingPending
+                }
+                // An index owner whose heartbeat is fresh is at work,
+                // with no lease held: another call of the same request.
+                // Its row is not closed under it.
+                recovery::LocalStanding::Pending
+                    if row.has_live_heartbeat(bridges::abandon::stale_heartbeat()) =>
+                {
+                    ClosedRefresh::AtWork
+                }
+                recovery::LocalStanding::Pending => {
+                    recovery::discard_operation(&transaction, row.id)
+                        .map_err(|error| error.for_operation(operation, root))?;
+                    ClosedRefresh::NothingPending
+                }
+            },
+        };
+        transaction.commit().map_err(sqlite)?;
+        Ok(closed)
     }
 
     /// The index hand-off a local row owes, which `operation resume` runs
@@ -6898,6 +6958,19 @@ enum RefreshScope<'a> {
     Recorded,
     /// `contexts`, which the row is recorded as owing before it is claimed.
     Owing(&'a [ContextKey]),
+}
+
+/// What `close_pending_refresh` found of a refresh's row.
+enum ClosedRefresh {
+    /// The row has completed: the index was brought up to date under
+    /// the ID, by another call.
+    Completed,
+    /// No row is pending under the ID: there was none, or it was closed
+    /// here or before.
+    NothingPending,
+    /// The row is pending and a call is at work under it. It was left
+    /// as it is.
+    AtWork,
 }
 
 /// A row a refresh has claimed for indexing.
