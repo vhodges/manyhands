@@ -70,11 +70,12 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
-            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
-            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
-            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, IndexPending, OperationFamily, OperationId,
+            ReadError, RemoteOperationSafePoint, RepositoryOperation, RepositoryService,
+            SafePointRequest, SynchronizationError, SynchronizationObserver,
+            SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
+            SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow},
             remote::{conflict_read, sync::RepublishConsent},
             transport::SshTransportErrorKind,
@@ -602,12 +603,24 @@ pub(crate) fn resumed(
     subject: Subject,
     owner: Option<RequestId>,
 ) -> Ran {
-    SyncBinding {
+    let binding = SyncBinding {
         root: accepted.root(),
         target,
         republish: None,
+    };
+    let (result, ran) = binding.observed(call, accepted, subject, owner, None, true);
+    match result {
+        Some(Ok(SynchronizationResult::Complete(came_to)))
+            if call.service.lifecycle_child_owes_its_parent(
+                &accepted.root(),
+                accepted.operation_id,
+                &binding.target,
+            ) =>
+        {
+            binding.owed_to_its_parent(call.service, accepted, came_to)
+        }
+        _ => ran,
     }
-    .call(call, accepted, subject, owner, None, true)
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, as
@@ -952,6 +965,37 @@ impl SyncBinding {
         }
         let ran = self.stopped(service, accepted, &watch, &error);
         (Some(Err(error)), ran)
+    }
+
+    /// The answer of a lifecycle's child taken up under its own ID
+    /// (`operation resume <child>`) that completed while the index does not
+    /// hold the context its local update changed: that indexing is its
+    /// parent's exit (Task 22), and no operation owes it. It is answered as
+    /// a completed save's replay is (R-SDD-16): `discovery_pending`,
+    /// offering the refresh that brings the index up to date, and final, so
+    /// that no resume is offered for what no resume would do.
+    fn owed_to_its_parent(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        came_to: SynchronizationOutcome,
+    ) -> Ran {
+        let Ran { answer, .. } = self.finished(
+            service,
+            accepted,
+            &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+        );
+        Ran {
+            answer: Answer {
+                recovery: crate::results::absolute_path_string(&accepted.root())
+                    .as_deref()
+                    .map(outcome::refresh_the_root)
+                    .into_iter()
+                    .collect(),
+                ..answer
+            },
+            standing: Standing::Final,
+        }
     }
 
     /// The domain returned a result: the synchronization has its

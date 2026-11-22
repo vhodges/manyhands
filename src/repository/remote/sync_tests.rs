@@ -17637,6 +17637,111 @@ fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
     }
 }
 
+/// `operation resume <child>` of a lifecycle's child is answered by the
+/// synchronization's binding. Once the child completed while the index does
+/// not hold the context its local update changed, whose indexing is its
+/// parent's exit (Task 22), it is answered as a completed save's replay is
+/// (R-SDD-16): `discovery_pending`, offering `index refresh` and no resume,
+/// with no row written. With its context indexed it is answered as any
+/// completed synchronization is; and after the refresh it offered, a resume
+/// again is a no-op, so nothing offers a resume that no resume would do.
+#[test]
+fn an_own_id_resume_of_a_lifecycle_child_owing_its_context_offers_a_refresh() {
+    use crate::repository::{
+        CancellationToken, ClosureExpectation, Mutation, MutationCall, NoProgress,
+        OperationResumeInput, RequestId,
+        closure::record::{self as closure, ClosureKind},
+        promotion::record::ChildRole,
+    };
+    use crate::results::{DiscoveryEffect, RecoveryActionKind, ResultCode};
+    for owed in [true, false] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let plan = configure_hand_off_plan(&service, root);
+        let target = ticket_target(HAND_OFF_X);
+        let child = state::with_transaction(&service, root, |tx, id| {
+            let r = closure::begin_record(
+                tx,
+                id,
+                OperationId::new(),
+                &HAND_OFF_X.parse().unwrap(),
+                ClosureExpectation::from_bytes([7; 32]),
+                Some("origin"),
+                ClosureKind::Existing,
+            )?;
+            Ok(closure::next_attempt(tx, id, r.operation_id, ChildRole::Context)?.context_sync_id)
+        })
+        .unwrap()
+        .unwrap();
+        classified_synchronization_under(&service, root, &plan, &target, child);
+        if owed {
+            // What the child's local update marked (`mark_local_update`).
+            crate::repository::mark_contexts_dirty(
+                &service.registry_path,
+                root,
+                &[hand_off_context(&target)],
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        let resume = || {
+            service.execute(
+                MutationCall {
+                    request_id: RequestId::new(),
+                    confirmation: None,
+                    mutation: Mutation::OperationResume(OperationResumeInput {
+                        root: root.to_owned(),
+                        operation_id: child,
+                    }),
+                },
+                &mut SessionCredentials::new(NoPrompt),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            )
+        };
+        let actions = |answer: &crate::results::Envelope<_>| {
+            answer
+                .recovery
+                .iter()
+                .map(|action: &crate::results::RecoveryAction| action.action)
+                .collect::<Vec<_>>()
+        };
+        let taken_up = resume();
+        assert_eq!(taken_up.command, "operation resume");
+        if owed {
+            assert_eq!(taken_up.code, ResultCode::DiscoveryPending, "{taken_up:?}");
+            assert_eq!(taken_up.effects.discovery, DiscoveryEffect::Pending);
+            assert_eq!(actions(&taken_up), [RecoveryActionKind::IndexRefresh]);
+        } else {
+            assert_eq!(taken_up.code, ResultCode::AlreadyApplied, "{taken_up:?}");
+            assert_eq!(taken_up.effects.discovery, DiscoveryEffect::Current);
+            assert!(actions(&taken_up).is_empty(), "{taken_up:?}");
+        }
+        assert!(
+            rows_under(data.path(), child).is_empty(),
+            "rows under its ID"
+        );
+        assert!(!index_pending(data.path(), child));
+        if owed {
+            assert!(matches!(
+                service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: root.to_owned(),
+                        operation_id: OperationId::new(),
+                    })
+                    .unwrap(),
+                RefreshOutcome::Refreshed { .. }
+            ));
+            // The operation owes nothing now: a resume again is a no-op.
+            let again = resume();
+            assert_eq!(again.code, ResultCode::AlreadyApplied, "{again:?}");
+            assert_ne!(again.effects.discovery, DiscoveryEffect::Pending);
+            assert!(actions(&again).is_empty(), "{again:?}");
+        }
+    }
+}
+
 /// A step of a synchronization's hand-off that is refused for its ID
 /// (`OperationMismatch`, `OperationAbandoned`) is answered as that refusal,
 /// which no resume or retry gets past; any other failure is owed, and is

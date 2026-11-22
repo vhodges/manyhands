@@ -7510,6 +7510,27 @@ impl RepositoryService {
         })
     }
 }
+impl RepositoryService {
+    /// Whether the synchronization `operation_id` of `target` is a
+    /// lifecycle's child (`lifecycle_record::is_child`) whose context, the
+    /// one its local update changes, the index does not hold yet. Its
+    /// hand-off is its parent's exit (Task 22), so a child taken up under
+    /// its own ID that completed is answered as owing nothing but a refresh,
+    /// as a completed save's replay is (R-SDD-16). `false` when its parent's
+    /// record cannot be read.
+    pub(crate) fn lifecycle_child_owes_its_parent(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &SynchronizationTarget,
+    ) -> bool {
+        state::with_transaction(self, root, |tx, _| {
+            crate::repository::promotion::lifecycle_record::is_child(tx, operation_id)
+        })
+        .unwrap_or(false)
+            && !self.contexts_indexed(root, &[hand_off_context(target)])
+    }
+}
 /// The context a synchronization of `target` changes and publishes: the
 /// item's, or the primary.
 fn hand_off_context(target: &SynchronizationTarget) -> ContextKey {
