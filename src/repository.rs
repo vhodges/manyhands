@@ -460,7 +460,9 @@ impl RegistryMemo {
     /// open; `None` when either part cannot be read, and the file is then
     /// migrated by every call that opens it, as before there was a memo.
     fn of(connection: &rusqlite::Connection, path: &Path) -> Option<Self> {
-        let file = coordination::file_identity(&std::fs::File::open(path).ok()?).ok()?;
+        // Read without a descriptor of the registry: closing one would drop
+        // this process's SQLite locks on it (`coordination::path_identity`).
+        let file = coordination::path_identity(path).ok()?;
         let schema_version = connection
             .query_row("PRAGMA schema_version", [], |row| row.get(0))
             .ok()?;

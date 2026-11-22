@@ -43,6 +43,54 @@ pub(super) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     Ok((metadata.dev(), u128::from(metadata.ino())))
 }
 
+/// The identity of the file at `path`, as `file_identity` gives it, read
+/// with no descriptor of it opened: on Unix, closing any descriptor of a
+/// file drops every POSIX lock this process holds on it, and SQLite's lock
+/// on an open database is one (review C1 of Task 20b).
+#[cfg(unix)]
+pub(super) fn path_identity(path: &Path) -> io::Result<(u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), u128::from(metadata.ino())))
+}
+
+/// The identity of the file at `path`, from a handle of its own. A
+/// Windows byte-range lock belongs to the handle that took it, so closing
+/// this one leaves SQLite's alone.
+#[cfg(windows)]
+pub(super) fn path_identity(path: &Path) -> io::Result<(u64, u128)> {
+    file_identity(&File::open(path)?)
+}
+
+/// Whether this process may open the file at `path` to read and write it,
+/// asked with no descriptor of it opened on Unix (see `path_identity`): an
+/// `access(2)` check, which a missing file fails.
+#[cfg(unix)]
+pub(super) fn may_read_and_write(path: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: `path` is a NUL-terminated string that outlives the call,
+    // which only reads it.
+    if unsafe { libc::access(path.as_ptr(), libc::R_OK | libc::W_OK) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Whether this process may open the file at `path` to read and write it:
+/// it is opened so, without being created. Closing this handle leaves the
+/// locks of SQLite's alone (see `path_identity`).
+#[cfg(windows)]
+pub(super) fn may_read_and_write(path: &Path) -> io::Result<()> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map(|_| ())
+}
+
 #[cfg(windows)]
 pub(super) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     use std::os::windows::io::AsRawHandle;
@@ -166,6 +214,39 @@ pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
 /// The file the repository lease is taken on, in the repository's common
 /// directory.
 const REPOSITORY_LOCK_FILE: &str = "manyhands-operation.lock";
+
+/// Whether this process holds the read lock SQLite's unix VFS keeps on a
+/// database's shared byte range (`SHARED_FIRST`, 510 bytes from offset
+/// 2^30 + 2) while a connection of it has the database open in WAL mode,
+/// as `/proc/locks` lists the file's device and inode.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn sqlite_shared_lock_held(database: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    const SHARED_FIRST: u64 = 0x4000_0000 + 2;
+    let metadata = std::fs::metadata(database).unwrap();
+    let dev = metadata.dev();
+    // The kernel's MAJOR:MINOR of a userspace device number, in hex.
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    let file = format!("{major:02x}:{minor:02x}:{}", metadata.ino());
+    let pid = std::process::id().to_string();
+    std::fs::read_to_string("/proc/locks")
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("->"))
+        .any(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            matches!(
+                fields.as_slice(),
+                [_, "POSIX", _, "READ", owner, held, start, end]
+                    if *owner == pid
+                        && *held == file
+                        && start.parse::<u64>().is_ok_and(|start| start <= SHARED_FIRST)
+                        && (*end == "EOF"
+                            || end.parse::<u64>().is_ok_and(|end| end >= SHARED_FIRST))
+            )
+        })
+}
 
 /// Full-content snapshot for repository fixtures, including the empty lease file.
 #[cfg(test)]

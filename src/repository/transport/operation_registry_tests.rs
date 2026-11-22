@@ -90,6 +90,8 @@ impl Fixture {
     /// Another file put in the registry's place, as a rebuild puts one
     /// there: the registry and its sidecars set aside, as a corrupt one is,
     /// and a copy of its rows, with `edit` made to them, in its place.
+    /// Unix only: Windows refuses to rename a file SQLite holds open.
+    #[cfg(unix)]
     fn replace_registry(&self, edit: &str) {
         let registry = self.data.join(REGISTRY_FILE);
         let copy = self.data.join("replacement.sqlite3");
@@ -216,7 +218,7 @@ fn a_remote_call_opens_the_registry_once_for_its_key_reads() {
 #[test]
 fn a_change_between_two_steps_of_one_call_is_refused_at_its_next_recheck() {
     use SshTransportErrorKind::*;
-    let rows: [(&str, Option<SshTransportErrorKind>, bool); 9] = [
+    let rows: &[(&str, Option<SshTransportErrorKind>, bool)] = &[
         // (change, what the next recheck answers, the configuration moved)
         ("nothing", None, false),
         ("key deselected", Some(SelectionChanged), true),
@@ -225,15 +227,22 @@ fn a_change_between_two_steps_of_one_call_is_refused_at_its_next_recheck() {
         ("key file removed", Some(KeySourceChanged), true),
         ("key removed", Some(SelectionChanged), true),
         ("host pin changed", Some(HostTrustChanged), false),
+        #[cfg(unix)]
         ("registry file replaced", None, false),
+        #[cfg(unix)]
         (
             "registry file replaced, key deselected",
             Some(SelectionChanged),
             true,
         ),
+        // Named edit E-71: Windows refuses to rename the registry while a
+        // call holds it open (SQLite shares no delete access), so the file
+        // a rebuild would put in its place never arrives during a call.
+        #[cfg(windows)]
+        ("registry file replacement refused", None, false),
     ];
     let (mut actual, mut expected) = (Vec::new(), Vec::new());
-    for (change, refused, moved) in rows {
+    for (change, refused, moved) in rows.iter().cloned() {
         let f = Fixture::new();
         let plan = f.plan();
         let (prepared, context) = f.prepare(SshDirection::Push);
@@ -280,8 +289,18 @@ fn a_change_between_two_steps_of_one_call_is_refused_at_its_next_recheck() {
                 .service
                 .approve_host_pin_for_testing(&prepared.endpoint.authority, &identity(2))
                 .unwrap(),
+            #[cfg(unix)]
             "registry file replaced" => f.replace_registry(""),
-            _ => f.replace_registry("UPDATE shared_ssh_keys SET selected = 0"),
+            #[cfg(unix)]
+            "registry file replaced, key deselected" => {
+                f.replace_registry("UPDATE shared_ssh_keys SET selected = 0")
+            }
+            #[cfg(windows)]
+            "registry file replacement refused" => assert!(
+                crate::repository::replace_corrupt_registry(&f.data.join(REGISTRY_FILE), &f.root)
+                    .is_err()
+            ),
+            other => panic!("{other}"),
         }
         // The next steps: the recheck before a listing or a transfer, and
         // the configuration the call's checks read.
@@ -312,4 +331,51 @@ fn a_change_between_two_steps_of_one_call_is_refused_at_its_next_recheck() {
         ));
     }
     assert_eq!(actual, expected);
+}
+
+/// The call's registry connection keeps this process's lock on the
+/// registry for the whole call (review C1). On Unix, closing any
+/// descriptor of a file drops every POSIX lock the process holds on it,
+/// SQLite's included; with its lock gone, another process's last close
+/// checkpoints and deletes the WAL and its index, and the call would go on
+/// reading the rows of the old ones. So no read, of the call or of a
+/// connection of its own, may open and close the registry outside SQLite.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_call_keeps_its_lock_on_the_registry_across_reads_and_opens() {
+    use crate::repository::coordination::sqlite_shared_lock_held;
+    let f = Fixture::new();
+    let registry = f.data.join(REGISTRY_FILE);
+    let plan = f.plan();
+    let (prepared, context) = f.prepare(SshDirection::Fetch);
+    let mut held = vec![("the call's first read", sqlite_shared_lock_held(&registry))];
+    f.service.recheck_ssh(&prepared, &context).unwrap();
+    held.push((
+        "a recheck on the call's connection",
+        sqlite_shared_lock_held(&registry),
+    ));
+    f.service
+        .observation_configuration_in(&prepared.registry, &f.root, &plan)
+        .unwrap();
+    held.push((
+        "the call's configuration read",
+        sqlite_shared_lock_held(&registry),
+    ));
+    f.service.list_shared_keys().unwrap();
+    held.push((
+        "a key read on a connection of its own",
+        sqlite_shared_lock_held(&registry),
+    ));
+    f.service.observation_configuration(&f.root, &plan).unwrap();
+    held.push((
+        "a configuration read outside the call",
+        sqlite_shared_lock_held(&registry),
+    ));
+    f.service.recheck_ssh(&prepared, &context).unwrap();
+    held.push((
+        "the call's next recheck",
+        sqlite_shared_lock_held(&registry),
+    ));
+    let expected: Vec<_> = held.iter().map(|(read, _)| (*read, true)).collect();
+    assert_eq!(held, expected);
 }

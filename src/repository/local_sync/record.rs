@@ -815,11 +815,9 @@ pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, 
         if let Some(kind) = WRITE_FAULT.with(|f| f.take()) {
             return Err(journal_io(std::io::Error::from(kind)));
         }
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&service.registry_path)
-            .map(|_| ())
+        // Asked without opening the registry outside SQLite: on Unix, its
+        // close would drop this process's SQLite locks on it.
+        super::super::coordination::may_read_and_write(&service.registry_path)
     };
     access.map_err(journal_io)?;
     open_registry(&service.registry_path, &mut |_| {}).map_err(|error| match error.kind {

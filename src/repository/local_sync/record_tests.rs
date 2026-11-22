@@ -797,3 +797,27 @@ fn registry_open_audits_unfinished_rows_and_not_completed_ones() {
         );
     }
 }
+
+/// The journal's access check on the registry, before it opens it for a
+/// write, leaves this process's lock on the registry in place: another
+/// connection of the process (a remote call's, the desktop's) keeps it
+/// while it is open (review C1). On Unix, closing a descriptor of the
+/// registry opened outside SQLite would drop it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_journal_s_registry_check_leaves_this_process_s_lock_in_place() {
+    use crate::repository::coordination::sqlite_shared_lock_held;
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let registry = data.path().join(REGISTRY_FILE);
+    let other = rusqlite::Connection::open(&registry).unwrap();
+    other
+        .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    let before = sqlite_shared_lock_held(&registry);
+    drop(record::open_for_write(&service).unwrap());
+    assert_eq!((before, sqlite_shared_lock_held(&registry)), (true, true));
+    drop(other);
+}
