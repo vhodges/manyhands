@@ -120,17 +120,23 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         Ok(())
     }
 
-    /// This connection's advertisement. A closed connection has none: a push
-    /// closes its own as it returns, and libgit2 would still hand back what it
-    /// listed when it connected, which proves nothing about the remote now.
-    pub(crate) fn advertisement(&mut self) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
-        let protocol = || {
-            self.context
-                .with_kind(SshTransportErrorKind::ProtocolFailure)
-        };
-        if !self.remote.connected() {
-            return Err(protocol());
+    /// The call's connection can still carry the call. A push closes its
+    /// connection as it returns. On a closed one, libgit2 would hand back the
+    /// listing it cached at connect, which proves nothing about the remote now,
+    /// and a transfer would reconnect inside libgit2, under whatever
+    /// authentication the server grants (R-SDD-51). Both refuse here first.
+    fn require_connected(&mut self) -> Result<(), SshTransportError> {
+        if self.remote.connected() {
+            Ok(())
+        } else {
+            Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ProtocolFailure))
         }
+    }
+    /// This connection's advertisement; none once the connection has closed.
+    pub(crate) fn advertisement(&mut self) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        self.require_connected()?;
         self.remote
             .list()
             .map(|heads| {
@@ -139,7 +145,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                     .map(|head| (head.name().to_owned(), head.oid()))
                     .collect()
             })
-            .map_err(|_| protocol())
+            .map_err(|_| {
+                self.context
+                    .with_kind(SshTransportErrorKind::ProtocolFailure)
+            })
     }
     // Task 4 owns safe points between these calls and complete pre/post OID
     // comparison. A transfer return is never proof of publication or deletion.
@@ -497,7 +506,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         self.recheck_trust()?;
         // The transfer runs on the call's connection, under its callback
         // attempt: no reconnect, no second key submission, and the host is
-        // the one this connection finalized.
+        // the one this connection finalized. A closed connection refuses
+        // before libgit2 could reconnect; the attempt's refusal of a second
+        // credential request is the second line.
+        self.require_connected()?;
         #[cfg(test)]
         super::operation_tests::checkpoint(super::operation_tests::Checkpoint::TransferStarted);
         if action == TransferAction::Observe {

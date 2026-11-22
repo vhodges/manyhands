@@ -220,13 +220,17 @@ fn reconnect_key_policy() -> Result<(), FixtureError> {
 fn reconnect_host_policy() -> Result<(), FixtureError> {
     reconnect(true)
 }
-/// Named edit E-48: a transfer no longer reconnects, so these cases make
-/// libgit2 reconnect inside one call: a push closes its connection, and a
-/// second push on the call connects again under the call's attempt. That
-/// reconnect fails closed: the attempt submits no second key, and refuses a
-/// rotated host key, so the second push sends nothing. (Was: a fresh
-/// reconnect before each transfer was refused by a rejecting server or a
-/// rotated host key.)
+/// Named edit E-48: a transfer no longer reconnects, so these cases make the
+/// call ask for one on its own connection after a push closed it: a second
+/// push in the same call. Named edit E-52 (R-SDD-51): that transfer refuses
+/// before libgit2 is called, with `ProtocolFailure`, whatever the server
+/// would grant; no second connection is opened, no second key offered, and
+/// a rotated host key is never even presented. The attempt's own refusal of a
+/// second credential request, the second line, is pinned by the library test
+/// `a_second_key_submission_on_one_connection_fails_closed`. (E-48 had the
+/// second push reach libgit2's reconnect, refused by the attempt with
+/// `KeyRejected` or a host kind; before E-48, a fresh reconnect before each
+/// transfer was refused by a rejecting server or a rotated host key.)
 #[allow(clippy::result_large_err)] // The scoped transport's owned, redacted error contract.
 fn reconnect(host: bool) -> Result<(), FixtureError> {
     let case = Case::new(false)?;
@@ -235,6 +239,7 @@ fn reconnect(host: bool) -> Result<(), FixtureError> {
     let mut request = case.request();
     request.direction = SshDirection::Push;
     let first = Cell::new(false);
+    let sockets = case.fixture.accepted_sockets();
     let result = case
         .service
         .with_authenticated_remote(request, &mut session, |remote| {
@@ -246,18 +251,12 @@ fn reconnect(host: bool) -> Result<(), FixtureError> {
             remote.push(&["refs/heads/pushed:refs/heads/again"])
         });
     assert!(first.get());
-    let error = result.unwrap_err();
-    if host {
-        assert!(matches!(
-            error.kind,
-            SshTransportErrorKind::HostApprovalRequired { .. }
-                | SshTransportErrorKind::HostReplacementRequired { .. }
-                | SshTransportErrorKind::HostTrustChanged
-        ));
-    } else {
-        assert_eq!(error.kind, SshTransportErrorKind::KeyRejected);
-    }
-    // The server saw one key offered, and accepted, in the whole call.
+    assert_eq!(
+        result.unwrap_err().kind,
+        SshTransportErrorKind::ProtocolFailure
+    );
+    // One connection in the whole call: one key offered, and accepted.
+    assert_eq!(case.fixture.accepted_sockets(), sockets + 1);
     assert_eq!(case.fixture.authentication_counts(), (1, 0));
     assert_eq!(
         case.fixture.accepted_keys(),
