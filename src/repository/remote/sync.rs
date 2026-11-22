@@ -1878,14 +1878,19 @@ fn apply_resolution_ref(
     if resolution_signer_digest(&signature)? != proof.signer_digest {
         return Err(SynchronizationError::RecoveryRequired);
     }
-    let progress = state::with_transaction(service, root, |tx, id| {
+    let (progress, resolved) = state::with_transaction(service, root, |tx, id| {
         let record = state::read_operation(tx, id, owner.operation_id())?
             .ok_or_else(state::recovery_required)?;
-        Ok(
+        let resolved = match record.target.item() {
+            Some((_, item_id)) => ContextKey::Item(item_id.clone()),
+            None => ContextKey::Primary,
+        };
+        Ok((
             state::resolution_index_artifact(tx, &record, request.attempt_id)?
                 .ok_or_else(state::recovery_required)?
                 .ref_phase,
-        )
+            resolved,
+        ))
     })?;
     // Operator restoration can restore baseline after ref observation but before
     // checkpoint observation. Keep progress monotonic; actual-state proof, not
@@ -1902,6 +1907,10 @@ fn apply_resolution_ref(
     )?;
     #[cfg(test)]
     tests::process_death_boundary(root, "ref-intent");
+    // The resolution's checkpoint is its synchronization's local update:
+    // its context is marked before its branch moves, under the lease the
+    // move holds, and again when the checkpoint is recorded applied.
+    mark_updated_context(service, root, resolved)?;
     transaction
         .set_target(
             &snapshot.branch,
@@ -3437,7 +3446,13 @@ fn reconcile_pending_candidate(
             .ok_or(SynchronizationError::RecoveryRequired)?;
         if head != candidate {
             service.synchronization_boundary(root, owner)?;
+            // The update the stopped call recorded and did not make is made
+            // here, and marks its context as that call's would have: the
+            // stopped call may not have marked it, or a store since may have
+            // cleared its mark.
+            mark_local_update(service, root, target)?;
             fast_forward(&repository, &branch, head, candidate)?;
+            let _ = mark_local_update(service, root, target);
         }
     } else if head != candidate {
         return Err(SynchronizationError::RecoveryRequired);
@@ -7249,10 +7264,19 @@ fn mark_local_update(
     root: &Path,
     target: &SynchronizationTarget,
 ) -> Result<(), SynchronizationError> {
+    mark_updated_context(service, root, hand_off_context(target))
+}
+/// Marks `context`, which a synchronization's local update moves, dirty;
+/// see `mark_local_update`.
+fn mark_updated_context(
+    service: &RepositoryService,
+    root: &Path,
+    context: ContextKey,
+) -> Result<(), SynchronizationError> {
     crate::repository::mark_contexts_dirty(
         &service.registry_path,
         root,
-        &[hand_off_context(target)],
+        &[context],
         RepositoryOperation::RepositorySnapshot,
     )
     .map_err(SynchronizationError::from)
@@ -7288,28 +7312,35 @@ fn hand_off_step(result: Result<bool, RepositoryError>) -> Result<bool, Synchron
 }
 #[cfg(test)]
 impl RepositoryService {
-    /// A synchronization of `target` under `operation`, classified with no
-    /// transport as having published `oid` (`published`), or as having
-    /// found the remote current at it: its reservation's own checkpoints
-    /// stand in for the fetch and the push, and its remote row is completed,
-    /// owing only its index hand-off, with no local row under its ID. The
-    /// publication remote's plan is `origin`'s, recorded in the index. The
-    /// request that replays it, which runs that hand-off, is returned.
-    pub(in super::super) fn classified_synchronization_for_testing(
-        &self,
-        root: &Path,
-        target: &SynchronizationTarget,
-        operation: OperationId,
-        oid: git2::Oid,
-        published: bool,
-    ) -> SynchronizeRemoteRequest {
+    /// The publication remote's plan, `origin`'s, recorded in the index of
+    /// `root`.
+    pub(in super::super) fn configure_origin_plan_for_testing(&self, root: &Path) -> RemoteRefPlan {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(self, root, |tx, id| {
             state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
+        plan
+    }
+
+    /// A synchronization of `target` under `operation`, classified with no
+    /// transport as having published `oid` (`published`), or as having
+    /// found the remote current at it: its reservation's own checkpoints,
+    /// under `plan`, stand in for the fetch and the push, and its remote row
+    /// is completed, owing only its index hand-off, with no local row under
+    /// its ID. The request that replays it, which runs that hand-off, is
+    /// returned.
+    pub(in super::super) fn classified_synchronization_for_testing(
+        &self,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+        operation: OperationId,
+        oid: git2::Oid,
+        published: bool,
+    ) -> SynchronizeRemoteRequest {
         let RemoteReservationOutcome::Reserved(owner) = self
-            .reserve_remote_operation(root, operation, &target.operation_target(&plan))
+            .reserve_remote_operation(root, operation, &target.operation_target(plan))
             .unwrap()
         else {
             panic!("the classified synchronization's reservation");
@@ -7324,10 +7355,9 @@ impl RepositoryService {
         self.remote_safe_point(root, &owner, RemoteOperationSafePoint::BeforeFetch)
             .unwrap();
         let observation =
-            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", oid, Some(oid))
+            RemoteRefObservation::from_advertisement(plan, "refs/heads/main", oid, Some(oid))
                 .unwrap();
-        reservation::commit_observation_batch(self, root, &owner, &plan, &[observation], 1)
-            .unwrap();
+        reservation::commit_observation_batch(self, root, &owner, plan, &[observation], 1).unwrap();
         let evidence = Evidence {
             expected_oid: Some(oid),
             local_oid: Some(oid),

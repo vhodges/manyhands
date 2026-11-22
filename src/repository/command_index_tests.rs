@@ -879,6 +879,7 @@ fn publish_to_origin(f: &Fixture) {
 fn synchronized(f: &Fixture, target: SynchronizationTarget, oid: git2::Oid) -> Watched {
     let replay = f.service.classified_synchronization_for_testing(
         &f.root,
+        &f.service.configure_origin_plan_for_testing(&f.root),
         &target,
         OperationId::new(),
         oid,
@@ -962,6 +963,7 @@ fn comment_add_synced(f: &Fixture) -> Watched {
                     .unwrap();
                 let replay = f.service.classified_synchronization_for_testing(
                     &f.root,
+                    &f.service.configure_origin_plan_for_testing(&f.root),
                     &synchronization.target,
                     synchronization.operation_id,
                     head,

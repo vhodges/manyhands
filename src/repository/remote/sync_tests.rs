@@ -2590,8 +2590,10 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
             )
             .unwrap()
         };
+        // The resolution marks the primary before its branch moves (Task
+        // 16b); the fault is in the mark its applied checkpoint makes after.
         db.execute_batch(if fault == "refresh" {
-            "CREATE TRIGGER review_fault BEFORE UPDATE OF dirty ON contexts WHEN NEW.dirty=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
+            "CREATE TRIGGER review_fault BEFORE UPDATE OF dirty ON contexts WHEN OLD.dirty=1 AND NEW.dirty=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         } else {
             "CREATE TRIGGER review_fault BEFORE UPDATE OF phase ON remote_operation_records WHEN OLD.phase='reconciling' AND NEW.phase='interrupted' BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         }).unwrap();
@@ -2620,7 +2622,7 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
                 .unwrap(),
                 "candidate_prepared"
             );
-            assert!(!primary_dirty());
+            assert!(primary_dirty(), "marked before the branch moved");
         } else {
             assert!(!repository.path().join("index.lock").exists());
             assert_eq!(
@@ -7217,6 +7219,13 @@ fn resolution_ref_transition_failure_reconciles_candidate_without_second_ref_mov
         .unwrap()
         .target()
         .unwrap();
+    // The branch moved before the checkpoint was recorded applied: the
+    // primary is marked from before the move (Task 16b).
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the resolved context's mark"
+    );
     *service.failure_point.lock().unwrap() = None;
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
@@ -16731,12 +16740,7 @@ fn ticket_target(item: &str) -> SynchronizationTarget {
 
 /// The publication remote's plan, configured in the index of `root`.
 fn configure_hand_off_plan(service: &RepositoryService, root: &Path) -> RemoteRefPlan {
-    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
-    state::with_transaction(service, root, |tx, id| {
-        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
-    })
-    .unwrap();
-    plan
+    service.configure_origin_plan_for_testing(root)
 }
 
 /// A synchronization of `target` whose push was verified and classified
@@ -16760,57 +16764,14 @@ fn classified_synchronization_under(
     target: &SynchronizationTarget,
     operation: OperationId,
 ) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
-    let RemoteReservationOutcome::Reserved(owner) = service
-        .reserve_remote_operation(root, operation, &target.operation_target(plan))
-        .unwrap()
-    else {
-        panic!("the fixture's reservation");
-    };
     let oid = git2::Repository::open(root)
         .unwrap()
         .head()
         .unwrap()
         .target()
         .unwrap();
-    service
-        .checkpoint_synchronization(
-            root,
-            &owner,
-            state::SynchronizationCheckpoint::FetchPrepared,
-            &state::SynchronizationEvidence::default(),
-        )
-        .unwrap();
-    service
-        .remote_safe_point(root, &owner, RemoteOperationSafePoint::BeforeFetch)
-        .unwrap();
-    let observation =
-        RemoteRefObservation::from_advertisement(plan, "refs/heads/main", oid, Some(oid)).unwrap();
-    commit_observation_batch(service, root, &owner, plan, &[observation], 1).unwrap();
-    let evidence = state::SynchronizationEvidence {
-        expected_oid: Some(oid),
-        local_oid: Some(oid),
-        tracking_oid: Some(oid),
-        primary_tracking_oid: Some(oid),
-        push_oid: Some(oid),
-        push_advertised_oid: Some(oid),
-    };
-    service
-        .checkpoint_synchronization(
-            root,
-            &owner,
-            state::SynchronizationCheckpoint::PushVerified,
-            &evidence,
-        )
-        .unwrap();
-    service
-        .classify_synchronization(root, &owner, Authority::AlreadyCurrent(oid))
-        .unwrap();
     (
-        SynchronizeRemoteRequest {
-            operation_id: operation,
-            target: target.clone(),
-            ..request(root)
-        },
+        service.classified_synchronization_for_testing(root, plan, target, operation, oid, false),
         SynchronizationOutcome::AlreadyCurrent {
             target: target.clone(),
             oid,
@@ -17592,6 +17553,7 @@ fn a_push_only_sync_records_its_hand_off_without_observing() {
         };
         let replay = service.classified_synchronization_for_testing(
             root,
+            &configure_hand_off_plan(&service, root),
             &target,
             OperationId::new(),
             oid,
@@ -17714,6 +17676,7 @@ fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
         let oid = ticket_head(root, HAND_OFF_X);
         let replay = service.classified_synchronization_for_testing(
             root,
+            &configure_hand_off_plan(&service, root),
             &target,
             OperationId::new(),
             oid,
@@ -17798,6 +17761,7 @@ fn a_context_stored_after_a_sync_s_hand_off_began_reads_current() {
         let oid = ticket_head(root, HAND_OFF_X);
         let replay = service.classified_synchronization_for_testing(
             root,
+            &configure_hand_off_plan(&service, root),
             &target,
             OperationId::new(),
             oid,
@@ -17892,4 +17856,147 @@ fn a_context_stored_after_a_sync_s_hand_off_began_reads_current() {
         );
         assert!(!index_pending(data, operation), "{case}");
     }
+}
+
+/// A synchronization stopped after it recorded its local update's intent
+/// and before it marked the context it updates (or with that mark failed),
+/// the context stored as it was: nothing marks it and no local row owes it,
+/// so it reads current. The restart
+/// makes the update the stopped call did not (`reconcile_pending_candidate`
+/// fast-forwards to the recorded merge), and that update marks its context
+/// as the first call's would have: it reads as owed an indexing from the
+/// update until something indexes it, through a push that would follow.
+#[test]
+fn a_restarted_sync_s_local_update_marks_its_context() {
+    let (root, data, service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let plan = configure_hand_off_plan(&service, root.path());
+    let base = repo.head().unwrap().target().unwrap();
+    fs::write(root.path().join("local.txt"), b"local\n").unwrap();
+    let local = commit_all(&repo);
+    repo.set_head_detached(base).unwrap();
+    repo.checkout_tree(&repo.find_object(base, None).unwrap(), None)
+        .unwrap();
+    fs::write(root.path().join("incoming.txt"), b"incoming\n").unwrap();
+    let incoming = commit_all(&repo);
+    repo.set_head("refs/heads/main").unwrap();
+    repo.reference("refs/heads/main", local, true, "fixture")
+        .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let tree = repo.find_commit(local).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let candidate = repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[
+                &repo.find_commit(local).unwrap(),
+                &repo.find_commit(incoming).unwrap(),
+            ],
+        )
+        .unwrap();
+    // The primary, as it is before the synchronization, is stored.
+    assert!(matches!(
+        service.refresh_repository(RefreshRepositoryRequest {
+            root: root.path().into(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("reservation"),
+    };
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+    commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: tree.id(),
+                baseline_index_digest: index_digest(tree.id()),
+            },
+        )
+        .unwrap();
+    // The intent of the effect is recorded; the call stops before it marks
+    // the primary, and before Git is touched.
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(local));
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+    assert!(
+        service.contexts_indexed(root.path(), &[ContextKey::Primary]),
+        "stored, unmarked and owed by no row"
+    );
+
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("restart"),
+    };
+    let mut resume_evidence = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap()
+    .sync_evidence;
+    let pending = reconcile_pending_candidate(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+        &resumed,
+        &mut resume_evidence,
+    )
+    .unwrap()
+    .expect("candidate evidence");
+    assert_eq!(pending.oid, candidate);
+    assert_eq!(repo.head().unwrap().target(), Some(candidate));
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the restart's update marks the primary"
+    );
+    assert!(
+        !service.contexts_indexed(root.path(), &[ContextKey::Primary]),
+        "the primary is owed an indexing from the restart's update"
+    );
 }
