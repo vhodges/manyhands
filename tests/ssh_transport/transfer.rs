@@ -166,7 +166,10 @@ fn transfer_failure_preserves_valid_secret() -> Result<(), FixtureError> {
         Transfer::Download,
         &Cell::new(0),
         || {
-            case.fixture.disconnect_at(FixtureBoundary::Advertisement);
+            // Named edit E-50: the download runs on the connection that already
+            // advertised, so the fault is at its transfer (was Advertisement,
+            // which only a reconnect reached).
+            case.fixture.disconnect_at(FixtureBoundary::Transfer);
         },
     )
     .unwrap_err();
@@ -183,17 +186,29 @@ fn transfer_failure_preserves_valid_secret() -> Result<(), FixtureError> {
 fn renewed_rejection_evicts_secret() -> Result<(), FixtureError> {
     let case = Case::new(true)?;
     let (mut session, requests) = session(vec![secret(PASSWORD)]);
+    // Named edit E-49: a transfer no longer authenticates again, so the server
+    // rejects the key on the connection that uses the passphrase just supplied
+    // (was on the transfer's reconnect).
+    let fixture = std::rc::Rc::new(case);
+    let rejecting = fixture.clone();
+    let hook = install_hook(move |point| {
+        if point == Checkpoint::ProviderReturned {
+            rejecting.fixture.reject_client();
+        }
+    });
+    let case = &*fixture;
+    let called = Cell::new(0);
     let error = transfer(
         &case.service,
         case.request(),
         &mut session,
         Transfer::Download,
-        &Cell::new(0),
-        || {
-            case.fixture.reject_client();
-        },
+        &called,
+        || {},
     )
     .unwrap_err();
+    drop(hook);
+    assert_eq!(called.get(), 0);
     assert_eq!(error.kind, SshTransportErrorKind::UnlockFailed);
     assert_eq!(requests.borrow().len(), 1);
     assert!(!session.has_cached_passphrase(&requests.borrow()[0]));
@@ -205,23 +220,31 @@ fn reconnect_key_policy() -> Result<(), FixtureError> {
 fn reconnect_host_policy() -> Result<(), FixtureError> {
     reconnect(true)
 }
+/// Named edit E-48: a transfer no longer reconnects, so these cases make
+/// libgit2 reconnect inside one call: a push closes its connection, and a
+/// second push on the call connects again under the call's attempt. That
+/// reconnect fails closed: the attempt submits no second key, and refuses a
+/// rotated host key, so the second push sends nothing. (Was: a fresh
+/// reconnect before each transfer was refused by a rejecting server or a
+/// rotated host key.)
 fn reconnect(host: bool) -> Result<(), FixtureError> {
     let case = Case::new(false)?;
+    let pushed = commit(&case)?;
     let (mut session, _) = session(vec![]);
-    let result = transfer(
-        &case.service,
-        case.request(),
-        &mut session,
-        Transfer::Download,
-        &Cell::new(0),
-        || {
+    let mut request = case.request();
+    request.direction = SshDirection::Push;
+    let first = Cell::new(false);
+    let result = case
+        .service
+        .with_authenticated_remote(request, &mut session, |remote| {
+            remote.push(&["refs/heads/pushed:refs/heads/pushed"])?;
+            first.set(true);
             if host {
                 case.fixture.rotate_host_key().unwrap();
-            } else {
-                case.fixture.reject_client();
             }
-        },
-    );
+            remote.push(&["refs/heads/pushed:refs/heads/again"])
+        });
+    assert!(first.get());
     let error = result.unwrap_err();
     if host {
         assert!(matches!(
@@ -233,7 +256,14 @@ fn reconnect(host: bool) -> Result<(), FixtureError> {
     } else {
         assert_eq!(error.kind, SshTransportErrorKind::KeyRejected);
     }
-    let repo = fixed(git2::Repository::open(&case.root))?;
-    assert!(repo.find_commit(case.fixture.commit_id()).is_err());
+    // The server saw one key offered, and accepted, in the whole call.
+    assert_eq!(case.fixture.authentication_counts(), (1, 0));
+    assert_eq!(
+        case.fixture.accepted_keys(),
+        vec![case.fixture.allowed_client_public_key()]
+    );
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    assert_eq!(fixed(server.refname_to_id("refs/heads/pushed"))?, pushed);
+    assert!(server.find_reference("refs/heads/again").is_err());
     Ok(())
 }
