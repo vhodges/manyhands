@@ -1656,10 +1656,11 @@ fn local_binding_after_none_rejects_actual_other_target_service_authority() {
             ..
         }))
     ));
+    // The one binding is the first synchronization's hand-off row (E-64).
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     assert_eq!(
         db.query_row(
-            "SELECT count(*) FROM operation_records WHERE target LIKE 'synchronization-local-v1/%'",
+            "SELECT count(*) FROM operation_records WHERE target LIKE 'synchronization-index-v1/%'",
             [],
             |r| r.get::<_, i64>(0)
         )
@@ -1859,7 +1860,8 @@ fn local_binding_transaction_accepts_only_identical_complete_tag_without_rewriti
             .unwrap()
             .target()
             .unwrap();
-        let matcher = format!("{}/{oid}", local_refresh_identity(&req.target));
+        // The tag this build binds with: the hand-off target (E-65).
+        let matcher = crate::repository::recovery::synchronization_index_target(&req.target, oid);
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         db.execute("INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,'refresh',?3,?4,0)",rusqlite::params![root.path().to_str().unwrap(),req.operation_id.to_string(),matcher,status]).unwrap();
         let count: i64 = db
@@ -16577,7 +16579,7 @@ mod process_death {
 }
 
 /// The local row of a synchronization with no publication remote is
-/// left pending by a refresh that stopped, and is then abandoned. An
+/// left pending by a hand-off that stopped, and is then abandoned. An
 /// abandoned row is `completed` in the journal, which is not "the refresh
 /// was done": the repeat of the ID is refused, neither replayed as
 /// complete nor begun again, and writes nothing.
@@ -16585,9 +16587,11 @@ mod process_death {
 fn a_local_synchronization_whose_row_was_abandoned_is_refused_and_not_replayed_as_complete() {
     let (root, data, service) = fixture();
     let req = request(root.path());
+    // Its hand-off is its context's index step, which stops before its
+    // index transaction commits (E-63).
     let failing = RepositoryService::open_at_with_failure_point_for_testing(
         data.path(),
-        FailurePoint::AfterIndexClaim,
+        FailurePoint::BeforeIndexTransactionCommit,
     )
     .unwrap();
     assert!(matches!(
@@ -17161,6 +17165,48 @@ fn index_pending(data: &Path, operation: OperationId) -> bool {
         .unwrap()
 }
 
+/// `index_pending`, or `None` when no remote row is under `operation`, as
+/// for a synchronization with no remote to publish to.
+fn index_debt(data: &Path, operation: OperationId) -> Option<bool> {
+    use rusqlite::OptionalExtension;
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT index_pending FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+}
+
+/// A new synchronization of `target` in a repository with no publication
+/// remote, which binds its local head and hands off with nothing to
+/// publish: the request, and what it comes to.
+fn unpublished_synchronization(
+    root: &Path,
+    target: &SynchronizationTarget,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    let local_oid = match target {
+        SynchronizationTarget::Primary => git2::Repository::open(root)
+            .unwrap()
+            .refname_to_id("refs/heads/main")
+            .unwrap(),
+        SynchronizationTarget::Context { item_id, .. } => ticket_head(root, &item_id.to_string()),
+    };
+    (
+        SynchronizeRemoteRequest {
+            target: target.clone(),
+            ..request(root)
+        },
+        SynchronizationOutcome::PublishPending {
+            target: target.clone(),
+            local_oid,
+            reason: PublishPendingReason::NoPublicationRemote,
+        },
+    )
+}
+
 /// A synchronization's hand-off that stopped before its index transaction
 /// committed leaves its row of its item (of the primary, for a
 /// synchronization of the primary), `failed`, owing only its hand-off, at
@@ -17170,19 +17216,39 @@ fn index_pending(data: &Path, operation: OperationId) -> bool {
 /// item's save, a synchronization of each other item, a whole refresh and
 /// a folder's creation behind another item's hand-off go on, and leave the
 /// row as it was. Its own retry completes it, and the item's next
-/// synchronization is then reserved.
+/// synchronization is then reserved. A synchronization with no remote to
+/// publish to hands off under the same row, at the local head it bound,
+/// and has no remote row.
 #[test]
 fn a_crashed_sync_hand_off_blocks_no_other_item() {
-    for (case, target) in [
-        ("a sync of X", ticket_target(HAND_OFF_X)),
-        ("a sync of the primary", SynchronizationTarget::Primary),
+    for (case, target, remote) in [
+        ("a sync of X", ticket_target(HAND_OFF_X), true),
+        (
+            "a sync of the primary",
+            SynchronizationTarget::Primary,
+            true,
+        ),
+        (
+            "a sync of X with no publication remote",
+            ticket_target(HAND_OFF_X),
+            false,
+        ),
+        (
+            "a sync of the primary with no publication remote",
+            SynchronizationTarget::Primary,
+            false,
+        ),
     ] {
         let (root, data, service) = fixture();
         let root = root.path();
         save_new_ticket(&service, root, HAND_OFF_X).unwrap();
         let plan = configure_hand_off_plan(&service, root);
         let classified = time::OffsetDateTime::now_utc().unix_timestamp();
-        let (replay, outcome) = classified_synchronization(&service, root, &plan, &target);
+        let (replay, outcome) = if remote {
+            classified_synchronization(&service, root, &plan, &target)
+        } else {
+            unpublished_synchronization(root, &target)
+        };
         let operation = replay.operation_id;
 
         *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
@@ -17194,8 +17260,10 @@ fn a_crashed_sync_hand_off_blocks_no_other_item() {
             "{case}"
         );
         *service.failure_point.lock().unwrap() = None;
-        let SynchronizationOutcome::AlreadyCurrent { oid, .. } = outcome else {
-            unreachable!()
+        let oid = match &outcome {
+            SynchronizationOutcome::AlreadyCurrent { oid, .. } => *oid,
+            SynchronizationOutcome::PublishPending { local_oid, .. } => *local_oid,
+            SynchronizationOutcome::Published { .. } => unreachable!(),
         };
         let (hand_off, item, owed) = match &target {
             SynchronizationTarget::Primary => (
@@ -17304,7 +17372,11 @@ fn a_crashed_sync_hand_off_blocks_no_other_item() {
             .unwrap();
         }
         assert_eq!(rows_under(data.path(), operation), crashed, "{case}");
-        assert!(index_pending(data.path(), operation), "{case}");
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(true),
+            "{case}"
+        );
 
         // Its own retry completes it.
         assert_eq!(
@@ -17322,7 +17394,11 @@ fn a_crashed_sync_hand_off_blocks_no_other_item() {
             ["completed"],
             "{case}"
         );
-        assert!(!index_pending(data.path(), operation), "{case}");
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(false),
+            "{case}"
+        );
         assert!(
             matches!(
                 service.reserve_remote_operation(
@@ -17338,27 +17414,47 @@ fn a_crashed_sync_hand_off_blocks_no_other_item() {
 }
 
 /// An older build began a synchronization's hand-off with no target, as a
-/// refresh of the whole repository. Its synchronization's replay takes that
-/// row up when it is pending, and counts it as the hand-off done when it
-/// completed, with nothing observed: either way the remote row's debt is
-/// cleared, and the row is the one under the ID, its target kept.
+/// refresh of the whole repository, and bound a synchronization with no
+/// remote to publish to under `synchronization-local-v1/`, which it
+/// refreshed the whole repository under too. Its synchronization's replay
+/// takes that row up when it is pending, and counts it as the hand-off done
+/// when it completed, with nothing observed: either way the remote row's
+/// debt, when there is one, is cleared, and the row is the one under the
+/// ID, its target kept.
 #[test]
 fn a_hand_off_row_from_an_older_build_still_replays() {
-    for (case, state) in [("pending", "failed"), ("completed", "completed")] {
+    for (case, state, remote) in [
+        ("pending", "failed", true),
+        ("completed", "completed", true),
+        ("pending, with no publication remote", "failed", false),
+        ("completed, with no publication remote", "completed", false),
+    ] {
         let (root, data, service) = fixture();
         let root = root.path();
         save_new_ticket(&service, root, HAND_OFF_X).unwrap();
-        let plan = configure_hand_off_plan(&service, root);
-        let (replay, outcome) =
-            classified_synchronization(&service, root, &plan, &ticket_target(HAND_OFF_X));
+        let target = ticket_target(HAND_OFF_X);
+        let (replay, outcome) = if remote {
+            let plan = configure_hand_off_plan(&service, root);
+            classified_synchronization(&service, root, &plan, &target)
+        } else {
+            unpublished_synchronization(root, &target)
+        };
         let operation = replay.operation_id;
+        let older = if remote {
+            String::new()
+        } else {
+            format!(
+                "synchronization-local-v1/ticket/{HAND_OFF_X}/{}",
+                ticket_head(root, HAND_OFF_X)
+            )
+        };
         rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
             .unwrap()
             .execute(
                 "INSERT INTO operation_records(repository_id, root_path, operation_ulid, action,
                      target, state, observed_at)
-                 SELECT id, root_path, ?1, 'refresh', '', ?2, 1 FROM repositories",
-                rusqlite::params![operation.to_string(), state],
+                 SELECT id, root_path, ?1, 'refresh', ?3, ?2, 1 FROM repositories",
+                rusqlite::params![operation.to_string(), state, older],
             )
             .unwrap();
         let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -17375,16 +17471,14 @@ fn a_hand_off_row_from_an_older_build_still_replays() {
         );
         assert_eq!(
             rows_under(data.path(), operation),
-            [(
-                Some(String::new()),
-                None,
-                None,
-                "completed".to_owned(),
-                None
-            )],
+            [(Some(older), None, None, "completed".to_owned(), None)],
             "{case}"
         );
-        assert!(!index_pending(data.path(), operation), "{case}");
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(false),
+            "{case}"
+        );
         assert_eq!(
             scans.load(Ordering::SeqCst),
             usize::from(state != "completed"),
@@ -17847,28 +17941,88 @@ fn a_sync_that_merged_main_indexes_only_its_context() {
     assert!(!index_pending(data, pass.operation));
 }
 
-/// A synchronization that changed nothing locally, whether it published or
-/// found the remote current, of an item or of the primary, records its
-/// hand-off with nothing observed: its context's basis holds and the
-/// context is not marked dirty, so its row of its item completes, and no
-/// context's rows, nor the repository's refresh time, change.
+/// How a hand-off case's synchronization came to its hand-off having changed
+/// nothing locally: classified through its reservation as having published,
+/// or as having found the remote current; or, with no publication remote,
+/// bound to its local head with nothing to publish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unchanged {
+    Published,
+    Current,
+    Unpublished,
+}
+
+/// The request that hands off a synchronization of `target` at `oid` that
+/// came to its hand-off as `came` says, and what it comes to.
+fn unchanged_synchronization(
+    service: &RepositoryService,
+    root: &Path,
+    target: &SynchronizationTarget,
+    oid: git2::Oid,
+    came: Unchanged,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    if came == Unchanged::Unpublished {
+        let (request, outcome) = unpublished_synchronization(root, target);
+        assert!(
+            matches!(
+                &outcome,
+                SynchronizationOutcome::PublishPending { local_oid, .. } if *local_oid == oid
+            ),
+            "the local head bound"
+        );
+        return (request, outcome);
+    }
+    let published = came == Unchanged::Published;
+    let replay = service.classified_synchronization_for_testing(
+        root,
+        &configure_hand_off_plan(service, root),
+        target,
+        OperationId::new(),
+        oid,
+        published,
+    );
+    let target = target.clone();
+    let outcome = if published {
+        SynchronizationOutcome::Published { target, oid }
+    } else {
+        SynchronizationOutcome::AlreadyCurrent { target, oid }
+    };
+    (replay, outcome)
+}
+
+/// A synchronization that changed nothing locally, whether it published,
+/// found the remote current or had no remote to publish to, of an item or
+/// of the primary, records its hand-off with nothing observed: its
+/// context's basis holds and the context is not marked dirty, so its row of
+/// its item completes, and no context's rows, nor the repository's refresh
+/// time, change.
 #[test]
 fn a_push_only_sync_records_its_hand_off_without_observing() {
-    for (case, target, published) in [
+    for (case, target, came) in [
         (
             "a sync of X that published",
             ticket_target(HAND_OFF_X),
-            true,
+            Unchanged::Published,
         ),
         (
             "a sync of X that found the remote current",
             ticket_target(HAND_OFF_X),
-            false,
+            Unchanged::Current,
         ),
         (
             "a sync of the primary that published",
             SynchronizationTarget::Primary,
-            true,
+            Unchanged::Published,
+        ),
+        (
+            "a sync of X with no publication remote",
+            ticket_target(HAND_OFF_X),
+            Unchanged::Unpublished,
+        ),
+        (
+            "a sync of the primary with no publication remote",
+            SynchronizationTarget::Primary,
+            Unchanged::Unpublished,
         ),
     ] {
         let (root, data, service) = fixture();
@@ -17888,26 +18042,8 @@ fn a_push_only_sync_records_its_hand_off_without_observing() {
                 .unwrap(),
             SynchronizationTarget::Context { .. } => ticket_head(root, HAND_OFF_X),
         };
-        let replay = service.classified_synchronization_for_testing(
-            root,
-            &configure_hand_off_plan(&service, root),
-            &target,
-            OperationId::new(),
-            oid,
-            published,
-        );
+        let (replay, outcome) = unchanged_synchronization(&service, root, &target, oid, came);
         let operation = replay.operation_id;
-        let outcome = if published {
-            SynchronizationOutcome::Published {
-                target: target.clone(),
-                oid,
-            }
-        } else {
-            SynchronizationOutcome::AlreadyCurrent {
-                target: target.clone(),
-                oid,
-            }
-        };
         let contexts = stored_contexts(data);
         let refreshed_at = |data: &Path| -> Option<i64> {
             rusqlite::Connection::open(data.join(REGISTRY_FILE))
@@ -17967,20 +18103,39 @@ fn a_push_only_sync_records_its_hand_off_without_observing() {
             [(Some(hand_off), item, Some(owed), "completed".to_owned())],
             "{case}"
         );
-        assert!(!index_pending(data, operation), "{case}");
+        assert_eq!(
+            index_debt(data, operation),
+            (came != Unchanged::Unpublished).then_some(false),
+            "{case}"
+        );
     }
 }
 
 /// A synchronization that changed nothing locally indexes its context when
 /// that context's basis no longer holds (a commit made in it outside
-/// Manyhands, which the synchronization pushed) or the context is marked
-/// dirty (as a conflict's resolution leaves it): that context alone, once.
-/// Another item's context that moved too is neither observed nor stored.
+/// Manyhands, which the synchronization pushed, or, with no publication
+/// remote, bound) or the context is marked dirty (as a conflict's
+/// resolution leaves it): that context alone, once. Another item's context
+/// that moved too is neither observed nor stored.
 #[test]
 fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
-    for (case, moved_basis) in [
-        ("a commit made in the context outside Manyhands", true),
-        ("the context marked dirty", false),
+    for (case, moved_basis, came) in [
+        (
+            "a commit made in the context outside Manyhands",
+            true,
+            Unchanged::Published,
+        ),
+        ("the context marked dirty", false, Unchanged::Published),
+        (
+            "a commit made in the context outside Manyhands, with no publication remote",
+            true,
+            Unchanged::Unpublished,
+        ),
+        (
+            "the context marked dirty, with no publication remote",
+            false,
+            Unchanged::Unpublished,
+        ),
     ] {
         let (root, data, service) = fixture();
         let root = root.path();
@@ -18011,14 +18166,7 @@ fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
         let primary = stored_context(data, None);
         let target = ticket_target(HAND_OFF_X);
         let oid = ticket_head(root, HAND_OFF_X);
-        let replay = service.classified_synchronization_for_testing(
-            root,
-            &configure_hand_off_plan(&service, root),
-            &target,
-            OperationId::new(),
-            oid,
-            true,
-        );
+        let (replay, outcome) = unchanged_synchronization(&service, root, &target, oid, came);
         let operation = replay.operation_id;
         let observed = observations_while(
             &[
@@ -18031,10 +18179,7 @@ fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
                     service
                         .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
                         .unwrap(),
-                    SynchronizationResult::Complete(SynchronizationOutcome::Published {
-                        target: target.clone(),
-                        oid,
-                    }),
+                    SynchronizationResult::Complete(outcome),
                     "{case}"
                 );
             },
@@ -18064,7 +18209,11 @@ fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
             ["completed"],
             "{case}"
         );
-        assert!(!index_pending(data, operation), "{case}");
+        assert_eq!(
+            index_debt(data, operation),
+            (came != Unchanged::Unpublished).then_some(false),
+            "{case}"
+        );
     }
 }
 

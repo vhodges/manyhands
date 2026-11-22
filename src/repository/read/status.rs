@@ -258,7 +258,9 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
 }
 
 /// What the target of a refresh begins with when the refresh is the local
-/// half of a synchronization that had no remote to publish to.
+/// half of a synchronization that had no remote to publish to, as older
+/// builds bound it. This build binds such a synchronization under its index
+/// hand-off target (P-4), which is reported as a refresh.
 const LOCAL_SYNCHRONIZATION_TARGET: &str = "synchronization-local-v1/";
 
 /// Whether `text` is a full object ID as Git writes one.

@@ -7243,6 +7243,14 @@ impl RepositoryService {
         }
         Ok(())
     }
+    /// Binds a synchronization with no remote to publish to to its local
+    /// head, under the repository's lease: the row it begins under its ID,
+    /// tagged so that only the same target is taken up, is its index
+    /// hand-off row (P-4), `synchronization-index-v1/<kind>/<item>/<oid>`
+    /// (or `.../primary/<oid>`) at that head, of its item or of the primary,
+    /// owing only that hand-off, as every synchronization's is. Older builds
+    /// bound it under `synchronization-local-v1/`, a row of the whole
+    /// repository; `local_synchronization_replay` still reads that one.
     fn bind_local_synchronization(
         &self,
         request: &SynchronizeRemoteRequest,
@@ -7284,13 +7292,19 @@ impl RepositoryService {
             &request.root,
             RepositoryOperation::RefreshRepository,
             request.operation_id,
-            &format!("{}/{oid}", local_refresh_identity(&request.target)),
+            &crate::repository::recovery::synchronization_index_target(&request.target, oid),
             self.clock.now().unix_timestamp(),
         )
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
         Ok(oid)
     }
 
+    /// The local head a synchronization with no remote to publish to bound
+    /// under `request`'s ID, when its row is there: the hand-off row
+    /// `bind_local_synchronization` begins, or the `synchronization-local-v1/`
+    /// row an older build bound it with. Any other row under the ID is a
+    /// mismatch. It is asked only when no remote row is under the ID, so a
+    /// hand-off row there is no remote synchronization's.
     fn local_synchronization_replay(
         &self,
         request: &SynchronizeRemoteRequest,
@@ -7307,7 +7321,10 @@ impl RepositoryService {
             return Err(identity_mismatch());
         };
         let oid = git2::Oid::from_str(oid).map_err(|_| identity_mismatch())?;
-        if identity != local_refresh_identity(&request.target) {
+        if identity != local_refresh_identity(&request.target)
+            && matcher
+                != crate::repository::recovery::synchronization_index_target(&request.target, oid)
+        {
             return Err(identity_mismatch());
         }
         Ok(Some(oid))
@@ -7349,25 +7366,28 @@ impl RepositoryService {
     /// The row's target says what it hands off. A synchronization that
     /// published, or found the remote current, begins a row of its item, or
     /// of the primary (P-4): `recovery::synchronization_index_target`, at the
-    /// authoritative commit, owing that context. Its step indexes that
-    /// context alone, never the whole repository. A merge or a fast-forward
-    /// this call made (`changed`) is indexed with no basis check
-    /// (`index_contexts`): it moved the context. Otherwise the context is
-    /// indexed only when its basis no longer holds or it is marked dirty
-    /// (`complete_hand_off_unobserved`), as an earlier call's local update,
-    /// a conflict's resolution or a commit made outside Manyhands leaves it;
-    /// a push alone observes nothing.
+    /// authoritative commit, owing that context. One with no remote to
+    /// publish to began that row, at the local head it bound, when it bound
+    /// it (`bind_local_synchronization`), and takes it up here. Its step
+    /// indexes that context alone, never the whole repository. A merge or a
+    /// fast-forward this call made (`changed`) is indexed with no prior
+    /// basis comparison (`index_contexts`, which still checks the basis of
+    /// what it observed under the lease before it stores): it moved the
+    /// context. Otherwise the context is indexed only when its basis no
+    /// longer holds or it is marked dirty (`complete_hand_off_unobserved`),
+    /// as an earlier call's local update, a conflict's resolution or a
+    /// commit made outside Manyhands leaves it; a push alone, or a binding
+    /// with nothing to publish, observes nothing.
     ///
-    /// What keeps today's refresh of the whole repository: a
-    /// synchronization with no remote to publish to, which hands off under
-    /// the row it bound its local head with (`synchronization-local-v1/`); a
-    /// lifecycle's child, which begins the plain row with no target that its
-    /// parent's records accept, whether its parent runs it or it is taken
-    /// up under its own ID (`operation resume`): it is known by its parent's
-    /// record (`lifecycle_record::is_child`), the one the begin's check
-    /// reads; and a row with no target that an older build began under the
-    /// ID, which is taken up as it is. A completed one of those is the
-    /// hand-off done, as before.
+    /// What keeps today's refresh of the whole repository: a lifecycle's
+    /// child, which begins the plain row with no target that its parent's
+    /// records accept, whether its parent runs it or it is taken up under
+    /// its own ID (`operation resume`): it is known by its parent's record
+    /// (`lifecycle_record::is_child`), the one the begin's check reads; and
+    /// what an older build began under the ID, which is taken up as it is: a
+    /// row with no target, or the `synchronization-local-v1/` row it bound a
+    /// synchronization with no remote to publish to with. A completed one of
+    /// those is the hand-off done, as before.
     fn synchronization_index_hand_off(
         &self,
         request: &SynchronizeRemoteRequest,
@@ -7388,16 +7408,6 @@ impl RepositoryService {
                     )));
                 }
             };
-        let matcher = match &outcome {
-            SynchronizationOutcome::PublishPending {
-                target, local_oid, ..
-            } => format!("{}/{local_oid}", local_refresh_identity(target)),
-            _ if lifecycle_child => String::new(),
-            SynchronizationOutcome::Published { target, oid }
-            | SynchronizationOutcome::AlreadyCurrent { target, oid } => {
-                crate::repository::recovery::synchronization_index_target(target, *oid)
-            }
-        };
         // The local row under the ID, when the journal can be read. One
         // that was abandoned is `completed` and is not a refresh that
         // was done: the synchronization is refused, and nothing is
@@ -7406,9 +7416,28 @@ impl RepositoryService {
         if let Some((_, _, _, _, step)) = &row {
             refuse_abandoned_refresh(request, step.as_deref())?;
         }
-        let older = row
-            .as_ref()
-            .is_some_and(|(_, _, stored, _, _)| stored.is_empty());
+        let stored = row.as_ref().map(|(_, _, stored, _, _)| stored.as_str());
+        // What an older build began: a row with no target, or the local
+        // binding of the whole repository.
+        let mut older = stored.is_some_and(str::is_empty);
+        let matcher = match &outcome {
+            SynchronizationOutcome::PublishPending {
+                target, local_oid, ..
+            } => {
+                let bound = format!("{}/{local_oid}", local_refresh_identity(target));
+                if stored == Some(bound.as_str()) {
+                    older = true;
+                    bound
+                } else {
+                    crate::repository::recovery::synchronization_index_target(target, *local_oid)
+                }
+            }
+            _ if lifecycle_child => String::new(),
+            SynchronizationOutcome::Published { target, oid }
+            | SynchronizationOutcome::AlreadyCurrent { target, oid } => {
+                crate::repository::recovery::synchronization_index_target(target, *oid)
+            }
+        };
         let completed = row.is_some_and(|(root, action, stored, state, _)| {
             root == request.root.to_string_lossy()
                 && action == "refresh"
@@ -7420,7 +7449,7 @@ impl RepositoryService {
             operation_id: request.operation_id,
         };
         let indexed = completed
-            || hand_off_step(if authoritative && !lifecycle_child && !older {
+            || hand_off_step(if !lifecycle_child && !older {
                 self.index_synchronization_hand_off(
                     refresh,
                     &matcher,

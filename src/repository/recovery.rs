@@ -1468,8 +1468,10 @@ fn first_pending_local(
     Blocker::local(operation_id.as_deref())
 }
 
-/// Tagged synchronization-local identity cannot share an ID with any remote row.
-/// The collision check belongs in the insertion transaction, not prior inspection.
+/// The tagged local binding of a synchronization with no remote to publish
+/// to, under its index hand-off target (P-4), cannot share an ID with any
+/// remote row. The collision check belongs in the insertion transaction, not
+/// prior inspection.
 pub(super) fn begin_or_reconcile_local_synchronization(
     connection: &mut Connection,
     root: &Path,
