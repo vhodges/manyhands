@@ -355,6 +355,19 @@ For the owner's approval with this plan. Each changes only as stated.
 - [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
 - [ ] **Step 4: Run** the new tests and the local-sync audit tests in `src/repository/local_sync/record.rs` by name (listed in the ledger). Expected: PASS. Commit.
 
+### Task 20b: One registry connection for a remote call's key reads (decision 36)
+
+**Files:**
+- Modify: `src/repository/transport/` (`recheck_ssh`, `prepare_ssh` and the remote call that holds them), `src/repository/remote/sync.rs` (`observation_configuration` and the call sites that read the shared keys during a remote call), `src/repository/keys/registry.rs` (`list_shared_keys`, which takes the call's connection)
+- Test: library tests in `src/repository/transport/` and `src/repository/keys/`
+
+**Interfaces:**
+- Produces: a remote call opens the registry once, after Task 20's `open_migrated_registry`, and its key reads (`prepare_ssh`, each `recheck_ssh` before a listing or transfer, `observation_configuration`) read through that connection. Every read is a fresh read of the current rows, never a copy kept for the call, so a key deselected, replaced or removed, or a host pin changed, between two steps of one call is refused at the next recheck exactly as today. Whatever answers today stays: no code, shape or recovery action changes.
+
+- [ ] **Step 1: Write failing tests** `a_remote_call_opens_the_registry_once_for_its_key_reads` (a registry-open counter over one sync, one comment publication and one poll: one open each for the key reads), and extend the existing recheck tests with a table row per change (key deselected, key file replaced, key removed, host pin changed) made between two steps of one call through the held connection, each refused as today.
+- [ ] **Step 2: Run.** Expected: FAIL for the counter; the recheck rows pass today and must keep passing. **Step 3: Implement.**
+- [ ] **Step 4: Run** the new tests, `repository::transport`, `repository::keys`, and the SSH cases that change a key or a pin mid-call (named in the ledger), singly by exact name. Expected: PASS. Commit.
+
 ### Task 21: Two previews per attempt
 
 **Files:**
@@ -375,9 +388,9 @@ For the owner's approval with this plan. Each changes only as stated.
 - Test: `src/repository/closure/run_tests.rs`, `src/repository/promotion/run_tests.rs`
 
 **Interfaces:**
-- Produces: on every exit the parent calls `index_contexts` once with its own contexts and those its children recorded in its record (Task 16), under the same row it uses today (a whole-repository-scoped `refresh` row with target `''`, claimed as `refresh_repository_unauthored` claims it, promotion/run.rs ~1699-1716; Owner question 2), and runs no whole-repository refresh. Folder create does the same under its request's row (folder.rs ~569-590). P-1: the full `require_cleanup_clean` check runs under the lease inside `remove_context_worktree`; a head-and-status check runs before the remote delete (~1340); the checks at ~1261 and ~1432 go.
+- Produces: on every exit the parent calls `index_contexts` once with its own contexts and those its children recorded in its record (Task 16), under the same row it uses today (a whole-repository-scoped `refresh` row with target `''`, claimed as `refresh_repository_unauthored` claims it, promotion/run.rs ~1699-1716; Owner question 2), and runs no whole-repository refresh. Folder create does the same under its request's row (folder.rs ~569-590). P-1: the full `require_cleanup_clean` check runs under the lease inside `remove_context_worktree`; a head-and-status check runs before the remote delete (~1340); the checks at ~1261 and ~1432 go. Decision 34: a close or promotion behind its own item's live sync hand-off (for the primary's, any close or promotion) waits as the per-item writers wait (vh-bhepg), then answers `busy`; `recovery_required` only when the row is stale (today it is refused at once, R-SDD-46, reservation.rs ~1573, recovery.rs ~2509).
 
-- [ ] **Step 1: Write failing tests** `every_lifecycle_exit_indexes_the_contexts_its_children_changed_once` (a table over finish, abandon, cancel, a stop at awaiting publication and its later finish, interrupted, primary advanced; each asserts exactly one index step and no whole-repository refresh), `a_dirty_worktree_stops_the_remote_delete`, `a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remote_deleted` (P-1's changed outcome: cleanup pending, the work merged, the retry finishes once it is gone), `a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable`; add the close and promote rows to `each_command_indexes_only_its_contexts`.
+- [ ] **Step 1: Write failing tests** `a_close_or_promotion_behind_a_live_hand_off_waits` (a table over close and promotion, item and primary hand-off: released within the wait → proceeds; still live past it → `busy`; stale → `recovery_required`; injected clock, no real waits), `every_lifecycle_exit_indexes_the_contexts_its_children_changed_once` (a table over finish, abandon, cancel, a stop at awaiting publication and its later finish, interrupted, primary advanced; each asserts exactly one index step and no whole-repository refresh), `a_dirty_worktree_stops_the_remote_delete`, `a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remote_deleted` (P-1's changed outcome: cleanup pending, the work merged, the retry finishes once it is gone), `a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable`; add the close and promote rows to `each_command_indexes_only_its_contexts`.
 - [ ] **Step 2: Run.** Expected: FAIL. **Step 3: Implement.**
 - [ ] **Step 4: Run** the new tests and the no-new-socket checks (`tests/ticket_closure/journeys.rs` ~222, ~1372; `tests/document_promotion/advanced.rs` ~247), by name. Expected: PASS. Commit.
 
