@@ -58,6 +58,9 @@ pub(super) fn image_types() -> Result<(), FixtureError> {
 }
 
 type OwnerRow = (i64, String, String, i64, Option<String>);
+/// The primary's and the document context's dirty marks, and whether the
+/// index reads behind as a whole (`index status` stale).
+type Behind = (Option<i64>, Option<i64>, bool);
 fn indexing_row(side: &Side, operation: OperationId) -> Result<OwnerRow, FixtureError> {
     assert_eq!(
         fixed(side.db()?.query_row(
@@ -223,12 +226,22 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
             Ok((indexing_row(&p.a, id)?, indexing_row(&foreign, foreign_id)?))
         })();
         ssh_harness::observation(&[2110, 7, captures.is_ok() as u128]);
-        let completed = (|| -> Result<(OwnerRow, OwnerRow, i64), FixtureError> {
+        let completed = (|| -> Result<(OwnerRow, OwnerRow, Behind), FixtureError> {
             let (a, b) = captures.as_ref().map_err(|_| FixtureError)?;
             exits::launch(&p, &request, 10)?; // Actual F11 process exit after SQL completion.
             ssh_harness::observation(&[2110, 8]);
             assert_eq!(step(&p.a, request.operation_id)?, "complete");
-            let captured=(owner_row(&p.a,a.0)?,owner_row(&foreign,b.0)?,fixed(p.a.db()?.query_row("SELECT refresh_required FROM repositories WHERE root_path=(SELECT root_path FROM operation_records WHERE id=?1)",[a.0],|r|r.get(0)))?);
+            // E-39: completion's own transaction marks what it changed, the
+            // primary and the retired context, dirty, so the index reads
+            // behind until a refresh stores them, whatever the fenced owner
+            // observed before it.
+            let marks:(Option<i64>,Option<i64>)=fixed(p.a.db()?.query_row("SELECT (SELECT dirty FROM contexts WHERE repository_id=r.id AND item_id IS NULL),(SELECT dirty FROM contexts WHERE repository_id=r.id AND item_id=?2) FROM repositories r WHERE root_path=(SELECT root_path FROM operation_records WHERE id=?1)",rusqlite::params![a.0,DOC],|r|Ok((r.get(0)?,r.get(1)?))))?;
+            let behind = fixed(p.a.service.repository_snapshot(&p.a.root))?.refresh_required;
+            let captured = (
+                owner_row(&p.a, a.0)?,
+                owner_row(&foreign, b.0)?,
+                (marks.0, marks.1, behind),
+            );
             if takeover {
                 // Another executor of this ORIGINAL refresh may claim the fence
                 // first. The paused token must not adopt its completed record.
@@ -255,7 +268,7 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
         let (fenced, untouched, stale) = completed?;
         assert_eq!(old?, !takeover);
         assert!(matches!(fixed(other)?, RefreshOutcome::Refreshed { .. }));
-        assert_eq!(stale, 1);
+        assert_eq!(stale, (Some(1), Some(1), true));
         let after = owner_row(&p.a, before.0)?;
         ssh_harness::observation(&[
             2100,
