@@ -96,11 +96,22 @@ fn fetch_set() -> Result<(), FixtureError> {
     let fetchhead = local.path().join("FETCH_HEAD");
     fixed(std::fs::write(&fetchhead, b"preserved"))?;
     let (mut session, requests) = session(vec![]);
+    let reads = crate::repository::key_reads::counts();
     let advertised = fixed(case.service.with_authenticated_remote(
         case.request(),
         &mut session,
         |remote| remote.fetch_poll_set(&plan(), |_| true),
     ))?;
+    // Named edit E-70: a poll's remote call opens the registry once for all
+    // its key reads (design decision 36).
+    let after = crate::repository::key_reads::counts();
+    assert_eq!(
+        (
+            after.calls - reads.calls,
+            after.opens_in_calls - reads.opens_in_calls
+        ),
+        (1, 1)
+    );
     for (target, oid) in [
         (plan().primary().clone(), case.fixture.commit_id()),
         (document.clone(), doc_oid),

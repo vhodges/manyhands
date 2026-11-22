@@ -759,16 +759,21 @@ fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
 /// Connection reuse is transport behaviour, so only SSH shows it. The key
 /// needs no passphrase: a protected one costs each new session a refused
 /// first attempt before the prompt, which is not a call of the sync.
+/// Named edit E-68: each of those connections is a remote call of its own,
+/// and each call opens the registry once for all its key reads (design
+/// decision 36).
 fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), FixtureError> {
     let mut w = World::plain_key()?;
     let context = w.context()?;
     let sockets = w.server.accepted_sockets();
+    let reads = repository::key_reads::counts();
     let n = w.server.receive_updates().len();
     let published = fixed(w.sync(w.context_request()))?;
     let first = fixed(w.bare()?.refname_to_id(CONTEXT))?;
     outcome(published, true, w.context_request().target, first);
     one_update(&w.server, n, CONTEXT, git2::Oid::zero(), first);
     assert_eq!(w.server.accepted_sockets() - sockets, 4, "a pushing sync");
+    one_open_per_call(reads, 4, "a pushing sync");
     // A local edit of the published item, with nothing to merge.
     let edited = advance(
         &fixed(git2::Repository::open(&context.worktree))?,
@@ -776,6 +781,7 @@ fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), F
         "context-local",
     )?;
     let sockets = w.server.accepted_sockets();
+    let reads = repository::key_reads::counts();
     let n = w.server.receive_updates().len();
     outcome(
         fixed(w.sync(w.context_request()))?,
@@ -789,6 +795,7 @@ fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), F
         4,
         "a pushing sync of the published item"
     );
+    one_open_per_call(reads, 4, "a pushing sync of the published item");
     // Main and the item move on at the remote: the next sync fast-forwards
     // the item, merges main into it, and pushes the merge.
     let server = w.bare()?;
@@ -798,6 +805,7 @@ fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), F
     let primary = commit(&server, base, "primary-divergent", b"primary-divergent")?;
     fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
     let sockets = w.server.accepted_sockets();
+    let reads = repository::key_reads::counts();
     let n = w.server.receive_updates().len();
     let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) =
         fixed(w.sync(w.context_request()))?
@@ -811,7 +819,19 @@ fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), F
     assert_eq!(fixed(merge.parent_id(1))?, primary);
     one_update(&w.server, n, CONTEXT, remote, oid);
     assert_eq!(w.server.accepted_sockets() - sockets, 5, "a merging sync");
+    one_open_per_call(reads, 5, "a merging sync");
     Ok(())
+}
+/// Since `before`, `calls` remote calls began on this thread, and their key
+/// reads opened the registry once each (design decision 36).
+fn one_open_per_call(before: repository::key_reads::KeyReadCounts, calls: usize, sync: &str) {
+    let after = repository::key_reads::counts();
+    assert_eq!(after.calls - before.calls, calls, "{sync}");
+    assert_eq!(
+        after.opens_in_calls - before.opens_in_calls,
+        calls,
+        "{sync}"
+    );
 }
 fn primary_conflict_is_retained_and_inspectable() -> Result<(), FixtureError> {
     let w = World::new()?;

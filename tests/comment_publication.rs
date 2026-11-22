@@ -633,9 +633,19 @@ fn published_thread(kind: AuthoringKind) -> Result<(), FixtureError> {
     let mut parent = None;
     for _ in 0..3 {
         let request = pair.request(&pair.a, kind, parent.clone());
+        let reads = repository::key_reads::counts();
         let (receipt, state, index) = saved(fixed(
             pair.a.service.submit_comment(request.clone(), &mut session),
         )?)?;
+        // Named edit E-69: each remote call of the publication, the first
+        // one's prompt included, opens the registry once for its key reads
+        // (design decision 36).
+        let after = repository::key_reads::counts();
+        assert!(after.calls > reads.calls);
+        assert_eq!(
+            after.opens_in_calls - reads.opens_in_calls,
+            after.calls - reads.calls
+        );
         assert_eq!(receipt.operation_id, request.comment.target.operation_id);
         assert_eq!(receipt.kind, kind);
         assert_eq!(receipt.item_id, request.comment.target.item_id);
