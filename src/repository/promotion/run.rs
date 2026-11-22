@@ -1342,19 +1342,24 @@ fn finish_steps<L: Lifecycle>(
     // holds. For promotion it is `context_oid`; for a closure, the checkpoint
     // (or an adopted synchronization over it) once written.
     let oid = r.merged_context().ok_or(Clean::RecoveryRequired)?;
-    // P-1: one full check of the worktree, inside its removal, and a cheap
-    // one of its head and status before the remote delete, so a dirty
-    // worktree still stops it. The cheap one is asked here too, before the
-    // cleanup reserves: a stopped cleanup that holds its reservation refuses
-    // every refresh row, its exit's own included, so dirt already there stops
-    // it with nothing reserved, as the full check here did. With no remote
-    // delete to make nothing is reserved, and the full check alone decides.
+    // P-1: the full check of the worktree runs inside its removal, and a
+    // cheap one of its head and status just before the remote delete, so a
+    // dirty worktree still stops it. When a remote delete is due, the full
+    // check is asked here too, before the cleanup reserves (R-SDD-73): a
+    // stopped cleanup that holds its reservation refuses every write, refresh
+    // and poll of the repository, its exit's own index step included, so
+    // whatever is already there, dirt or a repository nested in an ignored
+    // directory or one that cannot be read, stops it with nothing reserved
+    // and the remote branch kept, as before P-1. Only what appears after this
+    // check, and that the cheap one cannot see, stops it after the delete.
+    // With no remote delete to make nothing is reserved, and the full check
+    // inside the removal alone decides.
     if r.remote_name().is_some()
         && r.remote_deletion_required()
         && matches!(r.step(), Step::Published | Step::PublicationPending)
     {
         let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
-        match cleanup.precheck_head_and_status(service, L::KIND.authoring(), r.item_id(), oid) {
+        match cleanup.full_check(service, L::KIND.authoring(), r.item_id(), oid) {
             Precheck::Ok => (),
             _ => return Err(Clean::ContextChanged),
         }
@@ -1440,8 +1445,10 @@ fn finish_steps<L: Lifecycle>(
             )?;
             {
                 // P-1's cheap check before the delete. A repository nested in
-                // an ignored directory, or one that cannot be read, is left to
-                // the full check, which then stops the cleanup after the delete.
+                // an ignored directory, or one that cannot be read, that has
+                // appeared since the full check before the reservation is left
+                // to the full check inside the removal, which then stops the
+                // cleanup after the delete.
                 let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
                 match cleanup.precheck_head_and_status(
                     service,

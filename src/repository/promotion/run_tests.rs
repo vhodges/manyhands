@@ -5872,11 +5872,23 @@ enum Dirt {
     Gone,
     /// The worktree's directory removed, its registration kept.
     HalfGone,
+    /// The worktree's `.git` file taken away, its directory and its
+    /// registration kept.
+    GitLost,
 }
 
 /// The context worktree of the fixture at `root`.
 fn worktree_of(root: &std::path::Path) -> PathBuf {
     root.join(".manyhands/worktrees").join(ITEM)
+}
+
+/// Where `Dirt::GitLost` keeps the context worktree's `.git` file of the
+/// fixture at `root`: in the repository's own directory, out of the way.
+fn lost_git_of(root: &std::path::Path) -> PathBuf {
+    git2::Repository::open(root)
+        .unwrap()
+        .path()
+        .join("lost-worktree-git")
 }
 
 /// Leaves `dirt` in the context worktree of the fixture at `root`.
@@ -5934,6 +5946,7 @@ fn make_dirt(root: &std::path::Path, dirt: Dirt) {
             .unwrap();
         }
         Dirt::HalfGone => fs::remove_dir_all(&worktree).unwrap(),
+        Dirt::GitLost => fs::rename(worktree.join(".git"), lost_git_of(root)).unwrap(),
         Dirt::Unreadable => {
             exclude("target/");
             let closed = worktree.join("target/closed");
@@ -5965,6 +5978,7 @@ fn clear_dirt(root: &std::path::Path, dirt: Dirt) {
             .unlock()
             .unwrap(),
         Dirt::NestedRepository => fs::remove_dir_all(worktree.join("vendor")).unwrap(),
+        Dirt::GitLost => fs::rename(lost_git_of(root), worktree.join(".git")).unwrap(),
         Dirt::Unreadable => {
             #[cfg(unix)]
             {
@@ -6005,15 +6019,16 @@ fn remote_rows(f: &Fixture, operation: OperationId) -> i64 {
 }
 
 /// P-1 (design, Phase 3, "One full cleanup check and one cheap one"): the
-/// full check runs once, inside the worktree's removal; before the remote
+/// full check runs inside the worktree's removal; just before the remote
 /// delete only a cheap check of the worktree's head and status runs, so a
-/// dirty worktree still stops the delete. The cheap check is asked before
-/// the cleanup reserves, so dirt that was there by then stops it with
-/// nothing reserved and its exit indexes as before, and again just before
-/// the delete, for dirt that came after the reservation. Whatever stops it,
-/// the worktree is kept as the person left it, and the delete is not sent.
-/// No check walks the item's tree but through the service's cache: the
-/// whole cleanup walks it once at most.
+/// dirty worktree still stops the delete. When a remote delete is due the
+/// full check is asked before the cleanup reserves too (R-SDD-73), so dirt
+/// that was there by then stops it with nothing reserved and its exit
+/// indexes as before, and the cheap one again just before the delete, for
+/// dirt that came after the reservation. Whatever stops it, the worktree is
+/// kept as the person left it, and the delete is not sent. No check walks
+/// the item's tree but through the service's cache: the whole cleanup walks
+/// it once at most.
 #[test]
 fn a_dirty_worktree_stops_the_remote_delete() {
     let mut wrong = Vec::new();
@@ -6107,36 +6122,58 @@ fn a_dirty_worktree_stops_the_remote_delete() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// P-1's first changed outcome (design, Phase 3): what only the full check
-/// finds, a repository nested in an ignored directory or a directory that
-/// cannot be read, stops the close after the remote branch is deleted when
-/// it appears after the check before the delete; and, since a check of the
-/// head and status cannot see one, when it was there before that check
-/// too. The work is merged and the remote branch is gone; the cleanup is
-/// pending, `context_changed`, and recorded at `worktree_removing` (P-1's
-/// second changed outcome); what was there is kept. Once it is gone the
-/// same request finishes, and deletes nothing more.
+/// P-1's first changed outcome (design, Phase 3), which only a race reaches
+/// (R-SDD-73): what only the full check finds, a repository nested in an
+/// ignored directory or a directory that cannot be read, stops the close
+/// after the remote branch is deleted when it appears after the full check
+/// before the cleanup's reservation, between the two checks or after the
+/// delete, since the check of the head and status just before the delete
+/// cannot see one. The work is merged and the remote branch is gone; the
+/// cleanup is pending, `context_changed`, and recorded at
+/// `worktree_removing` (P-1's second changed outcome); what was there is
+/// kept. Once it is gone the same request finishes, and deletes nothing
+/// more. One that was there already is found by the full check before the
+/// reservation, as before P-1: the close stops with nothing reserved and
+/// the remote branch kept, its exit indexes, and the same request finishes
+/// once it is gone, deleting the remote branch then.
 #[test]
-fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remote_deleted() {
+fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_worktree_removing() {
     let mut wrong = Vec::new();
+    // (the case, where what only the full check finds is made, what it is,
+    // whether it is there before the cleanup's first check)
     let rows = [
         (
             "a nested repository made after the remote delete",
             FailurePoint::AfterRemoteDeletion,
             Dirt::NestedRepository,
+            false,
         ),
         (
             "an unreadable directory made after the remote delete",
             FailurePoint::AfterRemoteDeletion,
             Dirt::Unreadable,
+            false,
         ),
         (
-            "a nested repository there before the head-and-status check",
+            "a nested repository made between the two checks",
+            FailurePoint::BeforeRemoteDeletion,
+            Dirt::NestedRepository,
+            false,
+        ),
+        (
+            "a nested repository there before the first check",
             FailurePoint::AfterPublication,
             Dirt::NestedRepository,
+            true,
+        ),
+        (
+            "an unreadable directory there before the first check",
+            FailurePoint::AfterPublication,
+            Dirt::Unreadable,
+            true,
         ),
     ];
-    for (case, at, dirt) in rows {
+    for (case, at, dirt, before) in rows {
         if cfg!(not(unix)) && dirt == Dirt::Unreadable {
             continue;
         }
@@ -6152,12 +6189,14 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
             }
         });
         let mut io = FakeIo::default();
-        // The stop holds the cleanup's reservation, which refuses its exit's
-        // own index step: the answer is index pending (R-SDD-68's case).
-        let stopped = match f.run_io(req.clone(), &mut io).unwrap() {
-            DocumentPromotionResult::IndexPending(pending) => pending.authoritative,
-            other => {
-                wrong.push(format!("{case}: the stop indexed: {other:?}"));
+        // A stop after the delete holds the cleanup's reservation, which
+        // refuses its exit's own index step: the answer is index pending.
+        // One before the reservation holds nothing, and its exit indexes.
+        let stopped = match (before, f.run_io(req.clone(), &mut io).unwrap()) {
+            (false, DocumentPromotionResult::IndexPending(pending)) => pending.authoritative,
+            (true, DocumentPromotionResult::Complete(o)) => o,
+            (_, other) => {
+                wrong.push(format!("{case}: its exit's index step: {other:?}"));
                 authoritative(other)
             }
         };
@@ -6179,15 +6218,26 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
         if f.primary() != merged {
             wrong.push(format!("{case}: the primary does not hold the work"));
         }
-        if io.calls.borrow().deletes != 1 {
+        let (deletes, at_step, reserved) = if before {
+            (0, record::PromotionStep::Published, 0)
+        } else {
+            (1, record::PromotionStep::WorktreeRemoving, 1)
+        };
+        if io.calls.borrow().deletes != deletes {
             wrong.push(format!(
                 "{case}: {} remote deletes",
                 io.calls.borrow().deletes
             ));
         }
         let step = f.stored(req.operation_id).step;
-        if step != record::PromotionStep::WorktreeRemoving {
+        if step != at_step {
             wrong.push(format!("{case}: stopped at {step:?}"));
+        }
+        if remote_rows(&f, req.operation_id) != reserved {
+            wrong.push(format!(
+                "{case}: {} cleanup reservations",
+                remote_rows(&f, req.operation_id)
+            ));
         }
         let kept = match dirt {
             Dirt::NestedRepository => worktree_of(f.root.path()).join("vendor/clone/.git"),
@@ -6213,9 +6263,155 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
         } else {
             f.assert_cleaned();
         }
+        // One remote delete in all: the stop's, or else the retry's.
         if io.calls.borrow().deletes != 1 {
-            wrong.push(format!("{case}: its retry deleted again"));
+            wrong.push(format!(
+                "{case}: {} remote deletes with its retry",
+                io.calls.borrow().deletes
+            ));
         }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A wait that passes no time: each sleep returns at once.
+struct NoSleep;
+impl Sleeper for NoSleep {
+    fn sleep(&self, _: std::time::Duration) {}
+}
+
+/// The remote row under `operation`, every column as text.
+fn remote_row_image(f: &Fixture, operation: OperationId) -> Vec<String> {
+    let db = f.db();
+    let mut query = db
+        .prepare("SELECT * FROM remote_operation_records WHERE operation_ulid = ?1")
+        .unwrap();
+    let columns = query.column_count();
+    query
+        .query_row([operation.to_string()], |row| {
+            (0..columns)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i).map(|v| format!("{v:?}")))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+}
+
+/// What a stop after the remote delete holds (P-1's first outcome, which
+/// only a race reaches, R-SDD-73): the cleanup's reservation, which it keeps
+/// until the same request finishes the cleanup. While it holds it, with the
+/// process that stopped gone: another item's save is refused at once,
+/// `recovery_required`, naming the close's operation, judged not live; an
+/// `index refresh` is refused at once, `recovery_required`, naming it with
+/// no judgment; a `poll once` is `busy`. None of them changes the
+/// reservation. Once the same request has finished, the save and the
+/// refresh go on.
+#[test]
+fn a_stop_after_the_remote_delete_holds_the_repository_until_it_finishes() {
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    let mut made = false;
+    hook(&f, move |_, point| {
+        if point == FailurePoint::AfterRemoteDeletion && !made {
+            made = true;
+            make_dirt(&root, Dirt::NestedRepository);
+        }
+    });
+    let mut io = FakeIo::default();
+    let stopped = f.run_io(req.clone(), &mut io).unwrap();
+    HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+    assert!(
+        matches!(stopped, DocumentPromotionResult::IndexPending(_)),
+        "{stopped:?}"
+    );
+    assert_eq!(
+        f.stored(req.operation_id).step,
+        record::PromotionStep::WorktreeRemoving
+    );
+    let held = remote_row_image(&f, req.operation_id);
+    // The calls after it, made once the process that stopped is gone: no
+    // process of this host but one that is not this one is there.
+    let after = RepositoryService::open_at(f.data.path())
+        .unwrap()
+        .with_sleeper_for_testing(std::sync::Arc::new(NoSleep))
+        .with_wait_policy_for_testing(WAIT_POLICY)
+        .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
+    let save = |service: &RepositoryService| {
+        service.save_document(SaveDocumentRequest {
+            target: AuthoringTarget {
+                root: f.root.path().into(),
+                kind: AuthoringKind::Document,
+                item_id: OTHER.parse().unwrap(),
+                intent: ContextIntent::Create,
+                operation_id: OperationId::new(),
+            },
+            source_path: None,
+            destination_path: "docs/other.md".into(),
+            draft: DocumentDraft {
+                title: "another document".into(),
+                body: "another body\n".into(),
+            },
+            expected_source: None,
+            expected_destination: ExpectedPathObservation::Missing,
+        })
+    };
+    let refresh = |service: &RepositoryService| {
+        service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root.path().into(),
+            operation_id: OperationId::new(),
+        })
+    };
+    // Refused, naming the close's operation, judged as `live` says.
+    let names_the_close = |error: &RepositoryError, live: Option<bool>| {
+        error.kind == RepositoryErrorKind::RecoveryRequired
+            && error
+                .blocker()
+                .is_some_and(|b| b.operation_id == req.operation_id && b.live == live)
+    };
+    let mut wrong = Vec::new();
+    match save(&after) {
+        Err(error) if names_the_close(&error, Some(false)) => (),
+        Err(error) => wrong.push(format!("another item's save: {error:?}")),
+        Ok(_) => wrong.push("another item's save went on".into()),
+    }
+    match refresh(&after) {
+        Err(error) if names_the_close(&error, None) => (),
+        other => wrong.push(format!("an index refresh: {other:?}")),
+    }
+    let polled = after.poll_publication_remote(
+        PollPublicationRemoteRequest {
+            root: f.root.path().into(),
+            operation_id: OperationId::new(),
+            invocation: RemotePollInvocation::Explicit,
+            approval: None,
+            restart: false,
+        },
+        &mut SessionCredentials::new(NoCredentials),
+    );
+    if !matches!(polled, Err(RemotePollError::Busy)) {
+        wrong.push(format!("a poll once: {polled:?}"));
+    }
+    if remote_row_image(&f, req.operation_id) != held {
+        wrong.push("the cleanup's reservation changed".into());
+    }
+    if f.stored(req.operation_id).step != record::PromotionStep::WorktreeRemoving {
+        wrong.push("the close moved on".into());
+    }
+    // The same request finishes once what was nested is gone, and lets the
+    // reservation go: the save and the refresh go on.
+    clear_dirt(f.root.path(), Dirt::NestedRepository);
+    match f.run_io(req.clone(), &mut io) {
+        Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => {
+        }
+        other => wrong.push(format!("its retry: {other:?}")),
+    }
+    if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
+        wrong.push("another item's save after the retry".into());
+    }
+    if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
+        wrong.push("an index refresh after the retry".into());
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -6246,30 +6442,51 @@ enum Then {
 /// removal's own reading of a worktree that is gone or half gone, and
 /// whatever it finds is the person's: the cleanup is pending,
 /// `context_changed`, as the old check before the removal answered
-/// (R-SDD-71), and what the person left is kept. A resume of the same
-/// request at `worktree_removing` keeps the removal's own rules, and
-/// finishes once what was left is gone.
+/// (R-SDD-71), and what the person left is kept. So is a worktree's `.git`
+/// lost in that attempt once the step is recorded, before the removal (the
+/// window E-80 no longer reaches): `context_changed`, which a new request
+/// supersedes once it is back. A resume of the same request at
+/// `worktree_removing` keeps the removal's own rules, and finishes once
+/// what was left is gone.
 #[test]
 fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
     let mut wrong = Vec::new();
+    // (what the person leaves, what follows, where they leave it)
     let rows = [
-        (Dirt::Untracked, Then::ClearAndRetry),
-        (Dirt::Tracked, Then::ClearAndRetry),
-        (Dirt::Locked, Then::ClearAndRetry),
-        (Dirt::NestedRepository, Then::ClearAndRetry),
-        (Dirt::Removed, Then::ClearAndSupersede),
-        (Dirt::Gone, Then::RetryCompletes),
-        (Dirt::HalfGone, Then::RetryRecoveryRequired),
+        (Dirt::Untracked, Then::ClearAndRetry, FailurePoint::AfterPublication),
+        (Dirt::Tracked, Then::ClearAndRetry, FailurePoint::AfterPublication),
+        (Dirt::Locked, Then::ClearAndRetry, FailurePoint::AfterPublication),
+        (
+            Dirt::NestedRepository,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Removed,
+            Then::ClearAndSupersede,
+            FailurePoint::AfterPublication,
+        ),
+        (Dirt::Gone, Then::RetryCompletes, FailurePoint::AfterPublication),
+        (
+            Dirt::HalfGone,
+            Then::RetryRecoveryRequired,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::GitLost,
+            Then::ClearAndSupersede,
+            FailurePoint::DuringWorktreeRemoval,
+        ),
     ];
-    for (dirt, then) in rows {
-        let case = format!("{dirt:?}");
+    for (dirt, then, at) in rows {
+        let case = format!("{dirt:?} at {at:?}");
         let f = Fixture::new();
         let req = f.request();
         let root = f.root.path().to_owned();
         let left = Rc::new(RefCell::new(None));
         let image = left.clone();
         hook(&f, move |_, point| {
-            if point == FailurePoint::AfterPublication && image.borrow().is_none() {
+            if point == at && image.borrow().is_none() {
                 make_dirt(&root, dirt);
                 *image.borrow_mut() = Some(worktree_image(&root));
             }

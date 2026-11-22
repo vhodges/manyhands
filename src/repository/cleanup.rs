@@ -189,14 +189,15 @@ impl ContextCleanup {
     pub(super) fn precheck_context(&self, kind: AuthoringKind, id: &ItemId, oid: Oid) -> Precheck {
         Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(None)))
     }
-    /// The cheap check of a lifecycle's context before its remote branch is
-    /// deleted (P-1): as `precheck_context`, the tree read through
+    /// The cheap check of a lifecycle's context just before its remote
+    /// branch is deleted (P-1): as `precheck_context`, the tree read through
     /// `service`'s cache of accepted trees, except that no ignored
     /// directory is walked. So it finds the worktree's head moved, a change,
     /// an untracked file, a hidden index bit, a submodule's change, a lock
     /// or a context that is not the one registered, and not a repository
     /// nested in an ignored directory nor one that cannot be read, which
-    /// only the full check in `remove_context_worktree` finds.
+    /// only the full check finds (`full_check`): before the cleanup's
+    /// reservation, and inside `remove_context_worktree`.
     pub(super) fn precheck_head_and_status(
         &self,
         service: &super::RepositoryService,
@@ -360,8 +361,12 @@ impl ContextCleanup {
         }
         Self::removal(self.remove_worktree(kind, id, || None, || true))
     }
-    /// The full check of a lifecycle's removal (P-1).
-    fn full_check(
+    /// The full check of a lifecycle's cleanup (P-1): as
+    /// `precheck_context`'s, ignored directories walked, the tree read
+    /// through `service`'s cache of accepted trees. It runs inside the
+    /// worktree's removal, and, when a remote delete is due, before the
+    /// cleanup's reservation (R-SDD-73).
+    pub(super) fn full_check(
         &self,
         service: &super::RepositoryService,
         kind: AuthoringKind,
