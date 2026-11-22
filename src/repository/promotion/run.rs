@@ -1777,9 +1777,10 @@ fn refresh_with_publication<L: Lifecycle>(
     // two contexts (`lifecycle_contexts`): the primary, which its merge moved
     // and its primary's child published or fast-forwarded, and its item's,
     // which its checkpoint or its context's child moved and its cleanup
-    // removes. Both are marked, and indexed in the exit's one step.
+    // removes. Both are marked, the item's only while rows are stored for it
+    // once it is gone, and indexed in the exit's one step.
     let contexts = lifecycle_contexts(r.item_id());
-    let marked = mark_contexts_dirty(
+    let marked = mark_lifecycle_contexts_dirty(
         &service.registry_path,
         root,
         &contexts,

@@ -5502,7 +5502,10 @@ fn refresh_rows(f: &Fixture) -> Vec<RefreshRow> {
 /// so an exit there indexes only what a child left dirty; after it, the
 /// primary, which the merge moved, and the item's context, which the cleanup
 /// removes (its rows are deleted) or the child changed. A stop at awaiting
-/// publication indexes once, and its later finish once, not twice.
+/// publication indexes once, and its later finish once, not twice. No exit
+/// marks the repository behind for a context that is gone and has nothing
+/// stored (a retry after the worktree's removal, a replay); a context that
+/// is there and has nothing stored is indexed.
 #[test]
 fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
     type Run = Result<DocumentPromotionResult, DocumentPromotionError>;
@@ -5710,6 +5713,102 @@ fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
         ended,
         both,
     );
+
+    // A cancel once the worktree is removed: its exit deletes the context's
+    // rows. Its retry finishes, and neither its completion nor its exit
+    // marks the repository behind for a context that is gone and has
+    // nothing stored. With no publication remote, so with no remote
+    // deletion: a cleanup that holds its reservation for one keeps every
+    // refresh row from beginning while it is stopped, its exit's included.
+    let f = Fixture::new();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::BeforeBranchDeletion);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::Cancelled)
+        && !f.context.workdir().unwrap().exists();
+    check(
+        &mut wrong,
+        "a cancel once the worktree is removed",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    let ended = finished(&called.0);
+    check(&mut wrong, "its retry", &f, &req, called, ended, both);
+
+    // A replay of a finished promotion while the primary is owed an
+    // indexing: it indexes the primary, and marks nothing for the context
+    // it removed.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    assert!(finished(&called.0), "{:?}", called.0);
+    mark_contexts_dirty(
+        &f.service.registry_path,
+        f.root.path(),
+        &[discovery::ContextKey::Primary],
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .unwrap();
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    let ended = finished(&called.0);
+    check(
+        &mut wrong,
+        "a replay with the primary owed",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+
+    // Abandon, with nothing stored for the context its child changed: the
+    // child's mark could only mark the repository behind, and the exit
+    // indexes the context, which is there. Only a whole refresh clears that
+    // mark, so what is checked is the context's own rows.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    f.db()
+        .execute_batch(&format!(
+            "PRAGMA foreign_keys=ON; DELETE FROM contexts WHERE item_id='{ITEM}'"
+        ))
+        .unwrap();
+    let mutating = MutatingChild {
+        inner: FakeIo::default(),
+        new_path: true,
+        once: false,
+    };
+    let (result, begun, scans) = call(&f, &req, mutating, (true, false));
+    let exit = "abandon, the child's context unstored";
+    if !matches!(result, Err(DocumentPromotionError::ReconfirmationRequired)) {
+        wrong.push(format!("{exit}: ended as {result:?}"));
+    }
+    if scans != 0 {
+        wrong.push(format!("{exit}: {scans} whole-repository observations"));
+    }
+    let owing = format!("[\"{ITEM}\"]");
+    if !matches!(
+        begun.as_slice(),
+        [(_, _, Some(owed), state)] if *owed == owing && state == "completed"
+    ) {
+        wrong.push(format!("{exit}: index steps {begun:?}"));
+    }
+    let stored: Vec<i64> = f
+        .db()
+        .prepare("SELECT dirty FROM contexts WHERE item_id = ?1")
+        .unwrap()
+        .query_map([ITEM], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    if stored != [0] {
+        wrong.push(format!("{exit}: the context's rows are {stored:?}"));
+    }
 
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

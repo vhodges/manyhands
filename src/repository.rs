@@ -12748,6 +12748,24 @@ fn mark_contexts_dirty(
     contexts: &[ContextKey],
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    mark_in_registration(
+        registry_path,
+        root,
+        operation,
+        |connection, repository_id| {
+            mark_registered_contexts_dirty(connection, repository_id, contexts)
+        },
+    )
+}
+
+/// Runs `mark` on the registration of the repository at `root`, in one
+/// transaction of its own; see `mark_contexts_dirty`, whose errors it gives.
+fn mark_in_registration(
+    registry_path: &Path,
+    root: &Path,
+    operation: RepositoryOperation,
+    mark: impl FnOnce(&rusqlite::Connection, i64) -> Result<(), RepositoryError>,
+) -> Result<(), RepositoryError> {
     let _cache_guard = cache_read_guard(registry_path, root, operation)?;
     let root_path = registry_root_key(root, operation)?;
     let mut connection = open_registry(registry_path, &mut |_| {})
@@ -12770,7 +12788,7 @@ fn mark_contexts_dirty(
             std::io::Error::other("the repository registration is missing"),
         ));
     };
-    mark_registered_contexts_dirty(&transaction, repository_id, contexts)
+    mark(&transaction, repository_id)
         .map_err(|error| registry_refresh_pending(operation, root, error))?;
     transaction
         .commit()
@@ -12823,6 +12841,57 @@ fn mark_registered_contexts_dirty(
         mark_repository_behind(connection, repository_id)?;
     }
     Ok(())
+}
+
+/// `mark_registered_contexts_dirty`, for what a close or a promotion of the
+/// repository at `root` changed (`lifecycle_contexts`). An item's context
+/// that is gone from disk is marked only where rows are stored for it, for
+/// the indexing that follows to delete. With none stored there is nothing to
+/// index or to delete, and the repository is not marked behind for it as
+/// for a context nothing is stored for: once the cleanup has removed the
+/// worktree and an exit's index step has deleted its rows, the marks of the
+/// retry's completion and its exit, or of a later replay, would otherwise
+/// mark the repository behind, which only a whole refresh clears (Task 22).
+/// A context that is there and has nothing stored keeps the rule.
+fn mark_registered_lifecycle_contexts_dirty(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    root: &Path,
+    contexts: &[ContextKey],
+) -> Result<(), RepositoryError> {
+    let (present, gone): (Vec<_>, Vec<_>) = contexts
+        .iter()
+        .cloned()
+        .partition(|context| discovery::listed_context(root, context).is_some());
+    for context in &gone {
+        if let ContextKey::Item(item_id) = context {
+            connection
+                .execute(
+                    "UPDATE contexts SET dirty = 1 WHERE repository_id = ?1 AND item_id = ?2",
+                    params![repository_id, item_id.to_string()],
+                )
+                .map_err(RepositoryError::sqlite)?;
+        }
+    }
+    mark_registered_contexts_dirty(connection, repository_id, &present)
+}
+
+/// `mark_contexts_dirty`, for what a close or a promotion changed; see
+/// `mark_registered_lifecycle_contexts_dirty`.
+fn mark_lifecycle_contexts_dirty(
+    registry_path: &Path,
+    root: &Path,
+    contexts: &[ContextKey],
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    mark_in_registration(
+        registry_path,
+        root,
+        operation,
+        |connection, repository_id| {
+            mark_registered_lifecycle_contexts_dirty(connection, repository_id, root, contexts)
+        },
+    )
 }
 
 /// What the row `record_id`, just closed in the caller's transaction on
@@ -13137,11 +13206,12 @@ impl RepositoryService {
     }
 
     /// Which of `contexts` the index owes an indexing, each read as
-    /// `contexts_indexed` reads it: marked dirty, or owed by a pending row.
-    /// Whether the repository is marked behind as a whole is not read: an
-    /// indexing of these contexts would not clear it. Every one of them
-    /// when the index cannot be read, so a caller that indexes what this
-    /// gives indexes too much rather than too little.
+    /// `contexts_indexed` reads it: marked dirty, or owed by a pending row;
+    /// or there on disk with nothing stored for it, whose change a write
+    /// could record only by marking the repository behind as a whole. That
+    /// mark itself is not read: an indexing of these contexts does not clear
+    /// it. Every one of them when the index cannot be read, so a caller that
+    /// indexes what this gives indexes too much rather than too little.
     fn owed_of(&self, root: &Path, contexts: &[ContextKey]) -> Vec<ContextKey> {
         self.read_registration(root, |connection, root, root_path| {
             let repository_id: i64 = connection
@@ -13153,11 +13223,28 @@ impl RepositoryService {
                 .map_err(|error| snapshot_index_error_source(root, error))?;
             let dirty = DirtyContexts::read(connection, repository_id)
                 .map_err(|error| snapshot_index_error_source(root, error))?;
-            Ok(contexts
-                .iter()
-                .filter(|context| dirty.any_of(std::slice::from_ref(*context)))
-                .cloned()
-                .collect())
+            let mut owed = Vec::new();
+            for context in contexts {
+                let unstored = || -> Result<bool, RepositoryError> {
+                    let item = match context {
+                        ContextKey::Primary => None,
+                        ContextKey::Item(item_id) => Some(item_id.to_string()),
+                    };
+                    let stored: bool = connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM contexts
+                                WHERE repository_id = ?1 AND item_id IS ?2)",
+                            params![repository_id, item],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| snapshot_index_error_source(root, error))?;
+                    Ok(!stored && discovery::listed_context(root, context).is_some())
+                };
+                if dirty.any_of(std::slice::from_ref(context)) || unstored()? {
+                    owed.push(context.clone());
+                }
+            }
+            Ok(owed)
         })
         .unwrap_or_else(|_| contexts.to_vec())
     }
