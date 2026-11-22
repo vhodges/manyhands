@@ -172,6 +172,17 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         plan: &RemoteRefPlan,
         target: &SynchronizationTarget,
     ) -> Result<(), SshTransportError> {
+        self.fetch_exact_advertised(plan, target).map(|_| ())
+    }
+
+    /// `fetch_exact`, giving back the advertisement its download negotiated
+    /// against: the call's connection's, the fetch endpoint's refs before
+    /// the download.
+    pub(crate) fn fetch_exact_advertised(
+        &mut self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+    ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         self.validate_plan(plan, SshDirection::Fetch)?;
         let advertised = self.fresh_advertisement()?;
         self.validate_plan(plan, SshDirection::Fetch)?;
@@ -192,14 +203,14 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         // Empty libgit2 refspec lists select configured/default mappings; never
         // call a transfer with one when the exact advertised scope is absent.
         if present.is_empty() {
-            return Ok(());
+            return Ok(advertised);
         }
         self.transfer(
             &present,
             TransferAction::FetchTracking,
             Some((plan, target)),
-        )
-        .map(|_| ())
+        )?;
+        Ok(advertised)
     }
 
     /// Fetch only parsed advertised contexts and the advertised primary. The

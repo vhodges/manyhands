@@ -10931,7 +10931,10 @@ impl RepositoryService {
     }
 }
 
-fn uninspectable_context_tree(context: &ItemContext, operation: RepositoryOperation) -> RepositoryError {
+fn uninspectable_context_tree(
+    context: &ItemContext,
+    operation: RepositoryOperation,
+) -> RepositoryError {
     RepositoryError::new(
         operation,
         Some(context.root.clone()),

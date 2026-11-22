@@ -223,12 +223,25 @@ fn foreign_merge_rebase_and_cherry_pick_metadata_are_refused_without_adoption() 
     for metadata in ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"] {
         fs::write(repo.path().join(metadata), format!("{head}\n")).unwrap();
         assert!(matches!(
-            local_target(&service, root.path(), "main", &SynchronizationTarget::Primary),
+            local_target(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary
+            ),
             Err(SynchronizationError::WorktreeConflicted { .. })
         ));
         fs::remove_file(repo.path().join(metadata)).unwrap();
     }
-    assert!(local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).is_ok());
+    assert!(
+        local_target(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -708,13 +721,15 @@ fn a_head_or_status_change_after_the_kept_inspection_refuses_the_local_update() 
             }
             When::UnderTheLease => {
                 let mut write = Some(write);
-                Some(super::super::observation_tests::install_hook(move |point| {
-                    if point == RemoteOperationSafePoint::BeforeLocalMutation
-                        && let Some(write) = write.take()
-                    {
-                        write();
-                    }
-                }))
+                Some(super::super::observation_tests::install_hook(
+                    move |point| {
+                        if point == RemoteOperationSafePoint::BeforeLocalMutation
+                            && let Some(write) = write.take()
+                        {
+                            write();
+                        }
+                    },
+                ))
             }
         };
         let head = |repository: &git2::Repository| repository.refname_to_id("refs/heads/main");
@@ -734,7 +749,11 @@ fn a_head_or_status_change_after_the_kept_inspection_refuses_the_local_update() 
                     local,
                     "{row}: only the other writer's commit is on the branch"
                 );
-                assert_eq!(fs::read(fixture.root.path().join("fixture.txt")).unwrap(), b"original\n", "{row}");
+                assert_eq!(
+                    fs::read(fixture.root.path().join("fixture.txt")).unwrap(),
+                    b"original\n",
+                    "{row}"
+                );
             }
             Change::Status => {
                 assert!(
@@ -755,7 +774,11 @@ fn a_head_or_status_change_after_the_kept_inspection_refuses_the_local_update() 
             b"local\n",
             "{row}"
         );
-        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index, "{row}");
+        assert_eq!(
+            fs::read(repository.path().join("index")).unwrap(),
+            index,
+            "{row}"
+        );
         let applied: i64 = fixture
             .db()
             .query_row(
@@ -910,7 +933,13 @@ fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
         fs::read(root.path().join("fixture.txt")).unwrap(),
         b"advanced\n"
     );
-    local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+    )
+    .unwrap();
     assert!(matches!(
         fast_forward(&repo, "refs/heads/main", old, new),
         Err(SynchronizationError::ExternalChange)
@@ -946,7 +975,13 @@ fn fast_forward_respects_local_autocrlf_checkout_policy() {
     fast_forward(&repo, "refs/heads/main", old, new).unwrap();
     assert_eq!(repo.head().unwrap().target(), Some(new));
     assert!(fs::read(root.path().join("fixture.txt")).unwrap() == b"advanced\r\n");
-    local_target(&service, root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1143,8 +1178,18 @@ fn a_tree_validation_is_cached_by_tree_kind_item_configuration_and_build() {
     // (row, context, accepted, walks after the row)
     let rows: [(&str, &ItemContext, bool, usize); 6] = [
         ("first validation walks", &context, true, 1),
-        ("the same tree and item is not walked again", &context, true, 1),
-        ("another kind under the ID is walked, and refused", &other_kind, false, 2),
+        (
+            "the same tree and item is not walked again",
+            &context,
+            true,
+            1,
+        ),
+        (
+            "another kind under the ID is walked, and refused",
+            &other_kind,
+            false,
+            2,
+        ),
         ("a refused tree is walked again", &other_kind, false, 3),
         ("another item is walked, and refused", &other_item, false, 4),
         ("the accepted item still is not walked", &context, true, 4),
