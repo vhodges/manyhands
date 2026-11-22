@@ -1301,11 +1301,11 @@ fn context_deleted_before_push() -> Result<(), FixtureError> {
     let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
     let path = case.fixture.repository_path().to_owned();
     let deleted = Cell::new(false);
-    let hook = crate::repository::transport::operation_tests::install_hook(move |point| {
-        if point
-            == crate::repository::transport::operation_tests::Checkpoint::PushAdvertisementObserved
-            && !deleted.replace(true)
-        {
+    // Deleted once the fetch has observed it, before the push's call (E-60).
+    // A synchronization with nothing to update locally lists the push
+    // endpoint only on that call, whose listing refuses the absence.
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::AfterFetch && !deleted.replace(true) {
             git2::Repository::open_bare(&path)
                 .unwrap()
                 .find_reference(CONTEXT_REF)
