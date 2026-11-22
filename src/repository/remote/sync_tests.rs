@@ -17872,6 +17872,89 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
     }
 }
 
+/// Whether a synchronization taken up under its own ID owes its context's
+/// indexing to a lifecycle parent (`lifecycle_child_owes_its_parent`): it
+/// does while it is a child, as its parent's record says, and the index does
+/// not hold its context. A parent's record that cannot be read is read as
+/// a child's, so a dirty context is never answered `current` (decision 8);
+/// the index still guards the answer, so a context it holds owes nothing.
+#[test]
+fn a_child_whose_parent_record_cannot_be_read_owes_its_parent_while_its_context_is_dirty() {
+    use crate::repository::{
+        ClosureExpectation,
+        closure::record::{self as closure, ClosureKind},
+        promotion::record::ChildRole,
+    };
+    // (the case, a child of a close, its parent's record read, its context
+    // marked dirty, whether it owes its parent)
+    for (case, child, readable, dirty, owes) in [
+        ("a child, its context dirty", true, true, true, true),
+        ("a child, its context indexed", true, true, false, false),
+        ("no child, its context dirty", false, true, true, false),
+        (
+            "its parent's record unreadable, its context dirty",
+            true,
+            false,
+            true,
+            true,
+        ),
+        (
+            "its parent's record unreadable, its context indexed",
+            true,
+            false,
+            false,
+            false,
+        ),
+    ] {
+        let (root, _data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let context = hand_off_context(&target);
+        let operation = if child {
+            state::with_transaction(&service, root, |tx, id| {
+                let r = closure::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &HAND_OFF_X.parse().unwrap(),
+                    ClosureExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                    ClosureKind::Existing,
+                )?;
+                Ok(
+                    closure::next_attempt(tx, id, r.operation_id, ChildRole::Context)?
+                        .context_sync_id,
+                )
+            })
+            .unwrap()
+            .unwrap()
+        } else {
+            OperationId::new()
+        };
+        if dirty {
+            crate::repository::mark_contexts_dirty(
+                &service.registry_path,
+                root,
+                std::slice::from_ref(&context),
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            service.contexts_indexed(root, std::slice::from_ref(&context)),
+            !dirty,
+            "{case}: the fixture"
+        );
+        if !readable {
+            state::hold_registry_for_testing(root, true);
+        }
+        let owed = service.lifecycle_child_owes_its_parent(root, operation, &target);
+        state::release_registries_for_testing();
+        assert_eq!(owed, owes, "{case}");
+    }
+}
+
 /// A step of a synchronization's hand-off that is refused for its ID
 /// (`OperationMismatch`, `OperationAbandoned`) is answered as that refusal,
 /// which no resume or retry gets past; any other failure is owed, and is

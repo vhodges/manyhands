@@ -7532,8 +7532,10 @@ impl RepositoryService {
     /// one its local update changes, the index does not hold yet. Its
     /// hand-off is its parent's exit (Task 22), so a child taken up under
     /// its own ID that completed is answered as owing nothing but a refresh,
-    /// as a completed save's replay is (R-SDD-16). `false` when its parent's
-    /// record cannot be read.
+    /// as a completed save's replay is (R-SDD-16). A parent's record that
+    /// cannot be read is read as a child's: what decides is then whether the
+    /// index holds the context, so a dirty one is not answered `current`
+    /// (design decision 8), and one the index holds owes nothing.
     pub(crate) fn lifecycle_child_owes_its_parent(
         &self,
         root: &Path,
@@ -7543,7 +7545,7 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, _| {
             crate::repository::promotion::lifecycle_record::is_child(tx, operation_id)
         })
-        .unwrap_or(false)
+        .unwrap_or(true)
             && !self.contexts_indexed(root, &[hand_off_context(target)])
     }
 
