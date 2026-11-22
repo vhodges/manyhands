@@ -34,6 +34,29 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
         reference_status_rejection,
     ),
 ];
+/// Named edit E-44: a guarded delete's push closes its connection, so a sent
+/// delete is verified on a remote call of its own, as its caller does.
+fn delete_observed<P: keys::SessionCredentialProvider>(
+    case: &Case,
+    request: &VerifySshTransportRequest,
+    session: &mut keys::SessionCredentials<P>,
+    target: &SynchronizationTarget,
+    expected: git2::Oid,
+) -> Result<DeleteObservation, SshTransportError> {
+    match case
+        .service
+        .with_authenticated_remote(request.clone(), session, |remote| {
+            remote.delete_exact(&plan(), target, expected)
+        })? {
+        DeleteAttempt::Absent => Ok(DeleteObservation::Deleted),
+        DeleteAttempt::Sent => {
+            case.service
+                .with_authenticated_remote(request.clone(), session, |remote| {
+                    remote.observe_delete(&plan(), target, expected)
+                })
+        }
+    }
+}
 fn document() -> SynchronizationTarget {
     SynchronizationTarget::Context {
         kind: AuthoringKind::Document,
@@ -77,10 +100,12 @@ fn delete_case(mode: u8) -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut request = case.request();
     request.direction = SshDirection::Delete;
-    let observation = fixed(case.service.with_authenticated_remote(
-        request.clone(),
+    let observation = fixed(delete_observed(
+        &case,
+        &request,
         &mut session,
-        |remote| remote.delete_exact(&plan(), &document(), expected),
+        &document(),
+        expected,
     ))?;
     let wanted = match mode {
         1 => DeleteObservation::Changed(original),
@@ -97,8 +122,9 @@ fn delete_case(mode: u8) -> Result<(), FixtureError> {
     if mode == 1 {
         assert!(updates.is_empty());
         // Callback refusal still authenticates and starts receive-pack; it
-        // must not send a parsed update command.
-        assert_eq!(case.fixture.receive_advertisements(), 4);
+        // must not send a parsed update command. One receive-pack is the
+        // delete's call, one its verification's (E-44).
+        assert_eq!(case.fixture.receive_advertisements(), 2);
     } else {
         assert_eq!(updates.len(), 1);
         assert_eq!(
@@ -116,12 +142,13 @@ fn delete_case(mode: u8) -> Result<(), FixtureError> {
         assert!(case.fixture.receive_status_withheld());
         // An already absent context is observed without a second delete push.
         assert_eq!(
-            fixed(
-                case.service
-                    .with_authenticated_remote(request, &mut session, |remote| {
-                        remote.delete_exact(&plan(), &document(), expected)
-                    })
-            )?,
+            fixed(delete_observed(
+                &case,
+                &request,
+                &mut session,
+                &document(),
+                expected
+            ))?,
             DeleteObservation::Deleted
         );
         case.fixture.wait_for_helper_audits()?;
@@ -177,19 +204,23 @@ fn ticket_context_delete_is_in_scope() -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut request = case.request();
     request.direction = SshDirection::Delete;
-    let stale = fixed(case.service.with_authenticated_remote(
-        request.clone(),
+    let stale = fixed(delete_observed(
+        &case,
+        &request,
         &mut session,
-        |remote| remote.delete_exact(&plan(), &context(), competing),
+        &context(),
+        competing,
     ))?;
     assert_eq!(stale, DeleteObservation::Changed(original));
     case.fixture.wait_for_helper_audits()?;
     assert!(case.fixture.receive_updates().is_empty());
     assert_eq!(fixed(server.refname_to_id(target_ref()))?, original);
-    let observation = fixed(case.service.with_authenticated_remote(
-        request,
+    let observation = fixed(delete_observed(
+        &case,
+        &request,
         &mut session,
-        |remote| remote.delete_exact(&plan(), &context(), original),
+        &context(),
+        original,
     ))?;
     assert_eq!(observation, DeleteObservation::Deleted);
     for rendered in [format!("{stale:?}"), format!("{observation:?}")] {
@@ -238,12 +269,13 @@ fn delete_distinct_endpoint() -> Result<(), FixtureError> {
         presented: destination.host_identity(),
     });
     assert_eq!(
-        fixed(
-            case.service
-                .with_authenticated_remote(request, &mut session, |remote| {
-                    remote.delete_exact(&plan(), &document(), destination.commit_id())
-                })
-        )?,
+        fixed(delete_observed(
+            &case,
+            &request,
+            &mut session,
+            &document(),
+            destination.commit_id()
+        ))?,
         DeleteObservation::Deleted
     );
     destination.wait_for_helper_audits()?;
@@ -288,11 +320,13 @@ fn delete_post_send_observation() -> Result<(), FixtureError> {
         let (mut session, _) = session(vec![]);
         let mut request = case.request();
         request.direction = SshDirection::Delete;
-        let result =
-            case.service
-                .with_authenticated_remote(request.clone(), &mut session, |remote| {
-                    remote.delete_exact(&plan(), &document(), case.fixture.commit_id())
-                });
+        let result = delete_observed(
+            &case,
+            &request,
+            &mut session,
+            &document(),
+            case.fixture.commit_id(),
+        );
         drop(hook);
         assert_eq!(observed.get(), 1);
         if lose_advertisement {
@@ -306,12 +340,13 @@ fn delete_post_send_observation() -> Result<(), FixtureError> {
             assert!(case.fixture.receive_status_withheld());
             case.fixture.clear_fault();
             assert_eq!(
-                fixed(
-                    case.service
-                        .with_authenticated_remote(request, &mut session, |remote| {
-                            remote.delete_exact(&plan(), &document(), case.fixture.commit_id())
-                        })
-                )?,
+                fixed(delete_observed(
+                    &case,
+                    &request,
+                    &mut session,
+                    &document(),
+                    case.fixture.commit_id()
+                ))?,
                 DeleteObservation::Deleted
             );
         } else {
@@ -637,13 +672,13 @@ fn tracking_boundaries() -> Result<(), FixtureError> {
         fixed(local.reference(tracking_ref(), old, true, "fixture"))?;
         let root = case.root.clone();
         let server_path = case.fixture.repository_path().to_owned();
-        let mut reconnects = 0;
+        let mut transfers = 0;
         let mut first = true;
         let hook = install_hook(move |point| {
             let local = git2::Repository::open(&root).unwrap();
-            if point == Checkpoint::Reconnected {
-                reconnects += 1;
-                if reconnects == 1 && mode <= 1 {
+            if point == Checkpoint::TransferStarted {
+                transfers += 1;
+                if transfers == 1 && mode <= 1 {
                     let server = git2::Repository::open_bare(&server_path).unwrap();
                     if mode == 0 {
                         server
@@ -679,13 +714,13 @@ fn tracking_boundaries() -> Result<(), FixtureError> {
                     remote.fetch_exact(&plan(), &context())
                 });
         drop(hook);
-        if mode == 0 {
+        if mode <= 1 {
+            // Named edit E-8: one connection per call. The server moved (0) or
+            // dropped (1) main after this connection advertised it; the download
+            // used that one advertisement, so tracking holds the advertised OID.
+            // The moved-remote check is `remote_change_during_fetch`'s.
             fixed(result)?;
-            // This download's advertisement, not the previous connection's old OID.
-            assert_eq!(
-                fixed(local.refname_to_id("refs/remotes/origin/main"))?,
-                changed
-            );
+            assert_eq!(fixed(local.refname_to_id("refs/remotes/origin/main"))?, oid);
             assert_eq!(fixed(local.refname_to_id(tracking_ref()))?, oid);
         } else {
             assert_eq!(
@@ -693,11 +728,7 @@ fn tracking_boundaries() -> Result<(), FixtureError> {
                 SshTransportErrorKind::ProtocolFailure
             );
             assert_eq!(fixed(local.refname_to_id(tracking_ref()))?, old);
-            let expected = if mode == 1 { old } else { oid };
-            assert_eq!(
-                fixed(local.refname_to_id("refs/remotes/origin/main"))?,
-                expected
-            );
+            assert_eq!(fixed(local.refname_to_id("refs/remotes/origin/main"))?, oid);
         }
         assert!(!local.path().join("FETCH_HEAD").exists());
         assert_eq!(fixed(local.refname_to_id("refs/heads/pushed"))?, old);
@@ -732,7 +763,7 @@ fn reference_status_rejection() -> Result<(), FixtureError> {
     let changed = root_commit(&server, "refs/heads/different")?;
     let path = case.fixture.repository_path().to_owned();
     let hook = install_hook(move |point| {
-        if point == Checkpoint::Reconnected {
+        if point == Checkpoint::TransferStarted {
             git2::Repository::open_bare(&path)
                 .unwrap()
                 .reference("refs/heads/main", changed, true, "fixture race")

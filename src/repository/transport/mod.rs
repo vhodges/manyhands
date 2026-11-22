@@ -15,7 +15,7 @@ pub(crate) mod operation_tests;
 mod remote;
 pub(super) use remote::AuthenticatedSshRemote;
 #[allow(unused_imports)] // Consumed by the later promotion orchestrator.
-pub(crate) use remote::DeleteObservation;
+pub(crate) use remote::{DeleteAttempt, DeleteObservation};
 #[cfg(test)]
 pub(crate) mod tests;
 pub(super) mod trust;

@@ -268,7 +268,7 @@ fn cancel_before_transfer() -> Result<(), FixtureError> {
     ))?;
     let called = Cell::new(false);
     let hook = crate::repository::transport::operation_tests::install_hook(move |point| {
-        if point == crate::repository::transport::operation_tests::Checkpoint::Reconnected
+        if point == crate::repository::transport::operation_tests::Checkpoint::TransferStarted
             && !called.replace(true)
         {
             service.cancel_remote_operation(&root, operation).unwrap();

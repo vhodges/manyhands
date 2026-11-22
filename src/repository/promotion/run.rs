@@ -138,8 +138,12 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
             })?;
             Ok(())
         };
-        let observed = service.with_scoped_action_remote(
-            request,
+        let target = SynchronizationTarget::Context {
+            kind: self.1.authoring(),
+            item_id: item.clone(),
+        };
+        let attempt = service.with_scoped_action_remote(
+            request.clone(),
             self.0,
             plan,
             configuration,
@@ -158,17 +162,23 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                     Err(e) => return Ok(Err(e.into())),
                 }
                 Ok(remote
-                    .delete_exact(
-                        plan,
-                        &SynchronizationTarget::Context {
-                            kind: self.1.authoring(),
-                            item_id: item.clone(),
-                        },
-                        expected,
-                    )
+                    .delete_exact(plan, &target, expected)
                     .map_err(SynchronizationError::from))
             },
         )??;
+        // The delete's push closed its connection: the verification listing
+        // is a remote call of its own, under the same owner and fence.
+        let observed = match attempt {
+            DeleteAttempt::Absent => DeleteObservation::Deleted,
+            DeleteAttempt::Sent => service.with_scoped_action_remote(
+                request,
+                self.0,
+                plan,
+                configuration,
+                boundary,
+                |remote| remote.observe_delete(plan, &target, expected),
+            )?,
+        };
         if matches!(observed, DeleteObservation::Changed(_))
             && configuration.fetch_and_push_share_endpoint()
         {
@@ -185,15 +195,7 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                 plan,
                 configuration,
                 boundary,
-                |remote| {
-                    remote.fetch_exact(
-                        plan,
-                        &SynchronizationTarget::Context {
-                            kind: self.1.authoring(),
-                            item_id: item.clone(),
-                        },
-                    )
-                },
+                |remote| remote.fetch_exact(plan, &target),
             )?;
         }
         Ok(observed)

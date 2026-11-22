@@ -357,8 +357,10 @@ impl RepositoryService {
         .map_err(|kind| context.with_kind(kind))?;
         #[cfg(test)]
         super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
+        // The call lists and transfers on this connection, under this attempt.
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
+            &attempt,
             self,
             prepared,
             context,

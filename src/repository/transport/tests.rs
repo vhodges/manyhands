@@ -18,7 +18,7 @@ fn transport_poll_stop_is_sticky_and_independent_of_backend_error_code() {
     );
 }
 
-fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
+pub(super) fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
     use crate::repository::keys::*;
     PreparedSshAttempt {
         registration: SharedKeyRegistration {
