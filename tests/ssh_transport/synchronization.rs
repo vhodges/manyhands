@@ -1809,7 +1809,10 @@ fn authenticated_action_snapshot() -> Result<(), FixtureError> {
         [req.operation_id.to_string()],
         |r| r.get(0),
     ))?;
-    assert_eq!(checkpoint, "fetch_observed", "refused before the push intent");
+    assert_eq!(
+        checkpoint, "fetch_observed",
+        "refused before the push intent"
+    );
     assert_eq!(
         fixed(
             fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
@@ -1924,7 +1927,10 @@ fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
         [req.operation_id.to_string()],
         |r| r.get(0),
     ))?;
-    assert_eq!(checkpoint, "fetch_observed", "refused before the push intent");
+    assert_eq!(
+        checkpoint, "fetch_observed",
+        "refused before the push intent"
+    );
     assert_eq!(attempts.get(), 0);
     assert_eq!(prompts.borrow().len(), 0);
     assert_eq!(destination.accepted_keys().len(), effects);

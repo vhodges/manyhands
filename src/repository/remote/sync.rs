@@ -6917,15 +6917,7 @@ impl RepositoryService {
                 )?)?;
                 self.synchronization_publication_authority(&root, &owner)?
             }
-            (true, true) => self.verify_attempt_push(
-                &request,
-                session,
-                &owner,
-                &plan,
-                &configuration,
-                candidate,
-                observer,
-            )?,
+            (true, true) => self.verify_attempt_push(&steps, session, observer, candidate)?,
             (false, false) => {
                 if resumed != Some(Checkpoint::PushVerified) {
                     decision(self.checkpoint_synchronization(
@@ -7014,20 +7006,19 @@ impl RepositoryService {
     /// intent is neither rewritten nor replayed.
     fn verify_attempt_push<P: SessionCredentialProvider>(
         &self,
-        request: &SynchronizeRemoteRequest,
+        steps: &Steps<'_>,
         session: &mut SessionCredentials<P>,
-        owner: &RemoteReservation,
-        plan: &RemoteRefPlan,
-        configuration: &super::observation::ObservationConfiguration,
-        candidate: git2::Oid,
         observer: &mut dyn SynchronizationObserver,
+        candidate: git2::Oid,
     ) -> Result<Authority, SynchronizationError> {
+        let Steps {
+            request,
+            owner,
+            plan,
+            configuration,
+            primary_branch,
+        } = *steps;
         let root = &request.root;
-        let primary_branch = plan
-            .primary()
-            .remote_ref()
-            .strip_prefix("refs/heads/")
-            .ok_or(SynchronizationError::RecoveryRequired)?;
         decision(self.advance_synchronization_publication(
             root,
             owner,
