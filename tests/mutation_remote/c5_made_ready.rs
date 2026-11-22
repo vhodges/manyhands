@@ -997,10 +997,7 @@ fn resume_entered_again() -> Result<(), FixtureError> {
 
 /// A child is taken up by a resume of its own ID,
 /// and that answer holds no data, so no made-ready; the parent's request then
-/// reports it. E-74: main moved on (the dependent's commit), so the child
-/// merges it into the context, which its parent's exit indexes (Task 22):
-/// the resume answers as a completed save's replay does, `discovery_pending`
-/// offering `index refresh` and no resume (R-SDD-16).
+/// reports it.
 fn pending_child() -> Result<(), FixtureError> {
     let w = remote_with_a_dependent()?;
     let confirmation = confirmation_for(&w.service, Verb::Close, &w.root)?;
@@ -1021,13 +1018,7 @@ fn pending_child() -> Result<(), FixtureError> {
         |row| row.get(0),
     ))?;
     let taken_up = resumed(&w.service, &w.root, &child);
-    assert_eq!(
-        taken_up.code,
-        ResultCode::DiscoveryPending,
-        "{:?}",
-        taken_up.data
-    );
-    assert_eq!(actions(&taken_up), [RecoveryActionKind::IndexRefresh]);
+    assert_eq!(taken_up.code, ResultCode::Ok, "{:?}", taken_up.data);
     assert_eq!(taken_up.data, None, "no lifecycle's report, and no other");
     let done = resent(&w.service, FIRST, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
