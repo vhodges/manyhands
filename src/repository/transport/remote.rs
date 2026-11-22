@@ -354,7 +354,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             .recheck_ssh(self.prepared, self.context)
             .map_err(|kind| self.context.with_kind(kind))?;
         self.recheck_trust()?;
-        let attempt = CallbackAttempt::default();
+        let attempt = CallbackAttempt::for_finalized_host(self.observed.clone());
         let mut connection = remote
             .connect_auth(
                 git2::Direction::Fetch,

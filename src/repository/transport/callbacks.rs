@@ -16,9 +16,33 @@ pub(super) struct CallbackAttempt {
     key_submissions: Cell<u8>,
     username_submissions: Cell<u8>,
     poll_stopped: Cell<bool>,
+    /// The host a call already finalized, for a further connection it makes.
+    finalized_host: Option<HostKeyIdentity>,
 }
 
 impl CallbackAttempt {
+    /// The attempt of a further connection of a call that finalized `host`:
+    /// a host the prepared policy accepts but that is not `host` is refused
+    /// at the host check, before a key is offered to it.
+    pub(super) fn for_finalized_host(host: HostKeyIdentity) -> Self {
+        Self {
+            finalized_host: Some(host),
+            ..Self::default()
+        }
+    }
+    fn accept(
+        &self,
+        presented: &HostKeyIdentity,
+    ) -> Result<git2::CertificateCheckStatus, git2::Error> {
+        if self
+            .finalized_host
+            .as_ref()
+            .is_some_and(|finalized| finalized != presented)
+        {
+            return self.reject(SshTransportErrorKind::HostTrustChanged);
+        }
+        Ok(git2::CertificateCheckStatus::CertificateOk)
+    }
     pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
         if self.poll_stopped.get() {
             return false;
@@ -136,7 +160,7 @@ impl CallbackAttempt {
         );
         if let Some(pin) = prepared.trust.pin.as_ref() {
             if pin == &presented || approved {
-                return Ok(git2::CertificateCheckStatus::CertificateOk);
+                return self.accept(&presented);
             }
             return self.reject(SshTransportErrorKind::HostReplacementRequired {
                 expected: pin.clone(),
@@ -144,7 +168,7 @@ impl CallbackAttempt {
             });
         }
         if approved {
-            return Ok(git2::CertificateCheckStatus::CertificateOk);
+            return self.accept(&presented);
         }
         if prepared.trust.reapproval_required || prepared.approval.is_some() {
             return self.reject(SshTransportErrorKind::HostApprovalRequired { presented });

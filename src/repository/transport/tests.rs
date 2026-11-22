@@ -181,9 +181,29 @@ fn transport_callback_host_decision_table() {
             presented: presented.clone()
         })
     );
-    prepared.approval = Some(approval(&host, Some(old), &presented));
+    prepared.approval = Some(approval(&host, Some(old.clone()), &presented));
     assert!(matches!(
         CallbackAttempt::default().check_host(
+            &prepared,
+            "example.invalid",
+            Some(presented.clone())
+        ),
+        Ok(git2::CertificateCheckStatus::CertificateOk)
+    ));
+    // A further connection of a call that finalized `presented` refuses the
+    // old pin the prepared policy still accepts, before any key is offered.
+    let further = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(
+        further
+            .check_host(&prepared, "example.invalid", Some(old.clone()))
+            .is_err()
+    );
+    assert_eq!(
+        further.failure(),
+        Some(SshTransportErrorKind::HostTrustChanged)
+    );
+    assert!(matches!(
+        CallbackAttempt::for_finalized_host(presented.clone()).check_host(
             &prepared,
             "example.invalid",
             Some(presented.clone())
