@@ -525,7 +525,7 @@ impl ActionChecks<'_> {
         &self,
         remote: &crate::repository::transport::AuthenticatedSshRemote<'_, '_>,
     ) -> Result<Result<(), SynchronizationError>, SshTransportError> {
-        if let Err(error) = self.held() {
+        if let Err(error) = self.held(remote) {
             return Ok(Err(error));
         }
         remote.require_action_expectation(self.expectation)?;
@@ -537,11 +537,17 @@ impl ActionChecks<'_> {
         remote: &crate::repository::transport::AuthenticatedSshRemote<'_, '_>,
     ) -> Result<Result<(), SynchronizationError>, SshTransportError> {
         remote.require_action_expectation(self.expectation)?;
-        Ok(self.held())
+        Ok(self.held(remote))
     }
-    fn held(&self) -> Result<(), SynchronizationError> {
+    /// The boundary and the snapshot, its key read on the call's registry
+    /// connection.
+    fn held(
+        &self,
+        remote: &crate::repository::transport::AuthenticatedSshRemote<'_, '_>,
+    ) -> Result<(), SynchronizationError> {
         (self.boundary)(self.root)?;
-        if self.service.synchronization_configuration_matches(
+        if self.service.synchronization_configuration_matches_reading(
+            Some(remote.call_registry()),
             self.root,
             self.plan,
             self.expected,
@@ -4211,6 +4217,18 @@ impl RepositoryService {
         plan: &RemoteRefPlan,
         expected: &super::observation::ObservationConfiguration,
     ) -> Result<bool, SynchronizationError> {
+        self.synchronization_configuration_matches_reading(None, root, plan, expected)
+    }
+
+    /// `synchronization_configuration_matches`, its key read during the
+    /// remote call `call` on the call's registry connection.
+    fn synchronization_configuration_matches_reading(
+        &self,
+        call: Option<&crate::repository::CallRegistry>,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        expected: &super::observation::ObservationConfiguration,
+    ) -> Result<bool, SynchronizationError> {
         let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
             return Ok(false);
         };
@@ -4218,7 +4236,7 @@ impl RepositoryService {
             RemoteRefPlan::from_configuration(remote, &config.primary_branch).ok()
         });
         Ok(actual.as_ref() == Some(plan)
-            && self.observation_configuration(root, plan)? == *expected)
+            && self.observation_configuration_reading(call, root, plan)? == *expected)
     }
 
     /// Bind every authenticated scope to one action snapshot, including after
@@ -6871,8 +6889,8 @@ impl RepositoryService {
             observer,
             candidate,
             &mut evidence,
-            |push, evidence| {
-                if self.observation_configuration(&root, &plan)? != configuration {
+            |push, evidence, call| {
+                if self.observation_configuration_in(call, &root, &plan)? != configuration {
                     return Err(SynchronizationError::ExternalChange);
                 }
                 if push.is_none()
@@ -8187,8 +8205,8 @@ impl RepositoryService {
             observer,
             local,
             &mut evidence,
-            |push, evidence| {
-                if self.observation_configuration(root, plan)? != *configuration
+            |push, evidence, call| {
+                if self.observation_configuration_in(call, root, plan)? != *configuration
                     || push.is_some() && push != intended
                 {
                     return Err(SynchronizationError::ExternalChange);
@@ -8486,8 +8504,9 @@ impl RepositoryService {
     /// decides it (design Phase 2, "Fewer listings"). After the listing the
     /// call checks what a listing's own call checked after it, and that the
     /// target is still at `candidate`, clean. `decide` is given the commit
-    /// the push endpoint advertises for the target, and `evidence`, and asks
-    /// for the push by giving its intent, or for none. Then, on the same
+    /// the push endpoint advertises for the target, `evidence`, and the
+    /// call's registry connection for its key reads, and asks for the push
+    /// by giving its intent, or for none. Then, on the same
     /// connection: the intent is recorded, the safe point before the push
     /// passed and the target inspected, the call checks what a push's own
     /// call checked before it, and the push is made, its return recorded at
@@ -8510,6 +8529,7 @@ impl RepositoryService {
         decide: impl FnOnce(
             Option<git2::Oid>,
             &mut Evidence,
+            &crate::repository::CallRegistry,
         ) -> Result<Option<PushIntent>, SynchronizationError>,
     ) -> Result<bool, SynchronizationError> {
         let Steps {
@@ -8572,7 +8592,7 @@ impl RepositoryService {
                         let decide = decide
                             .take()
                             .ok_or(SynchronizationError::RecoveryRequired)?;
-                        Ok(Listed::Decided(decide(oid, evidence)?))
+                        Ok(Listed::Decided(decide(oid, evidence, r.call_registry())?))
                     })();
                     let intent = match listed {
                         Ok(Listed::Decided(Some(intent))) => intent,

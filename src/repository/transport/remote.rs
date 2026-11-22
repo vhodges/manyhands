@@ -800,6 +800,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         }
         Ok(())
     }
+    /// The registry connection this call's key reads go through.
+    pub(in super::super) fn call_registry(&self) -> &crate::repository::CallRegistry {
+        &self.prepared.registry
+    }
     pub(super) fn verified(&self) -> SshTransportVerified {
         SshTransportVerified {
             root: self.context.root.clone(),

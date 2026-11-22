@@ -42,6 +42,7 @@ pub(super) fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
             reapproval_required: false,
         },
         approval: None,
+        registry: crate::repository::CallRegistry::new(),
     }
 }
 

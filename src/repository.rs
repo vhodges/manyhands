@@ -471,6 +471,83 @@ impl RegistryMemo {
     }
 }
 
+/// The registry connection one remote call reads the shared keys through
+/// (design decision 36): the call opens it at its first key read, through
+/// `open_migrated_registry`, and closes it when the call ends. It holds
+/// the connection and nothing else. Each read takes the cache guard and a
+/// read transaction of its own, as a read on a connection of its own does,
+/// and so reads the rows as they are then; nothing a read finds is kept
+/// for the next. A read that finds the registry file no longer the one the
+/// call opened, or no longer as this service migrated it, opens it again
+/// as `open_migrated_registry` would.
+pub(crate) struct CallRegistry {
+    held: std::cell::RefCell<Option<(rusqlite::Connection, RegistryMemo)>>,
+}
+
+impl CallRegistry {
+    pub(crate) fn new() -> Self {
+        #[cfg(test)]
+        key_reads::call_begins();
+        Self {
+            held: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for CallRegistry {
+    fn drop(&mut self) {
+        key_reads::call_ends();
+    }
+}
+
+/// What a test counts of the key reads made on this thread: the remote
+/// calls begun, the registry opens the key reads made, and how many of
+/// those were made while a remote call was open.
+#[cfg(test)]
+pub(crate) mod key_reads {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct KeyReadCounts {
+        pub(crate) calls: usize,
+        pub(crate) opens: usize,
+        pub(crate) opens_in_calls: usize,
+    }
+
+    thread_local! {
+        static COUNTS: Cell<KeyReadCounts> = const {
+            Cell::new(KeyReadCounts { calls: 0, opens: 0, opens_in_calls: 0 })
+        };
+        static OPEN_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The counts on this thread so far.
+    pub(crate) fn counts() -> KeyReadCounts {
+        COUNTS.with(Cell::get)
+    }
+    pub(super) fn call_begins() {
+        OPEN_CALLS.with(|open| open.set(open.get() + 1));
+        COUNTS.with(|counts| {
+            let mut value = counts.get();
+            value.calls += 1;
+            counts.set(value);
+        });
+    }
+    pub(super) fn call_ends() {
+        OPEN_CALLS.with(|open| open.set(open.get().saturating_sub(1)));
+    }
+    pub(super) fn registry_opened() {
+        let in_call = OPEN_CALLS.with(Cell::get) > 0;
+        COUNTS.with(|counts| {
+            let mut value = counts.get();
+            value.opens += 1;
+            value.opens_in_calls += usize::from(in_call);
+            counts.set(value);
+        });
+    }
+}
+
 struct IndexOwnerHeartbeat {
     stop: Option<mpsc::Sender<()>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -4989,6 +5066,77 @@ impl RepositoryService {
         *self.registry_memo.lock().map_err(|_| memo_unavailable())? =
             RegistryMemo::of(&connection, &self.registry_path);
         Ok(connection)
+    }
+
+    /// A key read: `read` run on the registry as `open_migrated_registry`
+    /// opens it, on a connection of its own outside a remote call and on
+    /// the call's inside one (`read_in_call`). The outer `Err` is the
+    /// open's failure, the inner result the read's own.
+    fn read_key_registry<T>(
+        &self,
+        call: Option<&CallRegistry>,
+        operation: RepositoryOperation,
+        read: impl FnOnce(&mut rusqlite::Connection) -> Result<T, RepositoryError>,
+    ) -> Result<Result<T, RepositoryError>, RepositoryError> {
+        match call {
+            Some(call) => self.read_in_call(call, operation, read),
+            None => {
+                #[cfg(test)]
+                key_reads::registry_opened();
+                Ok(read(&mut self.open_migrated_registry(operation)?))
+            }
+        }
+    }
+
+    /// `read` on the connection of the remote call `call`. A read opens it
+    /// through `open_migrated_registry` when the call holds none, or when
+    /// the one it holds is no longer what that would give: the registry
+    /// file is not the one the call opened, or its schema is not the one
+    /// this service migrated. The opened connection replaces the call's,
+    /// so a file put in place of the registry during a call is migrated
+    /// and read as a fresh open would. A read that fails drops the call's
+    /// connection, and the next one opens afresh too.
+    fn read_in_call<T>(
+        &self,
+        call: &CallRegistry,
+        operation: RepositoryOperation,
+        read: impl FnOnce(&mut rusqlite::Connection) -> Result<T, RepositoryError>,
+    ) -> Result<Result<T, RepositoryError>, RepositoryError> {
+        let mut held = call.held.try_borrow_mut().map_err(|_| {
+            RepositoryError::new(
+                operation,
+                None,
+                RepositoryErrorKind::InjectedFailure,
+                "the call's registry connection is in use",
+            )
+        })?;
+        let migrated = self.registry_memo.lock().ok().and_then(|memo| *memo);
+        // A connection that no longer qualifies is dropped here, before the
+        // open. One whose file was moved away is closed as SQLite closes a
+        // moved database: no checkpoint, and the sidecars at the
+        // registry's path are left alone.
+        let reusable = held.take().filter(|(connection, opened)| {
+            RegistryMemo::of(connection, &self.registry_path)
+                .is_some_and(|current| current == *opened && Some(current) == migrated)
+        });
+        let (mut connection, opened) = match reusable {
+            Some((connection, opened)) => (connection, Some(opened)),
+            None => {
+                #[cfg(test)]
+                key_reads::registry_opened();
+                let connection = self.open_migrated_registry(operation)?;
+                // With no memo, every open migrates, and every read opens.
+                let opened = RegistryMemo::of(&connection, &self.registry_path);
+                (connection, opened)
+            }
+        };
+        let result = read(&mut connection);
+        if result.is_ok()
+            && let Some(opened) = opened
+        {
+            *held = Some((connection, opened));
+        }
+        Ok(result)
     }
 
     #[doc(hidden)]
