@@ -2580,3 +2580,107 @@ fn a_comment_receipt_is_proved_once() {
     assert_eq!(checkpoint, Some(receipt.checkpoint_oid.to_string()));
     assert!(created_at.is_some());
 }
+
+/// A binding corrupted after registry open is audited where it is reused,
+/// as the migration that every such call ran used to audit it: by the
+/// submission that takes the binding up again, and by a refresh begun
+/// under the binding's synchronization ID. Each property the migration
+/// checks is a row: the root's digest, the submission's target, and the
+/// correlation of the synchronization's hand-off row.
+#[test]
+fn a_reused_comment_binding_corrupted_after_open_is_refused() {
+    let mut refusals = Vec::new();
+    for corruption in ["root digest", "target", "hand-off"] {
+        let f = Fixture::new();
+        let request = f.request();
+        saved(
+            f.service
+                .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let (row, root, synchronization): (i64, String, String) = f
+            .db()
+            .query_row(
+                "SELECT o.id,o.root_path,b.synchronization_ulid FROM comment_publication_bindings b
+                  JOIN operation_records o ON o.id=b.local_record_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let root = PathBuf::from(root);
+        let synchronization = OperationId::parse(&synchronization).unwrap();
+        let repository = Repository::open(&root).unwrap();
+        let record = recovery::RecoveryRecord {
+            id: row,
+            is_new: false,
+            is_pending: false,
+            completed_step: None,
+        };
+        let reuse = || {
+            f.service
+                .bind_comment_publication(&repository, &root, &request.comment, record)
+                .map(|_| ())
+        };
+        let hand_off = || {
+            recovery::require_refresh_can_begin(
+                &f.db(),
+                &root,
+                RepositoryOperation::RefreshRepository,
+                synchronization,
+            )
+        };
+        // Intact, the binding is taken up again, and no refresh is due
+        // under its synchronization, which holds no authoritative result.
+        reuse().unwrap();
+        assert_eq!(
+            hand_off().unwrap_err().kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        match corruption {
+            "root digest" => f
+                .db()
+                .execute(
+                    "UPDATE comment_publication_bindings SET root_digest=zeroblob(32)",
+                    [],
+                )
+                .unwrap(),
+            "target" => f
+                .db()
+                .execute(
+                    "UPDATE operation_records SET target=target||'-substituted' WHERE id=?1",
+                    [row],
+                )
+                .unwrap(),
+            _ => f
+                .db()
+                .execute(
+                    "INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at)
+                     VALUES(?1,?2,'refresh',?3,'created',1)",
+                    params![
+                        root.to_str(),
+                        synchronization.to_string(),
+                        format!(
+                            "synchronization-index-v1/document/{}/{}",
+                            canonical::ItemId::generate(),
+                            "0".repeat(40)
+                        )
+                    ],
+                )
+                .unwrap(),
+        };
+        refusals.push((
+            corruption,
+            reuse().err().map(|error| error.kind),
+            hand_off().err().map(|error| error.kind),
+        ));
+    }
+    let refused = Some(RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        refusals,
+        [
+            ("root digest", refused, refused),
+            ("target", refused, refused),
+            ("hand-off", refused, refused),
+        ]
+    );
+}

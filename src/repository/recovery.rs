@@ -160,64 +160,91 @@ fn decode_comment_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommentBi
     })
 }
 
+/// Audits every binding, as registry open's migration does.
 pub(super) fn validate_comment_bindings(connection: &Connection) -> Result<(), RepositoryError> {
     let failure = super::comment_publication::recovery_error;
     let rows = connection.prepare("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings")
         .and_then(|mut statement| statement.query_map([], decode_comment_binding)?.collect::<Result<Vec<_>, _>>()).map_err(|_| failure())?;
     for binding in rows {
-        let (root, target, digest): (String, String, Vec<u8>) = connection.query_row("SELECT o.root_path,o.target,b.root_digest
-            FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id WHERE b.operation_ulid=?1",
-            [binding.operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_| failure())?;
-        let expected_target = format!(
-            "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
-            super::authoring_kind_segment(&binding.kind),
-            binding.item_id,
-            binding.comment_id
-        );
-        if digest != blake3::hash(root.as_bytes()).as_bytes().as_slice()
-            || target != expected_target
-        {
-            return Err(failure());
-        }
-        // The one local row under the synchronization's ID is its index
-        // hand-off: a refresh with the bound context's hand-off target at
-        // the authoritative commit (P-4), or with no target, as older builds
-        // began it.
-        let authoritative: Option<String> = connection
-            .query_row(
-                "SELECT r.authoritative_oid FROM remote_operation_records r
-                   JOIN repositories p ON p.id=r.repository_id
-                  WHERE r.operation_ulid=?1 AND p.root_path=?2",
-                params![binding.synchronization_id.to_string(), root],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|_| failure())?
-            .flatten();
-        let hand_off = authoritative.map(|oid| {
-            hand_off_target(
-                &format!(
-                    "{}/{}",
-                    super::authoring_kind_segment(&binding.kind),
-                    binding.item_id
-                ),
-                &oid,
-            )
-        });
-        let invalid: bool = connection.query_row("SELECT
-            NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
-                WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?6) OR root_path!=?3))
-            OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
-            OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
-                AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
-                SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
-            OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
-            params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string(),hand_off], |r| r.get(0)).map_err(|_| failure())?;
-        if invalid {
-            return Err(failure());
-        }
+        audit_comment_binding(connection, &binding)?;
+    }
+    Ok(())
+}
+
+/// Audits the binding of the comment operation `operation` exactly as
+/// `validate_comment_bindings` audits each one, with the same refusal: a
+/// call that takes a binding up again after registry open audits it here,
+/// since no later migration does (design decision 9). Nothing is refused
+/// when no binding has that operation ID.
+pub(super) fn validate_comment_binding(
+    connection: &Connection,
+    operation: &str,
+) -> Result<(), RepositoryError> {
+    let failure = super::comment_publication::recovery_error;
+    let binding = connection.query_row("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings WHERE operation_ulid=?1",
+        [operation], decode_comment_binding).optional().map_err(|_| failure())?;
+    binding.map_or(Ok(()), |binding| {
+        audit_comment_binding(connection, &binding)
+    })
+}
+
+/// One binding's root digest, its submission's target, and the
+/// correlation of its synchronization's hand-off row.
+fn audit_comment_binding(
+    connection: &Connection,
+    binding: &CommentBinding,
+) -> Result<(), RepositoryError> {
+    let failure = super::comment_publication::recovery_error;
+    let (root, target, digest): (String, String, Vec<u8>) = connection.query_row("SELECT o.root_path,o.target,b.root_digest
+        FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id WHERE b.operation_ulid=?1",
+        [binding.operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_| failure())?;
+    let expected_target = format!(
+        "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
+        super::authoring_kind_segment(&binding.kind),
+        binding.item_id,
+        binding.comment_id
+    );
+    if digest != blake3::hash(root.as_bytes()).as_bytes().as_slice() || target != expected_target {
+        return Err(failure());
+    }
+    // The one local row under the synchronization's ID is its index
+    // hand-off: a refresh with the bound context's hand-off target at
+    // the authoritative commit (P-4), or with no target, as older builds
+    // began it.
+    let authoritative: Option<String> = connection
+        .query_row(
+            "SELECT r.authoritative_oid FROM remote_operation_records r
+               JOIN repositories p ON p.id=r.repository_id
+              WHERE r.operation_ulid=?1 AND p.root_path=?2",
+            params![binding.synchronization_id.to_string(), root],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| failure())?
+        .flatten();
+    let hand_off = authoritative.map(|oid| {
+        hand_off_target(
+            &format!(
+                "{}/{}",
+                super::authoring_kind_segment(&binding.kind),
+                binding.item_id
+            ),
+            &oid,
+        )
+    });
+    let invalid: bool = connection.query_row("SELECT
+        NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
+            WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
+        OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?6) OR root_path!=?3))
+        OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
+        OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
+            AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
+        OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
+            SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
+        OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
+        params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string(),hand_off], |r| r.get(0)).map_err(|_| failure())?;
+    if invalid {
+        return Err(failure());
     }
     Ok(())
 }
@@ -291,6 +318,9 @@ impl super::RepositoryService {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| failure())?;
+        // A binding this call takes up again was audited by the migration
+        // its lifecycle's open ran; that open no longer migrates.
+        validate_comment_binding(&tx, &request.target.operation_id.to_string())?;
         let comment_id = request.comment_id.to_string();
         let target = super::authoring_write_target(
             &request.target,
@@ -2247,10 +2277,21 @@ fn comment_child_may_begin(
     requested: &str,
     target: &str,
 ) -> Result<bool, RepositoryError> {
-    let child: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid=?1)", [requested], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    if !child {
+    let child: Option<String> = connection
+        .query_row(
+            "SELECT operation_ulid FROM comment_publication_bindings WHERE synchronization_ulid=?1",
+            [requested],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?;
+    let Some(comment) = child else {
         return Ok(true);
-    }
+    };
+    // The binding is the authority for what may begin under its
+    // synchronization's ID; the open of the call that asks no longer
+    // migrates, and so no longer audits it first.
+    validate_comment_binding(connection, &comment)?;
     let allowed: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
         JOIN operation_records o ON o.id=b.local_record_id JOIN remote_operation_records r ON r.operation_ulid=b.synchronization_ulid
         JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
@@ -3938,7 +3979,17 @@ mod abandoned_row_tests {
                 "CREATE TABLE remote_operation_records (
                     id INTEGER PRIMARY KEY, operation_ulid TEXT, repository_id INTEGER,
                     action TEXT, priority TEXT, kind TEXT, item_id TEXT, phase TEXT,
-                    authoritative_kind TEXT)",
+                    authoritative_kind TEXT, authoritative_oid TEXT)",
+            )
+            .unwrap();
+        // A well-formed binding: the refresh under its synchronization's ID
+        // audits it first (design decision 9).
+        connection
+            .execute(
+                "UPDATE operation_records SET target=?1 WHERE id=1",
+                [format!(
+                    "authoring-context-v1/document/{ID}/Edit\0.manyhands/comments\0{ID}"
+                )],
             )
             .unwrap();
         connection
@@ -3947,7 +3998,12 @@ mod abandoned_row_tests {
                     (operation_ulid, local_record_id, root_digest, kind, item_ulid, comment_ulid,
                      synchronization_ulid, pre_checkpoint_oid)
                  VALUES (?1, 1, ?2, 'document', ?1, ?1, ?3, ?4)",
-                params![ID, [0_u8; 32].as_slice(), CHILD, "0".repeat(40)],
+                params![
+                    ID,
+                    blake3::hash(b"/repository").as_bytes().as_slice(),
+                    CHILD,
+                    "0".repeat(40)
+                ],
             )
             .unwrap();
         let root = Path::new("/repository");
