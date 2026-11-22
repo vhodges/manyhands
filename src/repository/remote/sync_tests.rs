@@ -17489,11 +17489,12 @@ fn a_hand_off_row_from_an_older_build_still_replays() {
 
 /// A lifecycle's child, a close's or a promotion's synchronization of its
 /// item or of the primary, that is taken up under its own ID with no
-/// parent's execution (`operation resume <child>`, or a retry of it) hands
-/// off under the row its parent's records accept, a refresh with no target,
-/// and completes: the remote row's debt is cleared and that row, completed,
-/// is the one under the ID. A child is known by its parent's record, not by
-/// who runs it, so it cannot begin the per-item row that the records
+/// parent's execution (`operation resume <child>`, or a retry of it)
+/// completes: the remote row's debt is cleared. Its hand-off is its
+/// parent's (Task 22): it begins no row under its ID, observes nothing of
+/// the whole repository, and leaves what its local update marked owed for
+/// the parent's exit to index. A child is known by its parent's record, not
+/// by who runs it, so it cannot begin the per-item row that the records
 /// refuse it and be left owing a hand-off that no resume can make.
 #[test]
 fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
@@ -17599,6 +17600,21 @@ fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
         .unwrap();
         let (replay, outcome) =
             classified_synchronization_under(&service, root, &plan, &target, child);
+        // What the child's local update marked, as `mark_local_update` marks
+        // it: its parent's exit indexes it.
+        let context = hand_off_context(&target);
+        crate::repository::mark_contexts_dirty(
+            &service.registry_path,
+            root,
+            std::slice::from_ref(&context),
+            RepositoryOperation::RepositorySnapshot,
+        )
+        .unwrap();
+        let scans = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = scans.clone();
+        crate::repository::discovery::set_scan_hook(root.to_owned(), move || {
+            counted.set(counted.get() + 1)
+        });
 
         assert_eq!(
             service
@@ -17607,15 +17623,17 @@ fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
             SynchronizationResult::Complete(outcome),
             "{case}"
         );
-        assert_eq!(
-            rows_under(data.path(), child)
-                .into_iter()
-                .map(|(target, item, owed, state, _)| (target, item, owed, state))
-                .collect::<Vec<_>>(),
-            [(Some(String::new()), None, None, "completed".to_owned())],
-            "{case}"
+        crate::repository::discovery::clear_scan_hook(root);
+        assert!(
+            rows_under(data.path(), child).is_empty(),
+            "{case}: rows under its ID"
         );
         assert!(!index_pending(data.path(), child), "{case}");
+        assert_eq!(scans.get(), 0, "{case}: whole-repository observations");
+        assert!(
+            !service.contexts_indexed(root, std::slice::from_ref(&context)),
+            "{case}: the child's context is its parent's to index"
+        );
     }
 }
 
