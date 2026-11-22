@@ -4434,8 +4434,8 @@ impl RepositoryService {
     /// stat of it, and the content of its few racy files. When it still
     /// holds and the context is not marked dirty, the row is claimed and
     /// completes with nothing observed. Otherwise the context is indexed by
-    /// `index_contexts`.
-    #[cfg_attr(not(test), allow(dead_code))] // A synchronization that changed nothing locally follows.
+    /// `index_contexts`. A completion that fails leaves the row `failed`,
+    /// owing its hand-off still, as an index step that fails does.
     fn complete_hand_off_unobserved(
         &self,
         root: &Path,
@@ -4458,11 +4458,75 @@ impl RepositoryService {
                 else {
                     return Err(nonowner_error(&root));
                 };
-                complete_index_step(&self.registry_path, &root, owner)?;
+                // The completion is this step's one index transaction.
+                let completed = self
+                    .check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)
+                    .and_then(|()| complete_index_step(&self.registry_path, &root, owner.clone()));
+                if let Err(error) = completed {
+                    let _ =
+                        set_refresh_operation(&self.registry_path, owner, "failed", None, &root);
+                    return Err(error);
+                }
                 return Ok(IndexOutcome::Current);
             }
         }
         self.index_contexts(&root, record, &[context])
+    }
+
+    /// The index step of a synchronization's hand-off (P-4), under the
+    /// refresh row of `request`'s ID with the hand-off `target`: the row is
+    /// begun, owing `context`, the one the synchronization changed or
+    /// published, or the pending one is taken up; then, with the lease let
+    /// go, that context alone is indexed. `changed`, the contexts the
+    /// synchronization's own local update moved, are indexed with no basis
+    /// check (`index_contexts`). With none, the context is indexed only when
+    /// its basis no longer holds or it is marked dirty, and otherwise the
+    /// row completes with nothing observed (`complete_hand_off_unobserved`).
+    /// Says whether the index holds what the synchronization changed: `false`
+    /// while the row still owes its hand-off.
+    fn index_synchronization_hand_off(
+        &self,
+        request: RefreshRepositoryRequest,
+        target: &str,
+        context: ContextKey,
+        changed: &[ContextKey],
+    ) -> Result<bool, RepositoryError> {
+        let operation = RepositoryOperation::RefreshRepository;
+        self.require_index_available(operation, Some(&request.root))?;
+        let (repository, root) = canonical_repository_root(&request.root, operation)?;
+        let record = {
+            let _repository_lease = repository_lease(&repository, &root, operation)?;
+            registered_repository_id(&self.registry_path, &root, operation)?;
+            let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
+            let mut connection = open_registry(&self.registry_path, &mut |_| {})
+                .map_err(|error| error.for_operation(operation, &root))?;
+            migrate_registry(&mut connection)
+                .map_err(|error| error.for_operation(operation, &root))?;
+            begin_or_reconcile_operation(
+                &mut connection,
+                &root,
+                operation,
+                request.operation_id,
+                target,
+                self.clock.now().unix_timestamp(),
+            )
+            .map_err(|error| error.for_operation(operation, &root))?
+        };
+        // The row is begun and owes only its hand-off, which the
+        // synchronization's resume or retry runs.
+        if self.should_inject(
+            FailurePoint::AfterCheckpointBeforeIndexStep,
+            operation,
+            &root,
+        )? {
+            return Ok(false);
+        }
+        let indexed = if changed.is_empty() {
+            self.complete_hand_off_unobserved(&root, record, context)
+        } else {
+            self.index_contexts(&root, record, changed)
+        };
+        indexed.map(|outcome| outcome == IndexOutcome::Current)
     }
 
     /// `index_claimed_contexts`, with the heartbeat of `owner`'s claim

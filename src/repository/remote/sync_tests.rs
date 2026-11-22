@@ -17327,3 +17327,550 @@ fn a_sync_s_hand_off_completes_while_another_item_s_write_is_mid_write() {
     assert!(!index_pending(data.path(), operation));
     assert_eq!(rows_under(data.path(), writing), before);
 }
+
+// Task 16b: what a synchronization's index hand-off indexes. A merge or a
+// fast-forward indexes the contexts it changed; a synchronization that
+// changed nothing locally records its hand-off with nothing observed while
+// its context's basis holds and it is not marked dirty, and otherwise
+// indexes that context alone.
+
+/// What the index stores for the context of `item` (the primary's, for
+/// `None`): its basis, when it was indexed, and its mark.
+type StoredContext = (Option<String>, Option<i64>, i64);
+
+fn stored_context(data: &Path, item: Option<&str>) -> Option<StoredContext> {
+    use rusqlite::OptionalExtension;
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT basis, indexed_at, dirty FROM contexts WHERE item_id IS ?1",
+            [item],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
+/// Every context the index stores, by item (`None` for the primary).
+fn stored_contexts(data: &Path) -> Vec<(Option<String>, StoredContext)> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare("SELECT item_id, basis, indexed_at, dirty FROM contexts ORDER BY item_id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// The titles the index stores for the context of `item`.
+fn stored_titles(data: &Path, item: &str) -> Vec<String> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare(
+            "SELECT d.title FROM discovered_items d JOIN contexts c ON c.id = d.context_id
+              WHERE c.item_id = ?1 ORDER BY d.title",
+        )
+        .unwrap()
+        .query_map([item], |row| row.get::<_, Option<String>>(0))
+        .unwrap()
+        .map(|title| title.unwrap().unwrap_or_default())
+        .collect()
+}
+
+/// The worktree of the ticket `item`'s context under `root`.
+fn ticket_worktree(root: &Path, item: &str) -> PathBuf {
+    crate::repository::item_context(root, AuthoringKind::Ticket, item.parse().unwrap()).worktree
+}
+
+/// How many times each of the contexts at `paths` (the root for the
+/// primary, a worktree for an item) is observed while `run` runs.
+fn observations_while(paths: &[PathBuf], run: impl FnOnce()) -> Vec<usize> {
+    let counts = paths
+        .iter()
+        .map(|path| {
+            let count = std::rc::Rc::new(std::cell::Cell::new(0));
+            let counted = count.clone();
+            crate::repository::discovery::set_context_scan_hook(path.clone(), move || {
+                counted.set(counted.get() + 1)
+            });
+            count
+        })
+        .collect::<Vec<_>>();
+    run();
+    for path in paths {
+        crate::repository::discovery::clear_scan_hook(path);
+    }
+    counts.iter().map(|count| count.get()).collect()
+}
+
+/// The head of the branch of the ticket `item`'s context.
+fn ticket_head(root: &Path, item: &str) -> git2::Oid {
+    git2::Repository::open(root)
+        .unwrap()
+        .refname_to_id(&format!("refs/heads/manyhands/ticket/{item}"))
+        .unwrap()
+}
+
+/// The ticket `item`'s file in its context is given the title `title` and
+/// committed there, outside Manyhands.
+fn commit_title_outside(root: &Path, item: &str, title: &str) -> git2::Oid {
+    let worktree = ticket_worktree(root, item);
+    let path = format!(".manyhands/tickets/{item}/ticket.md");
+    let text = fs::read_to_string(worktree.join(&path)).unwrap();
+    let retitled = text.replace(&format!("title: Ticket {item}"), &format!("title: {title}"));
+    assert_ne!(retitled, text, "the fixture's title line");
+    fs::write(worktree.join(&path), retitled).unwrap();
+    let repository = git2::Repository::open(&worktree).unwrap();
+    let mut index = repository.index().unwrap();
+    index.add_path(Path::new(&path)).unwrap();
+    index.write().unwrap();
+    let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let parent = repository.head().unwrap().peel_to_commit().unwrap();
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "outside",
+            &tree,
+            &[&parent],
+        )
+        .unwrap()
+}
+
+/// A context synchronization merges the remote context and then the primary
+/// into its context: that local update marks the context dirty, and its
+/// hand-off indexes that context alone. The primary, moved and not marked,
+/// is neither observed nor stored; the context is stored and its mark
+/// cleared; and the hand-off row of the item completes, clearing the remote
+/// row's debt.
+#[test]
+fn a_sync_that_merged_main_indexes_only_its_context() {
+    let pass = ContextPass::new();
+    let root = pass.root.path();
+    let data = pass.data.path();
+    let SynchronizationTarget::Context { item_id, .. } = &pass.target else {
+        panic!("a context target")
+    };
+    let item = item_id.to_string();
+    let primary = stored_context(data, None);
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+
+    let merged = pass.integrate().unwrap();
+    assert_eq!(pass.parents(merged)[1], pass.primary_incoming);
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the local update marks its context"
+    );
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(pass.local),
+        local_oid: Some(merged),
+        tracking_oid: Some(pass.context_incoming),
+        primary_tracking_oid: Some(pass.primary_incoming),
+        push_oid: Some(merged),
+        push_advertised_oid: Some(merged),
+    };
+    pass.service
+        .checkpoint_synchronization_merge_applied(root, &pass.owner, &evidence)
+        .unwrap();
+    pass.service
+        .checkpoint_synchronization(
+            root,
+            &pass.owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    pass.service
+        .classify_synchronization(root, &pass.owner, Authority::Published(merged))
+        .unwrap();
+
+    let mut replay = request(root);
+    replay.operation_id = pass.operation;
+    replay.target = pass.target.clone();
+    let observed = observations_while(&[root.to_owned(), ticket_worktree(root, &item)], || {
+        assert_eq!(
+            pass.service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(SynchronizationOutcome::Published {
+                target: pass.target.clone(),
+                oid: merged,
+            })
+        );
+    });
+    assert_eq!(
+        observed,
+        [0, 1],
+        "the primary's and the context's observations"
+    );
+    assert_eq!(stored_context(data, None), primary, "the primary's rows");
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+    assert_eq!(
+        rows_under(data, pass.operation),
+        [(
+            Some(format!("synchronization-index-v1/ticket/{item}/{merged}")),
+            Some(item.clone()),
+            Some(format!(r#"["{item}"]"#)),
+            "completed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )]
+    );
+    assert!(!index_pending(data, pass.operation));
+}
+
+/// A synchronization that changed nothing locally, whether it published or
+/// found the remote current, of an item or of the primary, records its
+/// hand-off with nothing observed: its context's basis holds and the
+/// context is not marked dirty, so its row of its item completes, and no
+/// context's rows, nor the repository's refresh time, change.
+#[test]
+fn a_push_only_sync_records_its_hand_off_without_observing() {
+    for (case, target, published) in [
+        (
+            "a sync of X that published",
+            ticket_target(HAND_OFF_X),
+            true,
+        ),
+        (
+            "a sync of X that found the remote current",
+            ticket_target(HAND_OFF_X),
+            false,
+        ),
+        (
+            "a sync of the primary that published",
+            SynchronizationTarget::Primary,
+            true,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let oid = match &target {
+            SynchronizationTarget::Primary => git2::Repository::open(root)
+                .unwrap()
+                .refname_to_id("refs/heads/main")
+                .unwrap(),
+            SynchronizationTarget::Context { .. } => ticket_head(root, HAND_OFF_X),
+        };
+        let replay = service.classified_synchronization_for_testing(
+            root,
+            &target,
+            OperationId::new(),
+            oid,
+            published,
+        );
+        let operation = replay.operation_id;
+        let outcome = if published {
+            SynchronizationOutcome::Published {
+                target: target.clone(),
+                oid,
+            }
+        } else {
+            SynchronizationOutcome::AlreadyCurrent {
+                target: target.clone(),
+                oid,
+            }
+        };
+        let contexts = stored_contexts(data);
+        let refreshed_at = |data: &Path| -> Option<i64> {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .query_row("SELECT refreshed_at FROM repositories", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        let refreshed = refreshed_at(data);
+        let hooked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hooked.clone();
+        service.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let observed = observations_while(
+            &[root.to_owned(), ticket_worktree(root, HAND_OFF_X)],
+            || {
+                assert_eq!(
+                    service
+                        .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                        .unwrap(),
+                    SynchronizationResult::Complete(outcome),
+                    "{case}"
+                );
+            },
+        );
+        assert_eq!(observed, [0, 0], "{case}: observations");
+        assert_eq!(
+            hooked.load(Ordering::SeqCst),
+            0,
+            "{case}: the observation hook"
+        );
+        assert_eq!(
+            stored_contexts(data),
+            contexts,
+            "{case}: the index's contexts"
+        );
+        assert_eq!(refreshed_at(data), refreshed, "{case}: the refresh time");
+        let (hand_off, item, owed) = match &target {
+            SynchronizationTarget::Primary => (
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                r#"["primary"]"#.to_owned(),
+            ),
+            SynchronizationTarget::Context { item_id, .. } => (
+                format!("synchronization-index-v1/ticket/{item_id}/{oid}"),
+                Some(item_id.to_string()),
+                format!(r#"["{item_id}"]"#),
+            ),
+        };
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(target, item, owed, state, _)| (target, item, owed, state))
+                .collect::<Vec<_>>(),
+            [(Some(hand_off), item, Some(owed), "completed".to_owned())],
+            "{case}"
+        );
+        assert!(!index_pending(data, operation), "{case}");
+    }
+}
+
+/// A synchronization that changed nothing locally indexes its context when
+/// that context's basis no longer holds (a commit made in it outside
+/// Manyhands, which the synchronization pushed) or the context is marked
+/// dirty (as a conflict's resolution leaves it): that context alone, once.
+/// Another item's context that moved too is neither observed nor stored.
+#[test]
+fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
+    for (case, moved_basis) in [
+        ("a commit made in the context outside Manyhands", true),
+        ("the context marked dirty", false),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        commit_title_outside(root, HAND_OFF_Y, "Moved Y");
+        let title = if moved_basis {
+            commit_title_outside(root, HAND_OFF_X, "Moved X");
+            "Moved X".to_owned()
+        } else {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+                    [HAND_OFF_X],
+                )
+                .unwrap();
+            format!("Ticket {HAND_OFF_X}")
+        };
+        let other = stored_context(data, Some(HAND_OFF_Y));
+        let primary = stored_context(data, None);
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let replay = service.classified_synchronization_for_testing(
+            root,
+            &target,
+            OperationId::new(),
+            oid,
+            true,
+        );
+        let operation = replay.operation_id;
+        let observed = observations_while(
+            &[
+                root.to_owned(),
+                ticket_worktree(root, HAND_OFF_X),
+                ticket_worktree(root, HAND_OFF_Y),
+            ],
+            || {
+                assert_eq!(
+                    service
+                        .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                        .unwrap(),
+                    SynchronizationResult::Complete(SynchronizationOutcome::Published {
+                        target: target.clone(),
+                        oid,
+                    }),
+                    "{case}"
+                );
+            },
+        );
+        assert_eq!(observed, [0, 1, 0], "{case}: observations");
+        assert_eq!(stored_titles(data, HAND_OFF_X), [title], "{case}");
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+            Some(0),
+            "{case}"
+        );
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_Y)),
+            other,
+            "{case}: Y's rows"
+        );
+        assert_eq!(
+            stored_context(data, None),
+            primary,
+            "{case}: the primary's rows"
+        );
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert!(!index_pending(data, operation), "{case}");
+    }
+}
+
+/// A synchronization's hand-off row is begun, owing its item's context, at
+/// a time no earlier than its synchronization's classification, and that
+/// time is what decides whether a context stored while the row is open is
+/// current (design decision 32, carry C-5). The hand-off stops once its row
+/// is begun, before its index step. A whole refresh then stores the context,
+/// which the synchronization's local update left dirty. Stored from an
+/// observation that began in a later second than the row's time, the
+/// context reads current while the row is open; stored from one that began
+/// before the row's time, it is still owed. Either way the row is left as
+/// it was, and the synchronization's retry completes it.
+#[test]
+fn a_context_stored_after_a_sync_s_hand_off_began_reads_current() {
+    for (case, dated_by, current) in [
+        ("stored in a later second than the row's time", -2, true),
+        ("stored before the row's time", 60, false),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let replay = service.classified_synchronization_for_testing(
+            root,
+            &target,
+            OperationId::new(),
+            oid,
+            false,
+        );
+        let classified = time::OffsetDateTime::now_utc().unix_timestamp();
+        let operation = replay.operation_id;
+        let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+            [HAND_OFF_X],
+        )
+        .unwrap();
+        let outcome = SynchronizationOutcome::AlreadyCurrent {
+            target: target.clone(),
+            oid,
+        };
+
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::AfterCheckpointBeforeIndexStep);
+        assert_eq!(
+            service
+                .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome.clone())),
+            "{case}"
+        );
+        let stopped = time::OffsetDateTime::now_utc().unix_timestamp();
+        let begun = vec![(
+            Some(format!(
+                "synchronization-index-v1/ticket/{HAND_OFF_X}/{oid}"
+            )),
+            Some(HAND_OFF_X.to_owned()),
+            Some(format!(r#"["{HAND_OFF_X}"]"#)),
+            "authoritative_observed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )];
+        assert_eq!(rows_under(data, operation), begun, "{case}");
+        let observed_at: i64 = db
+            .query_row(
+                "SELECT observed_at FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            (classified..=stopped).contains(&observed_at),
+            "{case}: the row's time {observed_at}, classified at {classified}"
+        );
+        assert!(
+            !service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            "{case}: owed by the row"
+        );
+
+        db.execute(
+            "UPDATE operation_records SET observed_at = observed_at + ?2
+              WHERE operation_ulid = ?1",
+            rusqlite::params![operation.to_string(), dated_by],
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                service.refresh_repository(RefreshRepositoryRequest {
+                    root: root.into(),
+                    operation_id: OperationId::new(),
+                }),
+                Ok(RefreshOutcome::Refreshed { .. })
+            ),
+            "{case}"
+        );
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+            Some(0),
+            "{case}: stored by the refresh"
+        );
+        assert_eq!(rows_under(data, operation), begun, "{case}: the row");
+        assert_eq!(
+            service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            current,
+            "{case}"
+        );
+
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert!(
+            service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            "{case}: after the retry"
+        );
+        assert!(!index_pending(data, operation), "{case}");
+    }
+}

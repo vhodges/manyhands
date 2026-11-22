@@ -7,6 +7,7 @@ mod tests;
 #[path = "windows_resolution.rs"]
 mod windows_resolution;
 use super::*;
+use crate::repository::discovery::ContextKey;
 use crate::repository::integration::{artifacts, prepare, resolution, validate};
 use crate::repository::promotion::record::ChildExecution;
 use crate::repository::{keys::*, transport::*, *};
@@ -3682,7 +3683,9 @@ fn integrate_divergence(
                     .ok()
                     .and_then(|head| head.symbolic_target().map(str::to_owned))
                     .ok_or(SynchronizationError::ExternalChange)?;
+                mark_local_update(service, root, target)?;
                 fast_forward(&target_repository, &branch, local, incoming)?;
+                let _ = mark_local_update(service, root, target);
                 let tree = target_repository
                     .find_commit(incoming)
                     .map_err(|_| SynchronizationError::RecoveryRequired)?
@@ -3773,7 +3776,9 @@ fn integrate_divergence(
                         .ok()
                         .and_then(|head| head.symbolic_target().map(str::to_owned))
                         .ok_or(SynchronizationError::ExternalChange)?;
+                    mark_local_update(service, root, target)?;
                     fast_forward(&repository, &branch, local, candidate)?;
+                    let _ = mark_local_update(service, root, target);
                     service.observe_synchronization_integration_effect_in_window(
                         root,
                         owner,
@@ -5909,6 +5914,9 @@ impl RepositoryService {
             Opened::Taken(existing) => *existing,
         };
         let root = request.root.clone();
+        // The context this call's own local update changes, a merge or a
+        // fast-forward, which its hand-off indexes with no basis check.
+        let mut updated = Vec::new();
         if execution.is_none()
             && existing.is_none()
             && let Some(oid) = self.local_synchronization_replay(&request)?
@@ -5921,6 +5929,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
+                &[],
             );
         }
         // A local child is authority for its recorded pass, not for fresh
@@ -6002,6 +6011,7 @@ impl RepositoryService {
                     local_oid: oid,
                     reason: PublishPendingReason::NoPublicationRemote,
                 },
+                &[],
             );
         };
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
@@ -6048,7 +6058,7 @@ impl RepositoryService {
                 if let Some(authority) = record.authority() {
                     let outcome = authority_outcome(&request.target, authority);
                     return if record.index_pending() {
-                        self.synchronization_refresh(&request, Some(&target), outcome)
+                        self.synchronization_refresh(&request, Some(&target), outcome, &[])
                     } else {
                         Ok(SynchronizationResult::Complete(outcome))
                     };
@@ -6173,6 +6183,9 @@ impl RepositoryService {
                     },
                 )?;
                 evidence.local_oid = Some(merged);
+                // The frozen pass is this call's local update, whichever of
+                // its stages it applied.
+                updated = vec![hand_off_context(&request.target)];
                 pending_candidate = reconcile_pending_candidate(
                     self,
                     &root,
@@ -6438,6 +6451,7 @@ impl RepositoryService {
                     &target,
                     Authority::Published(actual),
                     observer,
+                    &updated,
                 );
             }
             match self.synchronization_publication_intent(&root, &owner)? {
@@ -6462,6 +6476,7 @@ impl RepositoryService {
                         &target,
                         authority,
                         observer,
+                        &updated,
                     );
                 }
                 PublicationIntent::Verified(_) | PublicationIntent::Attempt(_) => {
@@ -6571,6 +6586,9 @@ impl RepositoryService {
                     },
                 )?;
                 evidence.local_oid = Some(merged);
+                if merged != local {
+                    updated = vec![hand_off_context(&request.target)];
+                }
                 decision(self.checkpoint_synchronization_merge_applied(&root, &owner, &evidence)?)?;
             }
         } else {
@@ -6656,7 +6674,10 @@ impl RepositoryService {
                     if local_oid(&fresh)? != local {
                         return Err(SynchronizationError::ExternalChange);
                     }
+                    mark_local_update(self, &root, &request.target)?;
                     fast_forward(&fresh, selected.remote_ref(), local, integration.final_oid)?;
+                    let _ = mark_local_update(self, &root, &request.target);
+                    updated = vec![hand_off_context(&request.target)];
                     local_target(&root, &config.primary_branch, &request.target)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
                     if local_oid(&fresh)? != integration.final_oid {
@@ -6724,6 +6745,7 @@ impl RepositoryService {
                 &target,
                 authority,
                 observer,
+                &updated,
             );
         }
         evidence.push_oid = Some(candidate);
@@ -6780,6 +6802,7 @@ impl RepositoryService {
             &target,
             authority,
             observer,
+            &updated,
         )
     }
 
@@ -6794,6 +6817,7 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         authority: Authority,
         observer: &mut dyn SynchronizationObserver,
+        changed: &[ContextKey],
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let root = &request.root;
         observer.verified(
@@ -6818,6 +6842,7 @@ impl RepositoryService {
             request,
             Some(target),
             authority_outcome(&request.target, authority),
+            changed,
         )
     }
 
@@ -7078,26 +7103,66 @@ impl RepositoryService {
         }
         Ok(Some(oid))
     }
-    /// The index hand-off of a synchronization that came to `outcome`,
-    /// under a local `refresh` row of the synchronization's own ID; `target`
-    /// is its remote row's, for one that has one.
-    ///
-    /// The row's target says what it hands off. A synchronization with no
-    /// remote to publish to hands off under the row it bound its local head
-    /// with (`synchronization-local-v1/`). One that published, or found the
-    /// remote current, begins a row of its item, or of the primary (P-4):
-    /// `recovery::synchronization_index_target`, at the authoritative
-    /// commit. A lifecycle's child begins the plain row with no target that
-    /// its parent's records accept, whether its parent runs it or it is
-    /// taken up under its own ID (`operation resume`): it is known by its
-    /// parent's record (`lifecycle_record::is_child`), the one the begin's
-    /// check reads. A row with no target that an older build began under
-    /// the ID is taken up, and a completed one is the hand-off done, as
-    /// before.
+    /// The index hand-off of a synchronization that came to `outcome`, and
+    /// whose own local update changed `changed`: its local index step
+    /// (`synchronization_index_hand_off`), and then, for one with a remote
+    /// row, of `target`, that row's debt cleared.
     fn synchronization_refresh(
         &self,
         request: &SynchronizeRemoteRequest,
         target: Option<&RemoteOperationTarget>,
+        outcome: SynchronizationOutcome,
+        changed: &[ContextKey],
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        let indexed = self.synchronization_index_hand_off(request, changed, outcome)?;
+        let SynchronizationResult::Complete(outcome) = indexed else {
+            return Ok(indexed);
+        };
+        let finished = match target {
+            None => true,
+            Some(target) => hand_off_step(
+                self.finish_synchronization_index(&request.root, request.operation_id, target)
+                    .map(|()| true),
+            )?,
+        };
+        Ok(if finished {
+            SynchronizationResult::Complete(outcome)
+        } else {
+            SynchronizationResult::IndexPending(IndexPending::new(outcome))
+        })
+    }
+
+    /// The local index step of a synchronization that came to `outcome`,
+    /// under a local `refresh` row of the synchronization's own ID:
+    /// `Complete` once the index holds what the synchronization changed,
+    /// and `IndexPending` while it is owed.
+    ///
+    /// The row's target says what it hands off. A synchronization that
+    /// published, or found the remote current, begins a row of its item, or
+    /// of the primary (P-4): `recovery::synchronization_index_target`, at the
+    /// authoritative commit, owing that context. Its step indexes that
+    /// context alone, never the whole repository. A merge or a fast-forward
+    /// this call made (`changed`) is indexed with no basis check
+    /// (`index_contexts`): it moved the context. Otherwise the context is
+    /// indexed only when its basis no longer holds or it is marked dirty
+    /// (`complete_hand_off_unobserved`), as an earlier call's local update,
+    /// a conflict's resolution or a commit made outside Manyhands leaves it;
+    /// a push alone observes nothing.
+    ///
+    /// What keeps today's refresh of the whole repository: a
+    /// synchronization with no remote to publish to, which hands off under
+    /// the row it bound its local head with (`synchronization-local-v1/`); a
+    /// lifecycle's child, which begins the plain row with no target that its
+    /// parent's records accept, whether its parent runs it or it is taken
+    /// up under its own ID (`operation resume`): it is known by its parent's
+    /// record (`lifecycle_record::is_child`), the one the begin's check
+    /// reads; and a row with no target that an older build began under the
+    /// ID, which is taken up as it is. A completed one of those is the
+    /// hand-off done, as before.
+    fn synchronization_index_hand_off(
+        &self,
+        request: &SynchronizeRemoteRequest,
+        changed: &[ContextKey],
         outcome: SynchronizationOutcome,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let authoritative = !matches!(outcome, SynchronizationOutcome::PublishPending { .. });
@@ -7132,38 +7197,65 @@ impl RepositoryService {
         if let Some((_, _, _, _, step)) = &row {
             refuse_abandoned_refresh(request, step.as_deref())?;
         }
+        let older = row
+            .as_ref()
+            .is_some_and(|(_, _, stored, _, _)| stored.is_empty());
         let completed = row.is_some_and(|(root, action, stored, state, _)| {
             root == request.root.to_string_lossy()
                 && action == "refresh"
                 && (stored == matcher || (authoritative && stored.is_empty()))
                 && state == "completed"
         });
-        let refreshed = completed
-            || hand_off_step(
-                self.refresh_repository_target(
-                    RefreshRepositoryRequest {
-                        root: request.root.clone(),
-                        operation_id: request.operation_id,
-                    },
+        let refresh = RefreshRepositoryRequest {
+            root: request.root.clone(),
+            operation_id: request.operation_id,
+        };
+        let indexed = completed
+            || hand_off_step(if authoritative && !lifecycle_child && !older {
+                self.index_synchronization_hand_off(
+                    refresh,
                     &matcher,
-                    true,
+                    hand_off_context(&request.target),
+                    changed,
                 )
-                .map(|refreshed| matches!(refreshed, RefreshOutcome::Refreshed { .. })),
-            )?;
-        let finished = refreshed
-            && match target {
-                None => true,
-                Some(target) => hand_off_step(
-                    self.finish_synchronization_index(&request.root, request.operation_id, target)
-                        .map(|()| true),
-                )?,
-            };
-        Ok(if finished {
+            } else {
+                self.refresh_repository_target(refresh, &matcher, true)
+                    .map(|refreshed| matches!(refreshed, RefreshOutcome::Refreshed { .. }))
+            })?;
+        Ok(if indexed {
             SynchronizationResult::Complete(outcome)
         } else {
             SynchronizationResult::IndexPending(IndexPending::new(outcome))
         })
     }
+}
+/// The context a synchronization of `target` changes and publishes: the
+/// item's, or the primary.
+fn hand_off_context(target: &SynchronizationTarget) -> ContextKey {
+    match target {
+        SynchronizationTarget::Primary => ContextKey::Primary,
+        SynchronizationTarget::Context { item_id, .. } => ContextKey::Item(item_id.clone()),
+    }
+}
+/// Marks the context a synchronization of `target` updates dirty, as a
+/// checkpoint marks the context it commits to, under the repository lease
+/// the update holds. It is marked once the update's intent is recorded and
+/// before Git is touched, so the context reads as owed an indexing from
+/// before the update, as a row's owed contexts do from its creation; no
+/// index store can clear the mark before the update is made, since a store
+/// takes that lease. It is marked again once the update is made.
+fn mark_local_update(
+    service: &RepositoryService,
+    root: &Path,
+    target: &SynchronizationTarget,
+) -> Result<(), SynchronizationError> {
+    crate::repository::mark_contexts_dirty(
+        &service.registry_path,
+        root,
+        &[hand_off_context(target)],
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .map_err(SynchronizationError::from)
 }
 /// Whether a step of a synchronization's index hand-off that answered
 /// `result` is done (`true`), or owed to the synchronization's resume or
@@ -7192,6 +7284,75 @@ fn hand_off_step(result: Result<bool, RepositoryError>) -> Result<bool, Synchron
             Err(error.into())
         }
         Err(_) => Ok(false),
+    }
+}
+#[cfg(test)]
+impl RepositoryService {
+    /// A synchronization of `target` under `operation`, classified with no
+    /// transport as having published `oid` (`published`), or as having
+    /// found the remote current at it: its reservation's own checkpoints
+    /// stand in for the fetch and the push, and its remote row is completed,
+    /// owing only its index hand-off, with no local row under its ID. The
+    /// publication remote's plan is `origin`'s, recorded in the index. The
+    /// request that replays it, which runs that hand-off, is returned.
+    pub(in crate::repository) fn classified_synchronization_for_testing(
+        &self,
+        root: &Path,
+        target: &SynchronizationTarget,
+        operation: OperationId,
+        oid: git2::Oid,
+        published: bool,
+    ) -> SynchronizeRemoteRequest {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(self, root, |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let RemoteReservationOutcome::Reserved(owner) = self
+            .reserve_remote_operation(root, operation, &target.operation_target(&plan))
+            .unwrap()
+        else {
+            panic!("the classified synchronization's reservation");
+        };
+        self.checkpoint_synchronization(
+            root,
+            &owner,
+            Checkpoint::FetchPrepared,
+            &Evidence::default(),
+        )
+        .unwrap();
+        self.remote_safe_point(root, &owner, RemoteOperationSafePoint::BeforeFetch)
+            .unwrap();
+        let observation =
+            RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", oid, Some(oid))
+                .unwrap();
+        reservation::commit_observation_batch(self, root, &owner, &plan, &[observation], 1)
+            .unwrap();
+        let evidence = Evidence {
+            expected_oid: Some(oid),
+            local_oid: Some(oid),
+            tracking_oid: Some(oid),
+            primary_tracking_oid: Some(oid),
+            push_oid: Some(oid),
+            push_advertised_oid: Some(oid),
+        };
+        self.checkpoint_synchronization(root, &owner, Checkpoint::PushVerified, &evidence)
+            .unwrap();
+        let authority = if published {
+            Authority::Published(oid)
+        } else {
+            Authority::AlreadyCurrent(oid)
+        };
+        self.classify_synchronization(root, &owner, authority)
+            .unwrap();
+        SynchronizeRemoteRequest {
+            root: root.into(),
+            operation_id: operation,
+            target: target.clone(),
+            approval: None,
+            confirmed_identity: None,
+            restart: false,
+        }
     }
 }
 /// Record where a synchronization began when the evidence does not say, as the
@@ -7826,6 +7987,7 @@ impl RepositoryService {
             &target,
             Authority::Published(local),
             observer,
+            &[],
         )
     }
 }
@@ -7928,7 +8090,7 @@ impl RepositoryService {
                     .ok_or(SynchronizationError::RecoveryRequired)?,
             );
             return if inspection.index_pending() {
-                self.synchronization_refresh(request, Some(&record.target), outcome)
+                self.synchronization_refresh(request, Some(&record.target), outcome, &[])
             } else {
                 Ok(SynchronizationResult::Complete(outcome))
             }

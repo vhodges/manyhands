@@ -5,12 +5,11 @@
 //! the whole refresh (`index refresh`, a poll's hand-off) observes only the
 //! contexts that changed since they were stored.
 //!
-//! The rows of the other commands of the table are added by the tasks that
-//! change them: `item sync`,
-//! `repo sync`, the sync half of `comment add`, and the commands that index
-//! through a synchronization (`conflict resolve`, `item republish` and the
-//! comment hand-off repair) by Task 16; `ticket close` and `document
-//! promote` by Task 22.
+//! A synchronization (`item sync`, `repo sync`, the sync half of `comment
+//! add`) indexes the context it merged into or fast-forwarded, and nothing
+//! when it changed nothing locally; the comment hand-off repair indexes the
+//! comment's context (Task 16). The rows of `ticket close` and `document
+//! promote` are added by Task 22.
 
 use std::{
     cell::Cell,
@@ -811,6 +810,237 @@ fn poll_once(f: &Fixture) -> Watched {
     watched
 }
 
+/// The synchronization target of `TICKET`'s context.
+fn ticket_target() -> SynchronizationTarget {
+    SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: item(TICKET),
+    }
+}
+
+/// Main moves on by a commit made outside Manyhands; its head.
+fn main_moves_on(f: &Fixture) -> git2::Oid {
+    let repository = Repository::open(&f.root).unwrap();
+    write(&f.root, "docs/incoming.md", "Incoming.\n");
+    commit(&repository, &["docs/incoming.md"]);
+    repository.head().unwrap().target().unwrap()
+}
+
+/// `TICKET`'s context merges main, as a synchronization's local update
+/// merges it; the merge.
+fn merge_main_into_ticket(f: &Fixture) -> git2::Oid {
+    let context = Repository::open(f.worktree(TICKET)).unwrap();
+    let ours = context.head().unwrap().peel_to_commit().unwrap();
+    let theirs = context
+        .find_commit(context.refname_to_id("refs/heads/main").unwrap())
+        .unwrap();
+    let mut index = context.merge_commits(&ours, &theirs, None).unwrap();
+    assert!(!index.has_conflicts());
+    let tree = context
+        .find_tree(index.write_tree_to(&context).unwrap())
+        .unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let merged = context
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("Merge primary into ticket {TICKET}"),
+            &tree,
+            &[&ours, &theirs],
+        )
+        .unwrap();
+    context
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    merged
+}
+
+/// The repository's configuration names `origin` as its publication
+/// remote, committed on main, and the index holds it.
+fn publish_to_origin(f: &Fixture) {
+    let repository = Repository::open(&f.root).unwrap();
+    repository
+        .remote("origin", "ssh://fixture@127.0.0.1:1/fixture")
+        .unwrap();
+    let configuration = f.root.join(canonical::CONFIG_PATH);
+    let text = fs::read_to_string(&configuration).unwrap() + "publication_remote = \"origin\"\n";
+    fs::write(&configuration, text).unwrap();
+    commit(&repository, &[canonical::CONFIG_PATH]);
+    let refreshed = f.execute(Mutation::IndexRefresh(IndexRefreshInput {
+        root: f.root.clone(),
+    }));
+    assert_eq!(refreshed.code, ResultCode::Ok, "{refreshed:?}");
+}
+
+/// A synchronization of `target` that published `oid`, its push stood in
+/// for by its classification, runs its hand-off: what the synchronization
+/// indexes once its push is verified.
+fn synchronized(f: &Fixture, target: SynchronizationTarget, oid: git2::Oid) -> Watched {
+    let replay = f.service.classified_synchronization_for_testing(
+        &f.root,
+        &target,
+        OperationId::new(),
+        oid,
+        true,
+    );
+    f.watch(|| {
+        let synced = f
+            .service
+            .synchronize_remote(replay, &mut SessionCredentials::new(NoPassphrase))
+            .unwrap();
+        assert!(
+            matches!(synced, SynchronizationResult::Complete(_)),
+            "{synced:?}"
+        );
+    })
+}
+
+/// Main moves on, and `item sync` of `TICKET` merges it into the context
+/// and publishes the merge: the merge is in `TICKET`'s context alone.
+fn item_sync_merged(f: &Fixture) -> Watched {
+    main_moves_on(f);
+    let merged = merge_main_into_ticket(f);
+    synchronized(f, ticket_target(), merged)
+}
+
+/// `item sync` of `TICKET` publishes its context as it is: nothing local
+/// changed.
+fn item_sync_pushed(f: &Fixture) -> Watched {
+    let head = Repository::open(f.worktree(TICKET))
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    synchronized(f, ticket_target(), head)
+}
+
+/// `repo sync` brings main a commit ahead (made here, standing in for
+/// the fast-forward to the remote's) and publishes it.
+fn repo_sync(f: &Fixture) -> Watched {
+    let head = main_moves_on(f);
+    synchronized(f, SynchronizationTarget::Primary, head)
+}
+
+/// `TICKET`'s comment, as `comment add` makes it.
+fn comment_request() -> PublishCommentRequest {
+    PublishCommentRequest {
+        comment: SubmitCommentRequest {
+            target: AuthoringTarget {
+                root: PathBuf::new(),
+                kind: AuthoringKind::Ticket,
+                item_id: item(TICKET),
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            comment_id: item(COMMENT),
+            parent_id: None,
+            body: "A comment.\n".to_owned(),
+            expected_destination: ExpectedPathObservation::Missing,
+        },
+        approval: None,
+        confirmed_identity: None,
+    }
+}
+
+/// `comment add` with a publication remote: its local checkpoint, and then
+/// its synchronization, whose push is stood in for by its classification.
+fn comment_add_synced(f: &Fixture) -> Watched {
+    publish_to_origin(f);
+    let mut request = comment_request();
+    request.comment.target.root = f.root.clone();
+    f.watch(|| {
+        let added = f
+            .service
+            .submit_comment_with(request, None, false, false, &mut |synchronization| {
+                let head = Repository::open(f.worktree(TICKET))
+                    .unwrap()
+                    .head()
+                    .unwrap()
+                    .target()
+                    .unwrap();
+                let replay = f.service.classified_synchronization_for_testing(
+                    &f.root,
+                    &synchronization.target,
+                    synchronization.operation_id,
+                    head,
+                    true,
+                );
+                Some(
+                    f.service
+                        .synchronize_remote(replay, &mut SessionCredentials::new(NoPassphrase)),
+                )
+            })
+            .unwrap();
+        let CommentSubmissionOutcome::Saved {
+            publication,
+            indexing,
+            ..
+        } = added
+        else {
+            panic!("the comment was not saved");
+        };
+        assert!(
+            matches!(publication, CommentPublicationState::Published { .. }),
+            "{publication:?}"
+        );
+        assert!(!indexing.local_pending && !indexing.remote_pending);
+    })
+}
+
+/// A comment of `TICKET` whose checkpoint is committed and whose index
+/// step did not run; main moves on; the comment's retry repairs its
+/// hand-off before it would publish.
+fn comment_handoff_repair(f: &Fixture) -> Watched {
+    let mut request = comment_request();
+    request.comment.target.root = f.root.clone();
+    let operation_id = request.comment.target.operation_id;
+    *f.service.failure_point.lock().unwrap() = Some(FailurePoint::AfterCheckpointBeforeIndexStep);
+    let added = f
+        .service
+        .submit_comment(request, &mut SessionCredentials::new(NoPassphrase))
+        .unwrap();
+    let CommentSubmissionOutcome::Saved { indexing, .. } = added else {
+        panic!("the comment was not saved");
+    };
+    assert!(indexing.local_pending);
+    main_moves_on(f);
+    f.watch(|| {
+        let retried = f
+            .service
+            .retry_comment_publication(
+                RetryCommentPublicationRequest {
+                    root: f.root.clone(),
+                    operation_id,
+                    approval: None,
+                    confirmed_identity: None,
+                    restart: false,
+                },
+                &mut SessionCredentials::new(NoPassphrase),
+            )
+            .unwrap();
+        let CommentSubmissionOutcome::Saved {
+            publication,
+            indexing,
+            ..
+        } = retried
+        else {
+            panic!("the comment's retry saved nothing");
+        };
+        assert!(!indexing.local_pending, "{indexing:?}");
+        assert!(
+            matches!(
+                publication,
+                CommentPublicationState::Pending {
+                    reason: CommentPublicationPendingReason::NoPublicationRemote
+                }
+            ),
+            "{publication:?}"
+        );
+    })
+}
+
 /// A row of the table: the command, how it runs, the contexts it indexes,
 /// and the contexts whose rows it deletes.
 type Row = (
@@ -831,10 +1061,14 @@ type Row = (
 /// stores none of them. `repo identity-set` indexes nothing, as before.
 #[test]
 fn each_command_indexes_only_its_contexts() {
-    // `conflict resolve`, `item republish` and the comment hand-off repair
-    // index through a synchronization: their rows are Task 16's, with the
-    // syncs'. See the module's description for the other tasks' rows.
-    let rows: [Row; 20] = [
+    // A synchronization's push is stood in for by its classification, as
+    // `poll once`'s fetch is by its advertisement. `conflict resolve` and
+    // `item republish` index through their synchronization's hand-off once
+    // it publishes, as the synchronization rows do: a resolved context is
+    // marked dirty and indexed alone, and a republish changes nothing
+    // locally. With no transport here they come to no hand-off, so they have
+    // no row; see the module's description for the other tasks' rows.
+    let rows: [Row; 25] = [
         ("ticket save", ticket_save, &["TICKET"], &[]),
         ("ticket create", ticket_create, &["NEW"], &[]),
         ("ticket slug-assign", slug_assign, &["TICKET"], &[]),
@@ -870,6 +1104,26 @@ fn each_command_indexes_only_its_contexts() {
         ("repo identity-set", repo_identity_set, &[], &[]),
         ("index refresh", index_refresh, &["TICKET"], &[]),
         ("poll once", poll_once, &["primary"], &[]),
+        (
+            "item sync (merged main)",
+            item_sync_merged,
+            &["TICKET"],
+            &[],
+        ),
+        ("item sync (push only)", item_sync_pushed, &[], &[]),
+        ("repo sync", repo_sync, &["primary"], &[]),
+        (
+            "comment add (with its sync)",
+            comment_add_synced,
+            &["TICKET"],
+            &[],
+        ),
+        (
+            "comment hand-off repair",
+            comment_handoff_repair,
+            &["TICKET"],
+            &[],
+        ),
     ];
     // Every row runs, and every row that is not as the table says is named.
     let mut wrong = Vec::new();

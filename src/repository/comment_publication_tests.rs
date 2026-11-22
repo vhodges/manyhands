@@ -2532,3 +2532,51 @@ fn a_pending_publication_keeps_the_operation_its_synchronization_was_refused_for
     assert_eq!(error.operation, RepositoryOperation::SubmitComment);
     assert_eq!(error.blocker(), Some(&blocker));
 }
+
+/// A comment's first submission proves its receipt from Git once: the local
+/// checkpoint proves it and records it, and the publication that follows
+/// takes the recorded receipt, of the same commit, without proving it again.
+/// The receipt it answers with is the recorded one.
+#[test]
+fn a_comment_receipt_is_proved_once() {
+    let f = Fixture::new();
+    let request = f.request();
+    let before = comment_publication::receipt_proofs_for_testing();
+    let (receipt, publication, indexing) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert_eq!(
+        comment_publication::receipt_proofs_for_testing() - before,
+        1,
+        "the receipt's proofs"
+    );
+    assert!(matches!(
+        publication,
+        CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::NoPublicationRemote
+        }
+    ));
+    assert!(!indexing.local_pending && !indexing.remote_pending);
+    assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+    let (checkpoint, created_at): (Option<String>, Option<String>) = f
+        .db()
+        .query_row(
+            "SELECT checkpoint_oid, created_at FROM comment_publication_bindings
+              WHERE operation_ulid = ?1",
+            [receipt.operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(checkpoint, Some(receipt.checkpoint_oid.to_string()));
+    assert!(created_at.is_some());
+}
