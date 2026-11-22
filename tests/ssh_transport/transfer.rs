@@ -227,6 +227,7 @@ fn reconnect_host_policy() -> Result<(), FixtureError> {
 /// rotated host key, so the second push sends nothing. (Was: a fresh
 /// reconnect before each transfer was refused by a rejecting server or a
 /// rotated host key.)
+#[allow(clippy::result_large_err)] // The scoped transport's owned, redacted error contract.
 fn reconnect(host: bool) -> Result<(), FixtureError> {
     let case = Case::new(false)?;
     let pushed = commit(&case)?;
