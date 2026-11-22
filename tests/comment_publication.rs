@@ -998,8 +998,11 @@ fn remote_index_pending() -> Result<(), FixtureError> {
     let cursor = pair.server.receive_updates().len();
     let data = pair.a.data.clone();
     let mut provider = Provider::new(Arc::new(AtomicUsize::new(0)));
+    // The publication's hand-off stops at its one index transaction: a
+    // push alone indexes nothing the comment's checkpoint did not, so its
+    // row's completion is that transaction (Task 16b).
     provider.action = Some(Box::new(move || {
-        rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap().execute_batch("CREATE TRIGGER stop_remote_discovery BEFORE INSERT ON discovered_comments BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
+        rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap().execute_batch("CREATE TRIGGER stop_remote_discovery BEFORE UPDATE ON operation_records WHEN NEW.action='refresh' AND NEW.state='completed' BEGIN SELECT RAISE(ABORT,'fixed failure'); END;").unwrap();
     }));
     let mut session = SessionCredentials::new(provider);
     let (receipt, state, index) = saved(fixed(pair.a.service.submit_comment(
