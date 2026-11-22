@@ -16749,7 +16749,17 @@ fn classified_synchronization(
     plan: &RemoteRefPlan,
     target: &SynchronizationTarget,
 ) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
-    let operation = OperationId::new();
+    classified_synchronization_under(service, root, plan, target, OperationId::new())
+}
+
+/// `classified_synchronization`, under `operation`.
+fn classified_synchronization_under(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    target: &SynchronizationTarget,
+    operation: OperationId,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
     let RemoteReservationOutcome::Reserved(owner) = service
         .reserve_remote_operation(root, operation, &target.operation_target(plan))
         .unwrap()
@@ -17082,6 +17092,178 @@ fn a_hand_off_row_from_an_older_build_still_replays() {
             usize::from(state != "completed"),
             "{case}: observations"
         );
+    }
+}
+
+/// A lifecycle's child, a close's or a promotion's synchronization of its
+/// item or of the primary, that is taken up under its own ID with no
+/// parent's execution (`operation resume <child>`, or a retry of it) hands
+/// off under the row its parent's records accept, a refresh with no target,
+/// and completes: the remote row's debt is cleared and that row, completed,
+/// is the one under the ID. A child is known by its parent's record, not by
+/// who runs it, so it cannot begin the per-item row that the records
+/// refuse it and be left owing a hand-off that no resume can make.
+#[test]
+fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
+    use crate::repository::{
+        ClosureExpectation, PromotionExpectation,
+        closure::record::{self as closure, ClosureKind, ClosureStep},
+        promotion::record::{self as promotion, ChildRole, IntegrationKind, PromotionStep},
+    };
+    const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDC";
+    let document = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: DOCUMENT.parse().unwrap(),
+    };
+    for (case, close, role, target) in [
+        (
+            "a close's context child",
+            true,
+            ChildRole::Context,
+            ticket_target(HAND_OFF_X),
+        ),
+        (
+            "a close's primary child",
+            true,
+            ChildRole::Primary,
+            SynchronizationTarget::Primary,
+        ),
+        (
+            "a promotion's context child",
+            false,
+            ChildRole::Context,
+            document.clone(),
+        ),
+        (
+            "a promotion's primary child",
+            false,
+            ChildRole::Primary,
+            SynchronizationTarget::Primary,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let plan = configure_hand_off_plan(&service, root);
+        let head = git2::Repository::open(root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        // The parent's record, at the step its child of `role` is begun
+        // at: confirmed for the context's, integrated for the primary's.
+        let primary = role == ChildRole::Primary;
+        let child = state::with_transaction(&service, root, |tx, id| {
+            let (context, primary_child) = if close {
+                let mut r = closure::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &HAND_OFF_X.parse().unwrap(),
+                    ClosureExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                    ClosureKind::Existing,
+                )?;
+                if primary {
+                    r.context_oid = Some(head);
+                    r.step = ClosureStep::ContextSynchronized;
+                    closure::save_record(tx, id, &r)?;
+                    r.base_oid = Some(head);
+                    r.integration_kind = Some(IntegrationKind::Merged);
+                    r.step = ClosureStep::Integrating;
+                    closure::save_record(tx, id, &r)?;
+                    r.integration_oid = Some(head);
+                    r.step = ClosureStep::Integrated;
+                    closure::save_record(tx, id, &r)?;
+                }
+                let r = closure::next_attempt(tx, id, r.operation_id, role)?;
+                (r.context_sync_id, r.primary_sync_id)
+            } else {
+                let mut r = promotion::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &DOCUMENT.parse().unwrap(),
+                    PromotionExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                )?;
+                if primary {
+                    r.context_oid = Some(head);
+                    r.step = PromotionStep::ContextSynchronized;
+                    promotion::save_record(tx, id, &r)?;
+                    r.base_oid = Some(head);
+                    r.integration_kind = Some(IntegrationKind::Merged);
+                    r.step = PromotionStep::Integrating;
+                    promotion::save_record(tx, id, &r)?;
+                    r.integration_oid = Some(head);
+                    r.step = PromotionStep::Integrated;
+                    promotion::save_record(tx, id, &r)?;
+                }
+                let r = promotion::next_attempt(tx, id, r.operation_id, role)?;
+                (r.context_sync_id, r.primary_sync_id)
+            };
+            Ok(if primary { primary_child } else { context }.unwrap())
+        })
+        .unwrap();
+        let (replay, outcome) =
+            classified_synchronization_under(&service, root, &plan, &target, child);
+
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert_eq!(
+            rows_under(data.path(), child)
+                .into_iter()
+                .map(|(target, item, owed, state, _)| (target, item, owed, state))
+                .collect::<Vec<_>>(),
+            [(Some(String::new()), None, None, "completed".to_owned())],
+            "{case}"
+        );
+        assert!(!index_pending(data.path(), child), "{case}");
+    }
+}
+
+/// A step of a synchronization's hand-off that is refused for its ID
+/// (`OperationMismatch`, `OperationAbandoned`) is answered as that refusal,
+/// which no resume or retry gets past; any other failure is owed, and is
+/// reported as `IndexPending` for the same request to complete.
+#[test]
+fn a_hand_off_step_answers_a_refusal_of_its_id_and_owes_any_other_failure() {
+    use RepositoryErrorKind as Kind;
+    let failed = |kind| {
+        Err(RepositoryError::new(
+            RepositoryOperation::RefreshRepository,
+            None,
+            kind,
+            "hand-off step",
+        ))
+    };
+    assert!(matches!(hand_off_step(Ok(true)), Ok(true)));
+    assert!(matches!(hand_off_step(Ok(false)), Ok(false)));
+    for kind in [Kind::OperationMismatch, Kind::OperationAbandoned] {
+        assert!(
+            matches!(
+                hand_off_step(failed(kind)),
+                Err(SynchronizationError::Repository(error)) if error.kind == kind
+            ),
+            "{kind:?}"
+        );
+    }
+    for kind in [
+        Kind::RecoveryRequired,
+        Kind::RepositoryBusy,
+        Kind::IndexUnavailable,
+        Kind::RepositoryNotRegistered,
+        Kind::Io,
+        Kind::Sqlite,
+        Kind::Git,
+        Kind::InjectedFailure,
+    ] {
+        assert!(matches!(hand_off_step(failed(kind)), Ok(false)), "{kind:?}");
     }
 }
 

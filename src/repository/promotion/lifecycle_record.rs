@@ -809,17 +809,7 @@ pub(in super::super) fn validate_local_identity(
     if parent {
         return Err(mismatch(kind));
     }
-    let child: Option<i64> = db
-        .query_row(
-            &format!(
-                "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
-            ),
-            [op],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|_| state::recovery_required())?;
-    if let Some(id) = child {
+    if let Some(id) = child_repository(kind, db, op)? {
         let registered: String = db
             .query_row(
                 "SELECT root_path FROM repositories WHERE id=?1",
@@ -840,6 +830,47 @@ pub(in super::super) fn validate_local_identity(
         }
     }
     Ok(())
+}
+/// The repository of the `kind` parent whose child `op` is: its context's
+/// or its primary's synchronization. `None` when `op` is no child of that
+/// table, or the table is not there yet.
+fn child_repository(
+    kind: LifecycleKind,
+    db: &Connection,
+    op: &str,
+) -> Result<Option<i64>, RepositoryError> {
+    let table = kind.table();
+    if !crate::repository::recovery::has_table(db, table).map_err(|_| state::recovery_required())? {
+        return Ok(None);
+    }
+    db.query_row(
+        &format!(
+            "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
+        ),
+        [op],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|_| state::recovery_required())
+}
+/// Whether `op` is a lifecycle's child, a promotion's or a closure's, as
+/// its parent's record says, whoever runs it: the ID under which
+/// `validate_local_identity` lets the local journal begin only the plain
+/// refresh hand-off, with no target.
+pub(in super::super) fn is_child(
+    db: &Connection,
+    op: OperationId,
+) -> Result<bool, RepositoryError> {
+    let op = op.to_string();
+    for kind in [
+        LifecycleKind::DocumentPromotion,
+        LifecycleKind::TicketClosure,
+    ] {
+        if child_repository(kind, db, &op)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 pub(in super::super) fn audit<R: ParentRecord>(db: &Connection) -> Result<(), RepositoryError> {
     R::validate_schema(db)?;
