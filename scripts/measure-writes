@@ -10,8 +10,9 @@ export LC_ALL=C
 # Phases, all on one persistent scratch root:
 #
 #   measure-writes setup --root DIR --build-ref REF [--local-only] [--ssh-port N]
+#                        [--key-file PATH]
 #   measure-writes trust-host --root DIR [--fingerprint SHA256:...]
-#   measure-writes run --root DIR [--runs N] --out CSV
+#   measure-writes run --root DIR [--runs N] --out CSV [--timeline FILE]
 #
 # setup builds the CLI from `git archive REF` of the main checkout, makes the
 # scratch environment, the replica and (unless --local-only) a bare remote at
@@ -20,6 +21,18 @@ export LC_ALL=C
 # printed host fingerprint. trust-host pins that host and polls once to
 # materialize every open context. run takes the timings.
 #
+# The build goes to DIR/target. That may be a symlink, made before setup, to
+# the build directory of an earlier root, so that the build is incremental;
+# setup keeps it, and only the binary it builds there is run.
+#
+# setup generates a throwaway key with no passphrase under DIR/home, unless
+# --key-file names one to reuse: an existing throwaway private key with no
+# passphrase, by an absolute path outside what setup removes (DIR/home among
+# them) and outside real data. It is imported by reference (`key import`, with
+# PATH.pub as its public key when that file exists) and selected; it is never
+# copied or read by this script. Its line is then expected to be in
+# ~/.ssh/authorized_keys already.
+#
 # run writes the CSV `command,run,seconds,build_ref`: ticket save, document
 # save, ticket create, comment add, "comment add (local checkpoint)" (the time
 # until the CLI's first publication progress line, NA when there is none),
@@ -27,6 +40,12 @@ export LC_ALL=C
 # --confirm), index refresh and poll once. The fixed ticket (the oldest open
 # one with a context) and the fixed document (the first managed one) are
 # chosen once per root. The promote and close run on items the script creates.
+#
+# --timeline FILE also writes `command,run,start,end`, one line per row of the
+# CSV, with the wall-clock times (Unix seconds, to the microsecond) that
+# bound the row's window, so that each window can be matched against the SSH
+# server's log (`journalctl -u sshd -o short-unix`). The end of a row whose
+# seconds are NA is NA. The CSV is the same with or without it.
 #
 # --local-only skips what needs a remote (item sync, promote, close, poll
 # once, the whole-command comment add): its remote is an unreachable address,
@@ -54,8 +73,9 @@ usage() {
     cat >&2 <<EOF
 usage:
   $program setup --root DIR --build-ref REF [--local-only] [--ssh-port N]
+                 [--key-file PATH]
   $program trust-host --root DIR [--fingerprint SHA256:...]
-  $program run --root DIR [--runs N] --out CSV
+  $program run --root DIR [--runs N] --out CSV [--timeline FILE]
 EOF
     exit 2
 }
@@ -90,6 +110,29 @@ protected_paths() {
 root=
 data_dir=
 cli=
+build_dir=
+key_file=
+
+# check_build_dir: $root/target, where setup builds, is a directory of the root
+# or a symlink to an earlier root's build directory, for an incremental build.
+# Wherever it resolves, it must be clear of real data. Sets build_dir to where
+# it resolves.
+check_build_dir() {
+    build_dir=$(realpath -m -- "$root/target")
+    if [[ -L $root/target && ! -d $build_dir ]]; then
+        die "$root/target is a symlink to $build_dir, which is not a directory"
+    fi
+    local protected
+    while IFS= read -r protected; do
+        [[ -n $protected ]] || continue
+        if is_under "$build_dir" "$protected"; then
+            die "refusing the build directory $root/target: it resolves to $build_dir, inside $protected"
+        fi
+        if is_under "$protected" "$build_dir"; then
+            die "refusing the build directory $root/target: it resolves to $build_dir, which contains $protected"
+        fi
+    done < <(protected_paths)
+}
 
 # check_root: refuses a root that is, contains or lies inside real data. Sets
 # the derived scratch paths.
@@ -112,6 +155,7 @@ check_root() {
     data_dir=$root/data
     cli=$root/target/release/manyhands-cli
     is_under "$data_dir" "$root" || die "MANYHANDS_DATA_DIR $data_dir is not under $root"
+    check_build_dir
 }
 
 # check_cli: the binary this script built, and nothing else, may run, and only
@@ -119,8 +163,10 @@ check_root() {
 check_cli() {
     [[ -f $cli && -x $cli ]] || die "no built CLI at $cli: run setup first"
     local resolved path
+    check_build_dir
     resolved=$(realpath -- "$cli")
-    is_under "$resolved" "$root" || die "the CLI binary $resolved is not under $root"
+    [[ $resolved == "$build_dir/release/manyhands-cli" ]] \
+        || die "the CLI binary $cli resolves to $resolved, not to the one setup built in $root/target"
     is_under "$data_dir" "$root" || die "MANYHANDS_DATA_DIR $data_dir is not under $root"
     for path in "$data_dir" "$root/home" "$root/xdg-data" "$root/xdg-config" \
         "$root/xdg-state" "$root/xdg-cache" "$root/tmp" "$root/gitconfig"; do
@@ -163,6 +209,16 @@ make_scratch_dirs() {
     mkdir -p "$root" "$data_dir" "$root/home" "$root/xdg-data" "$root/xdg-config" \
         "$root/xdg-state" "$root/xdg-cache" "$root/tmp" "$root/inputs"
     : >"$root/gitconfig"
+}
+
+# setup_removes: what setup removes when it reuses a root, one path a line.
+# The build directory is not among them, and the archive build_cli unpacks
+# ($root/src) is removed before each build.
+setup_removes() {
+    printf '%s\n' "${root:?}/replica" "${root:?}/remote.git" "$data_dir" "${root:?}/home" \
+        "${root:?}/xdg-data" "${root:?}/xdg-config" "${root:?}/xdg-state" \
+        "${root:?}/xdg-cache" "${root:?}/tmp" "${root:?}/inputs" \
+        "${root:?}/gitconfig" "${root:?}/measure-writes.settings"
 }
 
 # ----------------------------------------------------------------- settings
@@ -328,15 +384,57 @@ setup_replica() {
     note "replica has $(scratch_git -C "$replica" for-each-ref --format='x' refs/heads/manyhands | wc -l) local manyhands/* branches; remote is $url"
 }
 
+# check_key_file: --key-file names an existing regular file by an absolute
+# path, outside everything setup removes or rebuilds and outside real data.
+# Sets key_file to its canonical path. The file is not read.
+check_key_file() {
+    [[ $key_file == /* ]] || die "--key-file must be an absolute path, not $key_file"
+    [[ ! -L $key_file ]] || die "--key-file $key_file is a symlink: name the key file itself"
+    [[ -f $key_file ]] || die "--key-file $key_file is not an existing regular file"
+    [[ -r $key_file ]] || die "--key-file $key_file is not readable"
+    local given canonical path removed protected
+    given=$(realpath -s -m -- "$key_file")
+    canonical=$(realpath -e -- "$key_file") || die "--key-file $key_file cannot be resolved"
+    for path in "$given" "$canonical"; do
+        while IFS= read -r removed; do
+            if is_under "$path" "$removed"; then
+                die "refusing --key-file $key_file: it is under $removed, which setup removes"
+            fi
+        done < <(setup_removes; printf '%s\n' "$root/src")
+        while IFS= read -r protected; do
+            [[ -n $protected ]] || continue
+            if is_under "$path" "$protected"; then
+                die "refusing --key-file $key_file: it is inside $protected; use a throwaway key"
+            fi
+        done < <(protected_paths)
+    done
+    key_file=$canonical
+}
+
 setup_registry() {
     local replica=$root/replica dir=$root/inputs
     local identity_name='Measure Writes' identity_email='measure-writes@example.invalid'
 
-    write_json "$dir/key.json" label 'measure-writes throwaway' protection none
-    api_must 'key generate' key generate --input "$dir/key.json" --request-id "$(new_id)"
     local key_id
-    key_id=$(json_get data.id <<<"$answer")
-    [[ -n $key_id ]] || die "key generate gave no id: $answer"
+    if [[ -n $key_file ]]; then
+        # Registered by reference: the file stays where it is, and its public
+        # half, when it is beside it, lets `key public` print the line the
+        # owner already added.
+        local public=()
+        if [[ -f $key_file.pub && ! -L $key_file.pub ]]; then
+            public=(public_key_path "$key_file.pub")
+        fi
+        write_json "$dir/key.json" label 'measure-writes throwaway (imported)' \
+            private_key_path "$key_file" "${public[@]}"
+        api_must 'key import' key import --input "$dir/key.json" --request-id "$(new_id)"
+        key_id=$(json_get data.id <<<"$answer")
+        [[ -n $key_id ]] || die "key import gave no id: $answer"
+    else
+        write_json "$dir/key.json" label 'measure-writes throwaway' protection none
+        api_must 'key generate' key generate --input "$dir/key.json" --request-id "$(new_id)"
+        key_id=$(json_get data.id <<<"$answer")
+        [[ -n $key_id ]] || die "key generate gave no id: $answer"
+    fi
     api_must 'key select' key select --key-id "$key_id" --request-id "$(new_id)"
     setting_set key_id "$key_id"
 
@@ -377,16 +475,29 @@ host_fingerprints() {
 }
 
 print_owner_steps() {
-    local public fingerprint
-    public=$(cli key public --key-id "$(setting_get key_id)")
+    local public fingerprint imported key_step
+    imported=$(setting_get key_file)
+    if [[ -n $imported && ! -f $imported.pub ]]; then
+        public="   (no $imported.pub beside it, so its public key is not printed)"
+    else
+        public=$(cli key public --key-id "$(setting_get key_id)")
+    fi
+    if [[ -n $imported ]]; then
+        key_step="1. Imported throwaway key, registered by reference (setup did not copy it):
+   $imported
+   Its line is already expected to be present in ~/.ssh/authorized_keys for
+   localhost: check that it is there, and do not add it again:"
+    else
+        key_step="1. Throwaway public key (no passphrase; the private half stays under
+   $root/home/.ssh). Add this line to ~/.ssh/authorized_keys for localhost:"
+    fi
     fingerprint=$(ssh-keyscan -p "$ssh_port" -T 5 -t ed25519 127.0.0.1 2>/dev/null | ssh-keygen -lf - 2>/dev/null || true)
     [[ -n $fingerprint ]] || fingerprint='(ssh-keyscan found no ed25519 key at 127.0.0.1: is sshd running?)'
     cat <<EOF
 
 Setup is done up to the owner's step. Nothing has been trusted yet.
 
-1. Throwaway public key (no passphrase; the private half stays under
-   $root/home/.ssh). Add this line to ~/.ssh/authorized_keys for localhost:
+$key_step
 
 $public
 
@@ -403,12 +514,14 @@ phase_setup() {
     local build_ref=
     local_only=false
     ssh_port=22
+    key_file=
     while (($#)); do
         case $1 in
             --root) root=${2:?--root needs a value}; shift 2 ;;
             --build-ref) build_ref=${2:?--build-ref needs a value}; shift 2 ;;
             --local-only) local_only=true; shift ;;
             --ssh-port) ssh_port=${2:?--ssh-port needs a value}; shift 2 ;;
+            --key-file) key_file=${2:?--key-file needs a value}; shift 2 ;;
             *) usage ;;
         esac
     done
@@ -418,13 +531,16 @@ phase_setup() {
     command -v python3 >/dev/null || die 'python3 is required'
     command -v devenv >/dev/null || die 'devenv is required'
 
-    if [[ -e $root ]] && [[ -n $(ls -A "$root") ]]; then
+    [[ -z $key_file ]] || check_key_file
+
+    # A root that holds nothing but its build directory (such as a symlink to
+    # an earlier root's, made for an incremental build) is a new root.
+    if [[ -e $root ]] && [[ -n $(ls -A "$root" | grep -vx target || true) ]]; then
         [[ -f $root/.measure-writes-root ]] || die "$root exists, is not empty and is not a measure-writes root"
         note "reusing $root: removing the previous scratch state (the build cache is kept)"
-        rm -rf "${root:?}/replica" "${root:?}/remote.git" "$data_dir" "${root:?}/home" \
-            "${root:?}/xdg-data" "${root:?}/xdg-config" "${root:?}/xdg-state" \
-            "${root:?}/xdg-cache" "${root:?}/tmp" "${root:?}/inputs" \
-            "${root:?}/gitconfig" "${root:?}/measure-writes.settings"
+        local removed=()
+        mapfile -t removed < <(setup_removes)
+        rm -rf "${removed[@]}"
     fi
     make_scratch_dirs
     : >"$root/.measure-writes-root"
@@ -432,6 +548,7 @@ phase_setup() {
     setting_set build_ref "$build_ref"
     setting_set local_only "$local_only"
     setting_set ssh_port "$ssh_port"
+    [[ -z $key_file ]] || setting_set key_file "$key_file"
     build_cli "$build_ref"
     note "CLI: $(cli --version)"
     setup_replica
@@ -537,12 +654,28 @@ json.dump({"authority": sys.argv[2], "algorithm": sys.argv[3], "fingerprint": sy
 # ----------------------------------------------------------------- run phase
 
 csv_partial=
+timeline_partial=
 build_ref_label=
 
-# record NAME RUN SECONDS
+# record NAME RUN SECONDS START END: a row of the CSV and, with --timeline, the
+# row's window. START and END are `date +%s.%N` values; END is NA when SECONDS
+# is.
 record() {
     printf '%s,%s,%s,%s\n' "$1" "$2" "$3" "$build_ref_label" >>"$csv_partial"
     printf '%-38s run %s %9s s\n' "$1" "$2" "$3" >&2
+    if [[ -n $timeline_partial ]]; then
+        printf '%s,%s,%s,%s\n' "$1" "$2" "$(timeline_time "$4")" "$(timeline_time "$5")" \
+            >>"$timeline_partial"
+    fi
+}
+
+# timeline_time TIME: a `date +%s.%N` value to the microsecond; NA stays NA.
+timeline_time() {
+    if [[ $1 == NA ]]; then
+        printf NA
+    else
+        printf '%s' "${1%???}"
+    fi
 }
 
 # timed_api NAME RUN ARGS...: times one CLI call (with --json --non-interactive)
@@ -564,7 +697,7 @@ timed_api() {
         success | noop) ;;
         *) die "$name failed (exit $rc, outcome '$outcome', code '$(json_get code <<<"$answer" 2>/dev/null || true)'): $answer" ;;
     esac
-    record "$name" "$run" "$(elapsed "$start" "$end")"
+    record "$name" "$run" "$(elapsed "$start" "$end")" "$start" "$end"
 }
 
 # timed_confirmed NAME RUN ARGS...: times the --prepare and the --confirm of a
@@ -700,7 +833,7 @@ json.dump({"comment_id": sys.argv[2], "body": "A comment from measure-writes."},
         ((rc == 4)) || die "comment add: expected exit 4 (saved, publication pending) in --local-only mode, got $rc: $(cat "$errors")"
     else
         ((rc == 0)) || die "comment add failed with exit $rc: $(cat "$errors")"
-        record 'comment add' "$run" "$(elapsed "$start" "$end")"
+        record 'comment add' "$run" "$(elapsed "$start" "$end")" "$start" "$end"
     fi
 
     # The first stage of the publication: the local checkpoint is done. With
@@ -710,20 +843,21 @@ json.dump({"comment_id": sys.argv[2], "body": "A comment from measure-writes."},
     local marker
     marker=$(awk '$2 == "progress:" && ($3 == "connecting" || $3 == "fetching") { print $1; exit }' "$errors")
     if [[ -n $marker ]]; then
-        record 'comment add (local checkpoint)' "$run" "$(elapsed "$start" "$marker")"
+        record 'comment add (local checkpoint)' "$run" "$(elapsed "$start" "$marker")" "$start" "$marker"
     else
-        record 'comment add (local checkpoint)' "$run" NA
+        record 'comment add (local checkpoint)' "$run" NA "$start" NA
         note "comment add printed no publication progress line (connecting or fetching); wrote NA"
     fi
 }
 
 phase_run() {
-    local runs=3 out=
+    local runs=3 out= timeline=
     while (($#)); do
         case $1 in
             --root) root=${2:?--root needs a value}; shift 2 ;;
             --runs) runs=${2:?--runs needs a value}; shift 2 ;;
             --out) out=${2:?--out needs a value}; shift 2 ;;
+            --timeline) timeline=${2:?--timeline needs a value}; shift 2 ;;
             *) usage ;;
         esac
     done
@@ -742,7 +876,14 @@ phase_run() {
     local replica=$root/replica
     out=$(realpath -m -- "$out")
     csv_partial=$out.partial
+    if [[ -n $timeline ]]; then
+        timeline=$(realpath -m -- "$timeline")
+        [[ $timeline != "$out" && $timeline != "$csv_partial" && $timeline.partial != "$out" ]] \
+            || die '--timeline and --out must name different files'
+        timeline_partial=$timeline.partial
+    fi
     printf 'command,run,seconds,build_ref\n' >"$csv_partial"
+    [[ -z $timeline_partial ]] || printf 'command,run,start,end\n' >"$timeline_partial"
 
     pick_fixed_items "$replica"
     local ticket document
@@ -800,6 +941,10 @@ phase_run() {
     fi
     mv "$csv_partial" "$out"
     note "wrote $out"
+    if [[ -n $timeline_partial ]]; then
+        mv "$timeline_partial" "$timeline"
+        note "wrote $timeline"
+    fi
 }
 
 # Run the phase unless the file is being sourced (the functions can then be
