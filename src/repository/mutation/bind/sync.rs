@@ -70,8 +70,9 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, IndexPending, OperationFamily, OperationId,
-            ReadError, RemoteOperationSafePoint, RepositoryOperation, RepositoryService,
+            AuthoringKind, ConfigurationInspection, IndexPending, LifecycleIndexStep,
+            OperationFamily, OperationId, ReadError, RemoteOperationSafePoint,
+            RepositoryOperation, RepositoryService,
             SafePointRequest, SynchronizationError, SynchronizationObserver,
             SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
             SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
@@ -962,7 +963,11 @@ impl SyncBinding {
     /// indexes that context itself, since its parent is not running in this
     /// call (R-SDD-66), and is answered as a completed child is; only when
     /// that step does not complete is it answered as `owed_to_its_parent`
-    /// says (decision 8). Nothing of the call is held by then.
+    /// says (decision 8). When the step's row may be pending still, not
+    /// closed or with a call at work under it, it would refuse that refresh:
+    /// the child is then answered as a synchronization whose hand-off is
+    /// owed, as folder create is then, and no refresh is offered. Nothing of
+    /// the call is held by then.
     fn taken_up(
         &self,
         call: &CallContext<'_>,
@@ -980,13 +985,19 @@ impl SyncBinding {
                     &self.target,
                 ) =>
             {
-                if call
+                match call
                     .service
                     .index_lifecycle_child(&accepted.root(), &self.target)
                 {
-                    ran
-                } else {
-                    self.owed_to_its_parent(call.service, accepted, came_to)
+                    LifecycleIndexStep::Indexed => ran,
+                    LifecycleIndexStep::Pending => {
+                        self.owed_to_its_parent(call.service, accepted, came_to)
+                    }
+                    LifecycleIndexStep::PendingUnderOperation => self.finished(
+                        call.service,
+                        accepted,
+                        &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+                    ),
                 }
             }
             _ => ran,

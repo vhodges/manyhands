@@ -5845,6 +5845,89 @@ fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// An exit whose one index step does not complete, because it failed or
+/// because a context it observed moved before it was stored
+/// (`RetryRequired`), closes the refresh row it began under its fresh ID,
+/// as folder create's step and an own-ID child's do: nothing would take
+/// that row up, and with the whole repository's scope it would refuse
+/// every refresh, poll and write, and the next exit's step. Its contexts
+/// stay marked, so the exit answers index pending, and a later refresh,
+/// or the same request sent again (R-7), indexes them.
+#[test]
+fn a_failed_exit_index_step_leaves_no_row_in_the_way() {
+    let mut wrong = Vec::new();
+    for (case, failing, then_retry) in [
+        ("a failed step, then a refresh", true, false),
+        ("a failed step, then its retry", true, true),
+        ("a step left dirty, then a refresh", false, false),
+        ("a step left dirty, then its retry", false, true),
+    ] {
+        let f = Fixture::new();
+        let req = f.request();
+        let before = refresh_rows(&f)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        let failing_service = failing.then(|| {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeIndexTransactionCommit,
+            )
+            .unwrap()
+        });
+        if !failing {
+            // The primary moves once the step has observed it and before it
+            // stores it: the step leaves it dirty and its row at `retry`.
+            let doc = f.root.path().join(DOC);
+            f.service.set_observation_hook_for_testing(move || {
+                let mut text = fs::read_to_string(&doc).unwrap();
+                text.push_str("a person's line\n");
+                fs::write(&doc, text).unwrap();
+            });
+        }
+        let service = failing_service.as_ref().unwrap_or(&f.service);
+        match run::promote_with_io(service, req.clone(), &mut FakeIo::default()) {
+            Ok(DocumentPromotionResult::IndexPending(p))
+                if p.authoritative.cleanup() == PromotionCleanup::Complete => {}
+            other => wrong.push(format!("{case}: ended as {other:?}")),
+        }
+        let left = refresh_rows(&f)
+            .into_iter()
+            .filter(|row| !before.contains(&row.0) && row.3 != "completed")
+            .collect::<Vec<_>>();
+        if !left.is_empty() {
+            wrong.push(format!("{case}: rows left pending: {left:?}"));
+        }
+        if f.service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!("{case}: read as indexed while its contexts are owed"));
+        }
+        if then_retry {
+            match f.run(req) {
+                Ok(DocumentPromotionResult::Complete(o))
+                    if o.cleanup() == PromotionCleanup::Complete => {}
+                other => wrong.push(format!("{case}: its retry: {other:?}")),
+            }
+        } else {
+            let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+            });
+            if !matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })) {
+                wrong.push(format!("{case}: a refresh: {refreshed:?}"));
+            }
+        }
+        if !f
+            .service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!("{case}: its contexts are owed still"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 // --- Task 22b: P-1's cleanup checks and decision 34's wait ----------------
 
 /// What a person leaves in a context's worktree, which its cleanup keeps.

@@ -7551,28 +7551,19 @@ impl RepositoryService {
     /// own ID (R-SDD-66): its parent is not running in that call, so the
     /// child indexes its one context itself, in the step its parent's exit
     /// runs (`index_lifecycle_exit`), and the parent's later exit finds it
-    /// clean. Says whether the index now holds it. A step that did not
-    /// complete leaves the context marked, and the row it left pending is
-    /// closed (`close_pending_refresh`): nothing would take it up, and it
-    /// would refuse the refresh that brings the index up to date.
+    /// clean. Says what the step came to. A step that did not complete
+    /// leaves the context marked, and the row it left pending is closed
+    /// (`close_pending_refresh`): nothing would take it up, and it would
+    /// refuse the refresh that brings the index up to date. A row that could
+    /// not be closed, or that a call is at work under, is said to be pending
+    /// still (`LifecycleIndexStep::PendingUnderOperation`), as folder create
+    /// says of its own.
     pub(crate) fn index_lifecycle_child(
         &self,
         root: &Path,
         target: &SynchronizationTarget,
-    ) -> bool {
-        let operation_id = OperationId::new();
-        let indexed = matches!(
-            self.index_lifecycle_exit_under(root, operation_id, &[hand_off_context(target)]),
-            Ok(RefreshOutcome::Refreshed { .. })
-        );
-        if !indexed {
-            let _ = self.close_pending_refresh(
-                root,
-                operation_id,
-                RepositoryOperation::RefreshRepository,
-            );
-        }
-        indexed
+    ) -> LifecycleIndexStep {
+        self.index_lifecycle_exit(root, &[hand_off_context(target)])
     }
 }
 /// The context a synchronization of `target` changes and publishes: the

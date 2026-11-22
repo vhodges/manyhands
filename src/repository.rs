@@ -1593,12 +1593,33 @@ impl RepositoryService {
     /// claimed, as folder create's is (`refresh_contexts`), so its resume
     /// indexes them alone too. A context in it that is gone counts as
     /// indexed, and its rows are deleted.
+    ///
+    /// A step that does not complete has its row closed, as folder create
+    /// closes its own (`close_pending_refresh`): nothing else would take it
+    /// up under its fresh ID, and in the whole repository's way it would
+    /// refuse every refresh, poll and write, and the next exit's step. What
+    /// it owed stays marked, and the next refresh, under any ID, indexes it.
+    /// A lifecycle's child taken up under its own ID runs the same step
+    /// (`index_lifecycle_child`).
     fn index_lifecycle_exit(
         &self,
         root: &Path,
         contexts: &[ContextKey],
-    ) -> Result<RefreshOutcome, RepositoryError> {
-        self.index_lifecycle_exit_under(root, OperationId::new(), contexts)
+    ) -> LifecycleIndexStep {
+        let operation_id = OperationId::new();
+        if matches!(
+            self.index_lifecycle_exit_under(root, operation_id, contexts),
+            Ok(RefreshOutcome::Refreshed { .. })
+        ) {
+            return LifecycleIndexStep::Indexed;
+        }
+        match self.close_pending_refresh(root, operation_id, RepositoryOperation::RefreshRepository)
+        {
+            // The step's own commit landed before it failed.
+            Ok(ClosedRefresh::Completed) => LifecycleIndexStep::Indexed,
+            Ok(ClosedRefresh::NothingPending) => LifecycleIndexStep::Pending,
+            Ok(ClosedRefresh::AtWork) | Err(_) => LifecycleIndexStep::PendingUnderOperation,
+        }
     }
 
     /// `index_lifecycle_exit`, under the fresh ID `operation_id` its caller
@@ -6958,6 +6979,24 @@ enum RefreshScope<'a> {
     Recorded,
     /// `contexts`, which the row is recorded as owing before it is claimed.
     Owing(&'a [ContextKey]),
+}
+
+/// What a lifecycle's index step under a fresh ID came to
+/// (`index_lifecycle_exit`), as folder create reads its own
+/// (`FolderDiscovery`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LifecycleIndexStep {
+    /// The index holds the contexts.
+    Indexed,
+    /// It does not, and no row is left pending under the step's ID: what
+    /// the contexts owe stays marked, and any refresh that completes
+    /// indexes them.
+    Pending,
+    /// As `Pending`, except that the step's row was not closed and may be
+    /// pending still: it could not be written, or a call is at work under
+    /// it. Until a call under that ID takes it up, or the call at work
+    /// completes it, it refuses every other refresh.
+    PendingUnderOperation,
 }
 
 /// What `close_pending_refresh` found of a refresh's row.

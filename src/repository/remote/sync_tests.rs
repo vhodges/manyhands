@@ -17646,8 +17646,11 @@ fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
 /// whose context is indexed takes no step. When the step fails, it is
 /// answered as a completed save's replay is (R-SDD-16): `discovery_pending`
 /// offering only `index refresh`, with no row left pending, so that refresh
-/// is not refused, and nothing owed. No row is ever begun under the child's
-/// ID.
+/// is not refused, and nothing owed. When the step's row is left at work,
+/// so that it is not closed and would refuse that refresh, it is answered
+/// as a synchronization whose hand-off is owed: `discovery_pending`,
+/// offering nothing, so no refresh; the row is taken up under its own ID.
+/// No row is ever begun under the child's ID.
 #[test]
 fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
     use crate::repository::{
@@ -17670,10 +17673,21 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
             .collect::<Result<_, _>>()
             .unwrap()
     }
-    for (case, owed, failing) in [
-        ("its context owed", true, false),
-        ("its context indexed", false, false),
-        ("its index step failing", true, true),
+    /// How the child's own index step is stopped, if it is.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Step {
+        Completes,
+        /// It fails, and its row is closed.
+        Fails,
+        /// It stops once it has claimed its row, which is left as a call
+        /// at work leaves it: not closed.
+        LeftAtWork,
+    }
+    for (case, owed, step) in [
+        ("its context owed", true, Step::Completes),
+        ("its context indexed", false, Step::Completes),
+        ("its index step failing", true, Step::Fails),
+        ("its index step's row left at work", true, Step::LeftAtWork),
     ] {
         let (root, data, service) = fixture();
         let root = root.path();
@@ -17707,14 +17721,18 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
             .unwrap();
         }
         let before = refresh_rows(data.path());
-        let resuming = if failing {
-            RepositoryService::open_at_with_failure_point_for_testing(
+        let resuming = match step {
+            Step::Completes => RepositoryService::open_at(data.path()).unwrap(),
+            Step::Fails => RepositoryService::open_at_with_failure_point_for_testing(
                 data.path(),
                 FailurePoint::BeforeIndexTransactionCommit,
             )
-            .unwrap()
-        } else {
-            RepositoryService::open_at(data.path()).unwrap()
+            .unwrap(),
+            Step::LeftAtWork => RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                FailurePoint::AfterIndexClaim,
+            )
+            .unwrap(),
         };
         let taken_up = resuming.execute(
             MutationCall {
@@ -17739,7 +17757,55 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
             .filter(|row| !before.contains(row))
             .collect::<Vec<_>>();
         assert_eq!(taken_up.command, "operation resume", "{case}");
-        if failing {
+        if step == Step::LeftAtWork {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::DiscoveryPending,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Pending,
+                "{case}"
+            );
+            // No refresh, which the row left at work would refuse.
+            assert!(actions.is_empty(), "{case}: {taken_up:?}");
+            let [(row, state, _)] = begun.as_slice() else {
+                panic!("{case}: index steps {begun:?}");
+            };
+            assert_eq!(state, "indexing", "{case}: the row was not left as it was");
+            assert!(
+                !service.contexts_indexed(root, std::slice::from_ref(&context)),
+                "{case}"
+            );
+            // Once its heartbeat is old, the row is taken up under its own
+            // ID, which indexes the context.
+            let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE id = ?1",
+                [row],
+            )
+            .unwrap();
+            let operation: String = db
+                .query_row(
+                    "SELECT operation_ulid FROM operation_records WHERE id = ?1",
+                    [row],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    service
+                        .resume_hand_off(RefreshRepositoryRequest {
+                            root: root.to_owned(),
+                            operation_id: OperationId::parse(&operation).unwrap(),
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ),
+                "{case}"
+            );
+        } else if step == Step::Fails {
             assert_eq!(
                 taken_up.code,
                 ResultCode::DiscoveryPending,
@@ -17796,7 +17862,7 @@ fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
         }
         assert!(
             service.contexts_indexed(root, std::slice::from_ref(&context)),
-            "{case}: the context reads owed"
+            "{case}: the context is not indexed"
         );
         assert!(
             rows_under(data.path(), child).is_empty(),

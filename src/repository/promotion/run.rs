@@ -1842,15 +1842,13 @@ fn refresh_with_publication<L: Lifecycle>(
 }
 /// The one index step of an exit (Task 22): `contexts`, which the
 /// lifecycle and its children changed, are indexed and no other, under a
-/// refresh row of the exit's own (`index_lifecycle_exit`); nothing of the
-/// whole repository is observed. Says whether the index now holds them.
-/// One that fails leaves them marked, for the next exit, resume or refresh.
+/// refresh row of the exit's own (`index_lifecycle_exit`); nothing of
+/// the whole repository is observed. Says whether the index now holds them.
+/// One that does not complete closes the row it began, as folder create's
+/// does, and leaves them marked, for the next exit, resume or refresh.
 fn index_exit(service: &RepositoryService, root: &Path, contexts: &[ContextKey]) -> bool {
     boundary(service, root, FailurePoint::RefreshFailure).is_ok()
-        && matches!(
-            service.index_lifecycle_exit(root, contexts),
-            Ok(RefreshOutcome::Refreshed { .. })
-        )
+        && service.index_lifecycle_exit(root, contexts) == LifecycleIndexStep::Indexed
 }
 /// The contexts the children `r` names may have left owed, each by its
 /// role: the item's for the context's child, the primary for the primary's.
