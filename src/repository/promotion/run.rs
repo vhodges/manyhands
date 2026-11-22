@@ -361,10 +361,14 @@ fn run_observed<L: Lifecycle>(
     let Ok(mut r) = load::<L>(service, &root, request.operation_id) else {
         return Err(error);
     };
-    if r.item_id() != &request.item_id
-        || r.expectation() != request.expected
-        || r.integration_oid().is_none()
-    {
+    if r.item_id() != &request.item_id || r.expectation() != request.expected {
+        return Err(error);
+    }
+    // An exit before integration (an abandon, an interruption, a primary
+    // that advanced, a child that failed) still owes what its children
+    // changed: their one index step is this exit's (Task 22).
+    if r.integration_oid().is_none() {
+        index_children_owed(service, &root, &r);
         return Err(error);
     }
     if r.step() == Step::Complete || r.step() == Step::Superseded {
@@ -398,6 +402,7 @@ fn run_observed<L: Lifecycle>(
             .unwrap_or(integrate::IntegrationState::RecoveryRequired);
         match state {
             integrate::IntegrationState::NotIntegrated if L::primary_clean(&root) => {
+                index_children_owed(service, &root, &r);
                 return Err(error);
             }
             integrate::IntegrationState::Integrated { oid } if Some(oid) == r.integration_oid() => {
@@ -1768,28 +1773,61 @@ fn refresh_with_publication<L: Lifecycle>(
     if replay && service.lifecycle_indexed(root, r.item_id()) {
         return L::complete(outcome);
     }
+    // Past integration, what the lifecycle and its children changed is its
+    // two contexts (`lifecycle_contexts`): the primary, which its merge moved
+    // and its primary's child published or fast-forwarded, and its item's,
+    // which its checkpoint or its context's child moved and its cleanup
+    // removes. Both are marked, and indexed in the exit's one step.
+    let contexts = lifecycle_contexts(r.item_id());
     let marked = mark_contexts_dirty(
         &service.registry_path,
         root,
-        &lifecycle_contexts(r.item_id()),
+        &contexts,
         RepositoryOperation::RepositorySnapshot,
     )
     .is_ok();
-    let refreshed = marked
-        && boundary(service, root, FailurePoint::RefreshFailure).is_ok()
-        && matches!(
-            // Under an ID of its own, and recording no author: whoever
-            // closed or promoted is kept by the index alone (Cycle 10).
-            service.refresh_repository_unauthored(RefreshRepositoryRequest {
-                root: root.into(),
-                operation_id: OperationId::new()
-            }),
-            Ok(RefreshOutcome::Refreshed { .. })
-        );
+    let refreshed = marked && index_exit(service, root, &contexts);
     if refreshed {
         L::complete(outcome)
     } else {
         L::index_pending(outcome)
+    }
+}
+/// The one index step of an exit (Task 22): `contexts`, which the
+/// lifecycle and its children changed, are indexed and no other, under a
+/// refresh row of the exit's own (`index_lifecycle_exit`); nothing of the
+/// whole repository is observed. Says whether the index now holds them.
+/// One that fails leaves them marked, for the next exit, resume or refresh.
+fn index_exit(service: &RepositoryService, root: &Path, contexts: &[ContextKey]) -> bool {
+    boundary(service, root, FailurePoint::RefreshFailure).is_ok()
+        && matches!(
+            service.index_lifecycle_exit(root, contexts),
+            Ok(RefreshOutcome::Refreshed { .. })
+        )
+}
+/// The contexts the children `r` names may have left owed, each by its
+/// role: the item's for the context's child, the primary for the primary's.
+/// A child begins no index hand-off of its own (P-4): what its local update
+/// changes it marks dirty under its lease, and its parent indexes it.
+fn children_contexts<R: LifecycleRecord>(r: &R) -> Vec<ContextKey> {
+    let mut contexts = Vec::new();
+    if r.primary_sync_id().is_some() {
+        contexts.push(ContextKey::Primary);
+    }
+    if r.context_sync_id().is_some() {
+        contexts.push(ContextKey::Item(r.item_id().clone()));
+    }
+    contexts
+}
+/// The index step of an exit before integration, which has written
+/// nothing of its own to index: of the contexts its children may have
+/// changed (`children_contexts`), those still owed an indexing, in one step,
+/// and none when nothing is owed. The exit answers as it would have: what
+/// it reports of the index is read from the marks (`lifecycle_indexed`).
+fn index_children_owed<R: LifecycleRecord>(service: &RepositoryService, root: &Path, r: &R) {
+    let owed = service.owed_of(root, &children_contexts(r));
+    if !owed.is_empty() {
+        index_exit(service, root, &owed);
     }
 }
 fn make_outcome<L: Lifecycle>(

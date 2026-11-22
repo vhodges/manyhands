@@ -7397,15 +7397,20 @@ impl RepositoryService {
     /// commit made outside Manyhands leaves it; a push alone, or a binding
     /// with nothing to publish, observes nothing.
     ///
-    /// What keeps today's refresh of the whole repository: a lifecycle's
-    /// child, which begins the plain row with no target that its parent's
-    /// records accept, whether its parent runs it or it is taken up under
-    /// its own ID (`operation resume`): it is known by its parent's record
-    /// (`lifecycle_record::is_child`), the one the begin's check reads; and
-    /// what an older build began under the ID, which is taken up as it is: a
-    /// row with no target, or the `synchronization-local-v1/` row it bound a
-    /// synchronization with no remote to publish to with. A completed one of
-    /// those is the hand-off done, as before.
+    /// A lifecycle's child, a close's or a promotion's synchronization,
+    /// begins no row: its hand-off is its parent's, whose exit indexes what
+    /// the child changed in its one index step (P-4, Task 22). It is so
+    /// whether its parent runs it or it is taken up under its own ID
+    /// (`operation resume`): it is known by its parent's record
+    /// (`lifecycle_record::is_child`). Its local update marked its context
+    /// dirty, so until that exit the context reads as owed an indexing.
+    ///
+    /// What keeps today's refresh of the whole repository: what an older
+    /// build began under the ID, which is taken up as it is: a row with no
+    /// target (a lifecycle child's included), or the
+    /// `synchronization-local-v1/` row it bound a synchronization with no
+    /// remote to publish to with. A completed one of those is the hand-off
+    /// done, as before.
     fn synchronization_index_hand_off(
         &self,
         request: &SynchronizeRemoteRequest,
@@ -7429,10 +7434,30 @@ impl RepositoryService {
         // The local row under the ID, when the journal can be read. One
         // that was abandoned is `completed` and is not a refresh that
         // was done: the synchronization is refused, and nothing is
-        // written or reported as complete under it.
-        let row = refresh_row(self, request).ok().flatten();
+        // written or reported as complete under it. A lifecycle's child
+        // that cannot read it cannot tell whether an older build began its
+        // hand-off there: it owes the hand-off.
+        let row = match refresh_row(self, request) {
+            Ok(row) => row,
+            Err(_) if lifecycle_child => {
+                return Ok(SynchronizationResult::IndexPending(IndexPending::new(
+                    outcome,
+                )));
+            }
+            Err(_) => None,
+        };
         if let Some((_, _, _, _, step)) = &row {
             refuse_abandoned_refresh(request, step.as_deref())?;
+        }
+        // A lifecycle's child begins no hand-off of its own (P-4, Task 22).
+        // What its local update changed it marked dirty under its lease
+        // (`mark_local_update`), before the update and after it; its parent's
+        // record names it by its role; and the parent's exit indexes it, with
+        // the parent's own contexts, in one step. Its remote row's debt is
+        // then cleared as any hand-off's is. Only a row an older build began
+        // under its ID is taken up here, below.
+        if lifecycle_child && row.is_none() {
+            return Ok(SynchronizationResult::Complete(outcome));
         }
         let stored = row.as_ref().map(|(_, _, stored, _, _)| stored.as_str());
         // What an older build began: a row with no target, or the local

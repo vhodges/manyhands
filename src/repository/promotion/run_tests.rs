@@ -5406,3 +5406,310 @@ fn a_promotion_tells_its_observer_only_the_steps_that_run() {
         [E::Integrating, primary, E::CleaningUp]
     );
 }
+
+/// A lifecycle's child run as the synchronization runs one, its transport
+/// stood in for by `inner`, which completes its row: a child of a role
+/// `updates` names made a local update, which marks its context dirty under
+/// its lease (R-SDD-49); its row owes its index hand-off, as its
+/// classification leaves it; and the synchronization's own replay of the row
+/// then runs that hand-off.
+struct HandingOffChild<I> {
+    inner: I,
+    /// Whether the context's child, and the primary's, made a local update.
+    updates: (bool, bool),
+}
+impl<I: run::PromotionIo> run::PromotionIo for HandingOffChild<I> {
+    fn synchronize(
+        &mut self,
+        s: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &record::ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        let primary = req.target == SynchronizationTarget::Primary;
+        self.inner
+            .synchronize(s, req.clone(), observer, execution)?;
+        if if primary {
+            self.updates.1
+        } else {
+            self.updates.0
+        } {
+            let context = if primary {
+                discovery::ContextKey::Primary
+            } else {
+                discovery::ContextKey::Item(ITEM.parse().unwrap())
+            };
+            mark_contexts_dirty(
+                &s.registry_path,
+                &req.root,
+                &[context],
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        state::with_transaction(s, &req.root, |tx, _| {
+            tx.execute(
+                "UPDATE remote_operation_records SET index_pending=1 WHERE operation_ulid=?1",
+                [req.operation_id.to_string()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+        .unwrap();
+        s.synchronize_promotion_child_observed(
+            req,
+            &mut SessionCredentials::new(NoCredentials),
+            observer,
+            execution,
+        )
+    }
+    fn delete(
+        &mut self,
+        s: &RepositoryService,
+        req: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        config: &ObservationConfiguration,
+        oid: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner.delete(s, req, plan, owner, config, oid, item)
+    }
+}
+
+/// The local refresh rows, by ID: `(ID, operation, owed contexts, state)`.
+type RefreshRow = (i64, String, Option<String>, String);
+fn refresh_rows(f: &Fixture) -> Vec<RefreshRow> {
+    f.db()
+        .prepare(
+            "SELECT id, operation_ulid, owed_contexts, state FROM operation_records
+              WHERE action = 'refresh' ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Task 22 (design, Phase 3, "One index update per exit"): a lifecycle's
+/// children begin no index hand-off of their own. What a child's local
+/// update changed is marked dirty under its lease, and its parent's record
+/// names it by its role; every exit of the parent then indexes, in one step
+/// under one refresh row of its own that records what it owes, the contexts
+/// its children changed and its own, and runs no refresh of the whole
+/// repository. Before integration the parent has written nothing of its own,
+/// so an exit there indexes only what a child left dirty; after it, the
+/// primary, which the merge moved, and the item's context, which the cleanup
+/// removes (its rows are deleted) or the child changed. A stop at awaiting
+/// publication indexes once, and its later finish once, not twice.
+#[test]
+fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
+    type Run = Result<DocumentPromotionResult, DocumentPromotionError>;
+    /// One call of `req`, its children run by `inner`: its result, the
+    /// refresh rows it began, and how many times it observed the whole
+    /// repository.
+    fn call(
+        f: &Fixture,
+        req: &PromoteDocumentRequest,
+        inner: impl run::PromotionIo,
+        updates: (bool, bool),
+    ) -> (Run, Vec<RefreshRow>, usize) {
+        let before = refresh_rows(f)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        let scans = Rc::new(std::cell::Cell::new(0));
+        let counted = scans.clone();
+        discovery::set_scan_hook(f.root.path().to_owned(), move || {
+            counted.set(counted.get() + 1)
+        });
+        let result = f.run_io(req.clone(), &mut HandingOffChild { inner, updates });
+        discovery::clear_scan_hook(f.root.path());
+        let begun = refresh_rows(f)
+            .into_iter()
+            .filter(|row| !before.contains(&row.0))
+            .collect();
+        (result, begun, scans.get())
+    }
+    fn cancel_at(f: &Fixture, req: &PromoteDocumentRequest, at: FailurePoint) {
+        let (root, op) = (f.root.path().to_owned(), req.operation_id);
+        let mut once = false;
+        hook(f, move |s, point| {
+            if point == at && !once {
+                once = true;
+                assert!(s.cancel_document_promotion(&root, op).unwrap());
+            }
+        });
+    }
+    let finished = |result: &Run| matches!(result, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete);
+    let cleanup = |result: &Run, reason: PromotionCleanupPending| matches!(result, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Pending { reason });
+    let both: &[&str] = &["primary", ITEM];
+    let context: &[&str] = &[ITEM];
+    let mut wrong = Vec::new();
+    /// What is wrong with the exit `exit` of `req` that `called` came to:
+    /// `ended` says whether it ended as it should, and `owed` names what its
+    /// one index step should have indexed.
+    fn check(
+        wrong: &mut Vec<String>,
+        exit: &str,
+        f: &Fixture,
+        req: &PromoteDocumentRequest,
+        called: (Run, Vec<RefreshRow>, usize),
+        ended: bool,
+        owed: &[&str],
+    ) {
+        let (result, begun, scans) = called;
+        if !ended {
+            wrong.push(format!("{exit}: ended as {result:?}"));
+        }
+        if scans != 0 {
+            wrong.push(format!("{exit}: {scans} whole-repository observations"));
+        }
+        let stored = f.stored(req.operation_id);
+        let children = [stored.context_sync_id, stored.primary_sync_id]
+            .into_iter()
+            .flatten()
+            .map(|child| child.to_string())
+            .collect::<Vec<_>>();
+        let expected = owed
+            .iter()
+            .map(|owed| owed.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        match begun.as_slice() {
+            [(_, operation, recorded, state)] => {
+                if children.contains(operation) {
+                    wrong.push(format!("{exit}: the one index step is a child's"));
+                }
+                let recorded = recorded
+                    .as_deref()
+                    .and_then(|owed| serde_json::from_str::<Vec<String>>(owed).ok())
+                    .map(|owed| owed.into_iter().collect::<std::collections::BTreeSet<_>>());
+                if recorded.as_ref() != Some(&expected) {
+                    wrong.push(format!("{exit}: indexed {recorded:?}, not {expected:?}"));
+                }
+                if state != "completed" {
+                    wrong.push(format!("{exit}: its index step is {state}"));
+                }
+            }
+            begun => wrong.push(format!(
+                "{exit}: {} index steps, not one: {begun:?} (children {children:?})",
+                begun.len()
+            )),
+        }
+        if !f
+            .service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!("{exit}: the lifecycle's contexts are owed still"));
+        }
+    }
+
+    // Finish: the context's child merged into the context.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = finished(&called.0);
+    check(&mut wrong, "finish", &f, &req, called, ended, both);
+
+    // Abandon: the context's child brought a new path, which the consent
+    // does not cover.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let mutating = MutatingChild {
+        inner: FakeIo::default(),
+        new_path: true,
+        once: false,
+    };
+    let called = call(&f, &req, mutating, (true, false));
+    let ended = matches!(
+        called.0,
+        Err(DocumentPromotionError::ReconfirmationRequired)
+    ) && f.stored(req.operation_id).step == record::PromotionStep::Abandoned;
+    check(&mut wrong, "abandon", &f, &req, called, ended, context);
+
+    // Interrupted: cancelled once the context's child is done.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::AfterContextSync);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = matches!(called.0, Err(DocumentPromotionError::Interrupted));
+    check(&mut wrong, "interrupted", &f, &req, called, ended, context);
+
+    // Primary advanced: main moved on once the context's child was done.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    let mut once = false;
+    hook(&f, move |_, point| {
+        if point == FailurePoint::AfterContextSync && !once {
+            once = true;
+            let repo = git2::Repository::open(&root).unwrap();
+            write(&repo, "primary-only", "advance");
+            let oid = commit(&repo);
+            repo.reference("refs/remotes/origin/main", oid, true, "fixture")
+                .unwrap();
+        }
+    });
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = matches!(called.0, Err(DocumentPromotionError::PrimaryAdvanced));
+    check(
+        &mut wrong,
+        "primary advanced",
+        &f,
+        &req,
+        called,
+        ended,
+        context,
+    );
+
+    // Cancel: cancelled once the merge is made.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::AfterIntegrationRef);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::Cancelled);
+    check(&mut wrong, "cancel", &f, &req, called, ended, both);
+
+    // A stop at awaiting publication: the primary's child did not reach the
+    // remote. Its later finish: the same request, which publishes.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let unreachable = FakeIo {
+        failure: Some((
+            true,
+            transport_error(SshTransportErrorKind::RemoteUnavailable),
+        )),
+        ..FakeIo::default()
+    };
+    let called = call(&f, &req, unreachable, (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::AwaitingPublication);
+    check(
+        &mut wrong,
+        "a stop at awaiting publication",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+    let called = call(&f, &req, FakeIo::default(), (false, true));
+    let ended = finished(&called.0);
+    check(
+        &mut wrong,
+        "its later finish",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

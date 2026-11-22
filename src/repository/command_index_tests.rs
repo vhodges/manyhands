@@ -8,8 +8,9 @@
 //! A synchronization (`item sync`, `repo sync`, the sync half of `comment
 //! add`) indexes the context it merged into or fast-forwarded, and nothing
 //! when it changed nothing locally; the comment hand-off repair indexes the
-//! comment's context (Task 16). The rows of `ticket close` and `document
-//! promote` are added by Task 22.
+//! comment's context (Task 16). `ticket close` and `document promote` index
+//! the primary and delete their removed context's rows in one step, and
+//! observe no other context (Task 22).
 
 use std::{
     cell::Cell,
@@ -1043,6 +1044,59 @@ fn comment_handoff_repair(f: &Fixture) -> Watched {
     })
 }
 
+/// `OTHER`'s ticket is edited by hand, outside Manyhands and unmarked: a
+/// change a lifecycle does not make, which a refresh of the whole
+/// repository would observe and the lifecycle's one index step does not.
+fn edit_other_by_hand(f: &Fixture) {
+    write(
+        &f.worktree(OTHER),
+        &ticket_path(OTHER),
+        &ticket_source(OTHER, "Edited by hand", ""),
+    );
+}
+
+/// `ticket close` of `TICKET`, with no publication remote and so no child:
+/// it checkpoints the closure in `TICKET`'s context, merges it into main and
+/// removes the context. Its previews read `TICKET`'s own context.
+fn ticket_close(f: &Fixture) -> Watched {
+    edit_other_by_hand(f);
+    f.watch(|| {
+        let closed = f.execute_confirmed(|| {
+            Mutation::TicketClose(TicketCloseInput {
+                root: f.root.clone(),
+                id: item(TICKET),
+            })
+        });
+        assert_eq!(closed.code, ResultCode::Ok, "{closed:?}");
+    })
+}
+
+/// `document promote` of `DOCUMENT`, saved in a context of its own first,
+/// with no publication remote: it merges the context into main and removes
+/// it. Its previews read `DOCUMENT`'s own context.
+fn document_promote(f: &Fixture) -> Watched {
+    let saved = f.execute(Mutation::DocumentSave(DocumentSaveInput {
+        root: f.root.clone(),
+        id: item(DOCUMENT),
+        draft: DocumentDraft {
+            title: "Guide".to_owned(),
+            body: "# Guide\n\nPromoted.\n".to_owned(),
+        },
+        observation: Some(f.token(DOCUMENT)),
+    }));
+    assert_eq!(saved.code, ResultCode::Ok, "{saved:?}");
+    edit_other_by_hand(f);
+    f.watch(|| {
+        let promoted = f.execute_confirmed(|| {
+            Mutation::DocumentPromote(DocumentPromoteInput {
+                root: f.root.clone(),
+                id: item(DOCUMENT),
+            })
+        });
+        assert_eq!(promoted.code, ResultCode::Ok, "{promoted:?}");
+    })
+}
+
 /// A row of the table: the command, how it runs, the contexts it indexes,
 /// and the contexts whose rows it deletes.
 type Row = (
@@ -1070,7 +1124,13 @@ fn each_command_indexes_only_its_contexts() {
     // marked dirty and indexed alone, and a republish changes nothing
     // locally. With no transport here they come to no hand-off, so they have
     // no row; see the module's description for the other tasks' rows.
-    let rows: [Row; 25] = [
+    //
+    // `ticket close` and `document promote` index, in one step, the primary,
+    // which their merge moved, and their item's context, which their cleanup
+    // removed, so its rows are deleted; their previews observe that context
+    // too. `OTHER`, which a hand edit changed, is not theirs: they observe
+    // it no more than they index it (Task 22).
+    let rows: [Row; 27] = [
         ("ticket save", ticket_save, &["TICKET"], &[]),
         ("ticket create", ticket_create, &["NEW"], &[]),
         ("ticket slug-assign", slug_assign, &["TICKET"], &[]),
@@ -1125,6 +1185,18 @@ fn each_command_indexes_only_its_contexts() {
             comment_handoff_repair,
             &["TICKET"],
             &[],
+        ),
+        (
+            "ticket close",
+            ticket_close,
+            &["primary", "TICKET"],
+            &["TICKET"],
+        ),
+        (
+            "document promote",
+            document_promote,
+            &["primary", "DOCUMENT"],
+            &["DOCUMENT"],
         ),
     ];
     // Every row runs, and every row that is not as the table says is named.

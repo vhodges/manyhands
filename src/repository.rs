@@ -1582,14 +1582,31 @@ impl RepositoryService {
         self.refresh_repository_target(request, "", true)
     }
 
-    /// `refresh_repository`, whose row records no author: the refresh a
-    /// promotion or a closure hands its result to the index with, under an
-    /// ID of its own. Whoever closed or promoted is kept by the index alone.
-    pub(crate) fn refresh_repository_unauthored(
+    /// The one index step of an exit of a promotion or a closure (Task 22):
+    /// `contexts`, the ones it and its children changed, are indexed and no
+    /// other, and nothing of the whole repository is observed. It runs under
+    /// a refresh row of its own, a fresh ID's, as the refresh it replaces
+    /// did: its target is none, so the row keeps the whole repository's scope
+    /// in the way of other calls (Owner question 2), and it records no
+    /// author, so whoever closed or promoted is kept by the index alone
+    /// (Cycle 10). The row is recorded as owing `contexts` before it is
+    /// claimed, as folder create's is (`refresh_contexts`), so its resume
+    /// indexes them alone too. A context in it that is gone counts as
+    /// indexed, and its rows are deleted.
+    fn index_lifecycle_exit(
         &self,
-        request: RefreshRepositoryRequest,
+        root: &Path,
+        contexts: &[ContextKey],
     ) -> Result<RefreshOutcome, RepositoryError> {
-        self.refresh_repository_target(request, "", false)
+        self.refresh_repository_as(
+            RefreshRepositoryRequest {
+                root: root.to_owned(),
+                operation_id: OperationId::new(),
+            },
+            "",
+            false,
+            RefreshScope::Owing(contexts),
+        )
     }
 
     /// The index hand-off a local row owes, which `operation resume` runs
@@ -4827,9 +4844,11 @@ impl RepositoryService {
     ///
     /// Close, promotion and folder create never come here: they index
     /// under refresh rows of their own, which keep the whole repository's
-    /// scope in the way of other calls (design decision 16). Close's and
-    /// promotion's refresh the whole repository; folder create's records
-    /// that it owes the primary, and indexes that alone (`refresh_contexts`).
+    /// scope in the way of other calls (design decision 16), and record the
+    /// contexts they owe before they claim them: an exit of a close or a
+    /// promotion the contexts it and its children changed
+    /// (`index_lifecycle_exit`), folder create's the primary
+    /// (`refresh_contexts`). Each indexes those alone.
     fn claim_lifecycle_indexing(
         &self,
         root: &Path,
@@ -13115,6 +13134,32 @@ impl RepositoryService {
     /// changed; see `lifecycle_contexts`.
     fn lifecycle_indexed(&self, root: &Path, item: &canonical::ItemId) -> bool {
         self.contexts_indexed(root, &lifecycle_contexts(item))
+    }
+
+    /// Which of `contexts` the index owes an indexing, each read as
+    /// `contexts_indexed` reads it: marked dirty, or owed by a pending row.
+    /// Whether the repository is marked behind as a whole is not read: an
+    /// indexing of these contexts would not clear it. Every one of them
+    /// when the index cannot be read, so a caller that indexes what this
+    /// gives indexes too much rather than too little.
+    fn owed_of(&self, root: &Path, contexts: &[ContextKey]) -> Vec<ContextKey> {
+        self.read_registration(root, |connection, root, root_path| {
+            let repository_id: i64 = connection
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root_path],
+                    |row| row.get(0),
+                )
+                .map_err(|error| snapshot_index_error_source(root, error))?;
+            let dirty = DirtyContexts::read(connection, repository_id)
+                .map_err(|error| snapshot_index_error_source(root, error))?;
+            Ok(contexts
+                .iter()
+                .filter(|context| dirty.any_of(std::slice::from_ref(*context)))
+                .cloned()
+                .collect())
+        })
+        .unwrap_or_else(|_| contexts.to_vec())
     }
 }
 

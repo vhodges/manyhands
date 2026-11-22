@@ -786,7 +786,10 @@ pub(in super::super) fn remote_identity_of<R: ParentRecord>(
     Ok(())
 }
 /// The local journal may never begin under a parent ID, and under a child
-/// ID only as that child's exact authoritative refresh hand-off.
+/// ID only as that child's exact authoritative refresh hand-off: a row with
+/// no target, as an older build began it. This build begins none under a
+/// child ID, whose hand-off is its parent's exit (Task 22); it takes up only
+/// what an older build began there.
 pub(in super::super) fn validate_local_identity(
     kind: LifecycleKind,
     db: &Connection,
@@ -855,8 +858,10 @@ fn child_repository(
 }
 /// Whether `op` is a lifecycle's child, a promotion's or a closure's, as
 /// its parent's record says, whoever runs it: the ID under which
-/// `validate_local_identity` lets the local journal begin only the plain
-/// refresh hand-off, with no target.
+/// `validate_local_identity` lets the local journal hold only the plain
+/// refresh hand-off an older build began, with no target. Such a child
+/// begins no hand-off of its own: its parent's exit indexes what it changed
+/// (Task 22).
 pub(in super::super) fn is_child(
     db: &Connection,
     op: OperationId,
