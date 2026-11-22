@@ -511,7 +511,7 @@ fn unverified_push_error(error: SynchronizationError) -> SynchronizationError {
 /// (`expected`) still holds, and that the connection's endpoint is the
 /// action's (`expectation`). A failed boundary or snapshot is the call's
 /// answer (`Ok(Err(..))`); a failed endpoint check is the transport's.
-pub(in super::super) struct ActionChecks<'c> {
+struct ActionChecks<'c> {
     service: &'c RepositoryService,
     root: &'c Path,
     plan: &'c RemoteRefPlan,

@@ -1768,11 +1768,14 @@ fn authenticated_action_snapshot() -> Result<(), FixtureError> {
     let repo = fixed(git2::Repository::open(&case.root))?;
     // Keep Push explicitly pinned to A; alter only Fetch during Push auth. The
     // per-call Push endpoint remains valid, but the whole action snapshot does not.
+    // The push's call is the first Push call after the fetch, and it
+    // authenticates before its listing and the push intent (E-55): the change
+    // is refused there, before the intent, as before any other call.
     fixed(repo.remote_set_pushurl("origin", Some(&case.fixture.url())))?;
     let pushing = std::rc::Rc::new(Cell::new(false));
     let stage = pushing.clone();
     let hook = crate::repository::observation_tests::install_hook(move |point| {
-        if point == RemoteOperationSafePoint::BeforePush {
+        if point == RemoteOperationSafePoint::AfterFetch {
             stage.set(true);
         }
     });
@@ -1796,11 +1799,17 @@ fn authenticated_action_snapshot() -> Result<(), FixtureError> {
     let mut req = request(&case);
     req.approval = None;
     assert!(matches!(
-        case.service.synchronize_remote(req, &mut session),
-        Err(SynchronizationError::RecoveryRequired)
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::ExternalChange)
     ));
     drop(transport_hook);
     drop(hook);
+    let checkpoint: String = fixed(database(&case)?.query_row(
+        "SELECT sync_checkpoint FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    assert_eq!(checkpoint, "fetch_observed", "refused before the push intent");
     assert_eq!(
         fixed(
             fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
@@ -1870,10 +1879,13 @@ fn prompt_action_snapshot_and_cancel() -> Result<(), FixtureError> {
 fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
     let case = prepare()?;
     let destination = alternate_push(&case)?;
+    // The push's call is the first Push call after the fetch; its snapshot
+    // check and preparation come before its listing and the push intent
+    // (E-56), so the race is refused there, unmapped, before the intent.
     let pushing = std::rc::Rc::new(Cell::new(false));
     let stage = pushing.clone();
     let hook = crate::repository::observation_tests::install_hook(move |point| {
-        if point == RemoteOperationSafePoint::BeforePush {
+        if point == RemoteOperationSafePoint::AfterFetch {
             stage.set(true);
         }
     });
@@ -1901,11 +1913,18 @@ fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
     let mut req = request(&case);
     req.approval = None;
     assert!(matches!(
-        case.service.synchronize_remote(req, &mut session),
-        Err(SynchronizationError::RecoveryRequired)
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::Transport(error))
+            if error.kind == SshTransportErrorKind::EndpointChanged
     ));
     drop(transport_hook);
     drop(hook);
+    let checkpoint: String = fixed(database(&case)?.query_row(
+        "SELECT sync_checkpoint FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    assert_eq!(checkpoint, "fetch_observed", "refused before the push intent");
     assert_eq!(attempts.get(), 0);
     assert_eq!(prompts.borrow().len(), 0);
     assert_eq!(destination.accepted_keys().len(), effects);
