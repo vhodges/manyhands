@@ -2161,7 +2161,18 @@ fn resolved_by_the_route(a: &CliClone, lines: &[Vec<String>], request: &str) -> 
         })
         .collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    a.json(&args, &input, "ok", 0)
+    // E-77: the resolution published the close's child, whose resolved
+    // context waits for its parent's exit to index it (Task 22, decision 8):
+    // `discovery_pending`, offering only `index refresh`.
+    let resolution = a.json(&args, &input, "discovery_pending", 4);
+    let actions: Vec<&str> = resolution["recovery"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| action["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["index.refresh"], "{resolution}");
+    resolution
 }
 
 /// Decision 34's walk, which replaces Task 13b's stop for the owner. The

@@ -99,6 +99,22 @@ fn closure_fields(repo: &git2::Repository, reference: &str) -> Result<Vec<String
         .collect())
 }
 
+/// E-76: a resolution that published a lifecycle's child is answered as the
+/// child's own-ID answers are while its resolved context waits for its
+/// parent's exit to index it (Task 22, decision 8): `discovery_pending`,
+/// offering only `index refresh`, with the resolution's data. It owes no
+/// resume.
+fn assert_owed_to_its_parent(answer: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        answer.code,
+        ResultCode::DiscoveryPending,
+        "{:?}",
+        answer.data
+    );
+    assert_eq!(answer.effects.discovery, results::DiscoveryEffect::Pending);
+    assert_eq!(actions(answer), [RecoveryActionKind::IndexRefresh]);
+}
+
 /// The child's conflict stands as it was: nothing resolved, written or pushed.
 fn assert_untouched(w: &World, verb: Verb, child: OperationId, served: git2::Oid) {
     let index = git2::Repository::open(verb.worktree(&w.root))
@@ -193,7 +209,7 @@ fn resolved_then_the_same_request(verb: Verb) -> Result<(), FixtureError> {
         shown.observation.as_deref().ok_or(FixtureError)?,
         local_sides(&shown),
     );
-    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+    assert_owed_to_its_parent(&answer);
     let data = resolution_of(&answer);
     assert_eq!(data.operation_id, child.to_string());
     assert_eq!(data.publication, PublicationEffect::Published);
@@ -234,7 +250,7 @@ fn stale_token(verb: Verb) -> Result<(), FixtureError> {
     let resent_lifecycle = resent(&w, FIRST, verb);
     assert_eq!(resent_lifecycle.code, ResultCode::RecoveryRequired);
     let answer = resolved(&w, AGAIN, parent, &observation, local_sides(&shown));
-    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+    assert_owed_to_its_parent(&answer);
     assert_lifecycle_finishes(&w, verb)?;
     Ok(())
 }
@@ -381,8 +397,9 @@ fn resolved_under_a_cancelled_parent(verb: Verb) -> Result<(), FixtureError> {
 }
 
 /// A finished resolution, sent again under its ID and named this time by the
-/// child's ID, is the same request: its answer again, with no connection. The
-/// finished lifecycle request's replay is its answer too.
+/// child's ID, is the same request: its answer again (with no action, E-76),
+/// with no connection. The finished lifecycle request's replay is its answer
+/// too.
 fn replay(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     conflicted(&w, verb)?;
@@ -390,11 +407,20 @@ fn replay(verb: Verb) -> Result<(), FixtureError> {
     let shown = fixed(shown(&w, parent).map_err(|_| FixtureError))?;
     let observation = shown.observation.clone().ok_or(FixtureError)?;
     let first = resolved(&w, RESOLVE, parent, &observation, local_sides(&shown));
-    assert_eq!(first.code, ResultCode::Ok, "{:?}", first.data);
+    assert_owed_to_its_parent(&first);
     let done = assert_lifecycle_finishes(&w, verb)?;
     let before = connections(&w);
     let again = resolved(&w, RESOLVE, child, &observation, local_sides(&shown));
-    assert_eq!(again, first);
+    // E-76: a finished `conflict resolve` is given again with no action, as
+    // every command's finished result that is no synchronization's is; the
+    // rest of its answer is the first one's.
+    assert_eq!(
+        again,
+        Envelope {
+            recovery: Vec::new(),
+            ..first.clone()
+        }
+    );
     assert_eq!(resent(&w, FIRST, verb), done);
     assert_eq!(connections(&w), before, "no connection");
     assert_eq!(merges_on_primary(&w.repo()?)?, 1);
@@ -402,7 +428,8 @@ fn replay(verb: Verb) -> Result<(), FixtureError> {
 }
 
 /// A resolution to the peer's side changes the change set the request
-/// consented to. The resolution itself is `ok` and published; the same
+/// consented to. The resolution itself is published (E-76: answered as
+/// owing only a refresh while its context waits for the exit); the same
 /// lifecycle request then answers `external_change`, offering a new prepare,
 /// with no merge on primary. Its record is finished, and a new prepare is free.
 fn unconsented_resolution(verb: Verb) -> Result<(), FixtureError> {
@@ -422,7 +449,7 @@ fn unconsented_resolution(verb: Verb) -> Result<(), FixtureError> {
         shown.observation.as_deref().ok_or(FixtureError)?,
         incoming,
     );
-    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+    assert_owed_to_its_parent(&answer);
     assert_eq!(
         resolution_of(&answer).publication,
         PublicationEffect::Published
