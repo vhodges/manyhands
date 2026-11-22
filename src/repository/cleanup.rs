@@ -324,9 +324,12 @@ impl ContextCleanup {
             Err(_) => Err(Finding::Mismatch),
         }
     }
-    /// A lifecycle's removal of its context's worktree, under the one full
-    /// check the cleanup makes (P-1): as `precheck_context`'s, the tree read
-    /// through `service`'s cache of accepted trees.
+    /// A lifecycle's removal of its context's worktree, resumed at
+    /// `worktree_removing`, under the one full check the cleanup makes
+    /// (P-1): as `precheck_context`'s, the tree read through `service`'s
+    /// cache of accepted trees. A removal may have begun, so a worktree
+    /// that is gone reads as one removed, and one partly gone as one whose
+    /// prune did not finish, before the check.
     pub(super) fn remove_context_worktree(
         &self,
         service: &super::RepositoryService,
@@ -335,11 +338,40 @@ impl ContextCleanup {
         oid: Oid,
     ) -> WorktreeRemoval {
         let refusal = || {
-            (Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(Some(service))))
-                != Precheck::Ok)
+            (self.full_check(service, kind, id, oid) != Precheck::Ok)
                 .then_some(WorktreeRelease::NotClean)
         };
-        match self.remove_worktree(kind, id, refusal, || true) {
+        Self::removal(self.remove_worktree(kind, id, refusal, || true))
+    }
+    /// `remove_context_worktree`, in the attempt that has just recorded
+    /// `worktree_removing`: no prune has run, so whatever the full check
+    /// finds, a worktree gone or partly gone or a file missing among it, is
+    /// the person's, and it answers first, `Changed`, as the check before
+    /// the removal did (R-SDD-71). The check still runs once.
+    pub(super) fn remove_fresh_context_worktree(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> WorktreeRemoval {
+        if self.full_check(service, kind, id, oid) != Precheck::Ok {
+            return WorktreeRemoval::Changed;
+        }
+        Self::removal(self.remove_worktree(kind, id, || None, || true))
+    }
+    /// The full check of a lifecycle's removal (P-1).
+    fn full_check(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> Precheck {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(Some(service))))
+    }
+    fn removal(release: WorktreeRelease) -> WorktreeRemoval {
+        match release {
             WorktreeRelease::Removed => WorktreeRemoval::Removed,
             WorktreeRelease::AlreadyAbsent => WorktreeRemoval::AlreadyAbsent,
             WorktreeRelease::NotClean => WorktreeRemoval::Changed,

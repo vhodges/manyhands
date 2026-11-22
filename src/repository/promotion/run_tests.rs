@@ -4880,12 +4880,28 @@ fn integrated_configuration_failure_is_ok_pending_even_when_configuration_is_inv
 fn partial_worktree_prune_requires_recovery_and_never_finishes_a_stub() {
     let f = Fixture::new();
     let req = f.request();
-    let root = f.root.path().to_owned();
-    hook(&f, move |_, p| {
-        if p == FailurePoint::DuringWorktreeRemoval {
-            fs::remove_file(root.join(".manyhands/worktrees").join(ITEM).join(".git")).unwrap();
-        }
-    });
+    // E-80: an attempt stopped once it recorded `worktree_removing`, and a
+    // prune that began then lost the worktree's `.git`. A resume at that
+    // step reads it as a removal that did not finish. (The attempt that
+    // records the step reads a change there as the person's: R-SDD-71.)
+    let stopped = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::DuringWorktreeRemoval,
+    )
+    .unwrap();
+    authoritative(run::promote_with_io(&stopped, req.clone(), &mut FakeIo::default()).unwrap());
+    assert_eq!(
+        f.stored(req.operation_id).step,
+        record::PromotionStep::WorktreeRemoving
+    );
+    fs::remove_file(
+        f.root
+            .path()
+            .join(".manyhands/worktrees")
+            .join(ITEM)
+            .join(".git"),
+    )
+    .unwrap();
     let result = authoritative(f.run(req.clone()).unwrap());
     assert_eq!(
         result.cleanup(),
@@ -5842,6 +5858,10 @@ enum Dirt {
     NestedRepository,
     /// An ignored directory that cannot be read.
     Unreadable,
+    /// The worktree removed with its registration.
+    Gone,
+    /// The worktree's directory removed, its registration kept.
+    HalfGone,
 }
 
 /// The context worktree of the fixture at `root`.
@@ -5892,6 +5912,18 @@ fn make_dirt(root: &std::path::Path, dirt: Dirt) {
             fs::create_dir_all(worktree.join("vendor")).unwrap();
             git2::Repository::init(worktree.join("vendor/clone")).unwrap();
         }
+        Dirt::Gone => {
+            fs::remove_dir_all(&worktree).unwrap();
+            fs::remove_dir_all(
+                git2::Repository::open(root)
+                    .unwrap()
+                    .path()
+                    .join("worktrees")
+                    .join(ITEM),
+            )
+            .unwrap();
+        }
+        Dirt::HalfGone => fs::remove_dir_all(&worktree).unwrap(),
         Dirt::Unreadable => {
             exclude("target/");
             let closed = worktree.join("target/closed");
@@ -5935,7 +5967,9 @@ fn clear_dirt(root: &std::path::Path, dirt: Dirt) {
             }
             fs::remove_dir_all(worktree.join("target")).unwrap();
         }
-        Dirt::Moved | Dirt::Hidden => unreachable!("not cleared by these tests"),
+        Dirt::Moved | Dirt::Hidden | Dirt::Gone | Dirt::HalfGone => {
+            unreachable!("not cleared by these tests")
+        }
     }
 }
 
@@ -6108,7 +6142,15 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
             }
         });
         let mut io = FakeIo::default();
-        let stopped = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+        // The stop holds the cleanup's reservation, which refuses its exit's
+        // own index step: the answer is index pending (R-SDD-68's case).
+        let stopped = match f.run_io(req.clone(), &mut io).unwrap() {
+            DocumentPromotionResult::IndexPending(pending) => pending.authoritative,
+            other => {
+                wrong.push(format!("{case}: the stop indexed: {other:?}"));
+                authoritative(other)
+            }
+        };
         HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
         if stopped.cleanup()
             != (PromotionCleanup::Pending {
@@ -6145,7 +6187,14 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
             wrong.push(format!("{case}: what was nested is gone"));
         }
         clear_dirt(f.root.path(), dirt);
-        let finished = authoritative(f.run_io(req, &mut io).unwrap());
+        // The retry ends the reservation before its exit's index step.
+        let finished = match f.run_io(req, &mut io).unwrap() {
+            DocumentPromotionResult::Complete(o) => o,
+            other => {
+                wrong.push(format!("{case}: its retry did not index: {other:?}"));
+                authoritative(other)
+            }
+        };
         if finished.cleanup() != PromotionCleanup::Complete {
             wrong.push(format!(
                 "{case}: its retry: cleanup {:?}",
@@ -6161,27 +6210,48 @@ fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remo
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// What follows a refused removal's stop, in
+/// `a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable`.
+#[derive(Clone, Copy, Debug)]
+enum Then {
+    /// The person takes back out what they left, and the same request
+    /// finishes.
+    ClearAndRetry,
+    /// The person puts back what they took, and a new request supersedes
+    /// the stop and finishes, as a `context_changed` stop lets it.
+    ClearAndSupersede,
+    /// The same request resumes at `worktree_removing` under the removal's
+    /// own rules: a worktree gone with its registration is a removal that
+    /// finished, and the cleanup completes.
+    RetryCompletes,
+    /// The same, for a worktree half gone: a removal that may have begun,
+    /// `recovery_required`.
+    RetryRecoveryRequired,
+}
+
 /// P-1's second changed outcome (design, Phase 3): with no check before the
 /// removal of the worktree but the full one inside it, a close records
-/// `worktree_removing` before that check refuses. What the person left is
-/// kept, the cleanup is pending, and the same request finishes once it is
-/// gone. A tracked file that is missing reads there as a removal that may
-/// have begun, `recovery_required`, as it must at that step; it too
-/// finishes once the file is back.
+/// `worktree_removing` before that check refuses. In the attempt that
+/// records it no prune has run, so the full check answers first, before the
+/// removal's own reading of a worktree that is gone or half gone, and
+/// whatever it finds is the person's: the cleanup is pending,
+/// `context_changed`, as the old check before the removal answered
+/// (R-SDD-71), and what the person left is kept. A resume of the same
+/// request at `worktree_removing` keeps the removal's own rules, and
+/// finishes once what was left is gone.
 #[test]
 fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
     let mut wrong = Vec::new();
     let rows = [
-        (Dirt::Untracked, PromotionCleanupPending::ContextChanged),
-        (Dirt::Tracked, PromotionCleanupPending::ContextChanged),
-        (Dirt::Locked, PromotionCleanupPending::ContextChanged),
-        (
-            Dirt::NestedRepository,
-            PromotionCleanupPending::ContextChanged,
-        ),
-        (Dirt::Removed, PromotionCleanupPending::RecoveryRequired),
+        (Dirt::Untracked, Then::ClearAndRetry),
+        (Dirt::Tracked, Then::ClearAndRetry),
+        (Dirt::Locked, Then::ClearAndRetry),
+        (Dirt::NestedRepository, Then::ClearAndRetry),
+        (Dirt::Removed, Then::ClearAndSupersede),
+        (Dirt::Gone, Then::RetryCompletes),
+        (Dirt::HalfGone, Then::RetryRecoveryRequired),
     ];
-    for (dirt, reason) in rows {
+    for (dirt, then) in rows {
         let case = format!("{dirt:?}");
         let f = Fixture::new();
         let req = f.request();
@@ -6196,7 +6266,10 @@ fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
         });
         let stopped = authoritative(f.run(req.clone()).unwrap());
         HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
-        if stopped.cleanup() != (PromotionCleanup::Pending { reason }) {
+        let changed = PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::ContextChanged,
+        };
+        if stopped.cleanup() != changed {
             wrong.push(format!("{case}: cleanup {:?}", stopped.cleanup()));
         }
         let step = f.stored(req.operation_id).step;
@@ -6206,11 +6279,53 @@ fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
         if Some(worktree_image(f.root.path())) != *left.borrow() {
             wrong.push(format!("{case}: the worktree was not kept"));
         }
-        clear_dirt(f.root.path(), dirt);
-        let finished = authoritative(f.run(req).unwrap());
+        if f.repo
+            .find_reference(&format!("refs/heads/manyhands/document/{ITEM}"))
+            .is_err()
+        {
+            wrong.push(format!("{case}: the context's branch is gone"));
+        }
+        let finished = match then {
+            Then::ClearAndRetry => {
+                clear_dirt(f.root.path(), dirt);
+                authoritative(f.run(req).unwrap())
+            }
+            Then::ClearAndSupersede => {
+                clear_dirt(f.root.path(), dirt);
+                let finished = match f.run(f.request()) {
+                    Ok(result) => authoritative(result),
+                    Err(error) => {
+                        wrong.push(format!("{case}: a new request: {error:?}"));
+                        continue;
+                    }
+                };
+                let step = f.stored(req.operation_id).step;
+                if step != record::PromotionStep::Superseded {
+                    wrong.push(format!("{case}: the stop is {step:?}, not superseded"));
+                }
+                finished
+            }
+            Then::RetryCompletes => authoritative(f.run(req).unwrap()),
+            Then::RetryRecoveryRequired => {
+                let resumed = authoritative(f.run(req.clone()).unwrap());
+                let step = f.stored(req.operation_id).step;
+                if resumed.cleanup()
+                    != (PromotionCleanup::Pending {
+                        reason: PromotionCleanupPending::RecoveryRequired,
+                    })
+                    || step != record::PromotionStep::WorktreeRemoving
+                {
+                    wrong.push(format!(
+                        "{case}: its resume: cleanup {:?} at {step:?}",
+                        resumed.cleanup()
+                    ));
+                }
+                continue;
+            }
+        };
         if finished.cleanup() != PromotionCleanup::Complete {
             wrong.push(format!(
-                "{case}: its retry: cleanup {:?}",
+                "{case}: then {then:?}: cleanup {:?}",
                 finished.cleanup()
             ));
         } else {

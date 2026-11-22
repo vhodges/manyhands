@@ -1537,11 +1537,15 @@ fn finish_steps<L: Lifecycle>(
         primary,
     )?;
     // No check here (P-1): the removal's own full check refuses, once
-    // `worktree_removing` is recorded, and the same request resumes it.
-    if matches!(
+    // `worktree_removing` is recorded, and the same request resumes it. In
+    // the attempt that records it no prune has run, so that check answers
+    // first (`remove_fresh_context_worktree`), as the check here did; a
+    // resume keeps the removal's own reading of a prune that may have begun.
+    let fresh = matches!(
         r.step(),
         Step::PublicationPending | Step::RemoteDeleted | Step::Published
-    ) {
+    );
+    if fresh {
         r.set_step(Step::WorktreeRemoving);
         save::<L>(service, root, r).map_err(recovery)?;
     }
@@ -1558,7 +1562,12 @@ fn finish_steps<L: Lifecycle>(
             configuration.as_ref(),
             primary,
         )?;
-        match cleanup.remove_context_worktree(service, L::KIND.authoring(), r.item_id(), oid) {
+        let removal = if fresh {
+            cleanup.remove_fresh_context_worktree(service, L::KIND.authoring(), r.item_id(), oid)
+        } else {
+            cleanup.remove_context_worktree(service, L::KIND.authoring(), r.item_id(), oid)
+        };
+        match removal {
             WorktreeRemoval::Removed => {
                 #[cfg(test)]
                 super::run_tests::local_effect(service, root, "worktree_remove");
