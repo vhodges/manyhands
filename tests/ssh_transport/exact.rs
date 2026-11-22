@@ -409,9 +409,12 @@ fn fetch_scope() -> Result<(), FixtureError> {
     assert!(local.find_reference("refs/tags/untouched").is_err());
     assert_eq!(fixed(std::fs::read(&fetchhead))?, b"preserved fetch head");
     assert_eq!(requests.borrow().len(), 1);
+    // Named edit E-45: the call's listings and its download share one
+    // connection, so the selected key is submitted once (was once per listing
+    // and transfer, 5).
     assert_eq!(
         case.fixture.accepted_keys(),
-        vec![case.fixture.allowed_client_public_key(); 5]
+        vec![case.fixture.allowed_client_public_key()]
     );
     // A true tracking rewind is allowed, but its local source branch is untouched.
     let parent = fixed(local.find_commit(oid))?;
@@ -522,7 +525,7 @@ fn distinct_push_endpoint() -> Result<(), FixtureError> {
     });
     fixed(
         case.service
-            .with_authenticated_remote(request, &mut session, |remote| {
+            .with_authenticated_remote(request.clone(), &mut session, |remote| {
                 let before = remote.fresh_advertisement()?;
                 assert!(
                     before
@@ -530,16 +533,22 @@ fn distinct_push_endpoint() -> Result<(), FixtureError> {
                         .any(|(name, oid)| name == "refs/heads/main" && *oid == push_primary)
                 );
                 assert!(!before.iter().any(|(name, _)| name == target_ref()));
-                remote.push_exact(&plan(), &context())?;
-                let after = remote.fresh_advertisement()?;
-                assert!(
-                    after
-                        .iter()
-                        .any(|(name, oid)| name == target_ref() && *oid == candidate)
-                );
-                Ok(())
+                remote.push_exact(&plan(), &context())
             }),
     )?;
+    // Named edit E-46: the push closes its call's connection, so the
+    // verification listing is a call of its own, as a sync's is.
+    let after = fixed(
+        case.service
+            .with_authenticated_remote(request, &mut session, |remote| {
+                remote.fresh_advertisement()
+            }),
+    )?;
+    assert!(
+        after
+            .iter()
+            .any(|(name, oid)| name == target_ref() && *oid == candidate)
+    );
     assert_eq!(
         fixed(local.refname_to_id("refs/remotes/origin/main"))?,
         fetch_oid
@@ -547,9 +556,10 @@ fn distinct_push_endpoint() -> Result<(), FixtureError> {
     assert!(local.find_reference(tracking_ref()).is_err());
     let source = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
     assert!(source.find_reference(target_ref()).is_err());
+    // One key submission per call: the push's and its verification's (was 4).
     assert_eq!(
         destination.accepted_keys(),
-        vec![case.fixture.allowed_client_public_key(); 4]
+        vec![case.fixture.allowed_client_public_key(); 2]
     );
     Ok(())
 }
@@ -557,49 +567,62 @@ fn reconnect_rechecks() -> Result<(), FixtureError> {
     for mode in 0..5 {
         let case = Case::new(false)?;
         let (mut session, _) = session(vec![]);
-        let error = case
-            .service
-            .with_authenticated_remote(case.request(), &mut session, |remote| {
-                // These caller-owned checks/changes happen after a libgit2 call returns.
-                let checked = Cell::new(false);
-                match mode {
-                    0 => {
-                        fixed(git2::Repository::open(&case.root))
-                            .unwrap()
-                            .remote_set_url(
-                                "origin",
-                                "ssh://fixture@hostile.invalid/secret-endpoint",
+        let result =
+            case.service
+                .with_authenticated_remote(case.request(), &mut session, |remote| {
+                    // These caller-owned checks/changes happen after a libgit2 call returns.
+                    let checked = Cell::new(false);
+                    match mode {
+                        0 => {
+                            fixed(git2::Repository::open(&case.root))
+                                .unwrap()
+                                .remote_set_url(
+                                    "origin",
+                                    "ssh://fixture@hostile.invalid/secret-endpoint",
+                                )
+                                .unwrap();
+                        }
+                        1 => {
+                            case.service.clear_shared_key_selection().unwrap();
+                        }
+                        2 => {
+                            std::fs::write(case.fixture.client_key_path(), b"changed key source")
+                                .unwrap();
+                        }
+                        3 => {
+                            let db = rusqlite::Connection::open(
+                                case.directory.path().join("data/manyhands.sqlite3"),
                             )
                             .unwrap();
+                            db.execute("DELETE FROM ssh_host_pins", []).unwrap();
+                        }
+                        _ => {
+                            case.fixture.rotate_host_key().unwrap();
+                        }
                     }
-                    1 => {
-                        case.service.clear_shared_key_selection().unwrap();
-                    }
-                    2 => {
-                        std::fs::write(case.fixture.client_key_path(), b"changed key source")
-                            .unwrap();
-                    }
-                    3 => {
-                        let db = rusqlite::Connection::open(
-                            case.directory.path().join("data/manyhands.sqlite3"),
-                        )
-                        .unwrap();
-                        db.execute("DELETE FROM ssh_host_pins", []).unwrap();
-                    }
-                    _ => {
-                        case.fixture.rotate_host_key().unwrap();
-                    }
-                }
-                checked.set(true);
-                let result = if mode % 2 == 0 {
+                    checked.set(true);
+                    let result = if mode % 2 == 0 {
+                        remote.fresh_advertisement().map(|_| ())
+                    } else {
+                        remote.fetch_exact(&plan(), &context())
+                    };
+                    assert!(checked.get());
+                    result
+                });
+        let error = if mode == 4 {
+            // Named edit E-47: the host key rotated after this call's one
+            // connection verified it; nothing on that connection presents it
+            // again, so the call completes, and the next call's connection is
+            // refused at the host check.
+            fixed(result)?;
+            case.service
+                .with_authenticated_remote(case.request(), &mut session, |remote| {
                     remote.fresh_advertisement().map(|_| ())
-                } else {
-                    remote.fetch_exact(&plan(), &context())
-                };
-                assert!(checked.get());
-                result
-            })
-            .unwrap_err();
+                })
+                .unwrap_err()
+        } else {
+            result.unwrap_err()
+        };
         assert!(match mode {
             0 => error.kind == SshTransportErrorKind::EndpointChanged,
             1 => error.kind == SshTransportErrorKind::SelectionChanged,
