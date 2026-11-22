@@ -457,3 +457,36 @@ Entries for Tasks 1 to 10 follow, from the per-task reports, the reviewers' file
 - Named edits: E-72 (`sync_tests.rs` `a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off`: no row under the child's ID, the context stays owed for the parent), E-73 (`tests/document_promotion/quality.rs` F11 compound mode: the fenced owner is the exit's index step), E-75 (`context_release_tests.rs` `a_failed_hand_off_is_index_pending_and_a_refresh_under_its_id_finishes_it`: the refresh under a new ID proceeds, deletes the released context's rows and leaves the row pending). E-74, E-76 and E-77 were withdrawn; their tests are unchanged.
 - Review: spec ❌ with two Important findings (a retry past worktree removal left the repository flagged behind; an own-ID child answered `current` with its context dirty), both fixed in one round with the two concerns the fix raised; re-review clean. Minors deferred to the final review.
 - Not run, due at review-ready: the fast tier and every SSH-harness target.
+
+### Task 22b: One full cleanup check, and the wait behind a live hand-off
+
+- Base and commits: base `d24bcd6f`; `d3dc3239` (P-1: the full `require_cleanup_clean` check runs once, under the lease, inside the worktree removal; a cheap head-and-status check, the full check without the ignored-directory walk, runs before the cleanup's reservation and again just before the remote delete, both only when a remote delete is due; the other full checks go; the cleanup's tree validation reads through the service's validation cache with R-SDD-52's key), `d803215d` (decision 34: a new child's reservation and the cleanup's reservation wait in `RepositoryService::reserving`, the per-item writers' wait and liveness test, holding no lease or reservation while they wait; `publication_error` maps a `busy` that names a blocker to publication `busy`); fix round 1 `1c2a2a6f` (a fresh entry to the removal, the attempt that records `worktree_removing`, runs the full check before the removal's absent or partial rules, so it answers the old `context_changed`; a resume keeps the removal's rules) and `bf840c00`; fix round 2 `f03d4e91` (a child's newness is decided from what its caller read before it reserves, as the plain sync does; a restarting child is answered at once).
+- What: a close with a remote walked the item's tree 4 times in its cleanup checks, and 3 times without a remote; it now walks it at most once. A close or promotion behind its own item's live sync hand-off (or, for the primary's, any close or promotion) waits up to 5 s, then answers `busy`; `recovery_required` only for a stale row. Changed answers:
+  - P-1's two: an ignored nested repository or unreadable directory, which the cheap check cannot see, stops the close after the remote delete, with the work merged and cleanup pending at `worktree_removing`; a retry finishes it without a second delete. A refusal at removal is recorded at `worktree_removing`.
+  - Those of the wait, listed in R-SDD-70.
+- Rulings:
+  - R-SDD-67: two placements of the cheap check.
+  - R-SDD-68: outcome 1 covers an ignored nested repository that was there before the cheap check.
+  - R-SDD-69: after its wait, the cleanup's reservation behind a still-live hand-off answers cleanup pending `recovery_required`, not `busy`, because no answer shape carries `busy` there. This is for the owner.
+  - R-SDD-70: the answer changes from reusing the per-item writers' wait.
+  - R-SDD-71: a fresh entry gives the old reasons.
+  - R-SDD-72: a same-ID retry of a fresh entry's stop falls under the removal's resume rules.
+- Tests run, new (each RED before its change):
+  - `a_close_or_promotion_behind_a_live_hand_off_waits`, in promotion and closure;
+  - `a_dirty_worktree_stops_the_remote_delete`;
+  - `a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_remote_deleted`, which stops at `worktree_removing`; the name is the brief's;
+  - `a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable`;
+  - `a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not`.
+- Tests run, whole: lib `repository::closure`, `repository::promotion`, `repository::cleanup`, `repository::remote::reservation`, `repository::remote::sync`, `repository::recovery`, `repository::context_retirement`, `repository::blocker`, `repository::mutation`, `repository::context_release`, `repository::remote::poll` and `each_command_indexes_only_its_contexts`. SSH cases singly by exact name: 97 in the first run (`ticket_closure` 51, `document_promotion` 46), then 77 and 30 in the fix rounds. Static gates clean.
+- Named edits:
+  - E-78: `FakeIo::synchronize` returns the child's reservation with `?`.
+  - E-79: `remove_context_worktree`'s call sites pass the service.
+  - E-80: `partial_worktree_prune_requires_recovery_and_never_finishes_a_stub` reaches the partial prune by a crash at `DuringWorktreeRemoval`. Its assertions are unchanged.
+  - E-81: `reserve_promotion_child`'s test call sites pass `new`.
+- Review:
+  - spec ❌ only for the cleanup reservation's `busy` (ruled, R-SDD-69);
+  - three answer changes beyond P-1's, fixed in round 1;
+  - one regression from round 1's restart fix, fixed in round 2;
+  - both re-reviews clean;
+  - minors deferred to the final review.
+- Not run, due at review-ready: the fast tier and every SSH-harness target.
