@@ -6423,25 +6423,36 @@ impl RepositoryService {
                 resumed = record.sync_checkpoint;
             }
         }
+        let steps = Steps {
+            request: &request,
+            owner: &owner,
+            plan: &plan,
+            configuration: &configuration,
+            primary_branch: &config.primary_branch,
+        };
         let push_absence_boundary =
             self.synchronization_push_absence_boundary(&root, &owner, prior.is_some())?;
-        if let Some(boundary) = push_absence_boundary {
-            let actual =
-                self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
-            let observed = self.synchronization_push_observation(
-                &request,
-                session,
-                &owner,
-                &plan,
-                &configuration,
-                actual,
-            )?;
-            if self.observation_configuration(&root, &plan)? != configuration {
-                return Err(SynchronizationError::ExternalChange);
-            }
-            if observed.is_none() {
-                return Err(boundary.error());
-            }
+        // The absence check comes before any local update. A new
+        // synchronization whose plan, read from its initial head, makes none
+        // leaves it to its push's call: that call's listing is the same
+        // Push-direction observation, and its decision refuses an absence
+        // with the same boundary before anything is pushed. A local update
+        // found later, from a head that moved, runs the check first.
+        let mut absence_deferred = push_absence_boundary.is_some()
+            && prior.is_none()
+            && graph_plan(
+                &repository,
+                &request.target,
+                initial,
+                primary,
+                context,
+                publication,
+            )
+            .is_ok_and(|planned| !planned.local_update);
+        if let Some(boundary) = push_absence_boundary
+            && !absence_deferred
+        {
+            self.synchronization_push_absence_check(&steps, session, boundary)?;
         }
         // Set once the newest immutable push intent has been reconciled into an
         // open append-only publication attempt; the legacy push checkpoint is
@@ -6655,6 +6666,13 @@ impl RepositoryService {
                         || state::integration_step_in_window(tx, record.id, window.number, 1)?
                             .is_some()))
             })?;
+        if (divergence || ordered_continuation)
+            && absence_deferred
+            && let Some(boundary) = push_absence_boundary
+        {
+            self.synchronization_push_absence_check(&steps, session, boundary)?;
+            absence_deferred = false;
+        }
         // Refused before anything of a merge is recorded or prepared.
         if divergence && settings.refuse_divergence {
             return Err(SynchronizationError::MergeRequired {
@@ -6789,6 +6807,11 @@ impl RepositoryService {
                     return Err(SynchronizationError::RecoveryRequired);
                 }
                 evidence.local_oid = Some(integration.final_oid);
+                // The head is the initial one, so this is the plan that
+                // deferred the absence check: it makes no local update.
+                if integration.local_update && absence_deferred {
+                    return Err(SynchronizationError::ExternalChange);
+                }
                 if integration.local_update {
                     decision(self.checkpoint_synchronization(
                         &root,
@@ -6835,13 +6858,6 @@ impl RepositoryService {
         let candidate = evidence
             .local_oid
             .ok_or(SynchronizationError::RecoveryRequired)?;
-        let steps = Steps {
-            request: &request,
-            owner: &owner,
-            plan: &plan,
-            configuration: &configuration,
-            primary_branch: &config.primary_branch,
-        };
         // With an open publication attempt, the old Push intent and its
         // checkpoint stay as recorded: this invocation's single push is
         // journaled in the attempt. A Push endpoint that no longer
@@ -7087,6 +7103,41 @@ impl RepositoryService {
             .0)
         })
         .map_err(SynchronizationError::Repository)
+    }
+
+    /// The push-absence check: with `boundary`, the push endpoint, observed
+    /// on a call of its own, must still advertise the target, or the
+    /// synchronization is refused as `boundary` says.
+    fn synchronization_push_absence_check<P: SessionCredentialProvider>(
+        &self,
+        steps: &Steps<'_>,
+        session: &mut SessionCredentials<P>,
+        boundary: PushAbsenceBoundary,
+    ) -> Result<(), SynchronizationError> {
+        let Steps {
+            request,
+            owner,
+            plan,
+            configuration,
+            primary_branch,
+        } = *steps;
+        let actual =
+            self.inspect_synchronization_local(&request.root, primary_branch, &request.target)?;
+        let observed = self.synchronization_push_observation(
+            request,
+            session,
+            owner,
+            plan,
+            configuration,
+            actual,
+        )?;
+        if self.observation_configuration(&request.root, plan)? != *configuration {
+            return Err(SynchronizationError::ExternalChange);
+        }
+        if observed.is_none() {
+            return Err(boundary.error());
+        }
+        Ok(())
     }
 
     fn synchronization_push_observation<P: SessionCredentialProvider>(

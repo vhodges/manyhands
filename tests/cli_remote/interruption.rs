@@ -737,9 +737,11 @@ fn c4_interruption_index_hand_off_refused() -> Result<(), FixtureError> {
 }
 
 /// A `comment add` killed once its first push is prepared, for a ticket
-/// branch the remote has never had: the server holds the push's
-/// advertisement, which the client reaches only after recording the push
-/// intent, and the run is killed there. Nothing reached the remote, so
+/// branch the remote has never had: the server holds the push's commands,
+/// which the client sends only after recording the push intent and passing
+/// the safe point before the push, and the run is killed there (E-57; the
+/// push lists and pushes on one connection, so no connection opens between
+/// the intent and the push). Nothing reached the remote, so
 /// `operation resume` retries the push rather than answering
 /// `recovery_required`: it publishes, and no operation is left unfinished.
 /// SSH is needed because the behaviour is a real first push to a remote
@@ -750,14 +752,14 @@ fn a_publication_killed_after_push_prepared_resumes_to_published() -> Result<(),
     let a = &p.a;
     private_body();
     let pushes = remote_world::accepted(&p.server);
-    let mut hold = p.server.hold_advertisement()?;
+    let hold = p.server.hold_receive_commands()?;
     let run = started(
         &a.env,
         &comment_args(a, ITEM, R1),
         &comment_input(C1, None, PRIVATE_BODY),
     );
-    // Let each earlier connection go until the registry records the push
-    // intent: the held connection is then the push's own, made after it.
+    // The first push of the run is held as its commands arrive: the
+    // registry has recorded the push intent by then.
     let registry = a.env.data.join(repository::REGISTRY_FILE);
     let prepared = || -> Result<bool, FixtureError> {
         let db = fixed(rusqlite::Connection::open(&registry))?;
@@ -770,15 +772,8 @@ fn a_publication_killed_after_push_prepared_resumes_to_published() -> Result<(),
         ))?;
         Ok(found == 1)
     };
-    loop {
-        hold.wait_until_held()?;
-        if prepared()? {
-            break;
-        }
-        let next = p.server.hold_advertisement()?;
-        hold.release()?;
-        hold = next;
-    }
+    hold.wait_until_held()?;
+    assert!(prepared()?, "the push intent is recorded before the push");
     // Dropping the run kills the process by its handle and reaps it, so no
     // peer is alive when the resume runs. The server then lets go.
     drop(run);

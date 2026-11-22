@@ -1592,11 +1592,11 @@ fn before_push_endpoint_changed() -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut req = request(&case);
     req.approval = None;
-    assert!(
-        case.service
-            .synchronize_remote(req.clone(), &mut session)
-            .is_err()
-    );
+    // The change after the push intent is answered as one after it (E-59).
+    assert!(matches!(
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
     drop(hook);
     let server = fixed(git2::Repository::open_bare(destination.repository_path()))?;
     assert!(server.find_reference("refs/heads/main").is_err());

@@ -749,17 +749,19 @@ fn context_divergence(virtual_primary: bool) -> Result<(), FixtureError> {
     Ok(())
 }
 /// The design's connection counts (Phase 2, "Fewer listings"), on one
-/// endpoint for Fetch and Push. A pushing sync, the item's first
-/// publication with nothing to merge, makes 4: the fetch (its listing and
-/// download), the listing after it, the push (its listing and the push),
-/// and the verification. A sync that first merges main into the published
-/// item makes 5: the push-absence check before the merge is the fifth.
+/// endpoint for Fetch and Push. A pushing sync with nothing to merge makes
+/// 4: the fetch (its listing and download), the listing after it, the push
+/// (its listing and the push), and the verification. That holds for the
+/// item's first publication and for a local edit of the published item,
+/// whose push's own listing proves the branch is still there. A sync that
+/// first merges main into the published item makes 5: the push-absence
+/// check before the merge is the fifth.
 /// Connection reuse is transport behaviour, so only SSH shows it. The key
 /// needs no passphrase: a protected one costs each new session a refused
 /// first attempt before the prompt, which is not a call of the sync.
 fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), FixtureError> {
     let mut w = World::plain_key()?;
-    let _context = w.context()?;
+    let context = w.context()?;
     let sockets = w.server.accepted_sockets();
     let n = w.server.receive_updates().len();
     let published = fixed(w.sync(w.context_request()))?;
@@ -767,11 +769,31 @@ fn a_pushing_sync_uses_four_connections_and_a_merging_one_five() -> Result<(), F
     outcome(published, true, w.context_request().target, first);
     one_update(&w.server, n, CONTEXT, git2::Oid::zero(), first);
     assert_eq!(w.server.accepted_sockets() - sockets, 4, "a pushing sync");
+    // A local edit of the published item, with nothing to merge.
+    let edited = advance(
+        &fixed(git2::Repository::open(&context.worktree))?,
+        CONTEXT,
+        "context-local",
+    )?;
+    let sockets = w.server.accepted_sockets();
+    let n = w.server.receive_updates().len();
+    outcome(
+        fixed(w.sync(w.context_request()))?,
+        true,
+        w.context_request().target,
+        edited,
+    );
+    one_update(&w.server, n, CONTEXT, first, edited);
+    assert_eq!(
+        w.server.accepted_sockets() - sockets,
+        4,
+        "a pushing sync of the published item"
+    );
     // Main and the item move on at the remote: the next sync fast-forwards
     // the item, merges main into it, and pushes the merge.
     let server = w.bare()?;
     let base = fixed(server.refname_to_id("refs/heads/main"))?;
-    let remote = commit(&server, first, "remote-context", b"remote-context")?;
+    let remote = commit(&server, edited, "remote-context", b"remote-context")?;
     fixed(server.reference(CONTEXT, remote, true, "fixture"))?;
     let primary = commit(&server, base, "primary-divergent", b"primary-divergent")?;
     fixed(server.reference("refs/heads/main", primary, true, "fixture"))?;
