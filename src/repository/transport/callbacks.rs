@@ -22,8 +22,9 @@ pub(super) struct CallbackAttempt {
 
 impl CallbackAttempt {
     /// The attempt of a further connection of a call that finalized `host`:
-    /// a host the prepared policy accepts but that is not `host` is refused
-    /// at the host check, before a key is offered to it.
+    /// a host that is not `host` is refused at the host check, before a key
+    /// is offered to it, whether the prepared policy accepts it or would
+    /// pass it to libgit2's known_hosts check.
     pub(super) fn for_finalized_host(host: HostKeyIdentity) -> Self {
         Self {
             finalized_host: Some(host),
@@ -34,14 +35,17 @@ impl CallbackAttempt {
         &self,
         presented: &HostKeyIdentity,
     ) -> Result<git2::CertificateCheckStatus, git2::Error> {
-        if self
-            .finalized_host
-            .as_ref()
-            .is_some_and(|finalized| finalized != presented)
-        {
+        if self.not_finalized(presented) {
             return self.reject(SshTransportErrorKind::HostTrustChanged);
         }
         Ok(git2::CertificateCheckStatus::CertificateOk)
+    }
+    /// Whether this is a further connection of a call that finalized a host
+    /// other than `presented`.
+    fn not_finalized(&self, presented: &HostKeyIdentity) -> bool {
+        self.finalized_host
+            .as_ref()
+            .is_some_and(|finalized| finalized != presented)
     }
     pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
         if self.poll_stopped.get() {
@@ -172,6 +176,14 @@ impl CallbackAttempt {
         }
         if prepared.trust.reapproval_required || prepared.approval.is_some() {
             return self.reject(SshTransportErrorKind::HostApprovalRequired { presented });
+        }
+        // With no pin and no approval, libgit2's known_hosts check decides,
+        // and the call compares the host with the one it finalized only once
+        // the connection is made and the key submitted. A further connection
+        // refuses any other host here, before a key is offered, as the pinned
+        // and approved branches do (the final review's F-4).
+        if self.not_finalized(&presented) {
+            return self.reject(SshTransportErrorKind::HostTrustChanged);
         }
         self.passthrough.set(true);
         Ok(git2::CertificateCheckStatus::CertificatePassthrough)
