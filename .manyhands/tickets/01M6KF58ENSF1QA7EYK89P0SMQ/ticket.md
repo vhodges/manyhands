@@ -35,7 +35,6 @@ Outcome: an RFC proposal for the owner (CLI contract and desktop RFC), then Cycl
 
 Raised by the owner on 2026-11-04 after Wave 03 C5 (`01M4CC0VMXTNXNH78C11DYXS8H`).
 
-
 ## Missing step: record the closure
 
 The steps above do not include recording the closure: writing `closed_at` and `closed_by` on the item's branch without merging. In a repository whose primary changes only through pull requests, it is the one step a ticket still needs. `item sync` already publishes the branch, the forge does the merge, and `poll once` and `context retire` do the cleanup. `document promote` writes no completion marker, so a document needs no equivalent.
