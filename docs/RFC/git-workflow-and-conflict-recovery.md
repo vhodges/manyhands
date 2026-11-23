@@ -238,18 +238,24 @@ non-conflicted context worktree. After fetching, it re-observes `C`, `T(C)`, and
    remote, which the CLI and the desktop refuse before it begins
    (`publication_remote_required`), still runs in the library: it binds its
    local head under the same row, at that head, when it begins, and hands off
-   as one that found the remote current does. One that a promotion or closure
-   runs as its child, and a row that an older build began, with target `''`
-   or, for a synchronization with no publication remote, with a
-   `synchronization-local-v1/` target, still hand off to a refresh of the
-   whole repository. A hand-off that fails answers index
+   as one that found the remote current does. A row that an older build
+   began, with target `''` or, for a synchronization with no publication
+   remote, with a `synchronization-local-v1/` target, still hands off to a
+   refresh of the whole repository. A hand-off that fails answers index
    pending, and its resume or retry runs only the hand-off: it never repeats
    an observed push or merge. A refusal of the operation's own ID is answered
    as itself. The local update marks `C`'s context dirty under the repository
    lease it holds, before Git is touched and again after the update (ruling
    R-SDD-49 in the
    [execution log](../plans/2026-11-19-fast-writes-execution.md)), so the
-   update is owed an indexing until the hand-off stores it.
+   update is owed an indexing until the hand-off stores it. Amended 2026-11-22
+   by ticket vh-f3wts, Phase 3 of the fast-writes design: a synchronization
+   that a promotion or closure runs as its child begins no hand-off of its
+   own. Its local update marks the context it changes as above, and its
+   parent's exit indexes that context, with the contexts the parent changed,
+   in one step that observes no other context, under a row of that exit's
+   own; a row that an older build began under the child's ID is taken up as
+   above.
 
 Remote calls, amended 2026-11-22 by ticket vh-f3wts: each call lists refs and
 transfers on the one SSH connection it authenticated and runs one Git command
