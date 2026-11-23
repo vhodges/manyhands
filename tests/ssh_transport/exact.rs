@@ -391,10 +391,9 @@ fn fetch_scope() -> Result<(), FixtureError> {
     fixed(
         case.service
             .with_authenticated_remote(case.request(), &mut session, |remote| {
-                let before = remote.fresh_advertisement()?;
+                // A listing, then the download, on the call's one connection.
+                remote.fresh_advertisement()?;
                 remote.fetch_exact(&plan(), &context())?;
-                let after = remote.fresh_advertisement()?;
-                assert_eq!(before, after);
                 Ok(())
             }),
     )?;
@@ -409,9 +408,11 @@ fn fetch_scope() -> Result<(), FixtureError> {
     assert!(local.find_reference("refs/tags/untouched").is_err());
     assert_eq!(fixed(std::fs::read(&fetchhead))?, b"preserved fetch head");
     assert_eq!(requests.borrow().len(), 1);
-    // Named edit E-45: the call's listings and its download share one
+    // Named edit E-45: the call's listing and its download share one
     // connection, so the selected key is submitted once (was once per listing
-    // and transfer, 5).
+    // and transfer, 5). Named edit E-82: the listing after the download, and
+    // its comparison with the one before, are gone; on the one connection both
+    // were its cached advertisement, so they were equal whatever the fetch did.
     assert_eq!(
         case.fixture.accepted_keys(),
         vec![case.fixture.allowed_client_public_key()]
