@@ -742,6 +742,10 @@ pub(in super::super) enum RemoteContextHistory {
     /// Published, or its history unknown, with no fetch that saw it gone:
     /// the branch may stand, and a poll reads it.
     Unknown,
+    /// The evidence says the history is unknown (a repository whose cache
+    /// was lost or whose remote changed): a poll can't read it, and only
+    /// the owner's repair settles it.
+    Unresolved,
 }
 /// What an absent tracking context says of the remote. Published and then
 /// seen gone by a fetch is `Deleted`. Published with no fetch that saw it
@@ -759,7 +763,7 @@ pub(in super::super) fn remote_context_history(
             RemoteContextHistory::Deleted
         }
         RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Unknown,
-        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unresolved,
         RemotePublicationEvidence::NeverPublished => RemoteContextHistory::NeverPublished,
     }
 }
@@ -941,6 +945,9 @@ fn observe_git(
             }
             RemoteContextHistory::Unknown => {
                 blockers.insert(PromotionBlocker::HistoryUnknown);
+            }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(PromotionBlocker::HistoryUnresolved);
             }
             RemoteContextHistory::NeverPublished => {}
         }

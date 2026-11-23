@@ -737,6 +737,7 @@ impl RepositoryService {
         if changed != 1 {
             return Err(ReadError::new(ResultCode::RecoveryRequired));
         }
+        hold_envelope(&tx, current.operation_id).map_err(sql_error)?;
         tx.commit().map_err(sql_error)?;
         Ok(current)
     }
@@ -842,6 +843,8 @@ impl RepositoryService {
             return Err(ReadError::new(ResultCode::ExternalChange));
         }
         let execution = prepare(&git, &current)?;
+        // Whose the row is, read before the registry's write lock is taken.
+        let origin = recovery::RowOrigin::here(repo.root(), self.clock.now().unix_timestamp());
         let _cache =
             cache_write_guard(&self.registry_path, repo.root(), RepositoryOperation::Read)?;
         // Open only after taking the cache guard: never keep a writable
@@ -864,6 +867,7 @@ impl RepositoryService {
         let admitted = admit(&tx, facts.repository_id, kind, item, &git, &current)?;
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,context_path,state,completed_step,observed_at) VALUES(?1,?2,?3,'context_sync_local',?4,?5,?6,'created','local_sync_prepared',?7)",params![facts.repository_id,repo.root().to_str(),id,observation,item.to_string(),current.context_worktree,time::OffsetDateTime::now_utc().unix_timestamp()]).map_err(sql_error)?;
         let envelope = tx.last_insert_rowid();
+        recovery::attribute_local_row(&tx, envelope, &origin).map_err(sql_error)?;
         tx.execute("INSERT INTO local_context_sync_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,context_worktree,context_ref,primary_ref,observation,context_parent,primary_parent,state,owner_epoch,semantic_revision,generation,closure_operation,closure_checkpoint) VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,'prepared',1,1,1,?12,?13)",params![id,envelope,facts.repository_id,authoring_kind_segment(&kind),item.to_string(),current.context_worktree,current.context_ref,current.primary_ref,observation,current.context_head,current.primary_head,admitted.as_ref().map(|(op,_)|op.to_string()),admitted.as_ref().map(|(_,oid)|oid.to_string())]).map_err(sql_error)?;
         if let Some(execution) = execution {
             execution.insert(&tx, operation)?;
@@ -900,6 +904,19 @@ fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
         || owned_identity(db, id).map_err(recovery_error)?)
 }
 
+/// Records that this process holds the envelope row of the local
+/// synchronization `operation`, as a call that takes over its ownership
+/// does: the row names the process at work on it. Nothing else changes.
+pub(super) fn hold_envelope(db: &Connection, operation: OperationId) -> rusqlite::Result<()> {
+    let holder = recovery::Holder::this_process();
+    db.execute(
+        "UPDATE operation_records SET host=?2, pid=?3
+          WHERE id=(SELECT local_record_id FROM local_context_sync_records WHERE operation_ulid=?1)",
+        params![operation.to_string(), holder.host, holder.pid],
+    )?;
+    Ok(())
+}
+
 // Only local-sync identities are excluded here. Old remote/local index handoffs
 // and lifecycle child bindings retain their existing cross-journal rules.
 const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
@@ -918,7 +935,7 @@ const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
     ("remote_identity_confirmations", "confirmation_ulid"),
 ];
 
-fn foreign_id_collision(
+pub(in super::super) fn foreign_id_collision(
     db: &Connection,
     id: &str,
     own_envelope: Option<i64>,
@@ -975,6 +992,7 @@ pub(in super::super) fn require_foreign_id_available(
     db: &Connection,
     id: OperationId,
 ) -> Result<(), RepositoryError> {
+    super::super::context_retirement::record::require_foreign_id_available(db, id)?;
     if owned_identity(db, &id.to_string())? {
         Err(RepositoryError::new(
             RepositoryOperation::Read,

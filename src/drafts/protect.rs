@@ -75,10 +75,14 @@ impl From<std::io::Error> for DraftError {
     }
 }
 
-/// The drafts folder, held open. On Unix every file operation is relative
-/// to `handle` (decision 5); on Windows to `path`.
+/// The drafts folder's name in the data directory.
+const DRAFTS: &str = "drafts";
+
+/// A protected folder in the data directory (`drafts/` unless opened by
+/// name), held open. On Unix every file operation is relative to `handle`
+/// (decision 5); on Windows to `path`.
 pub(crate) struct Folder {
-    /// `<data>/drafts`.
+    /// `<data>/drafts`, or `<data>/<name>`.
     path: PathBuf,
     #[cfg(unix)]
     handle: std::fs::File,
@@ -89,7 +93,7 @@ pub(crate) struct Folder {
 /// can be resolved (or followed through a link) on the way. On Windows `:`
 /// is refused too: `C:x` would replace the folder in `Path::join`, and
 /// `x:y` names an alternate data stream.
-fn entry_name(name: &str) -> Result<&str, DraftError> {
+pub(crate) fn entry_name(name: &str) -> Result<&str, DraftError> {
     let separator = |c: char| matches!(c, '/' | '\\' | '\0') || (cfg!(windows) && c == ':');
     if name.is_empty() || name == "." || name == ".." || name.contains(separator) {
         return Err(DraftError::new(DraftErrorKind::Io));
@@ -98,10 +102,24 @@ fn entry_name(name: &str) -> Result<&str, DraftError> {
 }
 
 impl Folder {
+    /// `<data>/drafts`, made or checked and held open.
+    pub(crate) fn open(data: &std::path::Path) -> Result<Folder, DraftError> {
+        Self::open_named(data, DRAFTS)
+    }
+
     /// The data directory `path` is in.
     fn data(&self) -> Result<&std::path::Path, DraftError> {
         self.path
             .parent()
+            .ok_or_else(|| DraftError::new(DraftErrorKind::Io))
+    }
+
+    /// The folder's own name in the data directory.
+    #[cfg(unix)]
+    fn name(&self) -> Result<&str, DraftError> {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
             .ok_or_else(|| DraftError::new(DraftErrorKind::Io))
     }
 }
@@ -127,7 +145,7 @@ pub(crate) fn data_verdict(mode: u32, uid: u32, euid: u32) -> Verdict {
     }
 }
 
-/// `drafts/` must be our directory; any bit beyond the owner's is cleared.
+/// The folder must be our directory; any bit beyond the owner's is cleared.
 #[cfg(unix)]
 pub(crate) fn folder_verdict(mode: u32, uid: u32, euid: u32, is_dir: bool) -> Verdict {
     if uid != euid || !is_dir {

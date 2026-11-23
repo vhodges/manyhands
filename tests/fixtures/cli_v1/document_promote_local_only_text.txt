@@ -16,6 +16,8 @@ Publication pending: no_publication_remote
 Recording: none
 --- stderr
 progress: accepted
-progress: connecting
+progress: observing
+progress: integrating
+progress: cleaning_up
 note: primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.
 --- exit 0

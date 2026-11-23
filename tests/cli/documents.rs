@@ -292,7 +292,12 @@ impl InterruptedSave {
         assert_eq!(self.world.pending_journal_rows(), 0);
     }
 
-    fn other_requests(&self, row: &str, blocked: bool) {
+    /// New work beside the interrupted save: a refresh of the whole index,
+    /// and a save of another document. `interrupted`: the interrupted
+    /// save's row is still pending. It is in the refresh's way, which is
+    /// refused; it holds its own document alone, so the other document's
+    /// save succeeds whether it is pending or not.
+    fn other_requests(&self, row: &str, interrupted: bool) {
         for (request, mutation) in [
             (
                 REFRESH_REQUEST,
@@ -343,7 +348,7 @@ impl InterruptedSave {
                     record.result
                 ))
             );
-            if blocked {
+            if interrupted && request == REFRESH_REQUEST {
                 assert_eq!(
                     answer.code,
                     ResultCode::RecoveryRequired,
@@ -352,11 +357,6 @@ impl InterruptedSave {
                 // failure_class here is decoded from the child's actual exit.
                 assert_eq!(answer.failure_class(), Some(FailureClass::Blocked));
                 assert!(unchanged, "{row}: nothing may be written");
-                assert_eq!(
-                    self.world.record(REQUEST_3).unwrap().state,
-                    RequestState::Accepted
-                );
-                assert_eq!(self.world.pending_journal_rows(), 1);
             } else {
                 assert_eq!(
                     answer.code,
@@ -368,21 +368,35 @@ impl InterruptedSave {
                     self.world.record(request).unwrap().state,
                     RequestState::Finished
                 );
+            }
+            if interrupted {
+                assert_eq!(
+                    self.world.record(REQUEST_3).unwrap().state,
+                    RequestState::Accepted
+                );
+                assert_eq!(self.world.pending_journal_rows(), 1);
+            } else {
                 assert_eq!(self.world.pending_journal_rows(), 0);
             }
             self.unchanged_checkpoint();
         }
-        if !blocked {
-            assert_eq!(self.world.branch_commits(OTHER_DOCUMENT), 2);
-        }
+        assert_eq!(self.world.branch_commits(OTHER_DOCUMENT), 2);
     }
 }
 
+/// The approved table of what follows an interrupted save.
+///
+/// Row 1 was amended on 2026-11-18, with the owner's approval, for ticket
+/// vh-bhepg's per-item scope of the hold: while the interrupted save is
+/// pending, a save of another document now succeeds, and `index refresh`
+/// stays blocked. Every other row is as it was approved.
 #[test]
 fn interrupted_saves_follow_the_required_outcomes() {
     // Each table row has an independent accepted/pending checkpoint fixture.
     // Stop at the FIRST divergent answer; do not amend the contract to fit it.
     {
+        // Row 1: nothing else is done to the interrupted save. The refresh is
+        // refused; the other document's save succeeds (amended 2026-11-18).
         let f = InterruptedSave::new("row 1: nothing else");
         f.other_requests("row 1: nothing else", true);
     }

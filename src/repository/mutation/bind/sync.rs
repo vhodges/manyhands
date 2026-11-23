@@ -61,7 +61,10 @@ use rusqlite::OptionalExtension;
 
 use crate::{
     canonical::ItemId,
-    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
+    results::{
+        DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, RecoveryAction,
+        RecoveryActionKind, ResultCode, Scope,
+    },
 };
 
 use super::{
@@ -1034,12 +1037,16 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
+        // The domain ends an operation on unresolved history as it ends a
+        // cancelled one, but it is not the caller's cancellation: the
+        // answer is the error's, and names the repair.
+        let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
-            }) => true,
+            }) => !unresolved,
             Some(
                 JournalRow::Absent
                 | JournalRow::Pending(_)
@@ -1155,13 +1162,33 @@ impl SyncBinding {
                 host_data(error)
             }
         };
+        // The operation the synchronization was refused for: the local
+        // row the reservation found in its way, or, for a reservation
+        // another remote operation holds, that operation.
+        let blocker = error.blocker().cloned().or_else(|| {
+            matches!(error, SynchronizationError::Busy)
+                .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                .flatten()
+        });
+        let recovery = if unresolved {
+            crate::results::absolute_path_string(&accepted.root())
+                .map(|root| {
+                    RecoveryAction::new(RecoveryActionKind::RemoteHistory, [("root", root.into())])
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ran {
             answer: Answer {
                 effects,
                 data,
                 local_change,
+                recovery,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Stopped { journal },
         }
     }
@@ -1454,3 +1481,7 @@ impl Binding for SyncBinding {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

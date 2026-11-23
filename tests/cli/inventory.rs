@@ -80,6 +80,9 @@ const NO_INPUT: &[&str] = &[
     "item sync",
     "repo sync",
     "item republish",
+    "item resolve-history",
+    "remote history",
+    "remote resolve-history",
     "conflict show",
     "operation resume",
     "operation abandon",
@@ -91,10 +94,14 @@ const NO_INPUT: &[&str] = &[
     "poll resume",
     "context observe-local",
     "context show-local",
+    "context retire",
 ];
 
 /// The output schemas a verb's `data` is published by: a read's, a mutation's
 /// result and its preview's. An empty list is a verb whose data is always null.
+/// `blocked` is the data of a `busy` or `recovery_required` answer that names
+/// the operation in its way, in place of the command's own: listed for every
+/// verb whose answer can name one.
 const DATA: &[(&str, &[&str])] = &[
     ("repo list", &["repository_list"]),
     ("repo inspect", &["repository_inspection"]),
@@ -126,18 +133,18 @@ const DATA: &[(&str, &[&str])] = &[
     ("id new", &["new_id"]),
     // A create or enable answers with its preview and no other data.
     ("repo create", &["preview"]),
-    ("repo enable", &["preview"]),
+    ("repo enable", &["blocked", "preview"]),
     ("repo remove", &["repository_removal_preview"]),
     (
         "repo identity-set",
         &["identity_preview", "identity_mutation"],
     ),
-    ("remote add", &["remote_mutation"]),
+    ("remote add", &["blocked", "remote_mutation"]),
     (
         "remote remove",
-        &["remote_removal_preview", "remote_mutation"],
+        &["blocked", "remote_removal_preview", "remote_mutation"],
     ),
-    ("remote select", &["remote_mutation"]),
+    ("remote select", &["blocked", "remote_mutation"]),
     ("key generate", &["key_mutation"]),
     ("key import", &["key_mutation"]),
     ("key select", &["key_mutation"]),
@@ -155,23 +162,30 @@ const DATA: &[(&str, &[&str])] = &[
     ("host observe", &["host_observation"]),
     ("request show", &["request"]),
     ("request cancel", &["cancel"]),
-    ("folder create", &[]),
-    ("document create", &["document_mutation"]),
-    ("document save", &["document_mutation"]),
-    ("document move", &["document_mutation"]),
-    ("document repair", &["repair_preview", "repair_mutation"]),
-    ("ticket create", &["ticket_mutation"]),
-    ("ticket save", &["ticket_mutation"]),
-    ("ticket repair", &["repair_preview", "repair_mutation"]),
-    ("ticket slug-assign", &["ticket_mutation"]),
-    ("index refresh", &[]),
-    ("index rebuild", &[]),
+    ("folder create", &["blocked"]),
+    ("document create", &["blocked", "document_mutation"]),
+    ("document save", &["blocked", "document_mutation"]),
+    ("document move", &["blocked", "document_mutation"]),
+    (
+        "document repair",
+        &["blocked", "repair_preview", "repair_mutation"],
+    ),
+    ("ticket create", &["blocked", "ticket_mutation"]),
+    ("ticket save", &["blocked", "ticket_mutation"]),
+    (
+        "ticket repair",
+        &["blocked", "repair_preview", "repair_mutation"],
+    ),
+    ("ticket slug-assign", &["blocked", "ticket_mutation"]),
+    ("index refresh", &["blocked"]),
+    ("index rebuild", &["blocked"]),
     ("path observe", &["path_observation"]),
     ("ticket check", &["relationship_check"]),
-    ("comment add", &["comment_mutation"]),
+    ("comment add", &["blocked", "comment_mutation"]),
     (
         "item sync",
         &[
+            "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
         ],
@@ -179,21 +193,39 @@ const DATA: &[(&str, &[&str])] = &[
     (
         "repo sync",
         &[
+            "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
         ],
     ),
     // A republish's result is its effects; only its preview has data.
     ("item republish", &["item_republish_preview"]),
+    (
+        "item resolve-history",
+        &[
+            "item_resolve_history_preview",
+            "history_resolution_mutation",
+        ],
+    ),
+    ("remote history", &["remote_history"]),
+    (
+        "remote resolve-history",
+        &[
+            "remote_resolve_history_preview",
+            "history_resolution_mutation",
+        ],
+    ),
     ("conflict show", &["conflict"]),
     ("conflict resolve", &["conflict_resolution_mutation"]),
     (
         "operation resume",
         &[
+            "blocked",
             "comment_mutation",
             "synchronization_conflict_mutation",
             "local_context_sync_mutation",
             "lifecycle_mutation",
+            "context_retirement_mutation",
         ],
     ),
     (
@@ -217,7 +249,14 @@ const DATA: &[(&str, &[&str])] = &[
         ],
     ),
     // A first call's host stop carries the synchronization's host data.
-    ("poll once", &["poll_mutation", "synchronization_mutation"]),
+    (
+        "poll once",
+        &[
+            "poll_mutation",
+            "poll_retirement_mutation",
+            "synchronization_mutation",
+        ],
+    ),
     ("poll configure", &["poll_policy_mutation"]),
     ("poll pause", &["poll_policy_mutation"]),
     ("poll resume", &["poll_policy_mutation"]),
@@ -231,6 +270,10 @@ const DATA: &[(&str, &[&str])] = &[
     ),
     ("context sync-local", &["local_context_sync_mutation"]),
     ("context resolve-local", &["local_context_sync_mutation"]),
+    (
+        "context retire",
+        &["context_retirement_mutation", "synchronization_mutation"],
+    ),
 ];
 
 fn manifest() -> &'static Path {
@@ -255,7 +298,7 @@ fn help(args: &[&str]) -> Value {
 }
 
 /// The root help's commands, by name.
-fn catalog() -> BTreeMap<String, Value> {
+pub(crate) fn catalog() -> BTreeMap<String, Value> {
     let root = help(&["--help", "--json"]);
     let commands: BTreeMap<String, Value> = root["data"]["commands"]
         .as_array()
@@ -276,7 +319,7 @@ fn catalog() -> BTreeMap<String, Value> {
     commands
 }
 
-fn options(command: &Value) -> BTreeSet<String> {
+pub(crate) fn options(command: &Value) -> BTreeSet<String> {
     command["options"]
         .as_array()
         .unwrap()
@@ -346,7 +389,7 @@ fn every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt() {
     }
     let expected = set(bound.difference(&set(EXEMPT.iter().copied())).copied());
     assert_eq!(mutating, expected);
-    assert_eq!(mutating.len(), 41);
+    assert_eq!(mutating.len(), 44);
 }
 
 #[test]
@@ -364,7 +407,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 77);
+    assert_eq!(catalogued.len(), 81);
 }
 
 #[test]

@@ -22,7 +22,7 @@ use crate::repository::{
         lifecycle::LifecycleError,
         record::ChildExecution,
         run::{self, PromotionIo},
-        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS},
+        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS, Told},
     },
     remote::{observation::ObservationConfiguration, reservation::RemoteReservation, state},
     transport::{DeleteObservation, VerifySshTransportRequest},
@@ -728,6 +728,51 @@ fn checkpoint_seams_finish_once_with_the_same_id_and_a_new_id_is_busy() {
         assert_eq!(f.primary_ticket().closed_at, stopped.closed_at, "{point:?}");
         assert_eq!(result.cleanup(), PromotionCleanup::Complete, "{point:?}");
     }
+}
+
+/// A closure's checkpoint is reported as `recording` by every call that
+/// writes it: the first, and the resend of a request another process broke
+/// after recording `closing` (the record then names its checkpoint, so the
+/// run cannot tell a new closure by that alone). A resend past the
+/// checkpoint's write reports the integration only.
+#[test]
+fn a_resend_that_writes_the_checkpoint_reports_recording() {
+    let told = |service: &RepositoryService, req: &CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(req.clone()),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let writing = [run::RunEvent::Recording, run::RunEvent::Integrating];
+    // The first call writes the checkpoint.
+    let f = Fixture::new();
+    let first = told(&f.service, &f.request());
+    assert_eq!(&first[..2], writing, "{first:?}");
+    // Broken after `closing` was recorded, nothing yet moved: the resend
+    // writes the checkpoint.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(
+        &f.failing(FailurePoint::ClosureAfterClosingRecorded),
+        req.clone(),
+    );
+    assert!(f.stored(req.operation_id).closure_oid.is_some());
+    let resent = told(&f.reopened(), &req);
+    assert_eq!(&resent[..2], writing, "{resent:?}");
+    // Broken at `integrating`, the checkpoint long written: nothing is
+    // recorded again.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone());
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Integrating);
+    let resent = told(&f.reopened(), &req);
+    assert!(!resent.contains(&run::RunEvent::Recording), "{resent:?}");
 }
 
 /// "Exit after `closing` recorded, before checkout": consent is re-checked
@@ -2175,4 +2220,152 @@ fn a_closed_ticket_with_its_context_kept_lists_one_closed_copy() {
     let primary = f.primary_ticket();
     assert!(primary.closed_at.is_some());
     assert_eq!(primary.status, "open");
+}
+
+/// D5 decision 11, R-16: a closure tells its observer only the steps that
+/// run, in the order they run, `recording` before the merge. With no
+/// publication remote nothing is synchronized or published; a request sent
+/// again past its context's synchronization starts no context child but
+/// still writes the checkpoint it has not written. (Promotion's own order,
+/// and a context primary already holds, are
+/// `promotion::run_tests::a_promotion_tells_its_observer_only_the_steps_that_run`;
+/// a closure already recorded is told as `recording` and not reported as one
+/// at the boundary, `a_runs_steps_are_reported_as_stages`.)
+#[test]
+fn a_closure_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request: CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Recording, E::Integrating, E::CleaningUp]
+    );
+    let f = Fixture::remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [
+            context,
+            E::Recording,
+            E::Integrating,
+            primary,
+            E::CleaningUp
+        ]
+    );
+    let f = Fixture::remote();
+    let request = f.request();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterContextSync),
+        request.clone(),
+        &mut FakeIo::default(),
+    );
+    assert_eq!(
+        told(&f.reopened(), request),
+        [E::Recording, E::Integrating, primary, E::CleaningUp]
+    );
+}
+
+/// The stages a close reports through the mutation boundary.
+#[derive(Default)]
+struct Stages(Vec<crate::repository::ProgressStage>);
+impl crate::repository::ProgressSink for Stages {
+    fn event(&mut self, event: &crate::repository::ProgressEvent) {
+        self.0.push(event.stage);
+    }
+}
+
+/// R-15, D5 decision 11: a closure the ticket already holds is not recorded
+/// again, and so is not reported as `recording`. The binding sets this from
+/// what the request observed, at its prepare and again at a re-entry, so the
+/// stages come from a real prepare and execute of `ticket close`. Contained
+/// in the primary as well, only the tidy-up is left (R-14).
+#[test]
+fn a_closure_the_ticket_holds_is_not_reported_as_recording() {
+    use crate::repository::{
+        CancellationToken, ConfirmationId, Mutation, MutationCall, PrepareDataDto,
+        ProgressStage as S, RequestId, TicketCloseInput,
+    };
+    let stages_of = |contained: bool, interrupted: bool| {
+        let f = Fixture::new();
+        let closed = closed_ticket_bytes(
+            &read(&f.context, &ticket()),
+            support::at(1_800_000_000),
+            "Earlier <earlier@example.invalid>",
+        )
+        .unwrap();
+        write(&f.context, &ticket(), closed);
+        commit(&f.context);
+        if contained {
+            checkout(&f.repo, f.context_oid());
+        }
+        let mutation = || {
+            Mutation::TicketClose(TicketCloseInput {
+                root: f.root().to_owned(),
+                id: id(),
+            })
+        };
+        let prepared = f.service.prepare(&mutation());
+        let confirmation = prepared
+            .data
+            .as_ref()
+            .and_then(PrepareDataDto::preview)
+            .expect("a preview")
+            .confirmation_id
+            .clone();
+        let request_id = RequestId::new();
+        let call = || MutationCall {
+            request_id,
+            confirmation: Some(ConfirmationId::parse(&confirmation).unwrap()),
+            mutation: mutation(),
+        };
+        if interrupted {
+            // The process died after the request was accepted and before
+            // its domain call: the same request enters again.
+            let dying = f.failing(FailurePoint::BeforeRequestDomainCall);
+            let died = dying.execute(
+                call(),
+                &mut SessionCredentials::new(NoCredentials),
+                &mut Stages::default(),
+                &CancellationToken::new(),
+            );
+            assert_eq!(died.code, crate::results::ResultCode::InternalError);
+        }
+        let service = f.reopened();
+        let mut sink = Stages::default();
+        let done = service.execute(
+            call(),
+            &mut SessionCredentials::new(NoCredentials),
+            &mut sink,
+            &CancellationToken::new(),
+        );
+        assert_eq!(done.code, crate::results::ResultCode::Ok, "{:?}", done.data);
+        sink.0
+    };
+    assert_eq!(
+        stages_of(false, false),
+        [S::Accepted, S::Observing, S::Integrating, S::CleaningUp]
+    );
+    assert_eq!(
+        stages_of(true, false),
+        [S::Accepted, S::Observing, S::CleaningUp]
+    );
+    // The same request entered again, no `accepted` to report twice.
+    assert_eq!(
+        stages_of(false, true),
+        [S::Observing, S::Integrating, S::CleaningUp]
+    );
 }

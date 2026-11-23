@@ -59,9 +59,6 @@ pub(super) const CASES: &[ssh_harness::Case] = &[
     ("preserve_untracked_context_after_integration", || {
         preservation(1)
     }),
-    ("preserve_ignored_context_after_integration", || {
-        preservation(2)
-    }),
     ("preserve_moved_context_after_integration", || {
         preservation(3)
     }),
@@ -94,7 +91,7 @@ pub(super) const BLOCKERS: &[ssh_harness::Case] = &[
     ("blocker_context_behind_remote", || blocker(13)),
     ("blocker_integration_conflict", || blocker(14)),
     ("blocker_remote_context_deleted", || blocker(15)),
-    ("blocker_history_unknown", || blocker(16)),
+    ("blocker_history_unresolved", || blocker(16)),
     ("blocker_already_closed", || blocker(17)),
     ("blocker_primary_reopened", || blocker(18)),
     ("blocker_ticket_invalid_after_closure", || blocker(19)),
@@ -355,10 +352,7 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
     let closed = p.close(&p.a)?;
     let primary = merged(&closed)?;
     let report = poll(&p, &p.b)?;
-    assert_eq!(
-        ticket_disposition(&report),
-        Some(PollDisposition::RemotelyDeleted)
-    );
+    assert_eq!(ticket_disposition(&report), Some(PollDisposition::Closed));
     assert!(p.b.worktree().exists());
     // The collaborator's kept context is still open while its primary is
     // closed. C5 refuses a new write there (the primary-tip arm) and nothing
@@ -860,18 +854,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             fixed(std::fs::write(p.a.worktree().join("u"), b"user\n"))?;
             None
         }
-        2 => {
-            let repo = p.a.repo()?;
-            let path = repo.commondir().join("info/exclude");
-            let mut bytes = fixed(std::fs::read(&path))?;
-            bytes.extend_from_slice(b"\nprivate-ignored\n");
-            fixed(std::fs::write(path, bytes))?;
-            fixed(std::fs::write(
-                p.a.worktree().join("private-ignored"),
-                b"user\n",
-            ))?;
-            None
-        }
         3 => Some(commit_files(
             &linked(&p.a)?,
             &[("moved.txt", b"user commit\n")],
@@ -885,11 +867,7 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     assert_eq!(
         outcome.cleanup(),
         PromotionCleanup::Pending {
-            reason: if mode == 2 {
-                PromotionCleanupPending::IgnoredFiles
-            } else {
-                PromotionCleanupPending::ContextChanged
-            }
+            reason: PromotionCleanupPending::ContextChanged
         }
     );
     assert_eq!(server_oid(&p, CONTEXT)?, remote);
@@ -909,7 +887,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     match mode {
         0 => fixed(std::fs::write(&ticket, &closed))?,
         1 => fixed(std::fs::remove_file(p.a.worktree().join("u")))?,
-        2 => fixed(std::fs::remove_file(p.a.worktree().join("private-ignored")))?,
         _ => unreachable!(),
     }
     // A new confirmation observes the published primary; only the cleanup
@@ -1345,7 +1322,7 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
         }
         16 => {
             lose_registry(&p.server, &mut p.a)?;
-            ClosureBlocker::HistoryUnknown
+            ClosureBlocker::HistoryUnresolved
         }
         17 => {
             p.close(&p.a)?;

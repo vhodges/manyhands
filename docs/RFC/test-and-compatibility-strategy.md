@@ -182,7 +182,7 @@ following, in addition to retaining the Wave 1 gate:
   cancellation, unavailable or unsupported keys, imported-key non-deletion, and
   generated-key protection/deletion recovery.
 - Successful authenticated fetch and push with the selected key; rejection of a
-  wrong, absent, default, or SSH-agent key; first-contact host approval; changed
+  wrong, absent, or default key, and an agent that holds the selected key signing for it and no other key; first-contact host approval; changed
   host replacement; and redaction of all credential and remote response data.
 - Two disposable clones synchronizing one shared context branch, including
   already-current, fast-forward, clean merge, conflict, explicit resolution,
@@ -228,3 +228,7 @@ that exceed the ten-second feedback threshold: the UI reports still stopping,
 retains live ownership/recovery state and waits safely; no total process-exit
 deadline is asserted. There is no CLI daemon or concurrent
 resident-poller orchestration gate in this release.
+
+Amended 2026-11-09 by Wave 03 D6 (decision 12): the desktop reports still
+stopping in the quit's entry in its Activity panel; with Activity hidden it is
+seen when Activity is opened.

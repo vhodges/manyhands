@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{Bounds, Pixels, TestAppContext, px, size, test::TestWindowExt};
+use gpui_kit::{Bounds, Pixels, TestAppContext, px, test::TestWindowExt};
 use manyhands::repository::ItemDtoKind;
 
 use crate::desktop::{
@@ -32,7 +32,7 @@ fn tall(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.commit_file(&root, &ticket_path(MAIN), source.as_bytes());
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(700.)));
+    shell.resize_keeping_content(1440., 700., cx);
     shell.run(cx);
     open(&shell, &root, cx);
     shell.keys("secondary-3", cx);

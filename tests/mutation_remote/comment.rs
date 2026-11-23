@@ -171,10 +171,14 @@ fn add(w: &World) -> Mutation {
     comment_on(w, ITEM, COMMENT, None, COMMENT_BODY, None)
 }
 
-/// The envelope, with its data checked against the published schema.
+/// The envelope, with its data checked against the published schema: the
+/// comment's, or, for an answer refused for another operation's unfinished
+/// row, the one that names that operation.
 fn checked(envelope: Envelope<MutationDataDto>) -> Envelope<MutationDataDto> {
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
-    if !value["data"].is_null() {
+    if value["data"]["blocker"].is_object() {
+        schema::check_published(BLOCKED_SCHEMA, &value["data"]).expect("the blocked schema");
+    } else if !value["data"].is_null() {
         schema::check_published(COMMENT_SCHEMA, &value["data"]).expect("the comment data schema");
     }
     envelope
@@ -363,8 +367,19 @@ fn assert_nothing(
     id: &str,
     envelope: &Envelope<MutationDataDto>,
 ) -> Result<(), FixtureError> {
-    assert_eq!(envelope.effects, Effects::not_requested());
     assert!(envelope.data.is_none());
+    assert_left_nothing(w, context, id, envelope)
+}
+
+/// `assert_nothing`, but for the data: no effect, no record, no binding and
+/// no comment file.
+fn assert_left_nothing(
+    w: &World,
+    context: &ItemContext,
+    id: &str,
+    envelope: &Envelope<MutationDataDto>,
+) -> Result<(), FixtureError> {
+    assert_eq!(envelope.effects, Effects::not_requested());
     assert!(record(w, id).is_none());
     assert_eq!(binding_rows(w)?, 0);
     assert!(!context.worktree.join(comment_path(ITEM, COMMENT)).exists());
@@ -628,13 +643,21 @@ fn c4_comment_this_item_s_conflict() -> Result<(), FixtureError> {
 
 fn c4_comment_unfinished_local_sync() -> Result<(), FixtureError> {
     let (w, context) = world()?;
-    leave_local_sync_conflict(&w);
+    let local_sync = leave_local_sync_conflict(&w);
     let opened = connections(&w);
     let refused = added(&w, REQUEST_1, add(&w));
     assert_eq!(refused.code, ResultCode::RecoveryRequired);
     assert_eq!(refused.outcome, Outcome::Blocked);
-    assert_eq!(actions(&refused), [RecoveryActionKind::RepoInspect]);
-    assert_nothing(&w, &context, REQUEST_1, &refused)?;
+    // The local synchronization in its way is named, and offered to show.
+    assert_eq!(
+        actions(&refused),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_blocked_by_local_sync(&refused, local_sync);
+    assert_left_nothing(&w, &context, REQUEST_1, &refused)?;
     assert!(!reserved(&w));
     assert_eq!(connections(&w), opened);
     Ok(())
@@ -1168,7 +1191,15 @@ fn c4_comment_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
     let checkpoint = checkpoint_of(&w, CONTEXT, COMMENT)?;
     assert_eq!(ended.effects, saved(checkpoint, PublicationEffect::Pending));
     assert_eq!(ended.operation_id, lost.operation_id);
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // Its synchronization, which no call is at work under, is offered its
+    // abandon.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
     assert!(!reserved(&w));
     assert_eq!(state(&w, REQUEST_1), Some(RequestState::Finished));
     // A new `item sync` verifies and completes it.

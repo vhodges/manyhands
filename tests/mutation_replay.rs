@@ -1961,6 +1961,108 @@ fn show_request_returns_an_accepted_request() {
     );
 }
 
+/// A comment's request links its own local row. The synchronization that
+/// publishes the comment is reserved by the same call and is not linked, so
+/// `request show` finds it by the request its row names; so it does a later
+/// row the request began, once, in the order they were started. Another
+/// request's rows, and rows that name none, are not the request's.
+#[test]
+fn request_show_lists_the_sync_the_comment_started() {
+    let world = world();
+    let data = world.data.path();
+    operations::configure_remote(data);
+    let started = |at: i64| operations::Attribution {
+        request: Some(REQUEST_A),
+        command: Some("comment add"),
+        author: None,
+        host: None,
+        pid: None,
+        started_at: Some(at),
+    };
+    let sync = "01ARZ3NDEKTSV4RRFFQ69G5FA4";
+    let refresh = "01ARZ3NDEKTSV4RRFFQ69G5FA5";
+    // The comment's own row, linked by the request.
+    operations::insert_local(
+        data,
+        Some(OPERATION_A),
+        "submit_comment",
+        "completed",
+        Some("authoritative_observed"),
+    );
+    operations::attribute_local(data, OPERATION_A, &started(operations::STORED_AT), None);
+    // The synchronization, started in the same second and not linked; the
+    // refresh that hands it to the index shares its ID, and a later local
+    // row of the same request has its own.
+    operations::insert_remote_synchronization(
+        data,
+        sync,
+        Some(("ticket", items::TICKET_A)),
+        "completed",
+        Some("before_discovery"),
+        Some("completed"),
+    );
+    operations::attribute_remote(data, sync, &started(operations::STORED_AT));
+    operations::insert_local(data, Some(sync), "refresh", "failed", None);
+    operations::attribute_local(data, sync, &started(operations::STORED_AT + 1), None);
+    operations::insert_local(data, Some(refresh), "refresh", "failed", None);
+    operations::attribute_local(data, refresh, &started(operations::STORED_AT + 5), None);
+    // Rows of another request and of none.
+    operations::insert_local(data, Some(OPERATION_C), "refresh", "failed", None);
+    operations::attribute_local(
+        data,
+        OPERATION_C,
+        &operations::Attribution {
+            request: Some(REQUEST_B),
+            ..started(operations::STORED_AT)
+        },
+        None,
+    );
+    operations::insert_remote_poll(data, OPERATION_B, "reserved", None, None);
+    world
+        .service
+        .insert_request(&world.request(REQUEST_A))
+        .unwrap();
+
+    let shown = world
+        .service
+        .show_request(request_id(REQUEST_A))
+        .data
+        .unwrap()
+        .operations;
+
+    assert_eq!(
+        shown,
+        [
+            (OperationFamily::Local, OPERATION_A),
+            (OperationFamily::Remote, sync),
+            (OperationFamily::Local, refresh),
+        ]
+        .map(|(family, id)| RequestOperationDto {
+            family,
+            operation_id: id.to_owned(),
+        })
+    );
+    // Another request lists the row it linked and the row that names it, and
+    // not the first request's rows.
+    world
+        .service
+        .insert_request(&world.request(REQUEST_B))
+        .unwrap();
+    let other = world
+        .service
+        .show_request(request_id(REQUEST_B))
+        .data
+        .unwrap()
+        .operations;
+    assert_eq!(
+        other
+            .iter()
+            .map(|operation| operation.operation_id.as_str())
+            .collect::<Vec<_>>(),
+        [OPERATION_A, OPERATION_C]
+    );
+}
+
 #[test]
 fn show_request_returns_a_finished_request_with_its_stored_result() {
     let world = world();
@@ -2127,6 +2229,9 @@ mod cache_loss;
 
 #[path = "mutation_replay/reenter.rs"]
 mod reenter;
+
+#[path = "mutation_replay/publication_wait.rs"]
+mod publication_wait;
 
 #[path = "mutation_replay/slug_assign.rs"]
 mod slug_assign;

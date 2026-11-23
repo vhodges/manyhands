@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 history resolution mutation data",
+  "description": "The data of an item resolve-history or remote resolve-history envelope: the context is recorded as never published (item sync is what publishes it), and whether that cleared the repository-wide cache-loss flag.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cache_loss_cleared",
+    "marker"
+  ],
+  "properties": {
+    "cache_loss_cleared": {
+      "description": "Whether this resolution cleared the cache-loss flag: the last context that read unknown was resolved, or remote resolve-history found none.",
+      "type": "boolean"
+    },
+    "marker": {
+      "description": "What became of the cache-loss marker file once the flag was cleared: not_applicable when it was not cleared, removed, absent when there was no file, and failed when it could not be deleted (the resolution stands).",
+      "type": "string",
+      "enum": [
+        "not_applicable",
+        "removed",
+        "absent",
+        "failed"
+      ]
+    }
+  }
+}

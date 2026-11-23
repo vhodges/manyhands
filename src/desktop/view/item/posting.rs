@@ -20,7 +20,7 @@ use futures::channel::oneshot;
 use gpui_kit::{
     AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window,
-    component::{Sizable, button::Button, h_flex},
+    component::{Disableable, Sizable, button::Button, h_flex},
     div, px,
 };
 use manyhands::{
@@ -31,6 +31,7 @@ use manyhands::{
 use super::{ItemPane, ItemRoute, pill::UPDATING_LIST, text, tokens::item_colors};
 use crate::desktop::{
     model::{
+        activity::copy::{CHECK_HOST, OPEN_SHARING_AND_KEYS},
         navigation::OpenTarget,
         operations::Operations,
         publication::{CommentOffer, CommentOutcome},
@@ -244,6 +245,9 @@ impl ItemPane {
             return None;
         }
         let colors = item_colors(cx);
+        // Retry sharing and Unlock… send the post again: they wait for the
+        // lifecycle lock (R-23).
+        let waits = self.edits_wait(cx);
         match &result.outcome {
             CommentOutcome::SavedHere => Some(
                 text(format!("comment-saved-here-{comment}"), SAVED_HERE)
@@ -289,6 +293,13 @@ impl ItemPane {
                                     .label(label)
                                     .xsmall()
                                     .outline()
+                                    .disabled(
+                                        waits
+                                            && matches!(
+                                                offer,
+                                                CommentOffer::RetrySharing | CommentOffer::Unlock
+                                            ),
+                                    )
                                     .on_click(cx.listener(
                                         move |pane, _: &ClickEvent, window, cx| {
                                             pane.chip_pressed(&comment, offer, window, cx)
@@ -313,6 +324,11 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The chip's sends wait for the lifecycle lock (R-23).
+        if matches!(offer, CommentOffer::RetrySharing | CommentOffer::Unlock) && self.edits_wait(cx)
+        {
+            return;
+        }
         let root = self.post_root();
         let submissions = self.services.submissions().clone();
         let worker = self.services.worker().clone();
@@ -371,8 +387,8 @@ fn chip_control(offer: CommentOffer) -> Option<(&'static str, &'static str)> {
         CommentOffer::Unlock => ("unlock", "Unlock\u{2026}"),
         CommentOffer::GiveUp => ("give-up", "Stop trying to share"),
         CommentOffer::Share => ("share", "Share"),
-        CommentOffer::OpenSharingAndKeys => ("open-keys", "Open Sharing & keys"),
-        CommentOffer::CheckHost => ("check-host", "Check host"),
+        CommentOffer::OpenSharingAndKeys => ("open-keys", OPEN_SHARING_AND_KEYS),
+        CommentOffer::CheckHost => ("check-host", CHECK_HOST),
         CommentOffer::SetIdentity => ("set-identity", "Set identity"),
         CommentOffer::CheckAgain => ("check-again", "Check again"),
         CommentOffer::Retry

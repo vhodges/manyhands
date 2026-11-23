@@ -1,0 +1,57 @@
+{
+  "code": "discovery_pending",
+  "command": "context retire",
+  "data": {
+    "branch_removal": "none",
+    "code": "discovery_pending",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "kind": "ticket",
+    "materialization_settled": true,
+    "operation_id": "<operation-id>",
+    "state": "pending",
+    "type": "context_retirement",
+    "worktree_removal": "none"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation-id>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "operation.resume",
+      "arguments": {},
+      "operation_id": "<operation-id>"
+    },
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "operation.abandon",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": "<operation-id>"
+    }
+  ],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FCN"
+  }
+}

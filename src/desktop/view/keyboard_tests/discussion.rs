@@ -17,7 +17,7 @@
 
 use std::{fs, path::Path};
 
-use gpui_kit::{ElementId, Entity, TestAppContext, px, size};
+use gpui_kit::{ElementId, Entity, TestAppContext};
 use zorite_editor::EditorState;
 
 use super::Walk;
@@ -30,8 +30,6 @@ const MAIN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK0";
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK1";
 const REPLY: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK2";
 const LAST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK3";
-/// The repository details' Share main, after the discussion.
-const SHARE_MAIN: &str = "selection-share-main";
 const ADA: &str = "Ada Lovelace <ada@example.invalid>";
 
 /// What the journey writes.
@@ -66,7 +64,7 @@ fn discussed(comments: &[(&str, Option<&str>)], cx: &mut TestAppContext) -> Walk
     }
     fixture.refresh(&a);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     Walk::over(shell, a)
 }
@@ -289,10 +287,10 @@ async fn a_keyboard_only_user_comments_replies_and_posts(cx: &mut TestAppContext
 /// thread's last Reply into the composer, its toolbar's one stop and then
 /// its editor, where Tab indents and F6 leaves; from Write a comment…,
 /// Shift-Tab comes back through the next thread and that composer's
-/// footer into its editor. The repository's details follow Write a
-/// comment…. Opened, the new comment's composer takes Tab too: Tab indents
-/// in it and F6 leaves it. While editing, the edit toolbar comes between
-/// the chips and the page.
+/// footer into its editor. Write a comment… ends the item: nothing of the
+/// repository follows it. Opened, the new comment's composer takes Tab
+/// too: Tab indents in it and F6 leaves it. While editing, the edit
+/// toolbar comes between the chips and the page.
 #[gpui_kit::test]
 async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -302,11 +300,12 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
 
-    let header: [ElementId; 10] = [
+    let header: [ElementId; 11] = [
         ("tab-close-button", 0usize).into(),
         "item-comments".into(),
         "item-edit".into(),
         "item-share".into(),
+        "item-lifecycle-action".into(),
         "chip-type".into(),
         "chip-status".into(),
         "chip-project".into(),
@@ -331,12 +330,15 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     }
     walk.step("tab", "new-comment-start", Region::Content, cx);
     assert!(!walk.shell.present("composer-editor", cx), "collapsed");
-    // The repository's details end the item: Tab reaches its Share main,
-    // and Shift-Tab comes back.
+    // Write a comment… ends the item: nothing of the repository follows
+    // it, so Tab leaves the item area, and Shift-Tab comes back.
     walk.keys("tab", cx);
+    let region = walk
+        .shell
+        .frame(cx, |window, cx| walk.held_region(window, cx));
     assert!(
-        walk.holds_focus(&SHARE_MAIN.into(), cx),
-        "the details' Share main"
+        region.is_some() && region != Some(Region::Content),
+        "Tab left the item for another region: {region:?}"
     );
     walk.step("shift-tab", "new-comment-start", Region::Content, cx);
 
@@ -355,7 +357,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&reply, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
 
     // The order with it open: the thread's last Reply, its toolbar's stop,
     // its editor; and back from Write a comment… into its editor.
@@ -370,11 +372,11 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.step("tab", "composer-bold", Region::Content, cx);
     walk.step_into("tab", &reply, "the reply's editor", cx);
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
-    walk.tab_to("shift-tab", SHARE_MAIN, cx);
-    walk.step("shift-tab", "new-comment-start", Region::Content, cx);
+    walk.tab_to("shift-tab", "new-comment-start", cx);
+    walk.on("new-comment-start", Region::Content, cx);
     let last = walk.comment_editor(LAST, cx);
     walk.step("shift-tab", ("comment-reply", 2usize), Region::Content, cx);
     walk.step_into("shift-tab", &last, LAST, cx);
@@ -401,7 +403,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     assert!(indented != listed, "Tab indented: {indented:?}");
     assert!(walk.editor_focused(&editor, cx), "Tab stayed in the editor");
     walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
+    walk.region(Region::Tickets, cx);
     assert!(
         !walk.shell.present("new-comment-start", cx),
         "open: it holds text"
@@ -417,6 +419,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.on(("tab", 0usize), Region::Content, cx);
     walk.tab_to("tab", "item-share", cx);
     for id in [
+        "item-lifecycle-action",
         "chip-type",
         "chip-status",
         "chip-project",

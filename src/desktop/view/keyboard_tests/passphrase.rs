@@ -1,7 +1,7 @@
-//! D1's passphrase prompt by keyboard: Cancel, reached by Tab from the
-//! input past Unlock and pressed by Enter, cancels, where Enter used to
-//! submit the typed passphrase; no passphrase reaches the key. Unlock reached by Tab and Enter in the input each
-//! submit once.
+//! D1's passphrase prompt by keyboard: Cancel (Not now), reached by Tab
+//! from the input and pressed by Enter, cancels, where Enter used to
+//! submit the typed passphrase; no passphrase reaches the key. Unlock,
+//! reached by Tab past Not now, and Enter in the input each submit once.
 //!
 //! A plain thread calls the window's own provider, as the worker does
 //! inside a job; no transport is initialized (ruling R11).

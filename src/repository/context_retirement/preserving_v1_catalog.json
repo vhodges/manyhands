@@ -1,0 +1,32 @@
+[
+  [
+    "table",
+    "context_retirement_preservations",
+    "CREATE TABLE context_retirement_preservations (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) PRIMARY KEY NOT NULL REFERENCES context_retirement_records(operation_ulid) ON DELETE NO ACTION,\n abandon_request_ulid TEXT CHECK(abandon_request_ulid IS NULL OR (typeof(abandon_request_ulid)='text' AND length(abandon_request_ulid)=26 AND substr(abandon_request_ulid,1,1) BETWEEN '0' AND '7' AND abandon_request_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL UNIQUE REFERENCES request_records(request_ulid) ON DELETE NO ACTION,\n accepted_attempt INTEGER NOT NULL CHECK(typeof(accepted_attempt)='integer' AND accepted_attempt>0),\n owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>0),\n snapshot TEXT NOT NULL CHECK(json_valid(snapshot))\n)"
+  ],
+  [
+    "table",
+    "context_retirement_preservation_claims",
+    "CREATE TABLE context_retirement_preservation_claims (\n operation_ulid TEXT CHECK(operation_ulid IS NULL OR (typeof(operation_ulid)='text' AND length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*')) NOT NULL REFERENCES context_retirement_preservations(operation_ulid) ON DELETE NO ACTION,\n request_attempt INTEGER NOT NULL CHECK(typeof(request_attempt)='integer' AND request_attempt>0),\n index_owner_epoch INTEGER NOT NULL CHECK(typeof(index_owner_epoch)='integer' AND index_owner_epoch>0),\n PRIMARY KEY(operation_ulid,request_attempt), UNIQUE(operation_ulid,index_owner_epoch)\n)"
+  ],
+  [
+    "trigger",
+    "retirement_preservation_immutable",
+    "CREATE TRIGGER retirement_preservation_immutable BEFORE UPDATE ON context_retirement_preservations BEGIN SELECT RAISE(ABORT,'immutable preserving consent'); END"
+  ],
+  [
+    "trigger",
+    "retirement_preservation_retained",
+    "CREATE TRIGGER retirement_preservation_retained BEFORE DELETE ON context_retirement_preservations BEGIN SELECT RAISE(ABORT,'retained preserving consent'); END"
+  ],
+  [
+    "trigger",
+    "retirement_preservation_claim_immutable",
+    "CREATE TRIGGER retirement_preservation_claim_immutable BEFORE UPDATE ON context_retirement_preservation_claims BEGIN SELECT RAISE(ABORT,'immutable preserving spend'); END"
+  ],
+  [
+    "trigger",
+    "retirement_preservation_claim_retained",
+    "CREATE TRIGGER retirement_preservation_claim_retained BEFORE DELETE ON context_retirement_preservation_claims BEGIN SELECT RAISE(ABORT,'retained preserving spend'); END"
+  ]
+]

@@ -40,6 +40,15 @@ impl ResolvedRepository {
         self.registration_id
     }
 
+    /// The registration `registration_id` of `root`, as a read that has
+    /// looked both up in its own session takes it.
+    pub(super) fn registered(registration_id: i64, root: PathBuf) -> Self {
+        Self {
+            registration_id,
+            root,
+        }
+    }
+
     /// Opens the registered root. A root that can no longer be opened is
     /// `repository_inaccessible`.
     pub(super) fn open(&self) -> Result<Repository, ReadError> {

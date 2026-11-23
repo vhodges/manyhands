@@ -161,7 +161,10 @@ impl FolderCreateBinding {
             Err(CreateFolderError {
                 error,
                 left_directories: false,
-            }) => stopped(refused(error)),
+            }) => {
+                let blocker = error.blocker().cloned();
+                stopped(refused(error).naming(service, &accepted.root(), blocker.as_ref()))
+            }
             // A directory was made and the call failed before the index
             // was told: the same request goes on from what is there.
             Err(CreateFolderError {

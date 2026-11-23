@@ -215,6 +215,7 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "context_retire_index_pending",
     "document_repair_preview",
     "ticket_repair_preview",
     "document_repair_ok",
@@ -428,6 +429,7 @@ pub const CLI_CASES: &[&str] = &[
     "ticket_close_prepare_held",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "poll_once_retirement_stopped_text",
     "context_observe_local_text",
     "context_observe_local_unknown_text",
     "context_observe_local_no_context_text",

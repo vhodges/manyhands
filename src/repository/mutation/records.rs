@@ -339,6 +339,81 @@ fn request_operations(
     Ok(operations)
 }
 
+/// Every operation the request began, in the order it began them: the ones
+/// its record links and the ones whose rows name the request. A call links
+/// the rows it creates itself, but a synchronization that publishes a
+/// comment, and the rows a restart or a hand-off to the index add, are
+/// created under the request without a link; their rows name the request.
+///
+/// An operation ID is listed once, under the family the request linked it
+/// in, else the remote one: a synchronization and the refresh that hands it
+/// to the index share their ID, and the synchronization is the operation. They are ordered by the time the row records
+/// the request began them, then by their place in the record's own list,
+/// then by ID. A row that records no time, as one from before operations
+/// were attributed, comes first; a request's operations that none of its
+/// rows name keep the order the record gives them.
+pub(super) fn started_operations(
+    connection: &Connection,
+    request_id: &str,
+    linked: &[RequestOperation],
+) -> Result<Vec<RequestOperation>, ReadError> {
+    let named = |table: &str, family: OperationFamily| -> Result<_, ReadError> {
+        let mut statement = connection.prepare(&format!(
+            "SELECT operation_ulid, started_at FROM {table}
+              WHERE request_ulid = ?1 AND operation_ulid IS NOT NULL
+              ORDER BY id ASC"
+        ))?;
+        let mut rows = statement.query([request_id])?;
+        let mut named = Vec::new();
+        while let Some(row) = rows.next()? {
+            let operation_id: String = row.get(0)?;
+            named.push((
+                RequestOperation {
+                    family,
+                    operation_id: OperationId::parse(&operation_id)
+                        .map_err(|_| invalid_stored_data())?,
+                },
+                row.get::<_, Option<i64>>(1)?,
+            ));
+        }
+        Ok(named)
+    };
+    let local = named("operation_records", OperationFamily::Local)?;
+    let remote = named("remote_operation_records", OperationFamily::Remote)?;
+    let started = |operation: &RequestOperation| {
+        let rows = match operation.family {
+            OperationFamily::Local => &local,
+            OperationFamily::Remote => &remote,
+            OperationFamily::KeyMaterial => return None,
+        };
+        rows.iter()
+            .find(|(row, _)| row == operation)
+            .and_then(|(_, started_at)| *started_at)
+    };
+    let mut listed: Vec<(Option<i64>, usize, String, RequestOperation)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let unlinked = remote.iter().chain(&local).map(|(row, _)| row);
+    for (ordinal, operation) in linked
+        .iter()
+        .enumerate()
+        .chain(unlinked.map(|operation| (usize::MAX, operation)))
+    {
+        if seen.insert(operation.operation_id.to_string()) {
+            listed.push((
+                started(operation),
+                ordinal,
+                operation.operation_id.to_string(),
+                *operation,
+            ));
+        }
+    }
+    listed.sort_by(|left, right| (left.0, left.1, &left.2).cmp(&(right.0, right.1, &right.2)));
+    Ok(listed
+        .into_iter()
+        .map(|(.., operation)| operation)
+        .collect())
+}
+
 /// The stored result of a finished record, from the columns that hold it.
 struct StoredResult {
     outcome: String,
@@ -615,7 +690,7 @@ fn insert_request(
     Ok(InsertRequestOutcome::Inserted)
 }
 
-fn finish_request(
+pub(super) fn finish_request(
     transaction: &Transaction<'_>,
     request_id: RequestId,
     attempt: u64,
@@ -722,7 +797,7 @@ pub(in super::super) fn operation_owner(
 /// takes the operation up with the input it was begun with. With
 /// `command`, only a request of that command is named: `None` when the
 /// one that holds the operation is of another.
-pub(super) fn operation_holder(
+pub(in super::super) fn operation_holder(
     connection: &Connection,
     family: OperationFamily,
     scope_key: &str,
@@ -792,7 +867,19 @@ pub(in super::super) fn release_operation_owner(
     scope_key: &str,
     operation_id: OperationId,
 ) -> rusqlite::Result<Option<String>> {
-    let Some(owner) = operation_owner(transaction, scope_key, operation_id)? else {
+    release_operation_holder(transaction, OperationFamily::Local, scope_key, operation_id)
+}
+
+/// `release_operation_owner`, for an operation of any journal: the record
+/// of the unfinished request that holds the operation `operation_id` of
+/// `family` is deleted, and its confirmation released.
+pub(in super::super) fn release_operation_holder(
+    transaction: &Transaction<'_>,
+    family: OperationFamily,
+    scope_key: &str,
+    operation_id: OperationId,
+) -> rusqlite::Result<Option<String>> {
+    let Some(owner) = operation_holder(transaction, family, scope_key, operation_id, None)? else {
         return Ok(None);
     };
     transaction.execute(
@@ -846,6 +933,19 @@ impl RepositoryService {
     /// accept.
     #[doc(hidden)]
     pub fn insert_request(&self, request: &NewRequest) -> Result<InsertRequestOutcome, ReadError> {
+        self.insert_request_admitted(request, |tx| {
+            super::super::context_retirement::pass::require_unreserved(tx, request.request_id)
+                .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+        })
+    }
+
+    /// The ordinary acceptance transaction, with a private association hook.
+    /// Confirmation acceptance/fault rollback is identical for every binding.
+    pub(super) fn insert_request_admitted(
+        &self,
+        request: &NewRequest,
+        admit: impl FnOnce(&Transaction<'_>) -> Result<(), ReadError>,
+    ) -> Result<InsertRequestOutcome, ReadError> {
         let now = self.record_time();
         let fails_after_confirmation = request.confirmation.is_some()
             && self
@@ -855,8 +955,12 @@ impl RepositoryService {
                     Path::new(request.scope.as_str()),
                 )
                 .unwrap_or(false);
-        self.write_records(|transaction| {
-            insert_request(transaction, request, now, fails_after_confirmation)
+        self.write_records(|tx| {
+            let inserted = insert_request(tx, request, now, fails_after_confirmation)?;
+            if inserted == InsertRequestOutcome::Inserted {
+                admit(tx)?;
+            }
+            Ok(inserted)
         })
     }
 
@@ -872,6 +976,11 @@ impl RepositoryService {
     ) -> Result<Option<T>, ReadError> {
         let now = self.record_time();
         self.write_records(|transaction| {
+            super::super::context_retirement::pass::require_unreserved(
+                transaction,
+                request.request_id,
+            )
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
             match insert_request(transaction, request, now, false)? {
                 InsertRequestOutcome::Inserted => {}
                 InsertRequestOutcome::RequestExists => return Ok(None),

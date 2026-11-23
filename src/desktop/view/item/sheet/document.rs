@@ -116,6 +116,10 @@ impl ItemPane {
     /// while it is. It needs the document as read: a new document's
     /// stand-in, shown before its first read, is never moved.
     pub(in crate::desktop::view) fn move_blocked(&self, cx: &App) -> Option<&'static str> {
+        // While the document's merge is unfinished, Move… waits (R-23).
+        if self.edits_wait(cx) {
+            return Some(self.refused_words(cx));
+        }
         let (TabKey::Item { repo, kind, id }, Some(_)) = (self.tab_key(), self.model.item().rows())
         else {
             return Some(MOVE_WHILE_VIEWING);

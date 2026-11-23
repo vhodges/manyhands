@@ -36,19 +36,21 @@ State what was not done, for example "nothing was run" or "not pushed".
 
 ## The planning ticket comment
 
-Write it while the reviewers run, and update it before presenting. It
-records:
+Draft it while the reviewers run, and post it before presenting using
+`manyhands-comments`, following the shared
+[Manyhands operations](../../implementing-a-cycle/references/manyhands-operations.md)
+reference. It records:
 
 - the base SHA and the merge, and that the branch was merged, not rebased;
-- that no build or test was run;
+- which checks ran, or that no build or test was run;
 - the owner's decisions so far;
 - the review rounds, with their counts;
 - the open questions;
 - the proposed execution method.
 
-Comments are canonical files in `.manyhands/comments/<ticket>/<ULID>.md`,
-until the CLI can add them. Take `created_at` from the clock, in UTC; never
-guess it.
+Keep the draft JSON input outside the repository. `comment add` creates the
+canonical file and publishes the item's branch. Comments are not edited in
+place: add a follow-up if a posted checkpoint needs correction.
 
 ## Execution brief, when another session executes
 
@@ -66,7 +68,8 @@ Write it only when the owner asks. It covers:
   - Devenv for Cargo;
   - files and modules that are off-limits;
   - named test edits only;
-  - targeted tests between tasks, and the full suite once at the end;
+  - targeted tests between tasks, and AGENTS.md's local test gate once at the
+    end; the full suite and native CI run after merge;
   - `--features desktop` on its own for desktop work;
   - the `merge-tree` check before review-ready;
   - the commit trailer;

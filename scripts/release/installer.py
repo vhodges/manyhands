@@ -16,6 +16,8 @@ TARGET = 'x86_64-pc-windows-msvc'
 APP_ID = 'io.github.vhodges.manyhands'
 MANAGED_MANIFEST = 'licenses/installer/managed-files.txt'
 INSTALLER_LICENSE = 'licenses/installer/INNO-LICENSE.txt'
+# Installer-owned trees; keep in sync with the Pascal policy and the .iss enumerations.
+MANAGED_ROOTS = ('bin', 'licenses', 'skills')
 
 
 def managed_file_list(payload_files: list[str]) -> list[str]:
@@ -35,7 +37,7 @@ def managed_file_list(payload_files: list[str]) -> list[str]:
         if not isinstance(name, str) or not name or '\\' in name:
             raise ValueError('invalid managed file path')
         parts = name.split('/')
-        if parts[0].lower() in ('bin', 'licenses') and parts[0] not in ('bin', 'licenses'):
+        if parts[0].lower() in MANAGED_ROOTS and parts[0] not in MANAGED_ROOTS:
             raise ValueError('managed path root must use canonical case')
         for index, part in enumerate(parts):
             if not part or part in ('.', '..') or part[-1] in '. ' or any(
@@ -51,7 +53,7 @@ def managed_file_list(payload_files: list[str]) -> list[str]:
                 if previous != prefix or was_file or is_file:
                     raise ValueError(f'colliding or reserved managed file path: {name}')
             nodes[key] = (prefix, is_file)
-        if parts[0] in ('bin', 'licenses'):
+        if parts[0] in MANAGED_ROOTS:
             if len(parts) < 2:
                 raise ValueError('managed tree root is not a file')
             managed.append(name.replace('/', '\\'))

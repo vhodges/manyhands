@@ -19,7 +19,13 @@ use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::ItemPane;
-use crate::desktop::{assets::icon_path, model::relationships::Relationships};
+use crate::desktop::{
+    assets::icon_path,
+    model::{
+        relationships::Relationships,
+        status::{Tint, tint},
+    },
+};
 
 /// A chip's text.
 const TEXT_SIZE: f32 = 11.5;
@@ -119,14 +125,6 @@ enum Look {
     All,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tint {
-    Working,
-    Done,
-    Draft,
-    Blocked,
-}
-
 /// One chip: its field and the value it shows. A value is a field's own
 /// text, never body text.
 pub(crate) struct Chip {
@@ -150,19 +148,6 @@ impl Chip {
             Some(value) => format!("{} {value}", self.field.key()),
             None => self.field.key().to_owned(),
         }
-    }
-}
-
-/// The tint of a known status value, by its words.
-fn tint(status: &str) -> Option<Tint> {
-    match status.trim().to_lowercase().as_str() {
-        "open" | "todo" | "to do" | "in progress" | "in-progress" | "in_progress" | "active" => {
-            Some(Tint::Working)
-        }
-        "done" | "closed" | "complete" | "completed" | "approved" => Some(Tint::Done),
-        "draft" | "review" | "in review" => Some(Tint::Draft),
-        "blocked" => Some(Tint::Blocked),
-        _ => None,
     }
 }
 

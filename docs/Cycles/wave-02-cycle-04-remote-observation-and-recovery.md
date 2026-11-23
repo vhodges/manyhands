@@ -118,6 +118,12 @@ observed remotely remains `never published` only when the history marker was
 not active. The marker cannot be silently cleared by rebuild, polling, or a
 failed observation.
 
+Amended 2026-11-07 by vh-hyksw (`01M66HFV44YXNQ7ANJVA16TQ1H`): the "later
+explicit recovery" of this rule is the remote history repair: `remote history`
+lists the contexts that read unknown, `item resolve-history` records the
+owner's choice for each, and `remote resolve-history` clears the flag and
+retires the marker.
+
 | Visible state | Meaning and recovery boundary |
 | --- | --- |
 | `observed` | The complete advertisement contains a valid recognized context ref. Preserve its advertised OID and matching local tracking-ref observation. |

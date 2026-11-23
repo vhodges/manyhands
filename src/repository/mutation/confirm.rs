@@ -31,7 +31,7 @@ use super::{
         Accepted, Answer, Binding, CallContext, Confirmed, Entered, Place, Previewed, Ran, Standing,
     },
     command::Command,
-    dto::{MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
+    dto::{BlockedDto, MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
     observe::ObservationDigest,
     outcome,
@@ -91,7 +91,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         code,
         effects,
         // What a request would report is not what `prepare` gives: a
-        // preview, or what one of the two refusals below is about.
+        // preview, or what one of the refusals below is about.
         data: _,
         // What the binding or a read suggested is kept, as `execute`
         // keeps it; `outcome::offered` decides.
@@ -100,7 +100,16 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         offers_nothing,
         host_replacement,
         lifecycle_blocked,
+        blocker,
     } = answer;
+    // The operation a preview was refused for, as an execute names it: the
+    // data of a `busy` or `recovery_required` answer that names nothing
+    // else of its own, with `operation.show` offered for it.
+    let blocker = blocker.filter(|_| {
+        matches!(code, ResultCode::Busy | ResultCode::RecoveryRequired)
+            && host_replacement.is_none()
+            && lifecycle_blocked.is_none()
+    });
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.
     let authority = host_replacement.as_ref().map(|data| data.authority());
@@ -118,13 +127,20 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         offers_nothing,
         authority.as_deref(),
     );
+    let recovery = match &blocker {
+        Some(blocker) => outcome::showing(recovery, &blocker.operation_id),
+        None => recovery,
+    };
     let envelope =
         Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
             .with_recovery(recovery);
-    match (host_replacement, lifecycle_blocked) {
-        (Some(data), _) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
-        (None, Some(data)) => envelope.with_data(PrepareDataDto::LifecycleBlocked(data)),
-        (None, None) => envelope,
+    match (host_replacement, lifecycle_blocked, blocker) {
+        (Some(data), _, _) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
+        (None, Some(data), _) => envelope.with_data(PrepareDataDto::LifecycleBlocked(data)),
+        (None, None, Some(blocker)) => {
+            envelope.with_data(PrepareDataDto::Blocked(BlockedDto { blocker: *blocker }))
+        }
+        (None, None, None) => envelope,
     }
 }
 
