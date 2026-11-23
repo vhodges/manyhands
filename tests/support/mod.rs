@@ -32,6 +32,7 @@ pub mod mutation_golden;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;
+pub mod presentation;
 #[cfg(unix)]
 pub mod pty;
 pub mod records;

@@ -114,7 +114,24 @@ fn context(worktree: &str) -> StoredContext {
 }
 
 fn index() -> IndexStateDto {
-    index_state(false, Some(0), true)
+    index_state(false, Some(0), true, false)
+}
+
+// A context the index stores as invalid is never an item context a read may
+// use: it reads as the kind no read acts on, the one a context that could not
+// be verified has, and no stored kind is refused for being new.
+#[test]
+fn an_invalid_stored_context_kind_reads_as_a_context_no_read_acts_on() {
+    for (stored, kind) in [
+        ("primary", ItemContextKind::Primary),
+        ("unverified", ItemContextKind::Unverified),
+        ("active", ItemContextKind::Active),
+        ("invalid", ItemContextKind::Unverified),
+    ] {
+        assert_eq!(stored_context_kind(stored).unwrap(), kind, "{stored}");
+    }
+    assert!(stored_context_kind("Invalid").is_err());
+    assert!(stored_context_kind("").is_err());
 }
 
 #[test]
@@ -130,7 +147,7 @@ fn the_index_state_is_never_refreshed_only_when_nothing_was_ever_stored() {
         (true, Some(0), false, IndexState::Stale),
         (false, Some(0), false, IndexState::Current),
     ] {
-        let index = index_state(refresh_required, refreshed_at, has_contexts);
+        let index = index_state(refresh_required, refreshed_at, has_contexts, false);
         assert_eq!(
             index.state, state,
             "{refresh_required} {refreshed_at:?} {has_contexts}"
@@ -138,22 +155,22 @@ fn the_index_state_is_never_refreshed_only_when_nothing_was_ever_stored() {
         assert_eq!(index.refreshed_at.is_some(), refreshed_at.is_some());
     }
     assert_eq!(
-        index_state(false, Some(1_700_000_000), true)
+        index_state(false, Some(1_700_000_000), true, false)
             .refreshed_at
             .as_deref(),
         Some("2023-11-14T22:13:20Z")
     );
     // Only a current index becomes stale; what is worse stays what it is.
     assert_eq!(
-        behind(&index_state(false, Some(0), true)).state,
+        behind(&index_state(false, Some(0), true, false)).state,
         IndexState::Stale
     );
     assert_eq!(
-        behind(&index_state(true, Some(0), true)).state,
+        behind(&index_state(true, Some(0), true, false)).state,
         IndexState::Stale
     );
     assert_eq!(
-        behind(&index_state(true, None, false)).state,
+        behind(&index_state(true, None, false, false)).state,
         IndexState::NeverRefreshed
     );
 }

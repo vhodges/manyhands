@@ -7,8 +7,8 @@ use super::{
     *,
 };
 use crate::repository::{
-    ConfigurationInspection, RepositoryOperation, RepositoryService, canonical_repository_root,
-    keys::*, read_configuration,
+    CallRegistry, ConfigurationInspection, RepositoryOperation, RepositoryService,
+    canonical_repository_root, keys::*, read_configuration,
 };
 
 impl RepositoryService {
@@ -153,7 +153,9 @@ impl RepositoryService {
                 Err(error) => return Err(error),
             }
         }
-        // The first connection and all callback/Git/registry handles have dropped.
+        // The first connection and all its callback and Git handles have
+        // dropped. The call's registry connection stays open, idle: it holds
+        // no guard and no read transaction (design decision 36).
         // An Err here prevents newly supplied material from entering the cache.
         if automatic && let Some(failure) = session.blocked_unlock(&unlock) {
             return Err(context.with_kind(match failure {
@@ -223,8 +225,11 @@ impl RepositoryService {
                 .map_err(|_| SshTransportErrorKind::ConfigurationInvalid)?;
         context.root = root;
         context.remote_name = publication_remote(&context.root)?;
+        // The call's key reads, this one and its rechecks', go through one
+        // registry connection, which the call holds until it ends.
+        let registry = CallRegistry::new();
         let registration = self
-            .list_shared_keys()
+            .list_shared_keys_in(&registry)
             .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?
             .into_iter()
             .find(|registration| registration.selected)
@@ -248,6 +253,7 @@ impl RepositoryService {
             endpoint,
             trust,
             approval: request.approval,
+            registry,
         })
     }
 
@@ -256,8 +262,9 @@ impl RepositoryService {
         prepared: &PreparedSshAttempt,
         context: &SshTransportError,
     ) -> Result<(), SshTransportErrorKind> {
+        // The current rows, read afresh on the call's registry connection.
         let selected = self
-            .list_shared_keys()
+            .list_shared_keys_in(&prepared.registry)
             .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?
             .into_iter()
             .find(|registration| registration.selected);
@@ -357,8 +364,10 @@ impl RepositoryService {
         .map_err(|kind| context.with_kind(kind))?;
         #[cfg(test)]
         super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
+        // The call lists and transfers on this connection, under this attempt.
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
+            &attempt,
             self,
             prepared,
             context,
@@ -450,6 +459,9 @@ fn blame_for_cached(cached: bool, error: SshTransportError) -> SshTransportError
 #[cfg(test)]
 #[path = "operation_passphrase_tests.rs"]
 mod passphrase_tests;
+#[cfg(test)]
+#[path = "operation_registry_tests.rs"]
+mod registry_tests;
 impl SshTransportError {
     pub(super) fn with_kind(&self, kind: SshTransportErrorKind) -> Self {
         Self {

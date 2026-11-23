@@ -379,6 +379,30 @@ pub(crate) fn reenter<S: Save + ?Sized>(
                 standing: Standing::Unconfirmed,
             }),
         },
+        // The operation completed. Its commit is answered as discovered only
+        // while the contexts its row recorded are indexed. While one is
+        // dirty again (another write left it so), no operation owes the
+        // hand-off, and any refresh brings the index up to date.
+        Found::Done { commit }
+            if service.recorded_contexts_indexed(&root, accepted.operation_id) == Some(false) =>
+        {
+            let (code, effects) = SaveReport::Saved {
+                claimed: None,
+                discovered: false,
+            }
+            .result(Some(commit));
+            Err(Ran {
+                answer: Answer {
+                    recovery: crate::results::absolute_path_string(&root)
+                        .as_deref()
+                        .map(outcome::refresh_the_root)
+                        .into_iter()
+                        .collect(),
+                    ..save.answer(code, effects, &root)
+                },
+                standing: Standing::Owed,
+            })
+        }
         Found::Done { commit } => {
             let (code, effects) = settled(Some(commit));
             Err(Ran {

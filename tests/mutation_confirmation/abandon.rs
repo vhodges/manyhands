@@ -21,6 +21,8 @@ use super::{
 
 const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
 const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+/// The refresh that indexes what an abandoned save left (E-18).
+const REQUEST_6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX6";
 
 const STRANDED_ROOT: &str = "MANYHANDS_STRANDED_ROOT";
 const STRANDED_DATA: &str = "MANYHANDS_STRANDED_DATA";
@@ -356,6 +358,11 @@ fn a_save_whose_input_is_lost_is_abandoned_and_the_repository_goes_on() {
 
     assert_abandoned(&stranded, REQUEST_3, &[stranded.written_path()]);
     assert!(!operation_data(&world.execute(REQUEST_3, stranded.abandon())).committed);
+    // The next refresh indexes what the abandoned save left (E-18).
+    assert_eq!(
+        world.execute(REQUEST_6, refresh(world)).code,
+        ResultCode::Ok
+    );
 
     // A save of another item succeeds at once.
     let other = world.execute(REQUEST_2, world.create(TICKET_NEW));
@@ -425,6 +432,11 @@ fn a_save_that_was_overtaken_is_abandoned_and_the_repository_goes_on() {
     // replaced what the save wrote.
     assert_abandoned(&stranded, REQUEST_3, &[]);
     assert_eq!(world.branch_commits(TICKET_A), 1);
+    // The next refresh indexes what the abandoned save left (E-18).
+    assert_eq!(
+        world.execute(REQUEST_6, refresh(world)).code,
+        ResultCode::Ok
+    );
 
     let other = world.execute(REQUEST_2, world.create(TICKET_NEW));
     assert_eq!(other.code, ResultCode::Ok, "{}", other.message);

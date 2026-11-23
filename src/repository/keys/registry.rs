@@ -9,9 +9,9 @@ use std::{
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::super::{
-    ExpectedPathObservation, IndexAvailability, ReadError, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService, cache_read_guard, cache_write_guard, migrate_registry,
-    open_registry, open_registry_read_only,
+    CallRegistry, ExpectedPathObservation, IndexAvailability, ReadError, RepositoryError,
+    RepositoryErrorKind, RepositoryOperation, RepositoryService, cache_read_guard,
+    cache_write_guard, open_registry_read_only,
     recovery::{FinalKind, JournalRow, KEY_REGISTRY_CHANGES_TABLE, PendingOperation, has_table},
 };
 use super::{
@@ -138,9 +138,8 @@ impl RepositoryService {
 
         self.require_shared_key_registry(operation)?;
         let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        migrate_registry(&mut connection)
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -326,23 +325,44 @@ impl RepositoryService {
             .map(|registration| registration.id))
     }
 
+    /// The registered keys, read afresh from the registry's current rows
+    /// at each call; nothing of them is kept between calls. A read under
+    /// the shared cache guard, which migrates nothing once registry open
+    /// has migrated this registry file.
     pub fn list_shared_keys(&self) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
+        self.read_shared_keys(None)
+    }
+
+    /// `list_shared_keys` as a key read of the remote call `call`: read
+    /// through the call's registry connection (design decision 36), and as
+    /// afresh as `list_shared_keys` reads, under the same guard and in a
+    /// read transaction of its own.
+    pub(in super::super) fn list_shared_keys_in(
+        &self,
+        call: &CallRegistry,
+    ) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
+        self.read_shared_keys(Some(call))
+    }
+
+    fn read_shared_keys(
+        &self,
+        call: Option<&CallRegistry>,
+    ) -> Result<Vec<SharedKeyRegistration>, RepositoryError> {
         let operation = RepositoryOperation::ListSharedKeys;
         let data_directory = self.registry_data_directory();
         self.require_shared_key_registry(operation)?;
-        let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        migrate_registry(&mut connection)
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        let registrations = read_shared_key_registrations(&transaction, operation, data_directory)?;
-        transaction
-            .commit()
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        Ok(registrations)
+        let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
+        let unavailable = || shared_key_registry_unavailable(operation, data_directory);
+        self.read_key_registry(call, operation, |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|_| unavailable())?;
+            let registrations =
+                read_shared_key_registrations(&transaction, operation, data_directory)?;
+            transaction.commit().map_err(|_| unavailable())?;
+            Ok(registrations)
+        })
+        .map_err(|_| unavailable())?
     }
 
     pub fn preflight_generated_key_deletion(
@@ -408,9 +428,8 @@ impl RepositoryService {
         let data_directory = self.registry_data_directory();
         self.require_shared_key_registry(operation)?;
         let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        migrate_registry(&mut connection)
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -520,9 +539,8 @@ impl RepositoryService {
         let data_directory = self.registry_data_directory();
         self.require_shared_key_registry(operation)?;
         let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        migrate_registry(&mut connection)
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -589,9 +607,8 @@ impl RepositoryService {
         let data_directory = self.registry_data_directory();
         self.require_shared_key_registry(operation)?;
         let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
-        migrate_registry(&mut connection)
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1328,3 +1345,7 @@ fn require_no_pending_material(
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

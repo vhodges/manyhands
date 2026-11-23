@@ -3594,3 +3594,146 @@ fn ordinary_retirement_index_only_resume_spends_own_request_and_preserves_recrea
             .unwrap()
     );
 }
+
+/// One case of the poll retirement table: the fixture's closed ticket
+/// `ITEM` present with its branch and worktree (dirty when `dirty`, so its
+/// candidate carries a refusal), `row` of `item` seeded, then one
+/// `poll --retire-completed`. Run on its own thread: a poll refused before
+/// it fetches leaves its thread's synthetic fetch unconsumed.
+fn table_b_poll_retirement_case(row: TableBRow, item: &'static str, dirty: bool) -> String {
+    std::thread::spawn(move || {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        if dirty {
+            let ticket = f
+                .root
+                .path()
+                .join(".manyhands/worktrees")
+                .join(ITEM)
+                .join(format!(".manyhands/tickets/{ITEM}/ticket.md"));
+            let text = std::fs::read_to_string(&ticket).unwrap() + "Edited outside\n";
+            std::fs::write(ticket, text).unwrap();
+        }
+        table_b_seed(&f.service, f.root.path(), row, item, true);
+        let polls = || {
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM remote_operation_records WHERE action='poll' AND phase='completed'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        let before = polls();
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let answer = execute(
+            &f.service,
+            RequestId::new(),
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        let polled = polls() > before;
+        let retired = git.find_reference(&branch).is_err();
+        let refused: bool = f
+            .db()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE item_id=?1 AND phase='refused' AND final_code='worktree_not_clean')",
+                [ITEM],
+                |r| r.get(0),
+            )
+            .unwrap();
+        match (polled, retired, refused) {
+            (false, false, false) => "the poll held".to_owned(),
+            (true, true, false) => "retired".to_owned(),
+            (true, false, true) => "its refusal recorded".to_owned(),
+            (true, false, false) => "the poll ran, the retirement held".to_owned(),
+            other => format!("{other:?}, {:?}", answer.code),
+        }
+    })
+    .join()
+    .unwrap()
+}
+
+/// Table B of the fast-writes design ("Table B: what a pending row holds")
+/// at a poll's retirement pass (`poll --retire-completed`), written before
+/// the behaviour (Task 3). The pass
+/// runs the poll's guard (`poll.rs` ~1674), each candidate's capture
+/// (`source.rs` ~116), its blocking-debt question (`pass.rs` ~382) and then
+/// `retire_context_initial`: a clean present context is claimed through
+/// `claim_initial` (`authority.rs` ~401); a dirty one, whose candidate
+/// carries `worktree_not_clean`, has its refusal recorded through
+/// `refuse_fresh_scoped` (~518, with its `index_pending` check ~519). A row
+/// mid-write, and the rows of the whole repository, hold the poll; a row of
+/// the retired item that owes only its hand-off lets the poll run and holds
+/// that item's retirement, its claim and its refusal alike; such a row of
+/// another item holds nothing.
+#[test]
+fn table_b_a_poll_retirement_pass_behind_each_pending_row() {
+    table_b_a_poll_retirement_pass_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_poll_retirement_pass_behind_each_pending_row`, behind the rows
+/// of a synchronization's hand-off, which Task 16's hand-off rows (P-4) are
+/// written for.
+#[test]
+fn table_b_a_poll_retirement_pass_behind_each_synchronization_s_hand_off() {
+    table_b_a_poll_retirement_pass_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_poll_retirement_pass_behind(keep: impl Fn(TableBRow) -> bool) {
+    let mut mismatches = Vec::new();
+    for dirty in [false, true] {
+        for row in TableBRow::all().into_iter().filter(|row| keep(*row)) {
+            for item in [ITEM, TABLE_B_OTHER] {
+                if item == ITEM && !row.of_an_item() {
+                    continue;
+                }
+                let got = table_b_poll_retirement_case(row, item, dirty);
+                let poll_held = matches!(
+                    row,
+                    TableBRow::MidWrite
+                        | TableBRow::RunningRefresh
+                        | TableBRow::CrashedRefresh
+                        | TableBRow::Rebuild
+                );
+                let expected = if poll_held {
+                    "the poll held"
+                } else if row.holds_retirement(item, Some(ITEM)) {
+                    "the poll ran, the retirement held"
+                } else if dirty {
+                    "its refusal recorded"
+                } else {
+                    "retired"
+                };
+                if got != expected {
+                    let whose = if !row.of_an_item() {
+                        ""
+                    } else if item == ITEM {
+                        " of the retired item"
+                    } else {
+                        " of another item"
+                    };
+                    let site = if dirty {
+                        "refuse_fresh_scoped"
+                    } else {
+                        "claim_initial"
+                    };
+                    mismatches.push(format!(
+                        "{row:?}{whose} | C3/C4 a poll's retirement pass ({site}): expected {expected}, today {got}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

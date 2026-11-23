@@ -336,7 +336,7 @@ fn retirement_quality_unicode_head_is_refused_under_branch_ref_lock() {
             .refname_to_id(&format!("refs/heads/manyhands/ticket/{ID}"))
             .unwrap();
         assert_eq!(
-            cleanup.remove_context_worktree(f.request.kind, &f.request.item_id, tip),
+            cleanup.remove_context_worktree(&f.service, f.request.kind, &f.request.item_id, tip),
             crate::repository::cleanup::WorktreeRemoval::Removed
         );
         let name = if mode == "unicode" {

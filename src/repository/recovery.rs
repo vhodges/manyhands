@@ -160,39 +160,91 @@ fn decode_comment_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommentBi
     })
 }
 
+/// Audits every binding, as registry open's migration does.
 pub(super) fn validate_comment_bindings(connection: &Connection) -> Result<(), RepositoryError> {
     let failure = super::comment_publication::recovery_error;
     let rows = connection.prepare("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings")
         .and_then(|mut statement| statement.query_map([], decode_comment_binding)?.collect::<Result<Vec<_>, _>>()).map_err(|_| failure())?;
     for binding in rows {
-        let (root, target, digest): (String, String, Vec<u8>) = connection.query_row("SELECT o.root_path,o.target,b.root_digest
-            FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id WHERE b.operation_ulid=?1",
-            [binding.operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_| failure())?;
-        let expected_target = format!(
-            "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
-            super::authoring_kind_segment(&binding.kind),
-            binding.item_id,
-            binding.comment_id
-        );
-        if digest != blake3::hash(root.as_bytes()).as_bytes().as_slice()
-            || target != expected_target
-        {
-            return Err(failure());
-        }
-        let invalid: bool = connection.query_row("SELECT
-            NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
-                WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR target!='' OR root_path!=?3))
-            OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
-            OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
-                AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
-            OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
-                SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
-            OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
-            params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string()], |r| r.get(0)).map_err(|_| failure())?;
-        if invalid {
-            return Err(failure());
-        }
+        audit_comment_binding(connection, &binding)?;
+    }
+    Ok(())
+}
+
+/// Audits the binding of the comment operation `operation` exactly as
+/// `validate_comment_bindings` audits each one, with the same refusal: a
+/// call that takes a binding up again after registry open audits it here,
+/// since no later migration does (design decision 9). Nothing is refused
+/// when no binding has that operation ID.
+pub(super) fn validate_comment_binding(
+    connection: &Connection,
+    operation: &str,
+) -> Result<(), RepositoryError> {
+    let failure = super::comment_publication::recovery_error;
+    let binding = connection.query_row("SELECT operation_ulid,synchronization_ulid,kind,item_ulid,comment_ulid,parent_ulid,pre_checkpoint_oid,checkpoint_oid,created_at FROM comment_publication_bindings WHERE operation_ulid=?1",
+        [operation], decode_comment_binding).optional().map_err(|_| failure())?;
+    binding.map_or(Ok(()), |binding| {
+        audit_comment_binding(connection, &binding)
+    })
+}
+
+/// One binding's root digest, its submission's target, and the
+/// correlation of its synchronization's hand-off row.
+fn audit_comment_binding(
+    connection: &Connection,
+    binding: &CommentBinding,
+) -> Result<(), RepositoryError> {
+    let failure = super::comment_publication::recovery_error;
+    let (root, target, digest): (String, String, Vec<u8>) = connection.query_row("SELECT o.root_path,o.target,b.root_digest
+        FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id WHERE b.operation_ulid=?1",
+        [binding.operation_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_| failure())?;
+    let expected_target = format!(
+        "authoring-context-v1/{}/{}/Edit\0.manyhands/comments\0{}",
+        super::authoring_kind_segment(&binding.kind),
+        binding.item_id,
+        binding.comment_id
+    );
+    if digest != blake3::hash(root.as_bytes()).as_bytes().as_slice() || target != expected_target {
+        return Err(failure());
+    }
+    // The one local row under the synchronization's ID is its index
+    // hand-off: a refresh with the bound context's hand-off target at
+    // the authoritative commit (P-4), or with no target, as older builds
+    // began it.
+    let authoritative: Option<String> = connection
+        .query_row(
+            "SELECT r.authoritative_oid FROM remote_operation_records r
+               JOIN repositories p ON p.id=r.repository_id
+              WHERE r.operation_ulid=?1 AND p.root_path=?2",
+            params![binding.synchronization_id.to_string(), root],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| failure())?
+        .flatten();
+    let hand_off = authoritative.map(|oid| {
+        hand_off_target(
+            &format!(
+                "{}/{}",
+                super::authoring_kind_segment(&binding.kind),
+                binding.item_id
+            ),
+            &oid,
+        )
+    });
+    let invalid: bool = connection.query_row("SELECT
+        NOT EXISTS(SELECT 1 FROM operation_records o JOIN comment_publication_bindings b ON b.local_record_id=o.id
+            WHERE b.operation_ulid=?1 AND o.operation_ulid=?1 AND o.action='submit_comment')
+        OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2 AND (action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?6) OR root_path!=?3))
+        OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
+        OR EXISTS(SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2
+            AND (p.root_path!=?3 OR r.action!='synchronize_context' OR r.kind!=?4 OR r.item_id!=?5))
+        OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?2) AND NOT EXISTS(
+            SELECT 1 FROM remote_operation_records r JOIN repositories p ON p.id=r.repository_id WHERE r.operation_ulid=?2 AND p.root_path=?3 AND r.authoritative_kind IS NOT NULL)
+        OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?2 OR synchronization_ulid=?1)",
+        params![binding.operation_id.to_string(), binding.synchronization_id.to_string(), root, super::authoring_kind_segment(&binding.kind),binding.item_id.to_string(),hand_off], |r| r.get(0)).map_err(|_| failure())?;
+    if invalid {
+        return Err(failure());
     }
     Ok(())
 }
@@ -266,6 +318,9 @@ impl super::RepositoryService {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| failure())?;
+        // A binding this call takes up again was audited by the migration
+        // its lifecycle's open ran; that open no longer migrates.
+        validate_comment_binding(&tx, &request.target.operation_id.to_string())?;
         let comment_id = request.comment_id.to_string();
         let target = super::authoring_write_target(
             &request.target,
@@ -723,6 +778,7 @@ pub(super) fn migrate_operation_records(
     validate_comment_bindings(&transaction)?;
     super::local_sync::record::migrate(&transaction)?;
     migrate_operation_attribution(&transaction)?;
+    migrate_context_basis(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -818,6 +874,99 @@ fn migrate_operation_attribution(db: &Connection) -> Result<(), RepositoryError>
         db.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [ATTRIBUTION_MIGRATION],
+        )
+        .map_err(failure)?;
+    }
+    Ok(())
+}
+
+/// The marker of the migration that adds the context basis columns.
+const CONTEXT_BASIS_MIGRATION: &str = "cycle_context_basis";
+
+/// What a context row records of its last indexing, each with its type: the
+/// observation it was stored from as JSON, which none is for a row stored
+/// before the column (unknown, so the next whole refresh observes the
+/// context again); when that observation began, in nanoseconds since the
+/// epoch; whether the context is owed an indexing; and, for the primary
+/// only, the head its activity map was built for.
+///
+/// `dirty` is clean for a row inserted without it: a build before the column
+/// stores a context only after a whole observation, and its missing basis
+/// makes the next refresh observe it again. The migration marks the rows
+/// that exist when it runs.
+const CONTEXT_BASIS_COLUMNS: [(&str, &str); 4] = [
+    ("basis", "TEXT"),
+    ("indexed_at", "INTEGER"),
+    (
+        "dirty",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1))",
+    ),
+    ("activity_base", "TEXT"),
+];
+
+/// The contexts a row's operation owes an indexing, as a JSON array of
+/// encoded context keys, written when the row is made. NULL is unknown, and
+/// is owed a whole refresh of the repository.
+const OWED_CONTEXTS_COLUMNS: [(&str, &str); 1] = [("owed_contexts", "TEXT")];
+
+/// Adds the context basis columns to the contexts and to the local journal,
+/// and marks every context the registry holds dirty, once; it runs in the
+/// recovery migration's transaction, which commits or rolls back with it.
+///
+/// The same pattern as the attribution migration: additive, idempotent, and
+/// the marker is recorded only once both tables have the columns. Unlike
+/// it, a marked registry that lacks a column is not refused: the contexts
+/// are an index, which a refresh builds again, so a column that is missing is
+/// added. When that is `dirty`, what it held is unknown, so every context
+/// is marked dirty again.
+///
+/// A SQLite failure is reported as one, as the migrations around this one do.
+fn migrate_context_basis(db: &Connection) -> Result<(), RepositoryError> {
+    let failure = RepositoryError::sqlite;
+    let migrated: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CONTEXT_BASIS_MIGRATION],
+            |row| row.get(0),
+        )
+        .map_err(failure)?;
+    let mut complete = true;
+    let mut dirty_added = false;
+    for (table, columns) in [
+        ("contexts", &CONTEXT_BASIS_COLUMNS[..]),
+        ("operation_records", &OWED_CONTEXTS_COLUMNS[..]),
+    ] {
+        if !has_table(db, table).map_err(failure)? {
+            complete = false;
+            continue;
+        }
+        let present = db
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([table], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(failure)?;
+        for (name, definition) in columns {
+            if present.iter().any(|column| column == name) {
+                continue;
+            }
+            db.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+            ))
+            .map_err(failure)?;
+            dirty_added |= *name == "dirty";
+        }
+    }
+    if complete && (!migrated || dirty_added) {
+        db.execute("UPDATE contexts SET dirty = 1", [])
+            .map_err(failure)?;
+    }
+    if complete && !migrated {
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CONTEXT_BASIS_MIGRATION],
         )
         .map_err(failure)?;
     }
@@ -1075,8 +1224,9 @@ pub(super) fn attribute_remote_row(
 /// The actions whose rows are each of one item: the authoring operations,
 /// which write the item's editing context and nothing of the primary
 /// worktree, of any other item's context or of the repository's
-/// configuration. A row of one of them that names its item holds only that
-/// item; see `Scope`.
+/// configuration. A row of one of them that names its item holds that item,
+/// and while it is mid-write the work of the whole repository; see `Scope`
+/// and `holds`.
 ///
 /// A local synchronization names its item too and is not one of them: its
 /// index step rewrites the whole index without an index claim, and its
@@ -1091,12 +1241,98 @@ const ITEM_ACTIONS: [&str; 6] = [
     "release_context",
 ];
 
+/// What the target of a synchronization's index hand-off row begins with
+/// (P-4): `synchronization-index-v1/<kind>/<item>/<oid>` for a context,
+/// `synchronization-index-v1/primary/<oid>` for the primary, `<oid>` being
+/// the commit the synchronization published or found current. The row is a
+/// `refresh` under the synchronization's ID, of that item or of the primary
+/// (`Scope`), and is reported as a refresh. Older builds wrote it with no
+/// target, of the whole repository, and it is still read so.
+const SYNCHRONIZATION_INDEX_TARGET: &str = "synchronization-index-v1/";
+
+/// The target of the index hand-off row of a synchronization of `target`
+/// that published, or found current, `oid`.
+pub(super) fn synchronization_index_target(
+    target: &super::SynchronizationTarget,
+    oid: git2::Oid,
+) -> String {
+    match target {
+        super::SynchronizationTarget::Primary => hand_off_target("primary", &oid.to_string()),
+        super::SynchronizationTarget::Context { kind, item_id } => hand_off_target(
+            &format!("{}/{item_id}", super::authoring_kind_segment(kind)),
+            &oid.to_string(),
+        ),
+    }
+}
+
+/// The hand-off target of what a synchronization is `of` (`primary`, or
+/// `<kind>/<item>`) at `oid`, as `synchronization_index_target` spells it.
+fn hand_off_target(of: &str, oid: &str) -> String {
+    format!("{SYNCHRONIZATION_INDEX_TARGET}{of}/{oid}")
+}
+
+/// The kinds of item a hand-off target names, as it spells them.
+const HAND_OFF_KINDS: [super::AuthoringKind; 2] =
+    [super::AuthoringKind::Document, super::AuthoringKind::Ticket];
+
+/// The item a synchronization's index hand-off target of an item names:
+/// what follows `synchronization-index-v1/<kind>/`, up to the next `/`.
+/// `None` for a hand-off of the primary and for any other target. The
+/// commit after it is not read here: the reservation checks the whole
+/// target against its synchronization's (`validate_index_identity`), and so
+/// does a comment's binding (`comment_child_may_begin`).
+fn synchronization_index_item(target: &str) -> Option<crate::canonical::ItemId> {
+    let (kind, rest) = target
+        .strip_prefix(SYNCHRONIZATION_INDEX_TARGET)?
+        .split_once('/')?;
+    if !HAND_OFF_KINDS
+        .iter()
+        .any(|known| super::authoring_kind_segment(known) == kind)
+    {
+        return None;
+    }
+    rest.split_once('/')?.0.parse().ok()
+}
+
+/// The item a row of `action` that names `item_id` and was begun with
+/// `target` is a synchronization's index hand-off of, by
+/// `ContextKey::encode`: `primary` for a hand-off of the primary, whatever
+/// item the row names; else the item the row names, when its target is a
+/// hand-off of that item. `None` for any other row. Only the beginning of
+/// the target is read, as `scope_sql` reads it.
+fn synchronization_hand_off_of(
+    action: &str,
+    item_id: Option<&str>,
+    target: Option<&str>,
+) -> Option<String> {
+    let rest = target?.strip_prefix(SYNCHRONIZATION_INDEX_TARGET)?;
+    if action != "refresh" {
+        return None;
+    }
+    if rest.starts_with("primary/") {
+        return Some(super::discovery::ContextKey::Primary.encode());
+    }
+    let item = item_id?;
+    HAND_OFF_KINDS
+        .iter()
+        .any(|kind| rest.starts_with(&format!("{}/{item}/", super::authoring_kind_segment(kind))))
+        .then(|| item.to_owned())
+}
+
 /// The item and the comment a local row names, read from the target it is
 /// begun with: `authoring-context-v1/<kind>/<item>/<intent>`, then the
 /// paths, each after a NUL; a comment's are `.manyhands/comments` and its
 /// ID. A row of one of the `ITEM_ACTIONS` names its item, and only a
-/// comment's submission names its comment.
+/// comment's submission names its comment. A synchronization's index
+/// hand-off of an item names that item (P-4); one of the primary names
+/// none.
 fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) {
+    if action == "refresh" {
+        return (
+            synchronization_index_item(target).map(|item| item.to_string()),
+            None,
+        );
+    }
     if !ITEM_ACTIONS.contains(&action) {
         return (None, None);
     }
@@ -1115,33 +1351,134 @@ fn authored_ids(action: &str, target: &str) -> (Option<String>, Option<String>) 
     (item, comment)
 }
 
-/// Remote reservations cannot consume, replace or reinterpret local recovery.
+/// The `owed_contexts` a row of `action` begun with `target` records when it
+/// is begun: the context of the item it is of (`Scope::of_call`), which its
+/// index step indexes once its work is done. For one of the `ITEM_ACTIONS`
+/// that is its item's, which reads as owed an indexing before the write
+/// commits to it; for a synchronization's index hand-off, the context the
+/// synchronization changed or published, the item's or the primary (P-4). A
+/// row of the whole repository owes no context of its own, so it records
+/// nothing (NULL), and its hand-off is a refresh of the whole repository.
+fn owed_at_creation(action: &str, target: &str) -> Option<String> {
+    let Scope::Item(own) = Scope::of_call(action, target) else {
+        return None;
+    };
+    Some(super::encode_owed_contexts(&[
+        super::discovery::ContextKey::decode(&own)?,
+    ]))
+}
+
+/// The state and last step a new row of `action` begun with `target` is
+/// written with: a synchronization's index hand-off is begun once its
+/// synchronization is classified, its work done and recorded, so it owes
+/// only its hand-off from the first (`is_committed_and_owing`); every other
+/// row is `created`, with no step.
+fn begun_standing(action: &str, target: &str) -> (&'static str, Option<&'static str>) {
+    let (item, _) = authored_ids(action, target);
+    if synchronization_hand_off_of(action, item.as_deref(), Some(target)).is_some() {
+        let step = LocalStep::AuthoritativeObserved.as_str();
+        (step, Some(step))
+    } else {
+        ("created", None)
+    }
+}
+
+/// The contexts the row `record_id` records it owes an indexing. `None` for
+/// a row that records none (NULL), and for one whose list this build cannot
+/// read: both are handed off to a refresh of the whole repository.
+pub(super) fn recorded_owed_contexts(
+    connection: &Connection,
+    record_id: i64,
+) -> rusqlite::Result<super::OwedContexts> {
+    let owed: Option<rusqlite::types::Value> = connection
+        .query_row(
+            "SELECT owed_contexts FROM operation_records WHERE id = ?1",
+            [record_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(match owed {
+        Some(rusqlite::types::Value::Text(owed)) => super::decode_owed_contexts(&owed),
+        _ => None,
+    })
+}
+
+/// Refuses `call`, a call of the repository `repository_id` that begins
+/// no local row of its own (a remote operation's reservation, a
+/// retirement), while a pending local row `holds` it: remote operations and
+/// retirements cannot consume, replace or reinterpret local recovery. A
+/// row of the call's own item refuses it; see `holds` for the others.
 pub(super) fn require_no_pending_local(
     connection: &Connection,
     repository_id: i64,
+    call: &CallScope,
 ) -> Result<(), RepositoryError> {
-    let pending: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed')
-        OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending')",
+    let holds = holds_sql(call, "");
+    let pending: bool = connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state!='completed' AND {holds})
+        OR EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND completed_step='comment_registration_pending' AND {holds})"),
         [repository_id], |row| row.get(0)).map_err(|_| super::remote::state::recovery_required())?;
     if pending {
-        return Err(super::remote::state::recovery_required()
-            .with_blocker(first_pending_local(connection, repository_id)));
+        return Err(
+            super::remote::state::recovery_required().with_blocker(first_pending_local(
+                connection,
+                repository_id,
+                &holds,
+            )),
+        );
     }
     Ok(())
 }
 
+/// Refuses `call`, a new synchronization of the repository
+/// `repository_id`, while a remote operation's index debt `holds` it
+/// (`holds_remote_index_debt_sql`): a classified synchronization of the
+/// same item that owes its index step and has no local hand-off row yet
+/// (design decision 19, question 3). Once its hand-off row is written,
+/// `require_no_pending_local` holds the call for it as well, naming that
+/// row. The refusal names the remote operation.
+pub(super) fn require_no_remote_index_debt(
+    connection: &Connection,
+    repository_id: i64,
+    call: &CallScope,
+) -> Result<(), RepositoryError> {
+    let debt: Option<String> = connection
+        .query_row(
+            &format!(
+                "SELECT operation_ulid FROM remote_operation_records
+                  WHERE repository_id = ?1 AND {}
+                  ORDER BY id LIMIT 1",
+                holds_remote_index_debt_sql(call, "")
+            ),
+            [repository_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| super::remote::state::recovery_required())?;
+    match debt {
+        Some(operation_id) => {
+            Err(super::remote::state::recovery_required()
+                .with_blocker(Blocker::remote(&operation_id)))
+        }
+        None => Ok(()),
+    }
+}
+
 /// The operation of the oldest local row of the repository `repository_id`
-/// that `require_no_pending_local` is refused for, read by the two
-/// indexes the refusal itself reads. `None` when it names no operation or
-/// cannot be read: the refusal stands without a name.
-fn first_pending_local(connection: &Connection, repository_id: i64) -> Option<Blocker> {
+/// that `require_no_pending_local` is refused for, those `holds` selects,
+/// read by the two indexes the refusal itself reads. `None` when it names
+/// no operation or cannot be read: the refusal stands without a name.
+fn first_pending_local(
+    connection: &Connection,
+    repository_id: i64,
+    holds: &str,
+) -> Option<Blocker> {
     let first = |condition: &str| -> Option<(i64, Option<String>)> {
         connection
             .query_row(
                 &format!(
                     "SELECT id, operation_ulid FROM operation_records
                       WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1)
-                        AND {condition}
+                        AND {condition} AND {holds}
                       ORDER BY id LIMIT 1"
                 ),
                 [repository_id],
@@ -1161,8 +1498,10 @@ fn first_pending_local(connection: &Connection, repository_id: i64) -> Option<Bl
     Blocker::local(operation_id.as_deref())
 }
 
-/// Tagged synchronization-local identity cannot share an ID with any remote row.
-/// The collision check belongs in the insertion transaction, not prior inspection.
+/// The tagged local binding of a synchronization with no remote to publish
+/// to, under its index hand-off target (P-4), cannot share an ID with any
+/// remote row. The collision check belongs in the insertion transaction, not
+/// prior inspection.
 pub(super) fn begin_or_reconcile_local_synchronization(
     connection: &mut Connection,
     root: &Path,
@@ -1334,6 +1673,7 @@ fn begin_or_reconcile(
         target,
         tagged_local_binding,
         reach,
+        false,
     )?;
     let existing = transaction
         .query_row(
@@ -1409,8 +1749,10 @@ fn begin_or_reconcile(
             // is a fresh begin: it is attributed anew, as a new row is.
             transaction
                 .execute(
-                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2 WHERE id = ?1",
-                    params![id, now()],
+                    "UPDATE operation_records SET state = 'created', completed_step = NULL, observed_at = ?2,
+                            owed_contexts = ?3
+                      WHERE id = ?1",
+                    params![id, now(), owed_at_creation(action, target)],
                 )
                 .map_err(RepositoryError::sqlite)?;
             attribute_local_row(&transaction, id, &origin).map_err(RepositoryError::sqlite)?;
@@ -1439,10 +1781,16 @@ fn begin_or_reconcile(
         .optional()
         .map_err(RepositoryError::sqlite)?;
     let (item_id, comment_id) = authored_ids(action, target);
+    let owed = owed_at_creation(action, target);
+    let (state, step) = begun_standing(action, target);
+    // `observed_at` is the time of the begin, after whatever work of its
+    // own a row records as done from the first: a synchronization's push
+    // or local update is done before its hand-off row is begun (design
+    // decision 32).
     transaction
         .execute(
-            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, observed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'created', ?8)",
+            "INSERT INTO operation_records (repository_id, root_path, operation_ulid, action, target, item_id, comment_id, state, completed_step, observed_at, owed_contexts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 repository_id,
                 root_path,
@@ -1451,7 +1799,10 @@ fn begin_or_reconcile(
                 target,
                 item_id,
                 comment_id,
-                now()
+                state,
+                step,
+                now(),
+                owed
             ],
         )
         .map_err(RepositoryError::sqlite)?;
@@ -1909,10 +2260,12 @@ impl JournalRow {
 ///
 /// The ID a comment's binding keeps for its synchronization is that
 /// synchronization's alone. The one local operation under it is the
-/// synchronization's index hand-off: a refresh with no target, once the
-/// remote journal holds an authoritative result for the bound context.
-/// Anything else under the ID is another operation's use of it. An ID
-/// that is no binding's synchronization is not this question's.
+/// synchronization's index hand-off, once the remote journal holds an
+/// authoritative result for the bound context: a refresh with that
+/// context's hand-off target at the authoritative commit (P-4), or with no
+/// target, as older builds began it. Anything else under the ID is another
+/// operation's use of it. An ID that is no binding's synchronization is not
+/// this question's.
 ///
 /// Decided here for `begin_or_reconcile`, which asks it first, and for
 /// `require_refresh_can_begin`, so that a call which asks before it
@@ -1924,16 +2277,49 @@ fn comment_child_may_begin(
     requested: &str,
     target: &str,
 ) -> Result<bool, RepositoryError> {
-    let child: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid=?1)", [requested], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    if !child {
+    let child: Option<String> = connection
+        .query_row(
+            "SELECT operation_ulid FROM comment_publication_bindings WHERE synchronization_ulid=?1",
+            [requested],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?;
+    let Some(comment) = child else {
         return Ok(true);
-    }
+    };
+    // The binding is the authority for what may begin under its
+    // synchronization's ID; the open of the call that asks no longer
+    // migrates, and so no longer audits it first.
+    validate_comment_binding(connection, &comment)?;
     let allowed: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b
         JOIN operation_records o ON o.id=b.local_record_id JOIN remote_operation_records r ON r.operation_ulid=b.synchronization_ulid
         JOIN repositories p ON p.id=r.repository_id WHERE b.synchronization_ulid=?1 AND o.root_path=?2 AND p.root_path=?2
         AND r.authoritative_kind IS NOT NULL AND r.action='synchronize_context' AND r.kind=b.kind AND r.item_id=b.item_ulid)",
         params![requested,root_path], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    Ok(action == "refresh" && target.is_empty() && allowed)
+    if action != "refresh" || !allowed {
+        return Ok(false);
+    }
+    if target.is_empty() {
+        return Ok(true);
+    }
+    // The bound context's hand-off target, at the authoritative commit.
+    let hand_off: Option<String> = connection
+        .query_row(
+            "SELECT r.kind || '/' || r.item_id, r.authoritative_oid
+               FROM remote_operation_records r JOIN repositories p ON p.id = r.repository_id
+              WHERE r.operation_ulid = ?1 AND p.root_path = ?2",
+            params![requested, root_path],
+            |row| {
+                let of: String = row.get(0)?;
+                let oid: Option<String> = row.get(1)?;
+                Ok(oid.map(|oid| hand_off_target(&of, &oid)))
+            },
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .flatten();
+    Ok(hand_off.as_deref() == Some(target))
 }
 
 /// The table of the bindings of comment submissions.
@@ -1981,57 +2367,434 @@ enum Pending {
     Another(Option<Blocker>),
 }
 
-/// What a row of the local journal holds while it is pending, and what a
-/// call that would begin or take up a row is of.
+/// What a row of the local journal is of while it is pending, and what a
+/// call that would begin or take up a row is of; `holds` decides what the
+/// row holds.
 ///
-/// The hold is per item for the `ITEM_ACTIONS`. Everything else is of
-/// the whole repository: the one discovery index, which a refresh or a
-/// rebuild rewrites for every context; the primary branch and its
-/// checkout, which an item's context is cut from; the registration and
-/// the repository's remotes.
+/// The scope is per item for the `ITEM_ACTIONS`, and for a
+/// synchronization's index hand-off (P-4), which is of its item or of the
+/// primary. Everything else is of the whole repository: the one discovery
+/// index, which a refresh or a rebuild rewrites for every context; the
+/// primary branch and its checkout, which an item's context is cut from;
+/// the registration and the repository's remotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Scope {
-    /// One item, by its ID.
+    /// One item, by its ID, or the primary, as `primary` (design decision
+    /// 16): what `ContextKey::encode` writes, so an item's ID never reads
+    /// as the primary.
     Item(String),
     /// The whole repository.
     Repository,
 }
 
 impl Scope {
-    /// The scope of a row of `action` that names `item_id`. A row of an
-    /// item action that names no item, as each one an older build wrote
-    /// does, may be of any item: it is of the whole repository.
-    fn of_row(action: &str, item_id: Option<&str>) -> Self {
+    /// The scope of a row of `action` that names `item_id` and was begun
+    /// with `target`. A row of an item action that names no item, as each
+    /// one an older build wrote does, may be of any item: it is of the
+    /// whole repository. So is a synchronization's index hand-off with no
+    /// target, as older builds wrote it.
+    fn of_row(action: &str, item_id: Option<&str>, target: Option<&str>) -> Self {
         match item_id {
             Some(item) if ITEM_ACTIONS.contains(&action) => Self::Item(item.to_owned()),
-            _ => Self::Repository,
+            _ => synchronization_hand_off_of(action, item_id, target)
+                .map_or(Self::Repository, Self::Item),
         }
     }
 
     /// The scope of a call of `action` with `target` that takes no row
     /// up: the item the row it begins would name, or the repository.
     fn of_call(action: &str, target: &str) -> Self {
-        Self::of_row(action, authored_ids(action, target).0.as_deref())
+        Self::of_row(
+            action,
+            authored_ids(action, target).0.as_deref(),
+            Some(target),
+        )
     }
 }
 
-/// The states of a row that an index owner may be at work under with no
-/// lease held: one that claimed it, or that a promotion fenced and that
-/// may claim it again. A claim fences only the row it claims, so no other
-/// row's claim stops that owner. Such a row is in every call's way, of
-/// whatever item: two index owners of one repository would each rewrite
-/// the whole index, and lose each other's work.
-const INDEX_OWNER_STATES: [&str; 2] = [INDEXING_STATE, "index_invalidated"];
+/// The states in which a pending row whose commit is observed owes only its
+/// index hand-off: the hand-off's own states (`HAND_OFF_STATES`), and the
+/// state a write records with its checkpoint, which a crash before the
+/// hand-off begins leaves (design decision 19, question 1). An index step
+/// that claimed a row (`indexing`), or that a promotion fenced
+/// (`index_invalidated`), stores only what a basis re-check under the lease
+/// still finds, so it rewrites no other context's rows and is in no other
+/// item's way.
+const OWING_STATES: [&str; 6] = [
+    "authoritative_observed",
+    INDEXING_STATE,
+    "index_invalidated",
+    "failed",
+    "retry",
+    "authoring_checkpoint_observed",
+];
 
-/// Whether a pending row of `scope` in `state` is in the way of a call of
-/// `call`, which may not take it up. Only a row of one item, in no index
-/// owner's state, is not in the way of a call of another item.
-fn is_in_the_way(state: &str, scope: &Scope, call: &Scope) -> bool {
-    INDEX_OWNER_STATES.contains(&state)
-        || match (scope, call) {
-            (Scope::Item(row), Scope::Item(call)) => row == call,
-            _ => true,
+/// Whether a pending row in `state` whose last step is `step` has its
+/// commit observed and owes nothing more than its index hand-off (Table B's
+/// "owes only its hand-off"): its last step says the operation's own work is
+/// done (`LocalStep::is_authoritative`), and its state is one of the
+/// `OWING_STATES`, or it is a comment's that waits for its registration.
+/// Any other pending row is mid-write. `holds` asks it, and so does a read
+/// of what a pending row owes an indexing (design decision 32).
+///
+/// The step is asked as well as the state: a refresh that failed is in one
+/// of these states with no work of its own recorded. It is wider than
+/// `LocalRow::owes_only_its_hand_off`, which asks a different question:
+/// whether a refresh under the row's ID may complete it. A write stopped at
+/// its checkpoint is completed by its own retry, which advances it to its
+/// hand-off, and a comment waiting for its registration by its own retry
+/// once the repository is registered.
+pub(super) fn is_committed_and_owing(state: &str, step: Option<&str>) -> bool {
+    listed(step).is_some_and(LocalStep::is_authoritative)
+        && (OWING_STATES.contains(&state) || waits_for_registration(state, step))
+}
+
+/// A pending row of the local journal, as `holds` reads it: what it is of
+/// (its action, target and item) and where it stands (its state and last
+/// step). A row that has ended holds nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingRow {
+    pub(super) action: String,
+    pub(super) target: Option<String>,
+    pub(super) item_id: Option<String>,
+    pub(super) state: String,
+    pub(super) completed_step: Option<String>,
+}
+
+impl PendingRow {
+    /// Whether the row has not ended: it is not `completed`, or it is a
+    /// comment's that waits for its registration (see `NOT_ENDED`).
+    fn is_pending(&self) -> bool {
+        self.state != "completed" || waits_for_registration(&self.state, self.step())
+    }
+
+    /// See `is_committed_and_owing`.
+    fn is_committed_and_owing(&self) -> bool {
+        is_committed_and_owing(&self.state, self.step())
+    }
+
+    fn step(&self) -> Option<&str> {
+        self.completed_step.as_deref()
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::of_row(
+            &self.action,
+            self.item_id.as_deref(),
+            self.target.as_deref(),
+        )
+    }
+
+    fn standing(&self, call: &CallScope) -> Standing {
+        match self.scope() {
+            Scope::Repository => Standing::WholeRepository,
+            Scope::Item(item) if call.own.contains(&item) => Standing::CallsItem,
+            Scope::Item(_) => Standing::AnotherItem {
+                committed_and_owing: self.is_committed_and_owing(),
+            },
         }
+    }
+}
+
+/// What a call is of, as `holds` reads it: the items it is of (each by its
+/// ID, or `primary` for the primary; none for a call of no one item), how
+/// far it reached before it began, and whether it is of the whole
+/// repository. A close or a promotion is of two: its item and the primary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CallScope {
+    own: std::collections::BTreeSet<String>,
+    reach: CallReach,
+    repository_wide: bool,
+}
+
+impl CallScope {
+    /// A write or a synchronization of `item`, which reads nothing of
+    /// another item.
+    pub(super) fn item(item: &crate::canonical::ItemId) -> Self {
+        Self::of_key(&super::discovery::ContextKey::Item(item.clone()))
+    }
+
+    /// A synchronization of the primary.
+    pub(super) fn primary() -> Self {
+        Self::of_key(&super::discovery::ContextKey::Primary)
+    }
+
+    /// A call of the whole repository and of no one item: a whole refresh,
+    /// a rebuild, a poll, a retirement pass before it has its candidates.
+    pub(super) fn repository() -> Self {
+        Self {
+            own: std::collections::BTreeSet::new(),
+            reach: CallReach::OwnItem,
+            repository_wide: true,
+        }
+    }
+
+    /// A retirement of `item`'s context: of that item, and of the whole
+    /// repository, since it removes a context and claims the index for its
+    /// request (Table B's retirement column).
+    pub(super) fn retirement(item: &crate::canonical::ItemId) -> Self {
+        Self::item(item).and_the_repository()
+    }
+
+    /// The call of a remote operation of `target`. A poll is of the whole
+    /// repository; a synchronization of its item or of the primary. A close
+    /// or a promotion is of its item, which it merges and retires, and of
+    /// the primary, which it writes, and of the whole repository as well: it
+    /// is held by its own item's rows as by the primary's (Table B's own
+    /// item and retirement columns).
+    pub(super) fn of_remote(target: &super::RemoteOperationTarget) -> Self {
+        use super::RemoteOperationAction::{
+            Close, Poll, Promote, SynchronizeContext, SynchronizePrimary,
+        };
+        match (target.action(), target.item()) {
+            (SynchronizeContext, Some((_, item))) => Self::item(item),
+            (SynchronizePrimary, _) => Self::primary(),
+            (Promote | Close, Some((_, item))) => {
+                Self::item(item).with_the_primary().and_the_repository()
+            }
+            (Promote | Close, None) => Self::primary().and_the_repository(),
+            (Poll | SynchronizeContext, _) => Self::repository(),
+        }
+    }
+
+    /// This call, of the whole repository as well as of its own item: one
+    /// that removes a context or rewrites the index for every context.
+    pub(super) fn and_the_repository(self) -> Self {
+        Self {
+            repository_wide: true,
+            ..self
+        }
+    }
+
+    /// This call, of the primary as well as of the whole repository: a
+    /// folder's creation, which writes the primary's worktree and is held by
+    /// the primary's own rows, a primary synchronization's hand-off among
+    /// them (design decision 19, question 7).
+    fn and_the_primary(self) -> Self {
+        self.with_the_primary().and_the_repository()
+    }
+
+    /// This call, of the primary as well as of what it is of.
+    fn with_the_primary(mut self) -> Self {
+        self.own
+            .insert(super::discovery::ContextKey::Primary.encode());
+        self
+    }
+
+    fn of_key(key: &super::discovery::ContextKey) -> Self {
+        Self {
+            own: std::collections::BTreeSet::from([key.encode()]),
+            reach: CallReach::OwnItem,
+            repository_wide: false,
+        }
+    }
+
+    /// The items the call is of, as an SQL list of their keys; `None` for a
+    /// call of no one item.
+    fn own_sql(&self) -> Option<String> {
+        let own: Vec<&str> = self.own.iter().map(String::as_str).collect();
+        (!own.is_empty()).then(|| sql_list(&own))
+    }
+
+    /// The call `begin_or_reconcile` makes of `scope`, the scope of the row
+    /// it takes up or would begin, having reached as far as `reach` says.
+    fn of_begin(scope: Scope, reach: CallReach) -> Self {
+        let call = match scope {
+            Scope::Item(item) => Self {
+                own: std::collections::BTreeSet::from([item]),
+                reach: CallReach::OwnItem,
+                repository_wide: false,
+            },
+            Scope::Repository => Self::repository(),
+        };
+        Self { reach, ..call }
+    }
+}
+
+/// How a pending row stands to a call: the two facts of it Table B decides
+/// on, whose it is and, for a row of another item, whether it is mid-write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Standing {
+    /// The row is of the whole repository; see `Scope`.
+    WholeRepository,
+    /// The row is of the item the call is of.
+    CallsItem,
+    /// The row is of another item.
+    AnotherItem { committed_and_owing: bool },
+}
+
+impl Standing {
+    const ALL: [Self; 4] = [
+        Self::WholeRepository,
+        Self::CallsItem,
+        Self::AnotherItem {
+            committed_and_owing: false,
+        },
+        Self::AnotherItem {
+            committed_and_owing: true,
+        },
+    ];
+
+    /// Table B: whether a pending row that stands so to `call` holds it.
+    /// A row of the call's own item holds it, and so does a row of the
+    /// whole repository. A row of another item holds it only while the row
+    /// is mid-write and the call is of the whole repository or was checked
+    /// against other items: a call that reads or rewrites what that row is
+    /// still writing. A row of another item that owes only its hand-off
+    /// holds nothing: its commit is there to be read, and a store of its
+    /// context checks its basis again under the lease.
+    fn holds(self, call: &CallScope) -> bool {
+        match self {
+            Self::WholeRepository | Self::CallsItem => true,
+            Self::AnotherItem {
+                committed_and_owing,
+            } => {
+                !committed_and_owing
+                    && (call.repository_wide || call.reach == CallReach::OtherItems)
+            }
+        }
+    }
+}
+
+/// Whether the pending row `row` holds `call`, which may not take it up:
+/// the one place Table B ("what a pending row holds") is decided. The SQL
+/// checks ask it through `holds_sql` and `holds_remote_index_debt_sql`.
+/// Whether a held call then waits (its holder live) or is refused at once
+/// (stale) is the liveness judgement's, after it.
+pub(super) fn holds(row: &PendingRow, call: &CallScope) -> bool {
+    row.is_pending() && row.standing(call).holds(call)
+}
+
+/// `holds` for a row of `operation_records`, as an SQL condition on its
+/// columns, each named `{columns}<column>`: `columns` is `""`, or an alias
+/// and a dot. It selects exactly the rows `holds` holds
+/// (`holds_agrees_with_table_b`).
+pub(super) fn holds_sql(call: &CallScope, columns: &str) -> String {
+    let c = columns;
+    let scope = scope_sql(c);
+    let own = call.own_sql();
+    let owes = format!(
+        "({c}completed_step IS NOT NULL AND {c}completed_step IN {steps}
+          AND ({c}state IN {states} OR ({c}state = 'completed' AND {c}completed_step = {registering})))",
+        steps = sql_list(&authoritative_steps()),
+        states = sql_list(&OWING_STATES),
+        registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
+    );
+    let rows = |standing: Standing| match standing {
+        Standing::WholeRepository => Some(format!("{scope} IS NULL")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{scope} IN {own}")),
+        Standing::AnotherItem {
+            committed_and_owing,
+        } => Some(format!(
+            "({scope} IS NOT NULL{} AND {}{owes})",
+            own.as_ref()
+                .map(|own| format!(" AND {scope} NOT IN {own}"))
+                .unwrap_or_default(),
+            if committed_and_owing { "" } else { "NOT " }
+        )),
+    };
+    format!(
+        "(({c}state != 'completed' OR {c}completed_step IS {registering}) AND {held})",
+        registering = sql_text(LocalStep::CommentRegistrationPending.as_str()),
+        held = held_sql(call, rows)
+    )
+}
+
+/// `Scope::of_row` as an SQL expression on the columns of a row of
+/// `operation_records`, named as for `holds_sql`: the item the row is of
+/// (its ID, or `primary`), or NULL for a row of the whole repository. A
+/// target's beginning is compared exactly, as `synchronization_hand_off_of`
+/// compares it.
+fn scope_sql(c: &str) -> String {
+    let begins = |prefix: String| format!("substr({c}target, 1, length({prefix})) = {prefix}");
+    let hand_off =
+        |of: String| format!("{} || {of} || '/'", sql_text(SYNCHRONIZATION_INDEX_TARGET));
+    let of_its_item = HAND_OFF_KINDS
+        .iter()
+        .map(|kind| {
+            begins(hand_off(format!(
+                "{} || {c}item_id",
+                sql_text(&format!("{}/", super::authoring_kind_segment(kind)))
+            )))
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "(CASE WHEN {c}action IN {items} THEN {c}item_id
+               WHEN {c}action = 'refresh' AND {of_the_primary} THEN {primary}
+               WHEN {c}action = 'refresh' AND ({of_its_item}) THEN {c}item_id END)",
+        items = sql_list(&ITEM_ACTIONS),
+        of_the_primary = begins(hand_off(sql_text("primary"))),
+        primary = sql_text(&super::discovery::ContextKey::Primary.encode()),
+    )
+}
+
+/// `holds` for the index debt a remote operation's row keeps after it ended
+/// (`index_pending`), as an SQL condition on a row of
+/// `remote_operation_records`, its columns named as for `holds_sql`. Such a
+/// debt owes only its hand-off. A synchronization's is of its item, or of
+/// the primary (Table B's row of a synchronization's hand-off); any other
+/// remote operation's, a poll's, a promotion's or a close's, is handed off
+/// to a refresh of the whole repository, and is of the whole repository.
+pub(super) fn holds_remote_index_debt_sql(call: &CallScope, columns: &str) -> String {
+    let c = columns;
+    let item = format!(
+        "(CASE {c}action WHEN 'synchronize_context' THEN {c}item_id WHEN 'synchronize_primary' THEN {} END)",
+        sql_text(&super::discovery::ContextKey::Primary.encode())
+    );
+    let own = call.own_sql();
+    let rows = |standing: Standing| match standing {
+        Standing::WholeRepository => Some(format!("{item} IS NULL")),
+        Standing::CallsItem => own.as_ref().map(|own| format!("{item} IN {own}")),
+        Standing::AnotherItem {
+            committed_and_owing: true,
+        } => Some(format!(
+            "({item} IS NOT NULL{})",
+            own.as_ref()
+                .map(|own| format!(" AND {item} NOT IN {own}"))
+                .unwrap_or_default()
+        )),
+        // An index debt is never mid-write.
+        Standing::AnotherItem {
+            committed_and_owing: false,
+        } => None,
+    };
+    format!("({c}index_pending != 0 AND {})", held_sql(call, rows))
+}
+
+/// The rows of each `Standing` that holds `call`, as `rows` selects them,
+/// joined into one SQL condition: false when none does.
+fn held_sql(call: &CallScope, rows: impl Fn(Standing) -> Option<String>) -> String {
+    let held: Vec<String> = Standing::ALL
+        .into_iter()
+        .filter(|standing| standing.holds(call))
+        .filter_map(rows)
+        .collect();
+    if held.is_empty() {
+        "0".to_owned()
+    } else {
+        format!("({})", held.join(" OR "))
+    }
+}
+
+/// The steps `LocalStep::is_authoritative` accepts, as stored.
+fn authoritative_steps() -> Vec<&'static str> {
+    LocalStep::ALL
+        .into_iter()
+        .filter(|step| step.is_authoritative())
+        .map(LocalStep::as_str)
+        .collect()
+}
+
+/// `text` as an SQL string literal.
+fn sql_text(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// `items` as an SQL list of string literals.
+fn sql_list(items: &[&str]) -> String {
+    let items: Vec<String> = items.iter().map(|item| sql_text(item)).collect();
+    format!("({})", items.join(","))
 }
 
 /// How far a call that begins or takes up a row reached before it did.
@@ -2042,9 +2805,11 @@ pub(super) enum CallReach {
     OwnItem,
     /// It was checked against other items as the discovery index holds
     /// them, as a ticket save that sets `deps` or `parent` is for cycles
-    /// and kinds. Any unfinished row may hold a change the index does not
-    /// have yet, so the call is of the whole repository, whatever the
-    /// scope of the row it begins: every other pending row is in its way.
+    /// and kinds. A row of another item still mid-write may hold a change
+    /// that neither the index nor the disk has yet, so such a row holds the
+    /// call; one that owes only its hand-off has its commit on disk, where
+    /// the check reads every context whose basis moved, and does not. See
+    /// `holds`.
     OtherItems,
 }
 
@@ -2061,13 +2826,16 @@ pub(super) enum CallReach {
 /// `RepositoryService`'s checkpoint guard. Otherwise what the local
 /// journal holds pending, of what is in the call's way.
 ///
-/// A call that was checked against other items (`CallReach::OtherItems`)
-/// is of the whole repository. Any other call is of the scope of the row
-/// it would take up, when there is one: a refresh under a row's own ID,
-/// which is what `operation resume` runs for a row that owes only its
-/// hand-off, is of that row's item. Otherwise it is of the item its row
-/// would name, or of the whole repository; see `Scope`. A pending row of another item that no index
-/// owner may be at work under is not in its way, and is passed over.
+/// The call is of the scope of the row it would take up, when there is
+/// one: a refresh under a row's own ID, which is what `operation resume`
+/// runs for a row that owes only its hand-off, is of that row's item.
+/// Otherwise it is of the item its row would name, or of the whole
+/// repository; see `Scope`. It reached as far as `reach` says. With
+/// `of_the_primary`, a call of the whole repository is of the primary as
+/// well (`CallScope::and_the_primary`). Each other pending row, a comment's
+/// that waits for its registration among them, is in its way when it
+/// `holds` the call, and is passed over otherwise.
+#[allow(clippy::too_many_arguments)] // The one question both callers share.
 fn in_the_way(
     connection: &Connection,
     root_path: &str,
@@ -2076,6 +2844,7 @@ fn in_the_way(
     target: &str,
     tagged_local_binding: bool,
     reach: CallReach,
+    of_the_primary: bool,
 ) -> Result<Pending, RepositoryError> {
     let remote_active: Option<String> = connection.query_row(
         &format!("SELECT remote_operation_records.operation_ulid FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND phase IN {RESERVATION_PHASES} AND (action != 'synchronize_context' OR ?2 LIKE ('authoring-context-v1/' || kind || '/' || item_id || '/%')) ORDER BY remote_operation_records.id LIMIT 1"),
@@ -2088,15 +2857,21 @@ fn in_the_way(
     struct Row {
         id: i64,
         operation_id: Option<String>,
-        action: String,
-        target: Option<String>,
-        item_id: Option<String>,
-        state: String,
+        row: PendingRow,
     }
+    // Each of the two kinds of row that has not ended, read by the index
+    // kept for it: a row that is not completed, and a completed comment's
+    // that waits for its registration. No row is of both.
     let pending = connection
         .prepare(
-            "SELECT id, operation_ulid, action, target, item_id, state FROM operation_records
-             WHERE root_path = ?1 AND state != 'completed' ORDER BY id",
+            "SELECT id, operation_ulid, action, target, item_id, state, completed_step
+               FROM operation_records WHERE root_path = ?1 AND state != 'completed'
+             UNION ALL
+             SELECT id, operation_ulid, action, target, item_id, state, completed_step
+               FROM operation_records
+              WHERE root_path = ?1 AND completed_step = 'comment_registration_pending'
+                AND state = 'completed'
+             ORDER BY id",
         )
         .and_then(|mut statement| {
             statement
@@ -2104,50 +2879,59 @@ fn in_the_way(
                     Ok(Row {
                         id: row.get(0)?,
                         operation_id: row.get(1)?,
-                        action: row.get(2)?,
-                        target: row.get(3)?,
-                        item_id: row.get(4)?,
-                        state: row.get(5)?,
+                        row: PendingRow {
+                            action: row.get(2)?,
+                            target: row.get(3)?,
+                            item_id: row.get(4)?,
+                            state: row.get(5)?,
+                            completed_step: row.get(6)?,
+                        },
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(RepositoryError::sqlite)?;
-    // Whether the call takes the row up.
-    let compatible = |row: &Row| {
+    // Whether the row is the call's own: the row of its operation, or one
+    // it takes up.
+    let compatible = |Row {
+                          operation_id, row, ..
+                      }: &Row| {
         if tagged_local_binding {
-            row.operation_id.as_deref() == Some(requested)
+            operation_id.as_deref() == Some(requested)
                 && action == "refresh"
                 && row.action == action
                 && row.target.as_deref() == Some(target)
         } else {
-            row.operation_id.as_deref() == Some(requested)
+            operation_id.as_deref() == Some(requested)
                 && (same_lifecycle_action(&row.action, action)
                     || action == "refresh" && row.action != "refresh")
                 && (action == "refresh" || row.target.as_deref() == Some(target))
-                || row.operation_id.is_none()
+                || operation_id.is_none()
                     && matches!(
                         (row.action.as_str(), action),
                         ("refresh", "refresh") | ("rebuild", "rebuild")
                     )
         }
     };
-    let call = match reach {
-        CallReach::OtherItems => Scope::Repository,
-        CallReach::OwnItem => pending.iter().find(|row| compatible(row)).map_or_else(
-            || Scope::of_call(action, target),
-            |row| Scope::of_row(&row.action, row.item_id.as_deref()),
-        ),
+    // Whether the call takes the row up. A comment's row that waits for
+    // its registration is completed: its own call finds it as the row its
+    // ID has, below, as before.
+    let takes_up = |row: &Row| row.row.state != "completed" && compatible(row);
+    let scope = pending
+        .iter()
+        .find(|row| takes_up(row))
+        .map_or_else(|| Scope::of_call(action, target), |row| row.row.scope());
+    let call = match scope {
+        Scope::Repository if of_the_primary => CallScope::of_begin(scope, reach).and_the_primary(),
+        scope => CallScope::of_begin(scope, reach),
     };
     let mut matching = None;
     for row in &pending {
         if compatible(row) {
-            matching = Some(row.id);
-        } else if is_in_the_way(
-            &row.state,
-            &Scope::of_row(&row.action, row.item_id.as_deref()),
-            &call,
-        ) {
+            if takes_up(row) {
+                matching = Some(row.id);
+            }
+        } else if holds(&row.row, &call) {
             return Ok(Pending::Another(Blocker::local(
                 row.operation_id.as_deref(),
             )));
@@ -2163,10 +2947,16 @@ fn in_the_way(
 /// or a comment's synchronization whose hand-off is not yet due, with
 /// `RepositoryBusy` while an automatic poll holds the reservation, and
 /// with `RecoveryRequired` for any other remote operation that holds it,
-/// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
+/// or for a pending local row the refresh may not take up that `holds` it.
+/// It is the same test the refresh then makes,
 /// for a call that would otherwise change something first and find the
 /// refresh refused after. Nothing is written: the refresh, not this
 /// question, asks an automatic poll to yield.
+///
+/// The one call that asks it, a folder's creation, writes the primary's
+/// worktree before its refresh: it is asked as a call of the primary as
+/// well as of the whole repository, which a primary synchronization's
+/// hand-off holds (design decision 19, question 7).
 pub(super) fn require_refresh_can_begin(
     connection: &Connection,
     root: &Path,
@@ -2218,6 +3008,7 @@ pub(super) fn require_refresh_can_begin(
         "",
         false,
         CallReach::OwnItem,
+        true,
     )? {
         Pending::Nothing | Pending::Own(_) => Ok(()),
         Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
@@ -3188,7 +3979,17 @@ mod abandoned_row_tests {
                 "CREATE TABLE remote_operation_records (
                     id INTEGER PRIMARY KEY, operation_ulid TEXT, repository_id INTEGER,
                     action TEXT, priority TEXT, kind TEXT, item_id TEXT, phase TEXT,
-                    authoritative_kind TEXT)",
+                    authoritative_kind TEXT, authoritative_oid TEXT)",
+            )
+            .unwrap();
+        // A well-formed binding: the refresh under its synchronization's ID
+        // audits it first (design decision 9).
+        connection
+            .execute(
+                "UPDATE operation_records SET target=?1 WHERE id=1",
+                [format!(
+                    "authoring-context-v1/document/{ID}/Edit\0.manyhands/comments\0{ID}"
+                )],
             )
             .unwrap();
         connection
@@ -3197,7 +3998,12 @@ mod abandoned_row_tests {
                     (operation_ulid, local_record_id, root_digest, kind, item_ulid, comment_ulid,
                      synchronization_ulid, pre_checkpoint_oid)
                  VALUES (?1, 1, ?2, 'document', ?1, ?1, ?3, ?4)",
-                params![ID, [0_u8; 32].as_slice(), CHILD, "0".repeat(40)],
+                params![
+                    ID,
+                    blake3::hash(b"/repository").as_bytes().as_slice(),
+                    CHILD,
+                    "0".repeat(40)
+                ],
             )
             .unwrap();
         let root = Path::new("/repository");
@@ -3868,13 +4674,15 @@ mod attribution_tests {
 
     /// A row of an authoring action names its item, and only a comment's
     /// submission its comment, each read from a target of the form it is
-    /// begun with. No other row names an item here: a local
-    /// synchronization names its own when it is begun, and a retirement
-    /// none.
+    /// begun with; so does a synchronization's index hand-off of an item
+    /// (P-4), and one of the primary names none. No other row names an item
+    /// here: a local synchronization names its own when it is begun, and a
+    /// retirement none.
     #[test]
     fn an_authoring_row_names_its_item_and_only_a_comment_its_comment() {
         const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
         const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+        const OID: &str = "0123456789abcdef0123456789abcdef01234567";
         let item = || Some(ITEM.to_owned());
         for (action, target, expected) in [
             (
@@ -3922,6 +4730,36 @@ mod attribution_tests {
             ("context_sync_local", "observation".to_owned(), (None, None)),
             ("save_ticket", "remote-v1-0123".to_owned(), (None, None)),
             ("refresh", String::new(), (None, None)),
+            (
+                "refresh",
+                format!("synchronization-index-v1/ticket/{ITEM}/{OID}"),
+                (item(), None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/document/{ITEM}/{OID}"),
+                (item(), None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/primary/{OID}"),
+                (None, None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-index-v1/comment/{ITEM}/{OID}"),
+                (None, None),
+            ),
+            (
+                "refresh",
+                format!("synchronization-local-v1/ticket/{ITEM}/{OID}"),
+                (None, None),
+            ),
+            (
+                "save_ticket",
+                format!("synchronization-index-v1/ticket/{ITEM}/{OID}"),
+                (None, None),
+            ),
         ] {
             assert_eq!(
                 authored_ids(action, &target),

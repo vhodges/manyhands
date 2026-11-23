@@ -15,7 +15,10 @@ use super::{
     IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction,
     OperationAttributionDto, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
     OperationOwner, PollingOutcome, PollingStatusDto, ReadError, ResolvedRepository,
-    items::{behind, effective_rows, invalid_stored_data, stored_index_state, stored_items},
+    items::{
+        behind, effective_rows, invalid_stored_data, presented_problems, stored_contexts,
+        stored_index_state, stored_items,
+    },
 };
 use crate::{
     canonical::ItemId,
@@ -27,7 +30,7 @@ use crate::{
         recovery,
         remote::state::{self, StoredRemoteOperation},
     },
-    results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
+    results::{OperationFailureCode, ResultCode, timestamp_string},
 };
 
 /// The longest state or step name a local operation is taken to have.
@@ -255,7 +258,9 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
 }
 
 /// What the target of a refresh begins with when the refresh is the local
-/// half of a synchronization that had no remote to publish to.
+/// half of a synchronization that had no remote to publish to, as older
+/// builds bound it. This build binds such a synchronization under its index
+/// hand-off target (P-4), which is reported as a refresh.
 const LOCAL_SYNCHRONIZATION_TARGET: &str = "synchronization-local-v1/";
 
 /// Whether `text` is a full object ID as Git writes one.
@@ -299,7 +304,14 @@ fn local_operations(
     holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
-    crate::repository::local_sync::record::audit(connection)
+    // The unfinished local synchronizations are what the list shows; one
+    // shown by its ID is used whatever its state, so it is audited too.
+    crate::repository::local_sync::record::audit_unfinished(connection)
+        .and_then(|()| {
+            id.map_or(Ok(()), |id| {
+                crate::repository::local_sync::record::audit_record(connection, id)
+            })
+        })
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,
@@ -865,36 +877,24 @@ fn sort_operations(items: &mut [OperationDto]) {
     });
 }
 
-/// Every problem the index stores for the registration, with the working
-/// tree it was found in. The stored guidance is not read: it can hold a
+/// Every problem the index stores for the registration that the reads
+/// present, with the working tree it is presented in (see
+/// `presented_problems`). The stored guidance is not read: it can hold a
 /// parser's or the operating system's own words.
-fn index_problems(
+pub(super) fn index_problems(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<IndexProblemDto>, ReadError> {
-    let mut statement = connection.prepare(
-        "SELECT problems.code, problems.path, contexts.worktree_path
-           FROM problems
-           LEFT JOIN contexts ON contexts.id = problems.context_id
-          WHERE problems.repository_id = ?1
-          ORDER BY contexts.worktree_path ASC, problems.path ASC, problems.code ASC,
-                   problems.id ASC",
-    )?;
-    let mut rows = statement.query([repo.registration_id()])?;
-    let mut problems = Vec::new();
-    while let Some(row) = rows.next()? {
-        let code: String = row.get(0)?;
-        problems.push(IndexProblemDto {
-            code: ProblemCode::from_stored(&code),
+    Ok(presented_problems(connection, repo)?
+        .into_iter()
+        .map(|problem| IndexProblemDto {
+            code: problem.code,
             // A problem about the working tree itself is stored with a path
             // that is empty once made relative to it.
-            path: row
-                .get::<_, Option<String>>(1)?
-                .filter(|path| !path.is_empty()),
-            worktree: row.get(2)?,
-        });
-    }
-    Ok(problems)
+            path: problem.path.filter(|path| !path.is_empty()),
+            worktree: problem.context.map(|context| context.worktree),
+        })
+        .collect())
 }
 
 /// Fails with `repository_not_registered` when the registration was removed
@@ -925,11 +925,10 @@ impl RepositoryService {
             let stored = stored_items(connection, repo)?;
             let (items, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let contexts: i64 = connection.query_row(
-                "SELECT COUNT(*) FROM contexts WHERE repository_id = ?1",
-                [repo.registration_id()],
-                |row| row.get(0),
-            )?;
+            // The contexts the reads present. An item worktree that is not
+            // a valid item context is counted as none, as it was when the
+            // index stored no row for it, and its problem is the primary's.
+            let contexts = stored_contexts(connection, repo)?.len();
             let problems = index_problems(connection, repo)?;
             let pending_operations = local_operations(connection, repo, &Holders::of(self), None)?
                 .into_iter()
@@ -942,7 +941,7 @@ impl RepositoryService {
                     IndexState::NeverRefreshed => IndexStatusState::NeverRefreshed,
                 },
                 refreshed_at: index.refreshed_at,
-                context_count: u64::try_from(contexts).ok(),
+                context_count: count(contexts),
                 item_count: count(items.len()),
                 problem_count: count(problems.len()),
                 problems,

@@ -1223,6 +1223,24 @@ fn a_context_that_lost_its_item_gets_no_save_hint() {
     assert_eq!(case.refs(), before);
 }
 
+/// The same once a refresh has seen the file gone: the index then holds the
+/// worktree as one that is no valid item context, and the item is shown from
+/// primary's copy all the same.
+#[test]
+fn a_context_that_lost_its_item_gets_no_save_hint_after_a_refresh() {
+    let case = Case::saved();
+    let path = items::ticket_path(TICKET);
+    case.git(&case.context(), &["rm", "--quiet", "--", &path]);
+    case.git(&case.context(), &["commit", "--quiet", "-m", "removed"]);
+    items::refresh_completely(&case.world.service, &case.world.root);
+    let before = case.refs();
+    case.observe(TICKET, 2, "item_not_found");
+    let run = case.run(&case.observe_args(TICKET), &[]);
+    assert_eq!(run.status, 2);
+    assert!(!stderr(&run).contains("save"), "{}", stderr(&run));
+    assert_eq!(case.refs(), before);
+}
+
 #[test]
 fn sync_local_on_an_item_with_no_context_creates_none() {
     let case = Case::new();

@@ -113,7 +113,12 @@ impl OriginalPollSource {
         if !nonce {
             return Err(recovery_required());
         }
-        repository::recovery::require_no_pending_local(tx, id)?;
+        // The source is the poll: a call of the whole repository.
+        repository::recovery::require_no_pending_local(
+            tx,
+            id,
+            &repository::recovery::CallScope::repository(),
+        )?;
         pass::validate_parent(tx, &self.accepted, true)
     }
     pub(in super::super) fn validate(

@@ -4,8 +4,9 @@ use super::super::request_scope::Scope;
 use super::super::{ContextRetirementReport, RetireContextRequest};
 use crate::repository::{
     OperationId, RemoteOperationAction, RemoteOperationPriority, RemoteOperationTarget,
-    RemoteReservation, RepositoryError, RepositoryService, authoring_kind_segment, local_sync,
-    recovery,
+    RemoteReservation, RepositoryError, RepositoryService, authoring_kind_segment,
+    discovery::ContextKey,
+    local_sync, mark_registered_contexts_dirty, recovery,
     remote::{observation::ObservationConfiguration, reservation, state},
 };
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -132,8 +133,24 @@ impl ObserverExecution {
             AND c.request_ulid IS ?11 AND c.batch_operation_ulid IS NULL AND a.request_attempt IS ?12 AND a.batch_attempt_epoch IS NULL
             AND c.configuration_generation=?7 AND c.remote_name=?8 AND c.primary_branch=?9 AND c.endpoint_digest=?10
             AND c.phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','local_absent','index_pending'))", params![self.operation.to_string(),id,self.root.to_str(),self.epoch,self.observer.map(|o|o.to_string()),self.observer_epoch,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice(),self.request_scope.request_id(),self.request_scope.attempt()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-        let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND (o.state!='completed' OR o.completed_step='comment_registration_pending'))
-          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR index_pending!=0 OR reconciliation_required!=0))", params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+        // Every other row that holds a retirement of the retired item.
+        let retired: Option<crate::canonical::ItemId> = tx
+            .query_row(
+                "SELECT item_id FROM context_retirement_records WHERE operation_ulid=?1",
+                [self.operation.to_string()],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(RepositoryError::sqlite)?
+            .and_then(|item| item.parse().ok());
+        let Some(retired) = retired.filter(|_| valid) else {
+            return Err(recovery_required());
+        };
+        let call = recovery::CallScope::retirement(&retired);
+        let holds = recovery::holds_sql(&call, "o.");
+        let debt = recovery::holds_remote_index_debt_sql(&call, "");
+        let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND {holds})
+          OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid IS NOT ?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR {debt} OR reconciliation_required!=0))"), params![id,self.root.to_str(),self.operation.to_string(),self.observer.map(|o|o.to_string())], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
         if !valid || blocked {
             return Err(recovery_required());
         }
@@ -303,8 +320,9 @@ pub(in super::super) fn claim_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
-        let blocked: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let call = recovery::CallScope::retirement(&request.item_id);
+        recovery::require_no_pending_local(tx, id, &call)?;
+        let blocked: bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
@@ -324,7 +342,7 @@ pub(in super::super) fn claim_scoped(
             };
         let captured = materialization.as_ref().filter(|_| valid);
         let report = ContextRetirementReport::refused(crate::results::ResultCode::RecoveryRequired);
-        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,?5,?6)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),if valid {"created"}else{"completed"},service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,owed_contexts) VALUES(?1,?2,?3,'retire_context',?4,?5,?6,?7)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),if valid {"created"}else{"completed"},service.clock.now().unix_timestamp(),crate::repository::encode_owed_contexts(&[ContextKey::Item(request.item_id.clone())])]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
         recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,instance_nonce,request_ulid) VALUES(?1,?2,?3,1,?4,?5,?18,?6,1,0,?7,?8,?9,?10,?11,?12,?13,?14,0,1,?15,'none','none','none',?16,?17,?19,?20)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),tip.to_string(),plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),if !valid {"unverified"}else if captured.is_some(){"complete"}else{"absent"},captured.map(|v|&v.0),captured.map(|v|&v.1),captured.map(|v|&v.2),if valid{"selected"}else{"refused"},(!valid).then_some(report.code.as_str()),if valid{None}else{Some(report.encode()?)},if nonce.is_some(){"present"}else{"branch_only"},nonce.map(|v|v.to_string()),scope.request_id()]).map_err(RepositoryError::sqlite)?;
@@ -398,14 +416,18 @@ pub(in super::super) fn claim_initial(
         if !super::super::pass::unclaimed(tx, &request.operation_id.to_string(), scope)? {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
+        recovery::require_no_pending_local(
+            tx,
+            id,
+            &recovery::CallScope::retirement(&request.item_id),
+        )?;
         let c = &input.candidate;
         if super::super::pass::materialization(tx, id, c)? != c.materialization {
             return Err(recovery_required());
         }
         let m = c.materialization.as_ref();
         let operation = request.operation_id.to_string();
-        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",c.kind,c.item_id),service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,owed_contexts) VALUES(?1,?2,?3,'retire_context',?4,'created',?5,?6)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",c.kind,c.item_id),service.clock.now().unix_timestamp(),crate::repository::encode_owed_contexts(&[ContextKey::Item(request.item_id.clone())])]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
         recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_nonce,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,request_ulid,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) VALUES(?1,?2,?3,1,?4,?5,?6,?7,1,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,0,1,'selected','none','none','none')",params![operation,local,id,c.kind,c.item_id,c.resources,c.tip,c.nonce,c.resources=="present",plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),scope.request_id(),if m.is_some(){"complete"}else{"absent"},m.map(|m|&m.0),m.map(|m|&m.1),m.map(|m|&m.2)]).map_err(RepositoryError::sqlite)?;
@@ -417,11 +439,7 @@ pub(in super::super) fn claim_initial(
             super::super::run::require_materialization(tx, request.operation_id, true)?;
             tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='initial',materialization_settled=1 WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
             tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_retirement_absent' WHERE operation_ulid=?1",[&operation]).map_err(RepositoryError::sqlite)?;
-            tx.execute(
-                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                [id],
-            )
-            .map_err(RepositoryError::sqlite)?;
+            mark_registered_contexts_dirty(tx, id, &[ContextKey::Item(request.item_id.clone())])?;
         }
         super::audit_connection(tx)?;
         Ok(())
@@ -515,8 +533,9 @@ pub(in super::super) fn refuse_fresh_scoped(
         {
             return Err(recovery_required());
         }
-        recovery::require_no_pending_local(tx, id)?;
-        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let call = recovery::CallScope::retirement(&request.item_id);
+        recovery::require_no_pending_local(tx, id, &call)?;
+        let blocked:bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")),[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
@@ -525,7 +544,7 @@ pub(in super::super) fn refuse_fresh_scoped(
         } else {
             code
         });
-        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'completed',?5)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,owed_contexts) VALUES(?1,?2,?3,'retire_context',?4,'completed',?5,?6)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),service.clock.now().unix_timestamp(),crate::repository::encode_owed_contexts(&[ContextKey::Item(request.item_id.clone())])]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
         recovery::attribute_local_row(tx, local, &origin).map_err(RepositoryError::sqlite)?;
         tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,request_ulid) VALUES(?1,?2,?3,1,?4,?5,'invalid',1,0,'unverified',0,1,'refused','none','none','none',?6,?7,?8)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),report.code.as_str(),report.encode()?,scope.request_id()]).map_err(RepositoryError::sqlite)?;

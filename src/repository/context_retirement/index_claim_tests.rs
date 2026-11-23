@@ -99,7 +99,8 @@ fn claimed(f: &Fixture, stage: &str) -> (RetireContextRequest, RetirementAccepte
         }
     } else if stage == "persisted_cache" {
         let db = f.db();
-        // A finalizer SQL failure leaves REAL earlier cache persistence owed.
+        // A finalizer SQL failure leaves the index step owed, with nothing
+        // of it stored.
         db.execute_batch("CREATE TRIGGER index_claim_finalizer_fault BEFORE UPDATE OF phase ON context_retirement_records WHEN NEW.phase='complete' BEGIN SELECT RAISE(ABORT,'fixture finalizer failure'); END;").unwrap();
         assert!(matches!(
             run(&producer, &r, &a),
@@ -109,7 +110,7 @@ fn claimed(f: &Fixture, stage: &str) -> (RetireContextRequest, RetirementAccepte
             .unwrap();
         assert!(
             db.query_row(
-                "SELECT persisted_context_count>0 FROM operation_records WHERE operation_ulid=?1",
+                "SELECT persisted_context_count=0 FROM operation_records WHERE operation_ulid=?1",
                 [r.operation_id.to_string()],
                 |row| row.get::<_, bool>(0)
             )

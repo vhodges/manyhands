@@ -1035,13 +1035,14 @@ fn resume_does_not_lift_the_suspension() -> Result<(), FixtureError> {
 }
 
 /// The policy row goes after `prepare`, and neither a record nor a write stands.
-/// `read_policy` isn't reached: opening the index refuses a registration with no
-/// policy row (`state::migrate`), and `write_records` converts that as a read.
-///
-/// It answers `internal_error`, by the controller's ruling: a registration with
-/// no policy row is refused at open, and `write_records` keeps its conversion.
-/// `policy_row_unreadable_inside_the_path` pins `recovery_required` where `write`
-/// is reached.
+/// Only registry open migrates (design decision 9, R-5), so `write_records`
+/// doesn't run `state::migrate`'s check for a registration with no policy row
+/// on a registry this service has opened. `read_policy` finds no row, and the
+/// binding's `write` keeps its code, `recovery_required`, as
+/// `policy_row_unreadable_inside_the_path` pins for a row it refuses (E-85).
+/// A new service's registry open still refuses the registration, as
+/// `remote_observation` pins in
+/// `reopening_does_not_repair_deleted_policy_or_partial_remote_schema`.
 fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
     let local = Local::empty()?;
     let registry = local.directory.path().join("data").join(REGISTRY_FILE);
@@ -1052,7 +1053,7 @@ fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
             .expect("the policy row is removed");
     });
     let refused = called(&local.service, FIRST, pause(&local.root));
-    assert_eq!(refused.code, ResultCode::InternalError);
+    assert_eq!(refused.code, ResultCode::RecoveryRequired);
     assert_eq!(refused.data, None);
     assert_eq!(request_rows(&local)?, 0);
     Ok(())

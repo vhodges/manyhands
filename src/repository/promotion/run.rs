@@ -138,8 +138,12 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
             })?;
             Ok(())
         };
-        let observed = service.with_scoped_action_remote(
-            request,
+        let target = SynchronizationTarget::Context {
+            kind: self.1.authoring(),
+            item_id: item.clone(),
+        };
+        let attempt = service.with_scoped_action_remote(
+            request.clone(),
             self.0,
             plan,
             configuration,
@@ -158,17 +162,23 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                     Err(e) => return Ok(Err(e.into())),
                 }
                 Ok(remote
-                    .delete_exact(
-                        plan,
-                        &SynchronizationTarget::Context {
-                            kind: self.1.authoring(),
-                            item_id: item.clone(),
-                        },
-                        expected,
-                    )
+                    .delete_exact(plan, &target, expected)
                     .map_err(SynchronizationError::from))
             },
         )??;
+        // The delete's push closed its connection: the verification listing
+        // is a remote call of its own, under the same owner and fence.
+        let observed = match attempt {
+            DeleteAttempt::Absent => DeleteObservation::Deleted,
+            DeleteAttempt::Sent => service.with_scoped_action_remote(
+                request,
+                self.0,
+                plan,
+                configuration,
+                boundary,
+                |remote| remote.observe_delete(plan, &target, expected),
+            )?,
+        };
         if matches!(observed, DeleteObservation::Changed(_))
             && configuration.fetch_and_push_share_endpoint()
         {
@@ -185,15 +195,7 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                 plan,
                 configuration,
                 boundary,
-                |remote| {
-                    remote.fetch_exact(
-                        plan,
-                        &SynchronizationTarget::Context {
-                            kind: self.1.authoring(),
-                            item_id: item.clone(),
-                        },
-                    )
-                },
+                |remote| remote.fetch_exact(plan, &target),
             )?;
         }
         Ok(observed)
@@ -359,10 +361,14 @@ fn run_observed<L: Lifecycle>(
     let Ok(mut r) = load::<L>(service, &root, request.operation_id) else {
         return Err(error);
     };
-    if r.item_id() != &request.item_id
-        || r.expectation() != request.expected
-        || r.integration_oid().is_none()
-    {
+    if r.item_id() != &request.item_id || r.expectation() != request.expected {
+        return Err(error);
+    }
+    // An exit before integration (an abandon, an interruption, a primary
+    // that advanced, a child that failed) still owes what its children
+    // changed: their one index step is this exit's (Task 22).
+    if r.integration_oid().is_none() {
+        index_children_owed(service, &root, &r);
         return Err(error);
     }
     if r.step() == Step::Complete || r.step() == Step::Superseded {
@@ -396,6 +402,7 @@ fn run_observed<L: Lifecycle>(
             .unwrap_or(integrate::IntegrationState::RecoveryRequired);
         match state {
             integrate::IntegrationState::NotIntegrated if L::primary_clean(&root) => {
+                index_children_owed(service, &root, &r);
                 return Err(error);
             }
             integrate::IntegrationState::Integrated { oid } if Some(oid) == r.integration_oid() => {
@@ -656,15 +663,22 @@ fn promote_inner<L: Lifecycle>(
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
-        let cleanup_only = preview::<L>(
-            service,
-            &root,
-            r.item_id(),
-            request.confirmed_identity.as_ref(),
-        )
-        .ok()
-        .and_then(|p| L::ready(p).ok())
-        .is_some_and(|p| !p.runs_context_child());
+        // Two previews per attempt: the consent preview, which this call took
+        // when it inserted the record, says whether a context child runs. A
+        // resumed attempt has none, so with a remote it previews for that.
+        let cleanup_only = r.remote_name().is_some()
+            && match &observed {
+                Some(p) => !p.runs_context_child(),
+                None => preview::<L>(
+                    service,
+                    &root,
+                    r.item_id(),
+                    request.confirmed_identity.as_ref(),
+                )
+                .ok()
+                .and_then(|p| L::ready(p).ok())
+                .is_some_and(|p| !p.runs_context_child()),
+            };
         if r.remote_name().is_some()
             && !cleanup_only
             && let Err(error) =
@@ -676,24 +690,22 @@ fn promote_inner<L: Lifecycle>(
             }
             return Err(L::Error::context_synchronization(Box::new(error)));
         }
-        let p = match L::ready(preview::<L>(
-            service,
-            &root,
-            r.item_id(),
-            request.confirmed_identity.as_ref(),
-        )?) {
-            Ok(p) if p.expectation() == r.expectation() => p,
-            _ => {
-                return Err(abandon::<L>(
-                    service,
-                    &root,
-                    &mut r,
-                    L::Refusal::reconfirmation_required(),
-                ));
-            }
+        // The synchronized context as Git holds it. The integration preview
+        // checks it, and the consent, under the integration lease
+        // (`prepare_integration_for`); a refusal there abandons as one here
+        // did. A context branch that is gone cannot be consented.
+        let Some((context, tracking)) =
+            synchronized_context::<L>(&root, &r, &config.primary_branch)?
+        else {
+            return Err(abandon::<L>(
+                service,
+                &root,
+                &mut r,
+                L::Refusal::reconfirmation_required(),
+            ));
         };
-        r.set_context_oid(Some(p.context_oid()));
-        r.set_remote_context_oid(p.tracking_context());
+        r.set_context_oid(Some(context));
+        r.set_remote_context_oid(tracking);
         r.set_step(Step::ContextSynchronized);
         save::<L>(service, &root, &r)?;
         boundary(service, &root, FailurePoint::AfterContextSync)?;
@@ -701,12 +713,16 @@ fn promote_inner<L: Lifecycle>(
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
+    // The exact synchronized context, not a later edit, is integrated.
+    let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
     let input = if r.effect_written() {
         // A written effect is never re-previewed or abandoned here: the
         // lifecycle reconciles it under the integration lease (C9).
-        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         written_request::<L>(&root, &r, &bound_primary, context)?
-    } else {
+    } else if r.step() == Step::Integrating {
+        // A resumed integration that wrote no effect keeps its preview: one
+        // that is not ready abandons it, which a refusal under the lease does
+        // not at `integrating`.
         let p = match L::ready(preview::<L>(
             service,
             &root,
@@ -723,9 +739,22 @@ fn promote_inner<L: Lifecycle>(
                 ));
             }
         };
-        // The exact synchronized context, not a later edit, is integrated.
-        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         L::integration_request(&p, r.expectation(), context)
+    } else {
+        // No preview of its own: the integration preview checks this request
+        // and the consent, and a refusal there abandons as one here did. A
+        // primary branch that is gone cannot be consented.
+        match synchronized_request::<L>(&root, &r, &bound_primary, context)? {
+            Some(input) => input,
+            None => {
+                return Err(abandon::<L>(
+                    service,
+                    &root,
+                    &mut r,
+                    L::Refusal::reconfirmation_required(),
+                ));
+            }
+        }
     };
     // A closure's checkpoint is written in the integration's hook, unless an
     // earlier run wrote it. Whether the closure is new is the boundary's to
@@ -798,6 +827,26 @@ fn promote_inner<L: Lifecycle>(
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
+    // The merge moves main, the primary's context, so the primary is marked
+    // owed an indexing before it does, under the integration's lease, which
+    // `candidate` holds: as a synchronization marks the context its local
+    // update moves before Git is touched (R-SDD-49), and folder create the
+    // primary before it makes a directory. Every store takes that lease, so
+    // none can clear the mark before main has moved, and a process lost after
+    // the merge leaves the primary reading owed until an indexing stores it:
+    // its exit's, a refresh's, or the same request's (the final review's F-1).
+    // A mark that cannot be written refuses the integration with nothing
+    // moved, as it refuses a folder's creation. A merge refused once the mark
+    // is written leaves it, and the next store of the primary clears it. A
+    // context the primary already holds is not merged, and marks nothing.
+    if r.integration_kind() == Some(IntegrationKind::Merged) {
+        mark_contexts_dirty(
+            &service.registry_path,
+            &root,
+            &[ContextKey::Primary],
+            RepositoryOperation::RepositorySnapshot,
+        )?;
+    }
     let integrated = L::apply(candidate)?;
     if integrated == integrate::Integrated::RecoveryRequired {
         return Ok(recovery::<L>(service, &root, &mut r));
@@ -820,6 +869,56 @@ fn promote_inner<L: Lifecycle>(
     ))
 }
 
+/// The context branch's tip and, with a remote, its tracking ref, as a
+/// preview reads them (`observe::context_presence`, `observe::remote_facts`);
+/// `None` when the context branch is gone.
+fn synchronized_context<L: Lifecycle>(
+    root: &Path,
+    r: &L::Record,
+    primary: &str,
+) -> Result<Option<(Oid, Option<Oid>)>, L::Error> {
+    let (repo, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let Some(context) = observe::reference_oid(&repo, &L::KIND.context_ref(r.item_id()), root)?
+    else {
+        return Ok(None);
+    };
+    let tracking = match r.remote_name() {
+        Some(remote) => {
+            let plan = RemoteRefPlan::from_configuration(remote, primary)
+                .map_err(|_| observe::unavailable(root))?;
+            let tracking = plan.context(L::KIND.authoring(), r.item_id());
+            observe::reference_oid(&repo, tracking.tracking_ref(), root)?
+        }
+        None => None,
+    };
+    Ok(Some((context, tracking)))
+}
+/// The integration request of a synchronized context whose effect is not
+/// written: bound to the record and the local primary as a preview reads it
+/// (`observe::primary_presence`), with no preview; `None` when the local
+/// primary is gone.
+fn synchronized_request<L: Lifecycle>(
+    root: &Path,
+    r: &L::Record,
+    primary: &str,
+    context: Oid,
+) -> Result<Option<integrate::IntegrationRequest<L::Expectation>>, L::Error> {
+    let (repo, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let primary_ref = format!("refs/heads/{primary}");
+    let Some(primary_oid) = observe::reference_oid(&repo, &primary_ref, root)? else {
+        return Ok(None);
+    };
+    Ok(Some(integrate::IntegrationRequest {
+        expected: r.expectation(),
+        context: integrate::IntegrationContext {
+            item_id: r.item_id().clone(),
+            primary_branch: primary.into(),
+            oid: context,
+        },
+        primary_oid,
+        publication_remote: r.remote_name().map(str::to_owned),
+    }))
+}
 /// The integration request of a record whose effect may be written: bound to
 /// the record and the local primary as it is now, with no preview.
 fn written_request<L: Lifecycle>(
@@ -1067,6 +1166,13 @@ fn publication_error(error: &SynchronizationError) -> Pub {
         SynchronizationError::Transport(_) => Pub::Transport,
         SynchronizationError::IdentityRequired { .. } => Pub::Identity,
         SynchronizationError::Busy => Pub::Busy,
+        // The child waited for a live operation in its way, its primary's
+        // sync hand-off among them, until the wait was spent (decision 34).
+        SynchronizationError::Repository(error)
+            if error.kind == RepositoryErrorKind::RepositoryBusy && error.blocker().is_some() =>
+        {
+            Pub::Busy
+        }
         SynchronizationError::PollYielding => Pub::Yielding,
         SynchronizationError::Interrupted => Pub::Cancelled,
         _ => Pub::RecoveryRequired,
@@ -1256,9 +1362,24 @@ fn finish_steps<L: Lifecycle>(
     // holds. For promotion it is `context_oid`; for a closure, the checkpoint
     // (or an adopted synchronization over it) once written.
     let oid = r.merged_context().ok_or(Clean::RecoveryRequired)?;
-    if matches!(r.step(), Step::Published | Step::PublicationPending) {
+    // P-1: the full check of the worktree runs inside its removal, and a
+    // cheap one of its head and status just before the remote delete, so a
+    // dirty worktree still stops it. When a remote delete is due, the full
+    // check is asked here too, before the cleanup reserves (R-SDD-73): a
+    // stopped cleanup that holds its reservation refuses every write, refresh
+    // and poll of the repository, its exit's own index step included, so
+    // whatever is already there, dirt or a repository nested in an ignored
+    // directory or one that cannot be read, stops it with nothing reserved
+    // and the remote branch kept, as before P-1. Only what appears after this
+    // check, and that the cheap one cannot see, stops it after the delete.
+    // With no remote delete to make nothing is reserved, and the full check
+    // inside the removal alone decides.
+    if r.remote_name().is_some()
+        && r.remote_deletion_required()
+        && matches!(r.step(), Step::Published | Step::PublicationPending)
+    {
         let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
-        match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
+        match cleanup.full_check(service, L::KIND.authoring(), r.item_id(), oid) {
             Precheck::Ok => (),
             _ => return Err(Clean::ContextChanged),
         }
@@ -1299,11 +1420,18 @@ fn finish_steps<L: Lifecycle>(
             Ok(state::read_operation(tx, id, r.operation_id())?.is_some())
         })
         .map_err(recovery)?;
+        // A new reservation waits for a live holder in its way, a live sync
+        // hand-off of its item or of the primary among them, as a new
+        // synchronization does (decision 34), holding nothing. A restart takes
+        // up its own row and is answered at once. Its `busy` once the wait is
+        // spent has no cleanup category of its own: it stops as a refusal.
         owner = Some(
             match if exists {
                 service.restart_remote_lifecycle(L::KIND, root, r.operation_id(), &target)
             } else {
-                service.reserve_remote_operation(root, r.operation_id(), &target)
+                service.reserving(root, r.operation_id(), || {
+                    service.reserve_remote_operation(root, r.operation_id(), &target)
+                })
             }
             .map_err(recovery)?
             {
@@ -1336,8 +1464,18 @@ fn finish_steps<L: Lifecycle>(
                 primary,
             )?;
             {
+                // P-1's cheap check before the delete. A repository nested in
+                // an ignored directory, or one that cannot be read, that has
+                // appeared since the full check before the reservation is left
+                // to the full check inside the removal, which then stops the
+                // cleanup after the delete.
                 let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
-                match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
+                match cleanup.precheck_head_and_status(
+                    service,
+                    L::KIND.authoring(),
+                    r.item_id(),
+                    oid,
+                ) {
                     Precheck::Ok => (),
                     _ => return Err(Clean::ContextChanged),
                 }
@@ -1425,14 +1563,16 @@ fn finish_steps<L: Lifecycle>(
         configuration.as_ref(),
         primary,
     )?;
-    if matches!(
+    // No check here (P-1): the removal's own full check refuses, once
+    // `worktree_removing` is recorded, and the same request resumes it. In
+    // the attempt that records it no prune has run, so that check answers
+    // first (`remove_fresh_context_worktree`), as the check here did; a
+    // resume keeps the removal's own reading of a prune that may have begun.
+    let fresh = matches!(
         r.step(),
         Step::PublicationPending | Step::RemoteDeleted | Step::Published
-    ) {
-        match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
-            Precheck::Ok => (),
-            _ => return Err(Clean::ContextChanged),
-        }
+    );
+    if fresh {
         r.set_step(Step::WorktreeRemoving);
         save::<L>(service, root, r).map_err(recovery)?;
     }
@@ -1449,7 +1589,12 @@ fn finish_steps<L: Lifecycle>(
             configuration.as_ref(),
             primary,
         )?;
-        match cleanup.remove_context_worktree(L::KIND.authoring(), r.item_id(), oid) {
+        let removal = if fresh {
+            cleanup.remove_fresh_context_worktree(service, L::KIND.authoring(), r.item_id(), oid)
+        } else {
+            cleanup.remove_context_worktree(service, L::KIND.authoring(), r.item_id(), oid)
+        };
+        match removal {
             WorktreeRemoval::Removed => {
                 #[cfg(test)]
                 super::run_tests::local_effect(service, root, "worktree_remove");
@@ -1689,34 +1834,65 @@ fn refresh_with_publication<L: Lifecycle>(
     known: Option<KnownPublication>,
 ) -> L::Output {
     let outcome = make_outcome::<L>(service, root, r, known);
-    if replay
-        && service
-            .repository_snapshot(root)
-            .is_ok_and(|s| !s.refresh_required)
-    {
+    // A replay is complete once the index holds what this lifecycle
+    // changed, whatever other contexts are owed.
+    if replay && service.lifecycle_indexed(root, r.item_id()) {
         return L::complete(outcome);
     }
-    let marked = mark_document_refresh_required(
+    // Past integration, what the lifecycle and its children changed is its
+    // two contexts (`lifecycle_contexts`): the primary, which its merge moved
+    // and its primary's child published or fast-forwarded, and its item's,
+    // which its checkpoint or its context's child moved and its cleanup
+    // removes. Both are marked, the item's only while rows are stored for it
+    // once it is gone, and indexed in the exit's one step.
+    let contexts = lifecycle_contexts(r.item_id());
+    let marked = mark_lifecycle_contexts_dirty(
         &service.registry_path,
         root,
+        &contexts,
         RepositoryOperation::RepositorySnapshot,
     )
     .is_ok();
-    let refreshed = marked
-        && boundary(service, root, FailurePoint::RefreshFailure).is_ok()
-        && matches!(
-            // Under an ID of its own, and recording no author: whoever
-            // closed or promoted is kept by the index alone (Cycle 10).
-            service.refresh_repository_unauthored(RefreshRepositoryRequest {
-                root: root.into(),
-                operation_id: OperationId::new()
-            }),
-            Ok(RefreshOutcome::Refreshed { .. })
-        );
+    let refreshed = marked && index_exit(service, root, &contexts);
     if refreshed {
         L::complete(outcome)
     } else {
         L::index_pending(outcome)
+    }
+}
+/// The one index step of an exit (Task 22): `contexts`, which the
+/// lifecycle and its children changed, are indexed and no other, under a
+/// refresh row of the exit's own (`index_lifecycle_exit`); nothing of
+/// the whole repository is observed. Says whether the index now holds them.
+/// One that does not complete closes the row it began, as folder create's
+/// does, and leaves them marked, for the next exit, resume or refresh.
+fn index_exit(service: &RepositoryService, root: &Path, contexts: &[ContextKey]) -> bool {
+    boundary(service, root, FailurePoint::RefreshFailure).is_ok()
+        && service.index_lifecycle_exit(root, contexts) == LifecycleIndexStep::Indexed
+}
+/// The contexts the children `r` names may have left owed, each by its
+/// role: the item's for the context's child, the primary for the primary's.
+/// A child begins no index hand-off of its own (P-4): what its local update
+/// changes it marks dirty under its lease, and its parent indexes it.
+fn children_contexts<R: LifecycleRecord>(r: &R) -> Vec<ContextKey> {
+    let mut contexts = Vec::new();
+    if r.primary_sync_id().is_some() {
+        contexts.push(ContextKey::Primary);
+    }
+    if r.context_sync_id().is_some() {
+        contexts.push(ContextKey::Item(r.item_id().clone()));
+    }
+    contexts
+}
+/// The index step of an exit before integration, which has written
+/// nothing of its own to index: of the contexts its children may have
+/// changed (`children_contexts`), those still owed an indexing, in one step,
+/// and none when nothing is owed. The exit answers as it would have: what
+/// it reports of the index is read from the marks (`lifecycle_indexed`).
+fn index_children_owed<R: LifecycleRecord>(service: &RepositoryService, root: &Path, r: &R) {
+    let owed = service.owed_of(root, &children_contexts(r));
+    if !owed.is_empty() {
+        index_exit(service, root, &owed);
     }
 }
 fn make_outcome<L: Lifecycle>(

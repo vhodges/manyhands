@@ -1261,9 +1261,32 @@ const LOCAL_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ2";
 /// same path, and the synchronization of primary into the ticket's branch
 /// stops on the two. It is unfinished, which refuses every remote
 /// reservation of the repository (fact 80, R-38). Returns its operation.
+///
+/// The world commits its `publication_remote` outside Manyhands after
+/// `repo enable` indexed the primary, and a create indexes only its new
+/// context (decision 2), so the observation first refuses on the stored
+/// configuration; an `index refresh`, as a person runs after an outside
+/// change (decision 7), lets it seal (named edit E-61).
 fn leave_local_sync_conflict(w: &World) -> OperationId {
     let created = execute(w, LOCAL_SYNC_CREATE, create_other(w));
     assert_eq!(created.code, ResultCode::Ok);
+    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
+    let repository = w.service.resolve_repository(&w.root).unwrap();
+    assert_eq!(
+        w.service
+            .observe_local_context_sync(&repository, AuthoringKind::Ticket, &id)
+            .unwrap_err()
+            .code(),
+        ResultCode::ExternalChange,
+        "the create left the primary's outside configuration commit unindexed"
+    );
+    assert!(matches!(
+        w.service.refresh_repository(RefreshRepositoryRequest {
+            root: w.root.clone(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\n\
          title: Primary\ntype: task\nstatus: open\n---\nBody of Primary.\n"
@@ -1275,7 +1298,6 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
         source.as_bytes(),
     )
     .expect("a commit on primary");
-    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
     let observed = w
         .service
         .observe_local_context_sync(

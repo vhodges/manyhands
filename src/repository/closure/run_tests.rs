@@ -22,7 +22,9 @@ use crate::repository::{
         lifecycle::LifecycleError,
         record::ChildExecution,
         run::{self, PromotionIo},
-        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS, Told},
+        run_tests::{
+            COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, PreviewCount, TRACKING_HOOKS, Told,
+        },
     },
     remote::{observation::ObservationConfiguration, reservation::RemoteReservation, state},
     transport::{DeleteObservation, VerifySshTransportRequest},
@@ -1253,6 +1255,89 @@ fn process_exit_at_every_boundary_reopens_without_repeated_effects() {
     }
 }
 
+/// The final review's F-1 (Review Focus 2, decision 8), for a close: what
+/// a lost process had moved reads owed an indexing until an indexing
+/// stores it, so `index status` reads stale, and the same request, sent
+/// again, finishes and indexes it. The checkpoint marks the ticket's
+/// context before its checkout and ref move, and the merge marks the
+/// primary before it moves main, each under the integration's lease. The
+/// merge's mark is its own: a close whose checkpoint's marks a refresh
+/// cleared between two of its attempts, and whose later attempt is lost
+/// once its merge has moved main, still leaves the primary owed. With no
+/// publication remote, so a cleanup that reserves nothing.
+#[test]
+fn a_close_lost_after_its_checkout_or_its_merge_leaves_what_it_moved_owed_until_it_is_sent_again() {
+    use crate::repository::{
+        IndexStatusState, RefreshOutcome, RefreshRepositoryRequest, discovery::ContextKey,
+    };
+    let refresh = |f: &Fixture| {
+        let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root().into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{refreshed:?}"
+        );
+    };
+    let status = |f: &Fixture, service: &RepositoryService| {
+        service
+            .index_status(&service.resolve_repository(f.root()).unwrap())
+            .unwrap()
+            .state
+    };
+    let mut wrong = Vec::new();
+    // (where the process is lost, its index in `EXITS`, whether an earlier
+    // attempt stopped before the merge and a refresh indexed its checkpoint,
+    // what then reads owed)
+    for (lost, point, stopped_first, owed) in [
+        ("during the checkpoint's checkout", 3, false, [false, true]),
+        ("after the merge, sent again", 6, true, [true, false]),
+    ] {
+        let f = Fixture::new();
+        refresh(&f);
+        let req = f.request();
+        if stopped_first {
+            assert!(
+                f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone())
+                    .is_err(),
+                "{lost}"
+            );
+            assert_eq!(
+                f.stored(req.operation_id).step,
+                ClosureStep::Integrating,
+                "{lost}"
+            );
+            refresh(&f);
+        }
+        assert_eq!(status(&f, &f.service), IndexStatusState::Current, "{lost}");
+        exit_at(&f, &req, point);
+        let reopened = f.reopened();
+        let read = [ContextKey::Primary, ContextKey::Item(id())]
+            .map(|context| !reopened.contexts_indexed(f.root(), &[context]));
+        if read != owed {
+            wrong.push(format!("{lost}: [primary, ticket] read owed {read:?}"));
+        }
+        if status(&f, &reopened) != IndexStatusState::Stale {
+            wrong.push(format!("{lost}: index status {:?}", status(&f, &reopened)));
+        }
+        let retried = f.run_io(&reopened, req, &mut FakeIo::default());
+        if !matches!(&retried, Ok(TicketClosureResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete)
+        {
+            wrong.push(format!("{lost}: sent again, it ended as {retried:?}"));
+        }
+        if !reopened.lifecycle_indexed(f.root(), &id())
+            || status(&f, &reopened) != IndexStatusState::Current
+        {
+            wrong.push(format!(
+                "{lost}: sent again, index status {:?}",
+                status(&f, &reopened)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The adopted context through the F10 and F11 seams: the retirement and
 /// the completion use the merged context, once.
 #[test]
@@ -2368,4 +2453,189 @@ fn a_closure_the_ticket_holds_is_not_reported_as_recording() {
         stages_of(false, true),
         [S::Observing, S::Integrating, S::CleaningUp]
     );
+}
+
+/// Task 21 (design, "Two previews per attempt"): a confirmed close previews
+/// once against the consent digest and once at integration, and no preview
+/// observes the whole repository. With a remote, the context child runs
+/// between the two.
+#[test]
+fn a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation() {
+    for remote in [false, true] {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let count = PreviewCount::start(f.root());
+        let mut io = FakeIo::default();
+        let result = if remote {
+            f.run_io(&f.service, req, &mut io)
+        } else {
+            f.close(&f.service, req)
+        };
+        outcome(result.unwrap());
+        let children = io.calls.borrow().children.len();
+        assert_eq!(children, if remote { 2 } else { 0 }, "remote: {remote}");
+        assert_eq!(count.taken(), (2, 0), "remote: {remote}");
+    }
+}
+
+/// Task 21 (design, "Two previews per attempt"): a resumed attempt has no
+/// consent preview and re-checks under the integration lease. Stopped before
+/// its context synchronized, it previews at integration only, and with a
+/// remote once more, to decide whether a context child runs. Stopped after,
+/// it previews at integration only, and that preview's revalidation under
+/// the lease still refuses a context changed meanwhile. With its checkpoint
+/// written it takes no preview: the written effect resumes under the lease,
+/// and only a `closing` record whose checkpoint moved nothing observes, as
+/// it is not resumed. No preview observes the whole repository.
+#[test]
+fn a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview() {
+    // (stopped at, with a remote, the context made dirty while stopped,
+    // previews of the resumed attempt)
+    let rows = [
+        (FailurePoint::AfterConfirmed, false, false, 1),
+        (FailurePoint::AfterConfirmed, true, false, 2),
+        (FailurePoint::AfterContextSync, false, false, 1),
+        (FailurePoint::AfterContextSync, false, true, 1),
+        (FailurePoint::ClosureAfterClosingRecorded, false, false, 1),
+        (FailurePoint::AfterClosureCheckpoint, false, false, 0),
+        (FailurePoint::BeforeIntegrationRef, false, false, 0),
+    ];
+    for (stop, remote, dirty, previews) in rows {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let mut io = FakeIo::default();
+        assert!(
+            f.run_io(&f.failing(stop), req.clone(), &mut io).is_err(),
+            "{stop:?}"
+        );
+        if dirty {
+            write(&f.context, "draft.txt", "draft\n");
+        }
+        let count = PreviewCount::start(f.root());
+        let result = f.run_io(&f.reopened(), req.clone(), &mut io);
+        if dirty {
+            assert!(
+                matches!(result, Err(TicketClosureError::ReconfirmationRequired)),
+                "{stop:?}: {result:?}"
+            );
+            let r = f.stored(req.operation_id);
+            assert_eq!(r.step, ClosureStep::Abandoned, "{stop:?}");
+            assert_eq!(r.refusal, Some(record::Refusal::ReconfirmationRequired));
+        } else {
+            outcome(result.unwrap());
+        }
+        assert_eq!(
+            count.taken(),
+            (previews, 0),
+            "{stop:?}, remote {remote}, dirty {dirty}"
+        );
+    }
+}
+
+/// Decision 34 (design; it supersedes R-SDD-46), for a close: behind its own
+/// ticket's live synchronization hand-off, which its context child meets,
+/// or the primary's, which its primary child meets, it waits as the other
+/// per-item writers wait (vh-bhepg), holding nothing, and once the hand-off
+/// ends within the wait goes on as it would have had the hand-off been
+/// gone. Still live when the wait is spent, it answers `busy`, naming it; a
+/// stale hand-off is answered at once, `recovery_required`. The same
+/// request finishes once the hand-off is done. The cleanup's own wait is
+/// the runner's, shared with promotion, and tested there.
+#[test]
+fn a_close_or_promotion_behind_a_live_hand_off_waits() {
+    use crate::repository::promotion::run_tests::{
+        HandOff::{self, *},
+        SPENT_WAIT, begin_hand_off, behind_hand_off, end_hand_off, names_hand_off,
+    };
+    use crate::repository::{PromotionSynchronizationCategory, RepositoryService};
+    let mut wrong = Vec::new();
+    for item in [true, false] {
+        for holder in [Released, Live, Stale] {
+            let case = format!("item {item}, {holder:?}");
+            let f = Fixture::remote();
+            let req = f.request();
+            let hand_off = OperationId::new();
+            let (service, time, at): (RepositoryService, _, _) =
+                behind_hand_off(f.data.path(), hand_off, holder);
+            let of = if item {
+                SynchronizationTarget::Context {
+                    kind: AuthoringKind::Ticket,
+                    item_id: id(),
+                }
+            } else {
+                SynchronizationTarget::Primary
+            };
+            begin_hand_off(f.data.path(), hand_off, &of, f.primary(), holder, at);
+            let mut io = FakeIo::default();
+            let result = f.run_io(&service, req.clone(), &mut io);
+            let sleeps = match holder {
+                Released => 2,
+                Live => SPENT_WAIT,
+                Stale => 0,
+            };
+            if time.slept() != sleeps {
+                wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+            }
+            let busy = holder == HandOff::Live;
+            let ended = match (item, holder, &result) {
+                (_, Released, Ok(TicketClosureResult::Complete(o))) => {
+                    o.cleanup() == PromotionCleanup::Complete
+                        && matches!(o.publication(), PromotionPublication::Published { .. })
+                        && io.calls.borrow().children.len() == 2
+                        && io.calls.borrow().deletes == 1
+                }
+                (true, Live | Stale, Err(TicketClosureError::ContextSynchronization(e))) => {
+                    let kind = if busy {
+                        RepositoryErrorKind::RepositoryBusy
+                    } else {
+                        RepositoryErrorKind::RecoveryRequired
+                    };
+                    names_hand_off(e, kind, hand_off, busy)
+                        && f.db()
+                            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| {
+                                r.get::<_, i64>(0)
+                            })
+                            .unwrap()
+                            == 0
+                }
+                (false, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    let category = if busy {
+                        PromotionSynchronizationCategory::Busy
+                    } else {
+                        PromotionSynchronizationCategory::RecoveryRequired
+                    };
+                    o.publication()
+                        == PromotionPublication::Pending {
+                            reason: PromotionPublicationPending::Synchronization(category),
+                        }
+                        && o.cleanup()
+                            == PromotionCleanup::Pending {
+                                reason: PromotionCleanupPending::AwaitingPublication,
+                            }
+                }
+                _ => false,
+            };
+            if !ended {
+                wrong.push(format!("{case}: ended as {result:?}"));
+            }
+            if holder != Released {
+                end_hand_off(f.data.path(), hand_off);
+                let finished = f.run_io(&f.service, req, &mut io);
+                if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+                {
+                    wrong.push(format!("{case}: its retry ended as {finished:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

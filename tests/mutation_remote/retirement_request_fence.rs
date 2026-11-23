@@ -972,6 +972,7 @@ pub(super) fn envelope_persistence() -> Result<(), FixtureError> {
             db.execute("INSERT INTO remote_poll_materializations SELECT repository_id,kind,item_id,materialization_operation_ulid,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','complete' FROM context_retirement_records",[]).unwrap();
             db.execute_batch(sql).unwrap(); sender.send(registry_image(&db)).unwrap();
         });
+        let operation = r.operation_id;
         let result = w.service.retire_context_for_request(
             r,
             &accepted,
@@ -995,11 +996,15 @@ pub(super) fn envelope_persistence() -> Result<(), FixtureError> {
             ))?,
             ("index_pending".into(), true)
         );
-        assert!(fixed(w.db()?.query_row(
-            "SELECT refresh_required FROM repositories",
-            [],
-            |r| r.get::<_, bool>(0)
-        ))?);
+        assert_eq!(
+            fixed(w.db()?.query_row(
+                "SELECT owed_contexts FROM operation_records WHERE operation_ulid=?1",
+                [operation.to_string()],
+                |r| r.get::<_, String>(0)
+            ))?,
+            format!("[\"{ITEM}\"]"),
+            "{sql}: the retired context stays owed by its row"
+        );
         w.privacy()?;
     }
     Ok(())

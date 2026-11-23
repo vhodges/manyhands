@@ -16,9 +16,37 @@ pub(super) struct CallbackAttempt {
     key_submissions: Cell<u8>,
     username_submissions: Cell<u8>,
     poll_stopped: Cell<bool>,
+    /// The host a call already finalized, for a further connection it makes.
+    finalized_host: Option<HostKeyIdentity>,
 }
 
 impl CallbackAttempt {
+    /// The attempt of a further connection of a call that finalized `host`:
+    /// a host that is not `host` is refused at the host check, before a key
+    /// is offered to it, whether the prepared policy accepts it or would
+    /// pass it to libgit2's known_hosts check.
+    pub(super) fn for_finalized_host(host: HostKeyIdentity) -> Self {
+        Self {
+            finalized_host: Some(host),
+            ..Self::default()
+        }
+    }
+    fn accept(
+        &self,
+        presented: &HostKeyIdentity,
+    ) -> Result<git2::CertificateCheckStatus, git2::Error> {
+        if self.not_finalized(presented) {
+            return self.reject(SshTransportErrorKind::HostTrustChanged);
+        }
+        Ok(git2::CertificateCheckStatus::CertificateOk)
+    }
+    /// Whether this is a further connection of a call that finalized a host
+    /// other than `presented`.
+    fn not_finalized(&self, presented: &HostKeyIdentity) -> bool {
+        self.finalized_host
+            .as_ref()
+            .is_some_and(|finalized| finalized != presented)
+    }
     pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
         if self.poll_stopped.get() {
             return false;
@@ -67,9 +95,13 @@ impl CallbackAttempt {
         if username.is_some_and(|name| name != expected_username) {
             return self.reject(SshTransportErrorKind::EndpointChanged);
         }
-        let result = if allowed.contains(git2::CredentialType::SSH_KEY)
-            && self.key_submissions.get() == 0
-        {
+        // A connection submits the selected key once. A request after that,
+        // for the key or any other method, is libgit2 reconnecting on the
+        // call's connection: it fails closed, as a rejected key.
+        if self.key_submissions.get() != 0 {
+            return self.reject(SshTransportErrorKind::KeyRejected);
+        }
+        let result = if allowed.contains(git2::CredentialType::SSH_KEY) {
             self.key_submissions.set(1);
             match agent {
                 // Offers exactly the selected key; the agent's others are never
@@ -132,7 +164,7 @@ impl CallbackAttempt {
         );
         if let Some(pin) = prepared.trust.pin.as_ref() {
             if pin == &presented || approved {
-                return Ok(git2::CertificateCheckStatus::CertificateOk);
+                return self.accept(&presented);
             }
             return self.reject(SshTransportErrorKind::HostReplacementRequired {
                 expected: pin.clone(),
@@ -140,10 +172,18 @@ impl CallbackAttempt {
             });
         }
         if approved {
-            return Ok(git2::CertificateCheckStatus::CertificateOk);
+            return self.accept(&presented);
         }
         if prepared.trust.reapproval_required || prepared.approval.is_some() {
             return self.reject(SshTransportErrorKind::HostApprovalRequired { presented });
+        }
+        // With no pin and no approval, libgit2's known_hosts check decides,
+        // and the call compares the host with the one it finalized only once
+        // the connection is made and the key submitted. A further connection
+        // refuses any other host here, before a key is offered, as the pinned
+        // and approved branches do (the final review's F-4).
+        if self.not_finalized(&presented) {
+            return self.reject(SshTransportErrorKind::HostTrustChanged);
         }
         self.passthrough.set(true);
         Ok(git2::CertificateCheckStatus::CertificatePassthrough)
@@ -195,4 +235,81 @@ pub(super) fn guard_delete<'a>(
         }
         Ok(())
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One connection submits the selected key once. A later credential
+    /// request on it is libgit2 reconnecting: whatever it asks for, the
+    /// attempt refuses it as a rejected key, submits nothing more and falls
+    /// back to no other key or method, and the call answers as a failed
+    /// authentication of that kind does today.
+    #[test]
+    fn a_second_key_submission_on_one_connection_fails_closed() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let prepared = super::super::tests::prepared(file.path());
+        let url = prepared.endpoint.connection_url.clone();
+        for second in [
+            git2::CredentialType::SSH_KEY,
+            git2::CredentialType::SSH_KEY | git2::CredentialType::USER_PASS_PLAINTEXT,
+            git2::CredentialType::USERNAME,
+            git2::CredentialType::USER_PASS_PLAINTEXT,
+            git2::CredentialType::SSH_INTERACTIVE,
+            git2::CredentialType::SSH_CUSTOM,
+            git2::CredentialType::DEFAULT,
+        ] {
+            let attempt = CallbackAttempt::default();
+            attempt
+                .credentials(
+                    &prepared,
+                    None,
+                    None,
+                    &url,
+                    Some("fixture"),
+                    git2::CredentialType::SSH_KEY,
+                )
+                .unwrap();
+            assert_eq!(attempt.key_submissions(), 1);
+            let refused = attempt.credentials(&prepared, None, None, &url, Some("fixture"), second);
+            assert_eq!(
+                refused.err().map(|error| error.message().to_owned()),
+                Some("SSH policy rejected".to_owned()),
+                "{second:?}"
+            );
+            assert_eq!(attempt.key_submissions(), 1, "{second:?}");
+            assert_eq!(
+                attempt.failure(),
+                Some(SshTransportErrorKind::KeyRejected),
+                "{second:?}"
+            );
+            let error = git2::Error::from_str("SSH policy rejected");
+            assert_eq!(
+                super::super::remote::backend_failure(&attempt, &error, false),
+                SshTransportErrorKind::KeyRejected
+            );
+            assert_eq!(
+                super::super::remote::backend_failure(&attempt, &error, true),
+                SshTransportErrorKind::UnlockFailed
+            );
+            // Nothing more is offered on that connection.
+            for allowed in [
+                git2::CredentialType::SSH_KEY,
+                git2::CredentialType::USERNAME,
+            ] {
+                assert!(
+                    attempt
+                        .credentials(&prepared, None, None, &url, Some("fixture"), allowed)
+                        .is_err()
+                );
+            }
+            assert!(
+                attempt
+                    .check_host(&prepared, "example.invalid", None)
+                    .is_err()
+            );
+            assert_eq!(attempt.key_submissions(), 1);
+        }
+    }
 }

@@ -9,8 +9,8 @@ use super::super::{
     AuthoringKind, OperationId, RefreshOutcome, RefreshRepositoryRequest, RepositoryError,
     RepositoryErrorKind, RepositoryOperation, RepositoryService, authoring_kind_segment,
     cache_write_guard, canonical_repository_root,
-    discovery::{migrate_registry, open_registry},
-    item_context, local_sync, recovery,
+    discovery::{ContextKey, open_registry},
+    item_context, local_sync, mark_registered_contexts_dirty, recovery,
     remote::state::recovery_required,
     repository_lease,
 };
@@ -269,8 +269,7 @@ impl RepositoryService {
         let origin = recovery::RowOrigin::here(&root, self.clock.now().unix_timestamp());
         {
             let _guard = cache_write_guard(&self.registry_path, &root, OP)?;
-            let mut db = open_registry(&self.registry_path, &mut |_| {})?;
-            migrate_registry(&mut db)?;
+            let mut db = self.open_migrated_registry(OP)?;
             let tx = db
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(RepositoryError::sqlite)?;
@@ -327,11 +326,15 @@ impl RepositoryService {
                 {
                     return Err(recovery_required());
                 }
-                recovery::require_no_pending_local(&tx, repository_id)?;
+                let call = recovery::CallScope::retirement(&request.item_id);
+                recovery::require_no_pending_local(&tx, repository_id, &call)?;
                 // A terminal remote row may still own discovery/reconciliation
                 // before a local handoff row exists. Its released reservation
                 // is not permission for a new retirement to settle that debt.
-                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [repository_id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+                // An index debt holds the retirement as a local row owing its
+                // hand-off would (`holds`): a synchronization's of this item,
+                // or a whole-repository operation's.
+                let blocked: bool = tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [repository_id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
                 if blocked {
                     return Err(recovery_required());
                 }
@@ -355,7 +358,7 @@ impl RepositoryService {
                     && materialization
                         .as_ref()
                         .is_none_or(|(_, _, step)| step == "complete");
-                tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
+                tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,owed_contexts) VALUES(?1,?2,?3,'retire_context',?4,'created',?5,?6)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp(),crate::repository::encode_owed_contexts(&[ContextKey::Item(request.item_id.clone())])]).map_err(RepositoryError::sqlite)?;
                 let local_id = tx.last_insert_rowid();
                 recovery::attribute_local_row(&tx, local_id, &origin)
                     .map_err(RepositoryError::sqlite)?;
@@ -388,24 +391,32 @@ impl RepositoryService {
                 }
                 tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='initial',materialization_settled=1 WHERE operation_ulid=?1", [&id]).map_err(RepositoryError::sqlite)?;
                 tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_retirement_absent' WHERE id=?1", [local_id]).map_err(RepositoryError::sqlite)?;
-                tx.execute(
-                    "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                    [repository_id],
-                )
-                .map_err(RepositoryError::sqlite)?;
+                // The retired context's rows, if any, stay marked until the
+                // index step deletes them.
+                mark_registered_contexts_dirty(
+                    &tx,
+                    repository_id,
+                    &[ContextKey::Item(request.item_id.clone())],
+                )?;
             }
             tx.commit().map_err(RepositoryError::sqlite)?;
         }
         drop(lease);
-        // Full discovery is local and outside the lease, under this SAME local
+        // The index step is local and outside the lease, under this SAME local
         // operation's separate index epoch. It cannot invoke cleanup/transport.
+        // It deletes the retired context's rows; see `index_retirement_claimed`.
         let refreshed = if let Some(fence) = scope.fence() {
             self.refresh_retirement_request(&request, fence)
         } else {
-            self.refresh_repository(RefreshRepositoryRequest {
-                root: root.clone(),
-                operation_id: request.operation_id,
-            })
+            self.refresh_repository_as(
+                RefreshRepositoryRequest {
+                    root: root.clone(),
+                    operation_id: request.operation_id,
+                },
+                "",
+                true,
+                crate::repository::RefreshScope::Recorded,
+            )
         };
         match refreshed {
             Ok(RefreshOutcome::Refreshed { .. }) => {

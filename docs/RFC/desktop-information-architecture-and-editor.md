@@ -54,15 +54,7 @@ failures MUST NOT exist only in transient notifications. Labels use the
 plain-language vocabulary of `docs/design/06-language-and-states.md`, with
 Git detail in tooltips, dialogs and sheets.
 
-Documents retain their folder hierarchy. Tickets use a list with title, type,
-status and latest content/metadata change time. Both lists include visible
-nonconforming and inaccessible entries with a reason and recovery action.
-An empty result, a scan still running, and a failed/stale scan are distinct.
-No boards or project rollups are required.
-Short codes, ready and blocked filters and a ticket's dependencies, parent and
-children are shown as the
-[ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#desktop)
-defines; tabs and every mutation still key on the canonical ULID.
+Documents retain their folder hierarchy. Tickets use a list with title, type, status and latest content/metadata change time. Both lists include visible nonconforming and inaccessible entries with a reason and recovery action. An empty result, a scan still running, and a failed scan or a stale index are distinct. Amended 2026-11-21 by ticket vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`): a list reads stale while the index owes some context an indexing (for example after a write whose index step is pending, or a refresh that found a context changing as it read it) or is marked behind as a whole. A save indexes the saved item alone; it no longer refreshes the index of every other item. A change made outside Manyhands is not known to the index until the next refresh, poll or desktop start, as the [index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21) says. No boards or project rollups are required. Short codes, ready and blocked filters and a ticket's dependencies, parent and children are shown as the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#desktop) defines; tabs and every mutation still key on the canonical ULID.
 
 Ticket lists default to lifecycle-open tickets, with visible Closed/All filters.
 Closure is determined by lifecycle metadata, independently of free-form status.
@@ -210,12 +202,7 @@ resolution.
 
 ## Drafts, saves and external changes
 
-Each draft records its base path/content observation, base context and source,
-current body/metadata and a local draft ID. Invalid edits remain in the draft;
-they are never written to canonical files just to make Git report a dirty tree.
-Save validates, checkpoints through the domain service and refreshes discovery.
-Save does not publish. The UI distinguishes unsaved, saved locally, checkpoint
-failed, discovery refresh pending and publication pending.
+Each draft records its base path/content observation, base context and source, current body/metadata and a local draft ID. Invalid edits remain in the draft; they are never written to canonical files just to make Git report a dirty tree. Save validates, checkpoints through the domain service and indexes the saved item (amended 2026-11-21 by ticket vh-f3wts, `01M7RDVNZDCCVSMWHDY9503852`: a save indexes the saved item's context and no other, where it refreshed the whole repository's discovery before; see the [index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21)). Save does not publish. The UI distinguishes unsaved, saved locally, checkpoint failed, discovery refresh pending (the saved item's indexing is pending) and publication pending.
 
 Crash recovery uses an owner-protected, application-local draft store
 separate from SQLite, operation journals and canonical content. It writes
