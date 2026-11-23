@@ -10,7 +10,7 @@ use git2::{Config, ConfigLevel, Repository, RepositoryInitOptions, Signature, Ti
 use manyhands::{
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        InitialsSource, ProblemDto, ReadError, RepositoryService,
+        InitialsSource, ProblemDto, ReadError, RepositoryErrorKind, RepositoryService,
     },
     results::{ProblemCode, ResultCode},
 };
@@ -541,6 +541,15 @@ fn repo_inspect_lists_unfinished_operations_with_attribution() {
 /// when the operations cannot be read: an empty list and a problem that says
 /// so, which a person does not mistake for nothing being unfinished.
 /// `operation list` refuses the same registry.
+///
+/// Named edit E-84 (vh-f3wts, the final review fixes): a read audits the
+/// records it uses, and registry open audits the schema and its markers
+/// (design decision 9), so the registry that fails the audit is now an
+/// unfinished local synchronization whose record is gone, which the read's
+/// own audit refuses. A migration marker deleted under a service that has
+/// opened the registry is not audited again by that service's reads, which
+/// read the operations as they are; it is refused when a registry open
+/// audits it, as every new process does before it reads anything.
 #[test]
 fn repo_inspect_answers_with_a_problem_when_the_operations_cannot_be_read() {
     use support::{items, operations};
@@ -570,13 +579,13 @@ fn repo_inspect_answers_with_a_problem_when_the_operations_cannot_be_read() {
         (
             "a registry that fails the audit",
             &|index| {
-                index
-                    .execute(
-                        "DELETE FROM registry_migrations
-                          WHERE name = 'local_context_sync_child_cascade_v2'",
-                        [],
-                    )
-                    .unwrap();
+                operations::insert_local_into(
+                    index,
+                    Some(operations::OPERATION_A),
+                    "context_sync_local",
+                    "created",
+                    None,
+                )
             },
             ResultCode::RecoveryRequired,
         ),
@@ -610,14 +619,19 @@ fn repo_inspect_answers_with_a_problem_when_the_operations_cannot_be_read() {
         // Restore for the next case.
         let index = items::index(data);
         index.execute("DELETE FROM operation_records", []).unwrap();
-        index
-            .execute(
-                "INSERT OR IGNORE INTO registry_migrations (name)
-                 VALUES ('local_context_sync_child_cascade_v2')",
-                [],
-            )
-            .unwrap();
     }
+    // A migration marker gone: the registry open of a new process refuses it.
+    items::index(data)
+        .execute(
+            "DELETE FROM registry_migrations
+              WHERE name = 'local_context_sync_child_cascade_v2'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        RepositoryService::open_at(data).map(drop).unwrap_err().kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
     assert_git_transport_uninitialized();
 }
 

@@ -62,7 +62,7 @@ use super::super::{
     AuthoringKind, INDEX_OWNER_STALE_AFTER, OperationFamily, OperationId, ReadError,
     RemoteOperationPhase, RemoteOperationSafePoint, RepositoryError, RepositoryErrorKind,
     RepositoryOperation, RepositoryService, authoring_kind_segment, bootstrap_lease,
-    cache_write_guard, canonical, liveness, migrate_registry, mutation, open_registry,
+    cache_write_guard, canonical, liveness, mutation,
     recovery::{self, LocalRow, LocalStanding},
     remote::{
         reservation::{self, AbandonEvidence},
@@ -784,9 +784,9 @@ impl RepositoryService {
         let root_key = super::super::registry_root_key(&root, operation)?;
         let host = super::super::this_host();
         let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, &root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, &root))?;
         let sqlite = |error| RepositoryError::sqlite(error).for_operation(operation, &root);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -976,9 +976,9 @@ impl RepositoryService {
             Err(_) => None,
         };
         let _cache_guard = cache_write_guard(&self.registry_path, &root, operation)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
+        let mut connection = self
+            .open_migrated_registry(operation)
             .map_err(|error| error.for_operation(operation, &root))?;
-        migrate_registry(&mut connection).map_err(|error| error.for_operation(operation, &root))?;
         let sqlite = |error| RepositoryError::sqlite(error).for_operation(operation, &root);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1076,6 +1076,11 @@ impl RepositoryService {
                 "the journal row could not be closed",
             ));
         }
+        // The contexts the row owed an indexing read so still once it is
+        // closed: what the operation left is for the next refresh or resume
+        // to index. Only the index's marks are written.
+        super::super::mark_owed_by_closed_row(&transaction, row.id)
+            .map_err(|error| error.for_operation(operation, &root))?;
         transaction.commit().map_err(sqlite)?;
         Ok(AbandonOperationOutcome::Abandoned(left))
     }

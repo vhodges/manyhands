@@ -137,8 +137,9 @@ pub struct ConfigurationDto {
 
 /// `never_refreshed` when nothing has been stored for the registration: no
 /// refresh or rebuild has completed and the index holds no context for it.
-/// Otherwise `stale` when a refresh is required, or when the index was
-/// written before refresh times were recorded, and `current` when neither.
+/// Otherwise `stale` when a refresh is required, when a working tree a write
+/// changed is not yet indexed, or when the index was written before refresh
+/// times were recorded, and `current` when none of these.
 /// `refreshed_at` is the time the last completed refresh or rebuild began
 /// observing, and null when none is recorded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -564,8 +565,8 @@ pub struct ItemContextDto {
 ///
 /// `context` is the item's effective copy, which every comment was read
 /// from. `index` is `stale` when the item's file or a comment's is newer
-/// than the last refresh, or the comments are no longer what the index
-/// stored.
+/// than the last indexing of that context, or the context is owed one, or
+/// the comments are no longer what the index stored.
 ///
 /// The index says which files there are, so a comment added since the
 /// last refresh is not listed until the indexer has seen it. `complete` is

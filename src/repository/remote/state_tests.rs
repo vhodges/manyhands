@@ -4687,3 +4687,77 @@ fn polling_defaults_are_rebuilt_once_the_marker_is_retired() {
         db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) SELECT '/third',123,'accessible',0 WHERE NOT EXISTS(SELECT 1 FROM repositories WHERE root_path='/third')", []).unwrap();
     }
 }
+
+/// Table A of the fast-writes design: an item worktree that an outside
+/// `git checkout` made invalid is stored as a context of its own, kind
+/// `invalid`, with its problem. No poll, remote snapshot or history read
+/// is refused because of that row, and none reads it as an item context.
+///
+/// The cases are the shapes such a row can have: on the branch the outside
+/// checkout left, with its problem at the worktree itself (an empty path,
+/// as a problem about a working tree is stored relative to it); and on no
+/// branch, a detached head, with a problem that has no path.
+#[test]
+fn an_invalid_context_row_does_not_refuse_poll_remote_snapshot_or_history_reads() {
+    for (branch, problem_path) in [(Some("scratch"), Some("")), (None, None)] {
+        let case = format!("branch {branch:?}, problem path {problem_path:?}");
+        let (data, root, service) = fixture();
+        git2::Repository::init(root.path()).unwrap();
+        let worktree = root.path().join(".manyhands/worktrees").join(ITEM);
+        let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // The cache-loss flag is set, so every active context reads unknown
+        // to the history reads.
+        connection
+            .execute(
+                "UPDATE remote_polling_state SET history_unknown=1,remote_name='origin',primary_branch='main' WHERE repository_id=1",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'invalid',?1,?2,?3)",
+                params![branch, worktree.to_str().unwrap(), ITEM],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO problems(repository_id,context_id,path,code,guidance,observed_at) VALUES(1,?1,?2,'context','the worktree does not have a conforming authoring branch',123)",
+                params![connection.last_insert_rowid(), problem_path],
+            )
+            .unwrap();
+
+        // The remote snapshot, which the history read starts from.
+        let before = service
+            .remote_snapshot(root.path())
+            .unwrap_or_else(|error| panic!("{case}: remote snapshot: {error}"));
+        assert!(before.contexts().is_empty(), "{case}");
+        // The projection the poll and the history read take.
+        let projected = read_snapshot(&connection, 1)
+            .unwrap_or_else(|error| panic!("{case}: projection: {error}"));
+        assert!(projected.contexts().is_empty(), "{case}");
+        // The history reads: the row is no active context, and none reads
+        // unknown.
+        let (flag, unknown) = with_transaction(&service, root.path(), unresolved_contexts)
+            .unwrap_or_else(|error| panic!("{case}: unresolved contexts: {error}"));
+        assert!(flag, "{case}");
+        assert!(unknown.is_empty(), "{case}: {unknown:?}");
+        let active = with_transaction(&service, root.path(), |tx, id| active_contexts(tx, id))
+            .unwrap_or_else(|error| panic!("{case}: active contexts: {error}"));
+        assert!(active.is_empty(), "{case}: {active:?}");
+        // The poll's admission, and its record of a completed observation.
+        with_transaction(&service, root.path(), |tx, id| {
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::repository(),
+            )?;
+            complete_batch(tx, id, &plan(), 0, &[], 123)
+        })
+        .unwrap_or_else(|error| panic!("{case}: poll: {error}"));
+        // The history report a poll ends with.
+        let report = service
+            .history_report(root.path(), &before, &[])
+            .unwrap_or_else(|error| panic!("{case}: history report: {error}"));
+        assert!(report.entries.is_empty(), "{case}");
+    }
+}

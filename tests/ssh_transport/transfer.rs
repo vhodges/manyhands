@@ -1,5 +1,10 @@
+// Match the scoped transport's owned, redacted error contract.
+#![allow(clippy::result_large_err)]
 use crate::{
-    repository::transport::{operation_tests::*, *},
+    repository::{
+        RemoteRefPlan, SynchronizationTarget,
+        transport::{operation_tests::*, *},
+    },
     session::*,
     ssh_remote::*,
 };
@@ -10,7 +15,10 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
     ("scoped_push", push),
     ("push_rejection", push_rejection),
     ("reconnect_key_policy", reconnect_key_policy),
-    ("reconnect_host_policy", reconnect_host_policy),
+    (
+        "push_target_connection_policy",
+        push_target_connection_policy,
+    ),
     ("removed_pin_before_transfer", removed_pin_before_transfer),
     (
         "renewed_rejection_evicts_secret",
@@ -166,7 +174,10 @@ fn transfer_failure_preserves_valid_secret() -> Result<(), FixtureError> {
         Transfer::Download,
         &Cell::new(0),
         || {
-            case.fixture.disconnect_at(FixtureBoundary::Advertisement);
+            // Named edit E-50: the download runs on the connection that already
+            // advertised, so the fault is at its transfer (was Advertisement,
+            // which only a reconnect reached).
+            case.fixture.disconnect_at(FixtureBoundary::Transfer);
         },
     )
     .unwrap_err();
@@ -180,60 +191,189 @@ fn transfer_failure_preserves_valid_secret() -> Result<(), FixtureError> {
     assert!(session.has_cached_passphrase(&requests.borrow()[0]));
     Ok(())
 }
+/// Named edit E-49, revised in fix round 1. A rejection of the key the call
+/// unlocked with a passphrase just supplied evicts that passphrase, on either
+/// connection a call can make with it: its own (`later == false`, the server
+/// rejects at `ProviderReturned`), or a later one of the call, which is now
+/// `download_push_target`'s own upload-pack connection (`later == true`, the
+/// original property: a renewed rejection after the call authenticated).
 fn renewed_rejection_evicts_secret() -> Result<(), FixtureError> {
-    let case = Case::new(true)?;
-    let (mut session, requests) = session(vec![secret(PASSWORD)]);
-    let error = transfer(
-        &case.service,
-        case.request(),
-        &mut session,
-        Transfer::Download,
-        &Cell::new(0),
-        || {
-            case.fixture.reject_client();
-        },
-    )
-    .unwrap_err();
-    assert_eq!(error.kind, SshTransportErrorKind::UnlockFailed);
-    assert_eq!(requests.borrow().len(), 1);
-    assert!(!session.has_cached_passphrase(&requests.borrow()[0]));
-    Ok(())
-}
-fn reconnect_key_policy() -> Result<(), FixtureError> {
-    reconnect(false)
-}
-fn reconnect_host_policy() -> Result<(), FixtureError> {
-    reconnect(true)
-}
-fn reconnect(host: bool) -> Result<(), FixtureError> {
-    let case = Case::new(false)?;
-    let (mut session, _) = session(vec![]);
-    let result = transfer(
-        &case.service,
-        case.request(),
-        &mut session,
-        Transfer::Download,
-        &Cell::new(0),
-        || {
-            if host {
-                case.fixture.rotate_host_key().unwrap();
-            } else {
-                case.fixture.reject_client();
-            }
-        },
-    );
-    let error = result.unwrap_err();
-    if host {
-        assert!(matches!(
-            error.kind,
-            SshTransportErrorKind::HostApprovalRequired { .. }
-                | SshTransportErrorKind::HostReplacementRequired { .. }
-                | SshTransportErrorKind::HostTrustChanged
-        ));
-    } else {
-        assert_eq!(error.kind, SshTransportErrorKind::KeyRejected);
+    for later in [false, true] {
+        let case = std::rc::Rc::new(Case::new(true)?);
+        let (mut session, requests) = session(vec![secret(PASSWORD)]);
+        let called = Cell::new(0);
+        let error = if later {
+            let (destination, unique, request) = push_target(&case)?;
+            let error = case
+                .service
+                .with_authenticated_remote(request, &mut session, |remote| {
+                    called.set(called.get() + 1);
+                    destination.reject_client();
+                    remote.download_push_target(&plan(), &SynchronizationTarget::Primary)
+                })
+                .unwrap_err();
+            assert_eq!(called.get(), 1);
+            let repo = fixed(git2::Repository::open(&case.root))?;
+            assert!(repo.find_commit(unique).is_err());
+            error
+        } else {
+            let rejecting = case.clone();
+            let hook = install_hook(move |point| {
+                if point == Checkpoint::ProviderReturned {
+                    rejecting.fixture.reject_client();
+                }
+            });
+            let error = transfer(
+                &case.service,
+                case.request(),
+                &mut session,
+                Transfer::Download,
+                &called,
+                || {},
+            )
+            .unwrap_err();
+            drop(hook);
+            assert_eq!(called.get(), 0);
+            error
+        };
+        assert_eq!(error.kind, SshTransportErrorKind::UnlockFailed, "{later}");
+        assert_eq!(requests.borrow().len(), 1);
+        assert!(!session.has_cached_passphrase(&requests.borrow()[0]));
     }
-    let repo = fixed(git2::Repository::open(&case.root))?;
-    assert!(repo.find_commit(case.fixture.commit_id()).is_err());
     Ok(())
+}
+/// Named edit E-48, revised by E-52 and in fix round 1. A transfer no longer
+/// reconnects, so this case makes the call ask for one on its own
+/// connection after a push closed it: a second push in the same call. That
+/// transfer refuses before libgit2 is called, with `ProtocolFailure`
+/// (R-SDD-51), whatever the server would grant: no second connection is
+/// opened and no second key offered. The attempt's own refusal of a second
+/// credential request, the second line, is pinned by the library test
+/// `a_second_key_submission_on_one_connection_fails_closed`. (E-48 had the
+/// second push reach libgit2's reconnect, refused by the attempt; before
+/// E-48, a fresh reconnect before each transfer was refused by a rejecting
+/// server. The rotated-host variant is now `push_target_connection_policy`.)
+fn reconnect_key_policy() -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let pushed = commit(&case)?;
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Push;
+    let first = Cell::new(false);
+    let sockets = case.fixture.accepted_sockets();
+    let result = case
+        .service
+        .with_authenticated_remote(request, &mut session, |remote| {
+            remote.push(&["refs/heads/pushed:refs/heads/pushed"])?;
+            first.set(true);
+            remote.push(&["refs/heads/pushed:refs/heads/again"])
+        });
+    assert!(first.get());
+    assert_eq!(
+        result.unwrap_err().kind,
+        SshTransportErrorKind::ProtocolFailure
+    );
+    // One connection in the whole call: one key offered, and accepted.
+    assert_eq!(case.fixture.accepted_sockets(), sockets + 1);
+    assert_eq!(case.fixture.authentication_counts(), (1, 0));
+    assert_eq!(
+        case.fixture.accepted_keys(),
+        vec![case.fixture.allowed_client_public_key()]
+    );
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    assert_eq!(fixed(server.refname_to_id("refs/heads/pushed"))?, pushed);
+    assert!(server.find_reference("refs/heads/again").is_err());
+    Ok(())
+}
+/// Named edit E-53 (fix round 1; was `reconnect_host_policy`, E-48 and
+/// E-52). The second connection a call can still make is
+/// `download_push_target`'s own upload-pack connection to the Push
+/// endpoint. A rotated host key there is refused at the host check, before
+/// any key is offered to it; a server that rejects the key there answers
+/// `KeyRejected`, with one key offered on that connection. Either way nothing
+/// is downloaded and the fetch endpoint is never contacted. These are the
+/// outcomes the old pair pinned on a transfer's reconnect.
+fn push_target_connection_policy() -> Result<(), FixtureError> {
+    for host in [true, false] {
+        let case = Case::new(false)?;
+        let (destination, unique, request) = push_target(&case)?;
+        let (mut session, _) = session(vec![]);
+        let error = case
+            .service
+            .with_authenticated_remote(request, &mut session, |remote| {
+                if host {
+                    destination.rotate_host_key().unwrap();
+                } else {
+                    destination.reject_client();
+                }
+                remote.download_push_target(&plan(), &SynchronizationTarget::Primary)
+            })
+            .unwrap_err();
+        if host {
+            assert!(
+                matches!(
+                    error.kind,
+                    SshTransportErrorKind::HostApprovalRequired { .. }
+                        | SshTransportErrorKind::HostReplacementRequired { .. }
+                        | SshTransportErrorKind::HostTrustChanged
+                ),
+                "{host}"
+            );
+            // The call's connection offered the one key; the rotated host none.
+            assert_eq!(destination.authentication_counts(), (1, 0));
+        } else {
+            assert_eq!(error.kind, SshTransportErrorKind::KeyRejected);
+            // One key offered on each connection; the second was rejected.
+            assert_eq!(destination.authentication_counts(), (2, 1));
+        }
+        assert_eq!(destination.accepted_sockets(), 2, "{host}");
+        assert_eq!(
+            destination.accepted_keys(),
+            vec![case.fixture.allowed_client_public_key()]
+        );
+        let repo = fixed(git2::Repository::open(&case.root))?;
+        assert!(repo.find_commit(unique).is_err());
+        assert_eq!(case.fixture.helper_invocations(), 0);
+    }
+    Ok(())
+}
+fn plan() -> RemoteRefPlan {
+    RemoteRefPlan::from_configuration("origin", "main").unwrap()
+}
+/// A distinct Push endpoint whose primary is a commit this clone does not
+/// have, and a Push request that approves its host: `download_push_target`
+/// on that request makes the call's second connection.
+fn push_target(
+    case: &Case,
+) -> Result<(SshRemoteFixture, git2::Oid, VerifySshTransportRequest), FixtureError> {
+    let destination = SshRemoteFixture::start()?;
+    destination.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &case.fixture.allowed_client_public_key(),
+    ))?);
+    let server = fixed(git2::Repository::open_bare(destination.repository_path()))?;
+    let tree = fixed(server.find_tree(fixed(fixed(server.treebuilder(None))?.write())?))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let unique = fixed(server.commit(
+        Some("refs/heads/unique"),
+        &signature,
+        &signature,
+        "unique",
+        &tree,
+        &[],
+    ))?;
+    fixed(server.reference("refs/heads/main", unique, true, "fixture"))?;
+    let repo = fixed(git2::Repository::open(&case.root))?;
+    assert!(repo.find_commit(unique).is_err());
+    fixed(repo.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let mut request = case.request();
+    request.direction = SshDirection::Push;
+    request.approval = Some(HostApproval {
+        authority: SshAuthority {
+            host: "127.0.0.1".into(),
+            port: destination.address().port(),
+        },
+        expected: None,
+        presented: destination.host_identity(),
+    });
+    Ok((destination, unique, request))
 }

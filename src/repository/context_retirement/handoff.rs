@@ -526,13 +526,7 @@ pub(in super::super) fn replay_report(
         let plan = repository::RemoteRefPlan::from_configuration(&remote, &primary)
             .map_err(|_| recovery_required())?;
         let report = RemotePollReport::decode_frozen(&json, &plan)?;
-        let pending = tx
-            .query_row(
-                "SELECT refresh_required FROM repositories WHERE id=?1",
-                [id],
-                |r| r.get(0),
-            )
-            .map_err(|_| recovery_required())?;
+        let pending = crate::repository::index_behind(tx, id).map_err(|_| recovery_required())?;
         Ok(Some((report, pending)))
     })
 }

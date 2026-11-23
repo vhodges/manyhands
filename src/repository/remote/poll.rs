@@ -1671,7 +1671,11 @@ impl RepositoryService {
                 request.operation_id,
                 priority,
             )?;
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(&target),
+            )?;
             if state::has_pending_conflict(tx, id)? {
                 return Ok(false);
             }
@@ -2495,13 +2499,8 @@ impl RepositoryService {
             outcome: record.outcome,
             local_changes: original_targets.is_some_and(|(_, changed)| changed),
         });
-        let pending: bool = tx
-            .query_row(
-                "SELECT refresh_required FROM repositories WHERE id=?1",
-                [id],
-                |r| r.get(0),
-            )
-            .map_err(|_| state::recovery_required())?;
+        let pending =
+            crate::repository::index_behind(tx, id).map_err(|_| state::recovery_required())?;
         // A foreign generation fence may release this owner before it observes
         // the stop. Later index repair cannot rewrite its original handoff.
         let pending = pending

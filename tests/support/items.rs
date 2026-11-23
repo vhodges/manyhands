@@ -146,6 +146,14 @@ pub fn rebuild_as(service: &RepositoryService, root: &Path, operation_id: Operat
         .unwrap();
 }
 
+/// Writes `path` again with the bytes it holds. Its context has then moved
+/// since it was stored, so a refresh's first step observes it, and a change
+/// the observation hook makes between the refresh's two steps is met as a
+/// race.
+pub fn write_again(path: &Path) {
+    fs::write(path, fs::read(path).unwrap()).unwrap();
+}
+
 /// A writable connection to the index, for arranging what no public call
 /// can and for asserting what is stored.
 pub fn index(data_directory: &Path) -> Connection {

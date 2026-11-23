@@ -96,11 +96,22 @@ fn fetch_set() -> Result<(), FixtureError> {
     let fetchhead = local.path().join("FETCH_HEAD");
     fixed(std::fs::write(&fetchhead, b"preserved"))?;
     let (mut session, requests) = session(vec![]);
+    let reads = crate::repository::key_reads::counts();
     let advertised = fixed(case.service.with_authenticated_remote(
         case.request(),
         &mut session,
         |remote| remote.fetch_poll_set(&plan(), |_| true),
     ))?;
+    // Named edit E-70: a poll's remote call opens the registry once for all
+    // its key reads (design decision 36).
+    let after = crate::repository::key_reads::counts();
+    assert_eq!(
+        (
+            after.calls - reads.calls,
+            after.opens_in_calls - reads.opens_in_calls
+        ),
+        (1, 1)
+    );
     for (target, oid) in [
         (plan().primary().clone(), case.fixture.commit_id()),
         (document.clone(), doc_oid),
@@ -202,7 +213,9 @@ fn absent_and_empty() -> Result<(), FixtureError> {
         },
     ))?;
     assert!(advertised.contains(&("refs/heads/outside".into(), outside)));
-    assert_eq!(case.fixture.helper_invocations() - helpers, 2); // scope + poll advertisement, no download reconnect
+    // Named edit E-51: one connection, whose advertisement is the poll's (was
+    // 2: the scope's and the poll advertisement's).
+    assert_eq!(case.fixture.helper_invocations() - helpers, 1); // no download reconnect
     assert_eq!(calls.get(), 0);
     assert!(local.find_commit(outside).is_err());
     assert_eq!(
@@ -318,7 +331,9 @@ fn progress_stop() -> Result<(), FixtureError> {
     assert!(local.find_commit(incoming).is_err());
     assert_eq!(fixed(local.references())?.count(), 0);
     assert!(!local.path().join("FETCH_HEAD").exists());
-    assert_eq!(case.fixture.helper_invocations(), 2); // no post-stop reconnect
+    // Named edit E-51: the poll lists and downloads on its call's one
+    // connection (was 2: the call's and the download's reconnect).
+    assert_eq!(case.fixture.helper_invocations(), 1); // no post-stop reconnect
     no_push(&case)
 }
 fn frozen_policy() -> Result<(), FixtureError> {
@@ -413,15 +428,28 @@ fn download_advertisement() -> Result<(), FixtureError> {
     let local = fixed(git2::Repository::open(&case.root))?;
     let (mut session, _) = session(vec![]);
     let mut changed = None;
+    let mut prior = Vec::new();
     let advertised = fixed(case.service.with_authenticated_remote(
         case.request(),
         &mut session,
         |remote| {
-            let prior = remote.advertisement()?;
+            prior = remote.advertisement()?;
             assert!(!prior.iter().any(|(name, _)| name == ticket.remote_ref()));
             changed = Some(commit(&server, ticket.remote_ref(), 29).unwrap());
             remote.fetch_poll_set(&plan(), |_| true)
         },
+    ))?;
+    // Named edit E-51: one connection per call. The poll's set and OIDs are
+    // that connection's advertisement, which predates the change, and the
+    // next call's poll is the one that sees it (was: the download's own
+    // reconnect saw it).
+    assert_eq!(advertised, prior);
+    assert!(local.find_reference(ticket.tracking_ref()).is_err());
+    assert_eq!(case.fixture.helper_invocations(), 1);
+    let advertised = fixed(case.service.with_authenticated_remote(
+        case.request(),
+        &mut session,
+        |remote| remote.fetch_poll_set(&plan(), |_| true),
     ))?;
     assert!(advertised.contains(&(ticket.remote_ref().into(), changed.unwrap())));
     assert_eq!(

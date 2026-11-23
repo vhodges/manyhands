@@ -1256,3 +1256,59 @@ fn preview_is_read_only_offline_and_does_not_take_repository_lease() {
         std::io::ErrorKind::WouldBlock
     );
 }
+
+/// Task 21 (P-5): an item with no context of its own is of the other kind
+/// when the primary holds it so. That is read from the primary's index rows
+/// while the primary's basis holds, and from the primary on disk once the
+/// basis moved, whatever the rows say. The rows are altered in the index
+/// below only to tell the two reads apart.
+#[test]
+fn an_item_without_its_own_context_takes_its_kind_from_the_primary_rows_or_disk() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRY";
+    let f = Fixture::new(false);
+    let item: ItemId = OTHER.parse().unwrap();
+    let facts = || {
+        item_preview_facts(
+            LifecycleKind::DocumentPromotion,
+            &f.service,
+            f.root.path(),
+            &item,
+        )
+        .unwrap()
+    };
+    let path = format!(".manyhands/tickets/{OTHER}/ticket.md");
+    let ticket = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER}\ntitle: Ticket\ntype: task\nstatus: open\n---\n\nBody\n"
+    );
+    assert!(!facts().kind_mismatch, "an item held nowhere");
+    // Committed on the primary outside Manyhands: read from disk.
+    write(&f.repo, &path, &ticket);
+    commit(&f.repo);
+    let read = facts();
+    assert!(read.kind_mismatch, "the primary on disk, not yet indexed");
+    assert_eq!(read.item_path, None);
+    // Indexed: the primary's basis holds, so its rows are read.
+    f.service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: f.root.path().into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(facts().kind_mismatch, "the primary's rows");
+    f.db()
+        .execute(
+            "UPDATE discovered_items SET kind='document' WHERE item_id=?1",
+            [OTHER],
+        )
+        .unwrap();
+    assert!(
+        !facts().kind_mismatch,
+        "the primary's rows, while its basis holds"
+    );
+    // Edited on disk: the basis moved, and the primary is read from disk.
+    write(&f.repo, &path, ticket.replace("Body", "Edited body"));
+    assert!(
+        facts().kind_mismatch,
+        "the primary on disk, once its basis moved"
+    );
+}

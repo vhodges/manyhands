@@ -235,6 +235,19 @@ pub(super) fn recovery_error() -> RepositoryError {
 pub(crate) type Synchronizer<'a> = dyn FnMut(SynchronizeRemoteRequest) -> Option<Result<SynchronizationResult, SynchronizationError>>
     + 'a;
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `prove_comment_receipt` has proved a receipt on this
+    /// thread.
+    static RECEIPT_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many receipts this thread has proved so far.
+#[cfg(test)]
+pub(super) fn receipt_proofs_for_testing() -> usize {
+    RECEIPT_PROOFS.with(std::cell::Cell::get)
+}
+
 /// A comment's publication left pending by `error`, its synchronization's.
 /// A repository error is told as the submission's, of the same kind and
 /// with nothing of its text, and keeps the operation in its way, which the
@@ -384,37 +397,46 @@ impl RepositoryService {
                     binding,
                 } => (context, checkpoint, true, binding),
             };
+            // The local checkpoint proves its receipt from Git and records
+            // it. One recorded with this commit is not proved again.
+            let mut recorded = None;
             if let LocalCheckpoint::Checkpointed { commit_oid }
             | LocalCheckpoint::RefreshPending { commit_oid } = &checkpoint
             {
+                if binding.receipt_recorded && binding.checkpoint_oid == Some(*commit_oid) {
+                    recorded = binding.created_at.clone();
+                }
                 binding.checkpoint_oid = Some(*commit_oid);
             }
-            let (receipt, time) =
-                match self.prove_comment_receipt(&root, &binding, Some(&request.comment.body)) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        // A scoped commit returned by the local writer remains
-                        // authoritative even if later correlation proof is refused.
-                        // Never turn it into an unsaved result or attempt transport.
-                        if let LocalCheckpoint::Checkpointed { commit_oid }
-                        | LocalCheckpoint::RefreshPending { commit_oid } = &checkpoint
-                        {
-                            return Ok(CommentSubmissionOutcome::Saved {
-                                receipt: Box::new(binding_receipt(&root, &binding, *commit_oid)),
-                                context,
-                                checkpoint,
-                                publication: CommentPublicationState::Pending {
-                                    reason: CommentPublicationPendingReason::LocalRecoveryRequired,
-                                },
-                                indexing: CommentIndexingState {
-                                    local_pending: true,
-                                    remote_pending: false,
-                                },
-                            });
-                        }
-                        return Err(error);
+            let proved = match (recorded, binding.checkpoint_oid) {
+                (Some(time), Some(oid)) => Ok((binding_receipt(&root, &binding, oid), time)),
+                _ => self.prove_comment_receipt(&root, &binding, Some(&request.comment.body)),
+            };
+            let (receipt, time) = match proved {
+                Ok(value) => value,
+                Err(error) => {
+                    // A scoped commit returned by the local writer remains
+                    // authoritative even if later correlation proof is refused.
+                    // Never turn it into an unsaved result or attempt transport.
+                    if let LocalCheckpoint::Checkpointed { commit_oid }
+                    | LocalCheckpoint::RefreshPending { commit_oid } = &checkpoint
+                    {
+                        return Ok(CommentSubmissionOutcome::Saved {
+                            receipt: Box::new(binding_receipt(&root, &binding, *commit_oid)),
+                            context,
+                            checkpoint,
+                            publication: CommentPublicationState::Pending {
+                                reason: CommentPublicationPendingReason::LocalRecoveryRequired,
+                            },
+                            indexing: CommentIndexingState {
+                                local_pending: true,
+                                remote_pending: false,
+                            },
+                        });
                     }
-                };
+                    return Err(error);
+                }
+            };
             let persisted = self
                 .store_comment_receipt(&root, &binding, receipt.checkpoint_oid, &time)
                 .is_ok();
@@ -601,11 +623,17 @@ impl RepositoryService {
                 RepositoryOperation::SubmitComment,
             )?;
             let connection = open_registry(&self.registry_path, &mut |_| {})?;
-            connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed'
+            // Its time is now by the wall clock the index's times are read
+            // by, after the commit Git has proved: a row whose commit is
+            // observed is read by its time (design decision 32).
+            connection.execute("UPDATE operation_records SET state='authoring_checkpoint_observed',completed_step='authoring_checkpoint_observed',observed_at=max(observed_at,?3)
                 WHERE operation_ulid=?1 AND root_path=?2 AND action='submit_comment' AND (state IN ('created','worktree_observed','comment_checkpoint_intent','authoring_destination_observed') OR (state='completed' AND completed_step='comment_registration_pending'))",
-                params![receipt.operation_id.to_string(),root.to_str()]).map_err(|_| recovery_error())?;
+                params![receipt.operation_id.to_string(),root.to_str(),OffsetDateTime::now_utc().unix_timestamp()]).map_err(|_| recovery_error())?;
         }
-        self.refresh_repository(RefreshRepositoryRequest {
+        // The row's own hand-off: the comment's context, which the row
+        // records it owes, and nothing else (one an older build began, which
+        // records none, still gets a refresh of the whole repository).
+        self.resume_hand_off(RefreshRepositoryRequest {
             root,
             operation_id: receipt.operation_id,
         })?;
@@ -690,6 +718,8 @@ impl RepositoryService {
         binding: &recovery::CommentBinding,
         body: Option<&str>,
     ) -> Result<(CommentReceipt, String), RepositoryError> {
+        #[cfg(test)]
+        RECEIPT_PROOFS.with(|proofs| proofs.set(proofs.get() + 1));
         let repository = Repository::open(root).map_err(|_| recovery_error())?;
         let branch = format!(
             "manyhands/{}/{}",

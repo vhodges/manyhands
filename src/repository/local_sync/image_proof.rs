@@ -232,9 +232,12 @@ pub(super) fn migrate(db: &Connection) -> Result<(), super::super::RepositoryErr
         db.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| failure())?;
     }
-    audit(db)
+    // The proofs themselves are audited with their records, by the audit
+    // that ends the record migration.
+    audit_schema(db)
 }
-pub(super) fn audit(db: &Connection) -> Result<(), super::super::RepositoryError> {
+/// The marker, the table's schema and its foreign keys.
+pub(super) fn audit_schema(db: &Connection) -> Result<(), super::super::RepositoryError> {
     let marked: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -264,12 +267,21 @@ pub(super) fn audit(db: &Connection) -> Result<(), super::super::RepositoryError
     {
         return Err(failure());
     }
-    let orphan:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_images i LEFT JOIN local_context_sync_execution e ON e.operation_ulid=i.operation_ulid WHERE e.operation_ulid IS NULL)",[],|r|r.get(0)).map_err(|_|failure())?;
+    Ok(())
+}
+/// The proofs of the records `rows` selects: each belongs to an execution,
+/// and decodes to a proof bound to its record's parents and generation.
+pub(super) fn audit_rows(
+    db: &Connection,
+    rows: super::record::Rows<'_>,
+) -> Result<(), super::super::RepositoryError> {
+    let records = rows.records();
+    let orphan:bool=db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM local_context_sync_images i JOIN local_context_sync_records p ON p.operation_ulid=i.operation_ulid LEFT JOIN local_context_sync_execution e ON e.operation_ulid=i.operation_ulid WHERE ({records}) AND e.operation_ulid IS NULL)"),rows.bound(),|r|r.get(0)).map_err(|_|failure())?;
     if orphan {
         return Err(failure());
     }
-    let mut stmt=db.prepare("SELECT i.manifest,i.generation,i.owner_epoch,p.generation,p.owner_epoch,p.context_parent,p.primary_parent,i.baseline_v2,e.checkout_started FROM local_context_sync_images i JOIN local_context_sync_records p ON p.operation_ulid=i.operation_ulid JOIN local_context_sync_execution e ON e.operation_ulid=i.operation_ulid").map_err(|_|failure())?;
-    let mut rows = stmt.query([]).map_err(|_| failure())?;
+    let mut stmt=db.prepare(&format!("SELECT i.manifest,i.generation,i.owner_epoch,p.generation,p.owner_epoch,p.context_parent,p.primary_parent,i.baseline_v2,e.checkout_started FROM local_context_sync_images i JOIN local_context_sync_records p ON p.operation_ulid=i.operation_ulid JOIN local_context_sync_execution e ON e.operation_ulid=i.operation_ulid WHERE {records}")).map_err(|_|failure())?;
+    let mut rows = stmt.query(rows.bound()).map_err(|_| failure())?;
     while let Some(r) = rows.next().map_err(|_| failure())? {
         let g: i64 = r.get(1).map_err(|_| failure())?;
         let epoch: i64 = r.get(2).map_err(|_| failure())?;

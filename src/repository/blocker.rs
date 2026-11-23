@@ -20,7 +20,9 @@
 //! `repo sync` or a republish, waits the same way, under the same
 //! `WaitPolicy`, for another operation that is in the way of the
 //! repository's remote reservation while that operation's holder is live;
-//! see `RepositoryService::reserving`. Two
+//! see `RepositoryService::reserving`. So do a close's and a promotion's
+//! new children and the new reservation of their cleanup, behind their own
+//! item's or the primary's sync hand-off (decision 34). Two
 //! things are waited for there:
 //!
 //! - the holder of the reservation (another synchronization's row, family

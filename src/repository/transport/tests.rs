@@ -18,7 +18,7 @@ fn transport_poll_stop_is_sticky_and_independent_of_backend_error_code() {
     );
 }
 
-fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
+pub(super) fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
     use crate::repository::keys::*;
     PreparedSshAttempt {
         registration: SharedKeyRegistration {
@@ -42,6 +42,7 @@ fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
             reapproval_required: false,
         },
         approval: None,
+        registry: crate::repository::CallRegistry::new(),
     }
 }
 
@@ -181,9 +182,29 @@ fn transport_callback_host_decision_table() {
             presented: presented.clone()
         })
     );
-    prepared.approval = Some(approval(&host, Some(old), &presented));
+    prepared.approval = Some(approval(&host, Some(old.clone()), &presented));
     assert!(matches!(
         CallbackAttempt::default().check_host(
+            &prepared,
+            "example.invalid",
+            Some(presented.clone())
+        ),
+        Ok(git2::CertificateCheckStatus::CertificateOk)
+    ));
+    // A further connection of a call that finalized `presented` refuses the
+    // old pin the prepared policy still accepts, before any key is offered.
+    let further = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(
+        further
+            .check_host(&prepared, "example.invalid", Some(old.clone()))
+            .is_err()
+    );
+    assert_eq!(
+        further.failure(),
+        Some(SshTransportErrorKind::HostTrustChanged)
+    );
+    assert!(matches!(
+        CallbackAttempt::for_finalized_host(presented.clone()).check_host(
             &prepared,
             "example.invalid",
             Some(presented.clone())
@@ -193,9 +214,52 @@ fn transport_callback_host_decision_table() {
     prepared.approval = None;
     prepared.trust.pin = Some(presented.clone());
     assert!(matches!(
-        CallbackAttempt::default().check_host(&prepared, "EXAMPLE.INVALID", Some(presented)),
+        CallbackAttempt::default().check_host(
+            &prepared,
+            "EXAMPLE.INVALID",
+            Some(presented.clone())
+        ),
         Ok(git2::CertificateCheckStatus::CertificateOk)
     ));
+    // With no pin and no approval, a further connection of a call that
+    // finalized `presented` hands no other host to libgit2's known_hosts
+    // check: it is refused at the host check, as the pinned and approved
+    // branches refuse one, before any key is offered (the final review's
+    // F-4). The finalized host itself is still passed through.
+    prepared.trust.pin = None;
+    prepared.trust.reapproval_required = false;
+    let further = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(
+        further
+            .check_host(&prepared, "example.invalid", Some(old.clone()))
+            .is_err()
+    );
+    assert_eq!(
+        further.failure(),
+        Some(SshTransportErrorKind::HostTrustChanged)
+    );
+    assert!(!further.passthrough());
+    assert_eq!(further.key_submissions(), 0);
+    let url = prepared.endpoint.connection_url.clone();
+    assert!(
+        further
+            .credentials(
+                &prepared,
+                None,
+                None,
+                &url,
+                Some("fixture"),
+                git2::CredentialType::SSH_KEY,
+            )
+            .is_err()
+    );
+    assert_eq!(further.key_submissions(), 0);
+    let finalized = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(matches!(
+        finalized.check_host(&prepared, "example.invalid", Some(presented)),
+        Ok(git2::CertificateCheckStatus::CertificatePassthrough)
+    ));
+    assert!(finalized.passthrough());
 }
 
 #[test]

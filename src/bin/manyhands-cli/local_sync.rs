@@ -82,7 +82,12 @@ pub fn observe(
         ),
         Err(error) if error.code() == ResultCode::ItemNotFound => {
             let root = repo.root().to_string_lossy();
-            let extra = no_context(&item, &root, &id.to_string());
+            // The presented copy is primary's while the item's worktree has
+            // lost the file, so only the index can say whether a context
+            // stands. An index that can't say counts as one that does: the
+            // hint is a courtesy, and the refusal stands without it.
+            let has_context = service.item_has_context(&repo, &id).unwrap_or(true);
+            let extra = no_context(&item, has_context, &root, &id.to_string());
             let mut envelope = error.to_envelope(&name);
             // The item exists: the read found no editing context of it.
             if !session.json {

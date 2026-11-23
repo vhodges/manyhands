@@ -17,7 +17,8 @@ use crate::{
     repository::{
         CommitIdentity, ConfirmedCommitIdentity, FailurePoint, PlannedIntegration, RepositoryError,
         RepositoryOperation, RepositoryService, SynchronizationTarget,
-        mark_document_refresh_required,
+        discovery::ContextKey,
+        lifecycle_contexts, mark_contexts_dirty,
         promotion::{
             integrate,
             lifecycle::{LeasedIntegration, LifecycleError, LifecycleKind, PreIntegration},
@@ -554,11 +555,39 @@ fn boundary(
     service.check_failure(point, RepositoryOperation::RepositorySnapshot, root)
 }
 
-/// The context ref moved: the context now reads closed.
-fn context_moved(service: &RepositoryService, root: &Path) -> Result<(), RepositoryError> {
-    mark_document_refresh_required(
+/// The context ref is about to move to the checkpoint, its worktree checked
+/// out at it: the ticket's context is marked owed an indexing first, under
+/// the integration's lease, as a synchronization marks the context its local
+/// update moves before Git is touched (R-SDD-49). Every store takes that
+/// lease, so none can clear the mark before the move is made, and a process
+/// lost during the checkout or before `context_moved` leaves the context
+/// reading owed until an indexing stores it (the final review's F-1). A mark
+/// that cannot be written refuses the move, with nothing changed. The move
+/// changes the ticket's context alone; `context_moved` marks the primary too.
+fn context_moving(
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<(), RepositoryError> {
+    mark_contexts_dirty(
         &service.registry_path,
         root,
+        &[ContextKey::Item(item.clone())],
+        RepositoryOperation::RepositorySnapshot,
+    )
+}
+
+/// The context ref moved: the context now reads closed. The closure's
+/// contexts are marked owed an indexing, its own and the primary's.
+fn context_moved(
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<(), RepositoryError> {
+    mark_contexts_dirty(
+        &service.registry_path,
+        root,
+        &lifecycle_contexts(item),
         RepositoryOperation::RepositorySnapshot,
     )
 }
@@ -672,6 +701,7 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
     boundary(service, root, FailurePoint::ClosureAfterClosingRecorded)?;
     // Step 6, on the context worktree's repository.
     let context_repo = context_repository(root, &r.item_id)?;
+    context_moving(service, root, &r.item_id)?;
     move_context_to_checkpoint_with(
         &context_repo,
         &r.item_id,
@@ -679,7 +709,7 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
         prepared.checkpoint_commit,
         || boundary(service, root, FailurePoint::ClosureDuringCheckpointCheckout),
     )?;
-    context_moved(service, root)?;
+    context_moved(service, root, &r.item_id)?;
     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
     Ok(PreIntegration::Checkpoint {
         base,
@@ -714,16 +744,19 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
                 ClosingState::CheckoutDone => {
                     // The checkout holds no ref lock (R-T6-3). A lock held
                     // by another writer is never adopted or removed: the
-                    // record is kept for a retry.
+                    // record is kept for a retry. A store since the stopped
+                    // call may have cleared its mark, so the move this call
+                    // makes is marked first, as the stopped call's was.
+                    context_moving(service, root, &r.item_id)?;
                     finish_context_move(&context_repo, r).map_err(|_| E::recovery_required())?;
-                    context_moved(service, root)?;
+                    context_moved(service, root, &r.item_id)?;
                     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
                     closure
                 }
                 ClosingState::CheckpointWritten { tip } => {
                     // The ref moved before this call (or after a synchronization):
                     // the mark is idempotent and may not have been made.
-                    context_moved(service, root)?;
+                    context_moved(service, root, &r.item_id)?;
                     tip
                 }
                 ClosingState::Unrecognized => return Err(E::recovery_required()),

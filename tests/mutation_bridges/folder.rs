@@ -874,10 +874,10 @@ mod boundary {
     #[test]
     fn a_refresh_that_fails_for_a_folder_that_was_there_is_discovery_pending_too() {
         git_home::isolated();
-        // After the refresh has observed: it records that it failed,
+        // Inside the index step's transaction: it records that it failed,
         // as every failure of a refresh but the death of its process
         // does.
-        let world = failing_at(FailurePoint::AfterContextObservation);
+        let world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
         fs::create_dir(world.root.join("docs/by-hand")).unwrap();
 
         let pending = world.execute(REQUEST_1, create(&world, "docs/by-hand"));

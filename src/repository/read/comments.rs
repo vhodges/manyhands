@@ -17,7 +17,7 @@ use rusqlite::Connection;
 use super::{
     CommentDto, CommentListDto, ReadError, ResolvedRepository,
     items::{
-        EffectiveCopy, ItemFileRead, behind, effective_copy, invalid_stored_data,
+        ContextFreshness, EffectiveCopy, ItemFileRead, behind, effective_copy, invalid_stored_data,
         is_plain_relative, item_not_found, metadata_problems, problem, read_item_file,
         stored_index_state, stored_items, stored_problems,
     },
@@ -234,8 +234,9 @@ impl RepositoryService {
     /// and is taken from the problems the last refresh stored: an ID that
     /// another item's comment has too, and a parent that is a comment on
     /// another item. A file with such a stored problem that is no newer
-    /// than that refresh keeps it; one that is newer is checked like any
-    /// other, and the index is `stale`.
+    /// than its context's last indexing, in a context owed none, keeps it;
+    /// any other is checked like any other file, and the index is `stale`
+    /// (see `ContextFreshness::is_behind`).
     ///
     /// A file that is not a comment of the item by either means, that is
     /// not valid UTF-8, or that is no longer a regular file follows the
@@ -246,8 +247,9 @@ impl RepositoryService {
     /// comment directory, or the directory that holds every item's, or
     /// stopped part of the way through it: there may be comments it never
     /// saw. `index.state` is `stale` when the item's file or a comment's
-    /// is newer than the last refresh, or the comments are no longer what
-    /// the index stored.
+    /// is newer than the last indexing of the item's context, or that
+    /// context is owed one, or the comments are no longer what the index
+    /// stored.
     ///
     /// An item the index does not hold, whose file is gone, or whose file
     /// now holds another item is `item_not_found`, as it is for
@@ -308,9 +310,11 @@ impl RepositoryService {
                 .cloned()
                 .collect();
 
-            // Newer than the refresh, the item may no longer be what the
-            // index stored its comments against.
-            let mut is_behind = item_file.newer_than(refreshed_at);
+            // Newer than its context's indexing, or in a context owed one,
+            // the item may no longer be what the index stored its comments
+            // against.
+            let freshness = ContextFreshness::read(connection, repo, worktree)?;
+            let mut is_behind = freshness.is_behind(&item_file, refreshed_at);
             let mut entries: BTreeMap<String, Vec<ProblemCode>> = BTreeMap::new();
             let mut sources = Vec::new();
             // An item file that is not text is not an item, and then no
@@ -346,7 +350,7 @@ impl RepositoryService {
                 };
                 match read {
                     ItemFileRead::Found(file) => {
-                        let newer = file.newer_than(refreshed_at);
+                        let newer = freshness.is_behind(&file, refreshed_at);
                         is_behind |= newer;
                         // A problem that takes the whole context to find
                         // cannot be found again from this item's files. As

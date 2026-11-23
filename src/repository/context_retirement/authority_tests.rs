@@ -2330,3 +2330,373 @@ fn retirement_spec_s3_public_update_rejects_parent_and_observer_before_configura
         "reserved update-poll ID wrote configuration/metadata or failed to refuse (terminal,observer,valid): {failures:?}"
     );
 }
+
+// Table B of the fast-writes design ("Table B: what a pending row holds")
+// at a present context's retirement, written before the behaviour (Task 3);
+// the rows of a synchronization's hand-off are asked in tests of their own,
+// written as Task 16 writes them, as rows of their item (P-4). The rows and
+// what each holds
+// are `execution_tests::TableBRow`'s: a retirement waits for a row mid-write
+// of any item and for the rows of the whole repository, goes on past a row
+// of another item that owes only its hand-off, and is refused behind such a
+// row of its own item.
+use crate::repository::context_retirement::execution_tests::{
+    TABLE_B_OTHER, TableBRow, table_b_seed,
+};
+
+/// The item `Fixture` retires.
+const TABLE_B_RETIRED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+/// The cases of a table: each row, of the retired item and of another one
+/// (once, for a row that names no item), skipping the rows `keep` refuses.
+fn table_b_cases(keep: impl Fn(TableBRow) -> bool) -> Vec<(TableBRow, &'static str)> {
+    TableBRow::all()
+        .into_iter()
+        .filter(|row| keep(*row))
+        .flat_map(|row| {
+            [TABLE_B_RETIRED, TABLE_B_OTHER]
+                .into_iter()
+                .filter(move |item| row.of_an_item() || *item == TABLE_B_OTHER)
+                .map(move |item| (row, item))
+        })
+        .collect()
+}
+
+fn table_b_label(row: TableBRow, item: &str) -> String {
+    if !row.of_an_item() {
+        format!("{row:?}")
+    } else if item == TABLE_B_RETIRED {
+        format!("{row:?} of its own item")
+    } else {
+        format!("{row:?} of another item")
+    }
+}
+
+/// The claim of a present context's branch (`claim_scoped`, authority.rs
+/// ~306), behind each row written before it: `Fixture::with_request(false)`
+/// with the rows seeded before its claim.
+#[test]
+fn table_b_a_present_context_s_claim_behind_each_pending_row() {
+    table_b_a_present_context_s_claim_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_present_context_s_claim_behind_each_pending_row`, behind the
+/// rows of a synchronization's hand-off.
+#[test]
+fn table_b_a_present_context_s_claim_behind_each_synchronization_s_hand_off() {
+    table_b_a_present_context_s_claim_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_present_context_s_claim_behind(keep: impl Fn(TableBRow) -> bool) {
+    let mut mismatches = Vec::new();
+    for (row, item) in table_b_cases(keep) {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let git = git2::Repository::init(root.path()).unwrap();
+        git.set_head("refs/heads/main").unwrap();
+        let mut config = git.config().unwrap();
+        config.set_str("user.name", "Fixture").unwrap();
+        config
+            .set_str("user.email", "fixture@example.invalid")
+            .unwrap();
+        let tree = git
+            .find_tree(git.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        git.commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        git.remote("origin", "ssh://fixture@127.0.0.1:1/fixture")
+            .unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .enable(EnableRepositoryRequest {
+                root: root.path().into(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let config = root.path().join(".manyhands/config.toml");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("publication_remote = \"origin\"\n");
+        std::fs::write(config, text).unwrap();
+        let request = RetireContextRequest {
+            root: root.path().canonicalize().unwrap(),
+            kind: AuthoringKind::Ticket,
+            item_id: TABLE_B_RETIRED.parse().unwrap(),
+            operation_id: OperationId::new(),
+        };
+        let tip = git.head().unwrap().target().unwrap();
+        git.reference(
+            &format!("refs/heads/manyhands/ticket/{}", request.item_id),
+            tip,
+            false,
+            "fixture",
+        )
+        .unwrap();
+        table_b_seed(&service, &request.root, row, item, true);
+        let plan = crate::repository::remote::observation::observation_plan(&request.root).unwrap();
+        let configuration = service
+            .observation_configuration(&request.root, &plan)
+            .unwrap();
+        let lease =
+            repository_lease(&git, &request.root, RepositoryOperation::RetireContext).unwrap();
+        let got = match claim_branch(&service, &request, tip, plan, configuration) {
+            Ok(BranchClaim::Execute(_)) => "proceeds".to_owned(),
+            Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired => "held".to_owned(),
+            Err(error) => format!("{:?}", error.kind),
+            Ok(_) => "another claim".to_owned(),
+        };
+        drop(lease);
+        let expected = if row.holds_retirement(item, Some(TABLE_B_RETIRED)) {
+            "held"
+        } else {
+            "proceeds"
+        };
+        if got != expected {
+            mismatches.push(format!(
+                "{} | C4 the claim of a present context: expected {expected}, today {got}",
+                table_b_label(row, item)
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A claimed retirement's next owned write (`local_owner`, authority.rs
+/// ~135, through the observer's safe point), behind each row written after
+/// its claim. A row that owes only its hand-off may stand beside a running
+/// retirement once Table B holds; a remote half cannot be written while the
+/// retirement's observer holds the reservation, so a synchronization's
+/// hand-off row is seeded alone.
+#[test]
+fn table_b_a_claimed_retirement_s_next_write_behind_each_pending_row() {
+    table_b_a_claimed_retirement_s_next_write_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_claimed_retirement_s_next_write_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+fn table_b_a_claimed_retirement_s_next_write_behind_each_synchronization_s_hand_off() {
+    table_b_a_claimed_retirement_s_next_write_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_claimed_retirement_s_next_write_behind(keep: impl Fn(TableBRow) -> bool) {
+    let mut mismatches = Vec::new();
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
+        let f = Fixture::new();
+        table_b_seed(&f.service, &f.request.root, row, item, false);
+        let got = match f.service.remote_safe_point(
+            &f.request.root,
+            &f.owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        ) {
+            Ok(RemoteSafePointOutcome::Continue) => "proceeds".to_owned(),
+            Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired => "held".to_owned(),
+            other => format!("{other:?}"),
+        };
+        let expected = if row.holds_retirement(item, Some(TABLE_B_RETIRED)) {
+            "held"
+        } else {
+            "proceeds"
+        };
+        if got != expected {
+            mismatches.push(format!(
+                "{} | C4 a claimed retirement's next write: expected {expected}, today {got}",
+                table_b_label(row, item)
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The re-entry of a claimed retirement (`reenter_context_retirement`,
+/// reentry.rs ~144), behind each row written after its claim. A re-entry
+/// that goes on records its new owner epoch before it does anything else.
+#[test]
+fn table_b_a_retirement_s_reentry_behind_each_pending_row() {
+    table_b_a_retirement_s_reentry_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_retirement_s_reentry_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+fn table_b_a_retirement_s_reentry_behind_each_synchronization_s_hand_off() {
+    table_b_a_retirement_s_reentry_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_retirement_s_reentry_behind(keep: impl Fn(TableBRow) -> bool) {
+    let mut mismatches = Vec::new();
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
+        let f = Fixture::new();
+        table_b_seed(&f.service, &f.request.root, row, item, false);
+        let result = f.service.reenter_context_retirement_authenticated(
+            ReenterContextRetirementRequest {
+                retirement: f.request.clone(),
+                expected_owner_epoch: 1,
+            },
+            None,
+            &mut SessionCredentials::new(Provider),
+        );
+        let epoch: i64 = f
+            .db()
+            .query_row(
+                "SELECT owner_epoch FROM context_retirement_records WHERE operation_ulid=?1",
+                [f.request.operation_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let got = match (epoch, &result) {
+            (2, _) => "proceeds".to_owned(),
+            (1, Err(error)) if error.kind == RepositoryErrorKind::RecoveryRequired => {
+                "held".to_owned()
+            }
+            _ => format!("epoch {epoch}, {result:?}"),
+        };
+        let expected = if row.holds_retirement(item, Some(TABLE_B_RETIRED)) {
+            "held"
+        } else {
+            "proceeds"
+        };
+        if got != expected {
+            mismatches.push(format!(
+                "{} | C4 a retirement's re-entry: expected {expected}, today {got}",
+                table_b_label(row, item)
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The refusal a claimed retirement records once its configuration has moved
+/// (`finish_configuration_refusal`, record.rs ~1734, through a repeat of
+/// `retire_context` under its ID), behind each row written after its claim.
+/// Recording the refusal ends the retirement with `external_change`.
+#[test]
+fn table_b_a_retirement_s_configuration_refusal_behind_each_pending_row() {
+    table_b_a_retirement_s_configuration_refusal_behind(|row| !row.is_a_synchronization_s());
+}
+
+/// `table_b_a_retirement_s_configuration_refusal_behind_each_pending_row`, behind the rows of a synchronization's
+/// hand-off.
+#[test]
+fn table_b_a_retirement_s_configuration_refusal_behind_each_synchronization_s_hand_off() {
+    table_b_a_retirement_s_configuration_refusal_behind(TableBRow::is_a_synchronization_s);
+}
+
+fn table_b_a_retirement_s_configuration_refusal_behind(keep: impl Fn(TableBRow) -> bool) {
+    let mut mismatches = Vec::new();
+    for (row, item) in table_b_cases(|row| keep(row) && !row.is_remote_only()) {
+        let f = Fixture::new();
+        let plan = f.owner.retirement_execution().unwrap().plan().clone();
+        state::with_transaction(&f.service, &f.request.root, |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Credentials)
+        })
+        .unwrap();
+        table_b_seed(&f.service, &f.request.root, row, item, false);
+        let got = match f.service.retire_context(f.request.clone()) {
+            Ok(ContextRetirementOutcome::Final(report))
+                if report.code == crate::results::ResultCode::ExternalChange =>
+            {
+                "proceeds".to_owned()
+            }
+            Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired => "held".to_owned(),
+            other => format!("{other:?}"),
+        };
+        let expected = if row.holds_retirement(item, Some(TABLE_B_RETIRED)) {
+            "held"
+        } else {
+            "proceeds"
+        };
+        if got != expected {
+            mismatches.push(format!(
+                "{} | C4 a retirement's configuration refusal: expected {expected}, today {got}",
+                table_b_label(row, item)
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A preserving abandon of a retirement whose context is there with nothing
+/// stored for it (its worktree made outside Manyhands) leaves the index
+/// reading stale: only the retirement's row made that context read as owed,
+/// and the row completes, so the repository is marked behind instead.
+#[test]
+fn a_preserving_retirement_of_a_live_context_with_nothing_stored_leaves_the_index_stale() {
+    let f = Fixture::with_request(true);
+    let git = git2::Repository::open(&f.request.root).unwrap();
+    let worktree = f
+        .request
+        .root
+        .join(".manyhands/worktrees")
+        .join(f.request.item_id.to_string());
+    std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+    let branch = git
+        .find_reference(&format!(
+            "refs/heads/manyhands/ticket/{}",
+            f.request.item_id
+        ))
+        .unwrap();
+    git.worktree(
+        &f.request.item_id.to_string(),
+        &worktree,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&branch))),
+    )
+    .unwrap();
+    let stored = || -> i64 {
+        f.db()
+            .query_row(
+                "SELECT count(*) FROM contexts WHERE item_id = ?1",
+                [f.request.item_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let behind = || -> bool {
+        f.db()
+            .query_row("SELECT refresh_required FROM repositories", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(stored(), 0);
+    assert!(!behind());
+    let mutation = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: f.request.root.clone(),
+            operation_id: f.request.operation_id,
+        })
+    };
+    let preview = f.service.prepare(&mutation());
+    assert_eq!(preview.code, crate::results::ResultCode::Ok, "{preview:?}");
+    let preview = preview.data.unwrap().into_preview().unwrap();
+
+    let abandon = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+            mutation: mutation(),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+
+    assert_eq!(abandon.code, crate::results::ResultCode::Ok, "{abandon:?}");
+    let phase: String = f
+        .db()
+        .query_row("SELECT phase FROM context_retirement_records", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(phase, "abandoned");
+    assert!(worktree.is_dir(), "the context is preserved");
+    assert_eq!(stored(), 0);
+    assert!(behind());
+    let repository = f.service.resolve_repository(&f.request.root).unwrap();
+    assert_eq!(
+        f.service.index_status(&repository).unwrap().state,
+        IndexStatusState::Stale
+    );
+}

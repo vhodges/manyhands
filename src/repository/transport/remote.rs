@@ -22,16 +22,30 @@ enum TransferAction {
     Delete(git2::Oid),
 }
 
+/// What one call's guarded delete did. Neither is proof of the result: only
+/// `observe_delete`'s advertisement, on a call of its own, is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Consumed by the later promotion orchestrator.
+pub(crate) enum DeleteAttempt {
+    /// The call's advertisement had no such reference, and nothing was sent.
+    Absent,
+    /// The guarded delete was sent; the server may have refused or lost it.
+    Sent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeleteObservation {
     Deleted,
     StillPresent(git2::Oid),
     Changed(git2::Oid),
 }
 
+/// One remote call's authenticated connection. Every listing and transfer
+/// of the call runs on it and under its callback attempt, so the call
+/// submits the selected key once, to the host it finalized; a reconnect
+/// inside libgit2 asks that attempt again and fails closed.
 pub(crate) struct AuthenticatedSshRemote<'repo, 'a> {
     remote: &'a mut git2::Remote<'repo>,
+    attempt: &'a CallbackAttempt,
     service: &'a RepositoryService,
     prepared: &'a PreparedSshAttempt,
     context: &'a SshTransportError,
@@ -41,8 +55,10 @@ pub(crate) struct AuthenticatedSshRemote<'repo, 'a> {
     trust: super::trust::HostTrustSnapshot,
 }
 impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         remote: &'a mut git2::Remote<'repo>,
+        attempt: &'a CallbackAttempt,
         service: &'a RepositoryService,
         prepared: &'a PreparedSshAttempt,
         context: &'a SshTransportError,
@@ -61,6 +77,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         }
         Self {
             remote,
+            attempt,
             service,
             prepared,
             context,
@@ -71,7 +88,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         }
     }
     /// Pin the actual authenticated handle to the action's original endpoint;
-    /// subsequent typed reconnects continue using this handle and prepared policy.
+    /// the call's later transfers run on this handle, under the prepared policy.
     pub(in super::super) fn require_action_expectation(
         &self,
         expected: &SshScopeExpectation,
@@ -101,7 +118,23 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         Ok(())
     }
 
-    pub(crate) fn advertisement(&self) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+    /// The call's connection can still carry the call. A push closes its
+    /// connection as it returns. On a closed one, libgit2 would hand back the
+    /// listing it cached at connect, which proves nothing about the remote now,
+    /// and a transfer would reconnect inside libgit2, under whatever
+    /// authentication the server grants (R-SDD-51). Both refuse here first.
+    fn require_connected(&mut self) -> Result<(), SshTransportError> {
+        if self.remote.connected() {
+            Ok(())
+        } else {
+            Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ProtocolFailure))
+        }
+    }
+    /// This connection's advertisement; none once the connection has closed.
+    pub(crate) fn advertisement(&mut self) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        self.require_connected()?;
         self.remote
             .list()
             .map(|heads| {
@@ -117,6 +150,8 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     }
     // Task 4 owns safe points between these calls and complete pre/post OID
     // comparison. A transfer return is never proof of publication or deletion.
+    /// The call's connection's advertisement, after the rechecks a transfer
+    /// makes. It is fresh evidence only before that connection's transfer.
     pub(crate) fn fresh_advertisement(
         &mut self,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
@@ -135,6 +170,17 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         plan: &RemoteRefPlan,
         target: &SynchronizationTarget,
     ) -> Result<(), SshTransportError> {
+        self.fetch_exact_advertised(plan, target).map(|_| ())
+    }
+
+    /// `fetch_exact`, giving back the advertisement its download negotiated
+    /// against: the call's connection's, the fetch endpoint's refs before
+    /// the download.
+    pub(crate) fn fetch_exact_advertised(
+        &mut self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+    ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         self.validate_plan(plan, SshDirection::Fetch)?;
         let advertised = self.fresh_advertisement()?;
         self.validate_plan(plan, SshDirection::Fetch)?;
@@ -155,14 +201,14 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         // Empty libgit2 refspec lists select configured/default mappings; never
         // call a transfer with one when the exact advertised scope is absent.
         if present.is_empty() {
-            return Ok(());
+            return Ok(advertised);
         }
         self.transfer(
             &present,
             TransferAction::FetchTracking,
             Some((plan, target)),
-        )
-        .map(|_| ())
+        )?;
+        Ok(advertised)
     }
 
     /// Fetch only parsed advertised contexts and the advertised primary. The
@@ -215,32 +261,27 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         .map(|_| ())
     }
 
-    /// One guarded command at most. A fresh authenticated advertisement is the
-    /// only result evidence, including after a refused or ambiguously lost push.
-    #[allow(dead_code)] // Consumed by the later promotion orchestrator.
+    /// One guarded command at most, on the call's connection. A fresh
+    /// authenticated advertisement is the only result evidence, including after
+    /// a refused or ambiguously lost push; the push closes this connection as
+    /// it returns, so that advertisement is `observe_delete`'s, on a call of its
+    /// own.
     pub(crate) fn delete_exact(
         &mut self,
         plan: &RemoteRefPlan,
         target: &SynchronizationTarget,
         expected: git2::Oid,
-    ) -> Result<DeleteObservation, SshTransportError> {
-        self.validate_plan(plan, SshDirection::Delete)?;
-        let mappings = exact_mappings(plan, target, SshDirection::Delete);
-        let refs: Vec<_> = mappings.iter().map(String::as_str).collect();
-        if expected.is_zero() || !mappings_match_scope(plan, target, SshDirection::Delete, &refs) {
-            return Err(self
-                .context
-                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
-        }
-        let reference = mappings[0].strip_prefix(':').unwrap();
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        let (refs, reference) = self.delete_scope(plan, target, expected)?;
         // A retry must observe first: never blindly resend an ambiguous delete.
         if !self
             .fresh_advertisement()?
             .iter()
-            .any(|(name, _)| name == reference)
+            .any(|(name, _)| *name == reference)
         {
-            return Ok(DeleteObservation::Deleted);
+            return Ok(DeleteAttempt::Absent);
         }
+        let refs: Vec<_> = refs.iter().map(String::as_str).collect();
         match self.transfer(
             &refs,
             TransferAction::Delete(expected),
@@ -260,14 +301,44 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         super::operation_tests::checkpoint(
             super::operation_tests::Checkpoint::DeleteAttemptReturned,
         );
+        Ok(DeleteAttempt::Sent)
+    }
+
+    /// What a sent `delete_exact` left, from this call's own advertisement.
+    pub(crate) fn observe_delete(
+        &mut self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+        expected: git2::Oid,
+    ) -> Result<DeleteObservation, SshTransportError> {
+        let (_, reference) = self.delete_scope(plan, target, expected)?;
         let advertised = self.fresh_advertisement()?;
         Ok(
-            match advertised.iter().find(|(name, _)| name == reference) {
+            match advertised.iter().find(|(name, _)| *name == reference) {
                 None => DeleteObservation::Deleted,
                 Some((_, oid)) if *oid == expected => DeleteObservation::StillPresent(*oid),
                 Some((_, oid)) => DeleteObservation::Changed(*oid),
             },
         )
+    }
+
+    /// The exact delete mapping of `target` and the reference it deletes.
+    fn delete_scope(
+        &self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+        expected: git2::Oid,
+    ) -> Result<(Vec<String>, String), SshTransportError> {
+        self.validate_plan(plan, SshDirection::Delete)?;
+        let mappings = exact_mappings(plan, target, SshDirection::Delete);
+        let refs: Vec<_> = mappings.iter().map(String::as_str).collect();
+        if expected.is_zero() || !mappings_match_scope(plan, target, SshDirection::Delete, &refs) {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
+        }
+        let reference = mappings[0].strip_prefix(':').unwrap().to_owned();
+        Ok((mappings, reference))
     }
 
     /// Download only the selected Push destination's commit graph. Upload-pack
@@ -292,8 +363,48 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             SynchronizationTarget::Primary => plan.primary().clone(),
             SynchronizationTarget::Context { kind, item_id } => plan.context(*kind, item_id),
         };
+        // Upload-pack on the Push endpoint is a connection of its own, made
+        // here with its own attempt under this call's policy: one key
+        // submission, to the host this call finalized, with trust unchanged.
+        self.service
+            .recheck_ssh(self.prepared, self.context)
+            .map_err(|kind| self.context.with_kind(kind))?;
+        self.recheck_trust()?;
+        let attempt = CallbackAttempt::for_finalized_host(self.observed.clone());
+        let mut connection = remote
+            .connect_auth(
+                git2::Direction::Fetch,
+                Some(super::callbacks::build_callbacks(
+                    self.prepared,
+                    self.passphrase,
+                    self.agent,
+                    &attempt,
+                )),
+                None,
+            )
+            .map_err(|error| {
+                self.context
+                    .with_kind(backend_failure(&attempt, &error, self.passphrase.is_some()))
+            })?;
+        let observed = attempt.observed_host().ok_or_else(|| {
+            self.context
+                .with_kind(SshTransportErrorKind::HostVerificationUnavailable)
+        })?;
+        if attempt.key_submissions() != 1 {
+            return Err(self.context.with_kind(SshTransportErrorKind::KeyRejected));
+        }
+        self.service
+            .recheck_ssh(self.prepared, self.context)
+            .map_err(|kind| self.context.with_kind(kind))?;
+        self.recheck_trust()?;
+        if observed != self.observed {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::HostTrustChanged));
+        }
         let mut scoped = AuthenticatedSshRemote {
-            remote: &mut remote,
+            remote: connection.remote(),
+            attempt: &attempt,
             service: self.service,
             prepared: self.prepared,
             context: self.context,
@@ -400,67 +511,16 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             .recheck_ssh(self.prepared, self.context)
             .map_err(|kind| self.context.with_kind(kind))?;
         self.recheck_trust()?;
-        // Renew positive selected-key evidence before any transfer. A disconnected
-        // remote never inherits a prior connection's authentication evidence.
-        self.remote.disconnect().map_err(|_| {
-            self.context
-                .with_kind(SshTransportErrorKind::TransportUnavailable)
-        })?;
-        let attempt = CallbackAttempt::default();
-        let mut connection = self
-            .remote
-            .connect_auth(
-                if push {
-                    git2::Direction::Push
-                } else {
-                    git2::Direction::Fetch
-                },
-                Some(super::callbacks::build_callbacks(
-                    self.prepared,
-                    self.passphrase,
-                    self.agent,
-                    &attempt,
-                )),
-                None,
-            )
-            .map_err(|error| {
-                self.context
-                    .with_kind(backend_failure(&attempt, &error, self.passphrase.is_some()))
-            })?;
-        let observed = attempt.observed_host().ok_or_else(|| {
-            self.context
-                .with_kind(SshTransportErrorKind::HostVerificationUnavailable)
-        })?;
-        if attempt.key_submissions() != 1 {
-            return Err(self.context.with_kind(SshTransportErrorKind::KeyRejected));
-        }
+        // The transfer runs on the call's connection, under its callback
+        // attempt: no reconnect, no second key submission, and the host is
+        // the one this connection finalized. A closed connection refuses
+        // before libgit2 could reconnect; the attempt's refusal of a second
+        // credential request is the second line.
+        self.require_connected()?;
         #[cfg(test)]
-        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::Reconnected);
-        self.service
-            .recheck_ssh(self.prepared, self.context)
-            .map_err(|kind| self.context.with_kind(kind))?;
-        let current_trust = self
-            .service
-            .read_host_trust(&self.prepared.endpoint.authority)
-            .map_err(|kind| self.context.with_kind(kind))?;
-        if current_trust != self.trust || observed != self.observed {
-            return Err(self
-                .context
-                .with_kind(SshTransportErrorKind::HostTrustChanged));
-        }
+        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::TransferStarted);
         if action == TransferAction::Observe {
-            return connection
-                .list()
-                .map(|heads| {
-                    heads
-                        .iter()
-                        .map(|head| (head.name().to_owned(), head.oid()))
-                        .collect()
-                })
-                .map_err(|_| {
-                    self.context
-                        .with_kind(SshTransportErrorKind::ProtocolFailure)
-                });
+            return self.advertisement();
         }
         if let Some((plan, _)) = scope
             && !plan_matches_configuration(plan, self.context)
@@ -469,18 +529,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
         }
-        // The poll's set and returned OIDs belong to this authenticated download
-        // connection, never an earlier advertisement on a different connection.
+        // The poll's set and returned OIDs are this connection's advertisement,
+        // the one its download negotiates against.
         let poll_advertisement = if poll.is_some() {
-            connection
-                .list()
-                .map_err(|_| {
-                    self.context
-                        .with_kind(SshTransportErrorKind::ProtocolFailure)
-                })?
-                .iter()
-                .map(|head| (head.name().to_owned(), head.oid()))
-                .collect::<Vec<_>>()
+            self.advertisement()?
         } else {
             Vec::new()
         };
@@ -512,15 +564,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             None
         };
         let object_advertisement = if action == TransferAction::PushObjects {
-            let advertised = connection
-                .list()
-                .map_err(|_| {
-                    self.context
-                        .with_kind(SshTransportErrorKind::ProtocolFailure)
-                })?
-                .iter()
-                .map(|head| (head.name().to_owned(), head.oid()))
-                .collect::<Vec<_>>();
+            let advertised = self.advertisement()?;
             if !advertised.iter().any(|(name, _)| name == refspecs[0]) {
                 return Err(self
                     .context
@@ -532,10 +576,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         };
         let mut tracking_updates = Vec::new();
         if let Some(repository) = tracking_repository.as_ref() {
-            let heads = connection.list().map_err(|_| {
-                self.context
-                    .with_kind(SshTransportErrorKind::ProtocolFailure)
-            })?;
+            let heads = self.advertisement()?;
             for mapping in refspecs {
                 let (source, destination) = mapping
                     .strip_prefix('+')
@@ -546,8 +587,8 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                     })?;
                 let oid = heads
                     .iter()
-                    .find(|head| head.name() == source)
-                    .map(|head| head.oid())
+                    .find(|(name, _)| name == source)
+                    .map(|(_, oid)| *oid)
                     .ok_or_else(|| {
                         self.context
                             .with_kind(SshTransportErrorKind::ProtocolFailure)
@@ -560,8 +601,9 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             }
         }
         let rejected = std::cell::Cell::new(false);
+        let attempt = self.attempt;
         let mut callbacks =
-            super::callbacks::build_callbacks(self.prepared, self.passphrase, self.agent, &attempt);
+            super::callbacks::build_callbacks(self.prepared, self.passphrase, self.agent, attempt);
         if let TransferAction::Delete(expected) = action {
             super::callbacks::guard_delete(
                 &mut callbacks,
@@ -579,12 +621,13 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             callbacks.transfer_progress(|stats| attempt.poll_progress(|| (poll.progress)(stats)));
         }
         // libgit2 replaces prior options even on a connected remote. Every set
-        // carries policy; an unexpected further reconnect fails closed through
-        // the one-submission bound instead of silently changing credentials.
+        // carries the connection's policy and attempt: a reconnect inside
+        // libgit2 (a push closes its connection as it returns) asks that
+        // attempt for credentials again and fails closed.
         let result = if push {
             let mut options = git2::PushOptions::new();
             options.remote_callbacks(callbacks);
-            connection.remote().push(refspecs, Some(&mut options))
+            self.remote.push(refspecs, Some(&mut options))
         } else {
             let mut options = git2::FetchOptions::new();
             options.remote_callbacks(callbacks);
@@ -596,7 +639,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 options.download_tags(git2::AutotagOption::None);
                 options.prune(git2::FetchPrune::Off);
             }
-            connection.remote().download(refspecs, Some(&mut options))
+            self.remote.download(refspecs, Some(&mut options))
         };
         // Locked libgit2 reports GenericError after callback=false, not User.
         // Preserve explicit stop intent and never enter the tracking-write stage.
@@ -622,7 +665,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 .with_kind(if push && error.code() == git2::ErrorCode::NotFastForward {
                     SshTransportErrorKind::PushRejected
                 } else {
-                    backend_failure(&attempt, &error, self.passphrase.is_some())
+                    backend_failure(attempt, &error, self.passphrase.is_some())
                 })
         })?;
         #[cfg(test)]
@@ -752,6 +795,10 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 .with_kind(SshTransportErrorKind::HostTrustChanged));
         }
         Ok(())
+    }
+    /// The registry connection this call's key reads go through.
+    pub(in super::super) fn call_registry(&self) -> &crate::repository::CallRegistry {
+        &self.prepared.registry
     }
     pub(super) fn verified(&self) -> SshTransportVerified {
         SshTransportVerified {

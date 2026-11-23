@@ -3078,7 +3078,10 @@ fn seams_inventory(context: bool) -> Result<(), FixtureError> {
         ("discovery_pending", true),
     ] {
         fixed(db.execute_batch(&format!("CREATE TRIGGER seam BEFORE UPDATE ON remote_operation_records WHEN NEW.sync_checkpoint='{checkpoint}' AND OLD.sync_checkpoint IS NOT '{checkpoint}' BEGIN SELECT RAISE(ABORT,'fixed failure'); END")))?;
-        let advertisements = p.server.receive_advertisements();
+        // Push sessions: those that only listed, and the push's own, which
+        // lists and pushes on one connection (E-58).
+        let sessions = || p.server.receive_advertisements() + p.server.receive_updates().len();
+        let observed = sessions();
         assert!(matches!(
             p.sync_with(&p.b.reopened()?, restart(&conflict.request)),
             Err(SynchronizationError::Repository(RepositoryError {
@@ -3089,7 +3092,7 @@ fn seams_inventory(context: bool) -> Result<(), FixtureError> {
         fixed(db.execute_batch(DROP_SEAM))?;
         // Reaching the seam needed a new endpoint observation, not a new
         // commit or, once the push returned, another push.
-        assert!(p.server.receive_advertisements() > advertisements);
+        assert!(sessions() > observed);
         assert_eq!(
             inventory(&p, reference, n)?,
             (

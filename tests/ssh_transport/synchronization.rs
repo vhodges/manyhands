@@ -268,7 +268,7 @@ fn cancel_before_transfer() -> Result<(), FixtureError> {
     ))?;
     let called = Cell::new(false);
     let hook = crate::repository::transport::operation_tests::install_hook(move |point| {
-        if point == crate::repository::transport::operation_tests::Checkpoint::Reconnected
+        if point == crate::repository::transport::operation_tests::Checkpoint::TransferStarted
             && !called.replace(true)
         {
             service.cancel_remote_operation(&root, operation).unwrap();
@@ -1301,11 +1301,11 @@ fn context_deleted_before_push() -> Result<(), FixtureError> {
     let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
     let path = case.fixture.repository_path().to_owned();
     let deleted = Cell::new(false);
-    let hook = crate::repository::transport::operation_tests::install_hook(move |point| {
-        if point
-            == crate::repository::transport::operation_tests::Checkpoint::PushAdvertisementObserved
-            && !deleted.replace(true)
-        {
+    // Deleted once the fetch has observed it, before the push's call (E-60).
+    // A synchronization with nothing to update locally lists the push
+    // endpoint only on that call, whose listing refuses the absence.
+    let hook = crate::repository::observation_tests::install_hook(move |point| {
+        if point == RemoteOperationSafePoint::AfterFetch && !deleted.replace(true) {
             git2::Repository::open_bare(&path)
                 .unwrap()
                 .find_reference(CONTEXT_REF)
@@ -1416,8 +1416,9 @@ fn authoritative_replay_remote_removed() -> Result<(), FixtureError> {
         fixed(case.service.synchronize_remote(req.clone(), &mut session))?,
         expected
     );
-    // A completed empty-target remote handoff still replays, without scan or
-    // new tagged local authority, even after removal/another clean local commit.
+    // A completed remote handoff still replays, without scan or new tagged
+    // local authority, even after removal/another clean local commit. Its
+    // row is the primary's handoff at the published commit (P-4).
     case.service.set_observation_hook_for_testing(|| {
         panic!("completed authoritative replay scanned discovery")
     });
@@ -1427,13 +1428,18 @@ fn authoritative_replay_remote_removed() -> Result<(), FixtureError> {
     );
     assert_eq!(case.fixture.accepted_keys().len(), effects);
     assert_eq!(target_state(&case.root, &case.root)?, before);
+    let (SynchronizationOutcome::Published { oid, .. }
+    | SynchronizationOutcome::AlreadyCurrent { oid, .. }) = pending.authoritative
+    else {
+        return Err(FixtureError);
+    };
     assert_eq!(
         fixed(db.query_row(
             "SELECT target FROM operation_records WHERE operation_ulid=?1",
             [req.operation_id.to_string()],
             |r| r.get::<_, String>(0)
         ))?,
-        ""
+        format!("synchronization-index-v1/primary/{oid}")
     );
     Ok(())
 }
@@ -1586,11 +1592,11 @@ fn before_push_endpoint_changed() -> Result<(), FixtureError> {
     let (mut session, _) = session(vec![]);
     let mut req = request(&case);
     req.approval = None;
-    assert!(
-        case.service
-            .synchronize_remote(req.clone(), &mut session)
-            .is_err()
-    );
+    // The change after the push intent is answered as one after it (E-59).
+    assert!(matches!(
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
     drop(hook);
     let server = fixed(git2::Repository::open_bare(destination.repository_path()))?;
     assert!(server.find_reference("refs/heads/main").is_err());
@@ -1762,11 +1768,14 @@ fn authenticated_action_snapshot() -> Result<(), FixtureError> {
     let repo = fixed(git2::Repository::open(&case.root))?;
     // Keep Push explicitly pinned to A; alter only Fetch during Push auth. The
     // per-call Push endpoint remains valid, but the whole action snapshot does not.
+    // The push's call is the first Push call after the fetch, and it
+    // authenticates before its listing and the push intent (E-55): the change
+    // is refused there, before the intent, as before any other call.
     fixed(repo.remote_set_pushurl("origin", Some(&case.fixture.url())))?;
     let pushing = std::rc::Rc::new(Cell::new(false));
     let stage = pushing.clone();
     let hook = crate::repository::observation_tests::install_hook(move |point| {
-        if point == RemoteOperationSafePoint::BeforePush {
+        if point == RemoteOperationSafePoint::AfterFetch {
             stage.set(true);
         }
     });
@@ -1790,11 +1799,20 @@ fn authenticated_action_snapshot() -> Result<(), FixtureError> {
     let mut req = request(&case);
     req.approval = None;
     assert!(matches!(
-        case.service.synchronize_remote(req, &mut session),
-        Err(SynchronizationError::RecoveryRequired)
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::ExternalChange)
     ));
     drop(transport_hook);
     drop(hook);
+    let checkpoint: String = fixed(database(&case)?.query_row(
+        "SELECT sync_checkpoint FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    assert_eq!(
+        checkpoint, "fetch_observed",
+        "refused before the push intent"
+    );
     assert_eq!(
         fixed(
             fixed(git2::Repository::open_bare(case.fixture.repository_path()))?
@@ -1864,10 +1882,13 @@ fn prompt_action_snapshot_and_cancel() -> Result<(), FixtureError> {
 fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
     let case = prepare()?;
     let destination = alternate_push(&case)?;
+    // The push's call is the first Push call after the fetch; its snapshot
+    // check and preparation come before its listing and the push intent
+    // (E-56), so the race is refused there, unmapped, before the intent.
     let pushing = std::rc::Rc::new(Cell::new(false));
     let stage = pushing.clone();
     let hook = crate::repository::observation_tests::install_hook(move |point| {
-        if point == RemoteOperationSafePoint::BeforePush {
+        if point == RemoteOperationSafePoint::AfterFetch {
             stage.set(true);
         }
     });
@@ -1895,11 +1916,21 @@ fn scope_prepare_endpoint_race() -> Result<(), FixtureError> {
     let mut req = request(&case);
     req.approval = None;
     assert!(matches!(
-        case.service.synchronize_remote(req, &mut session),
-        Err(SynchronizationError::RecoveryRequired)
+        case.service.synchronize_remote(req.clone(), &mut session),
+        Err(SynchronizationError::Transport(error))
+            if error.kind == SshTransportErrorKind::EndpointChanged
     ));
     drop(transport_hook);
     drop(hook);
+    let checkpoint: String = fixed(database(&case)?.query_row(
+        "SELECT sync_checkpoint FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| r.get(0),
+    ))?;
+    assert_eq!(
+        checkpoint, "fetch_observed",
+        "refused before the push intent"
+    );
     assert_eq!(attempts.get(), 0);
     assert_eq!(prompts.borrow().len(), 0);
     assert_eq!(destination.accepted_keys().len(), effects);

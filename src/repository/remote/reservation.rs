@@ -214,13 +214,21 @@ fn mismatch() -> RepositoryError {
 }
 
 /// The sole allowed local-ID coexistence is the exact authoritative action's
-/// ordinary refresh handoff. Check every row, including failed/in-progress rows.
+/// refresh handoff: a refresh with the synchronization's hand-off target at
+/// its authoritative commit (P-4), or with no target, as older builds and a
+/// lifecycle's child begin it. Check every row, including failed/in-progress
+/// rows.
 fn validate_index_identity(
     tx: &Transaction<'_>,
     id: i64,
-    operation_id: OperationId,
+    record: &state::StoredRemoteOperation,
 ) -> Result<(), RepositoryError> {
-    let unrelated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (repository_id IS NULL OR repository_id!=?2 OR root_path!=(SELECT root_path FROM repositories WHERE id=?2) OR action!='refresh' OR target IS NULL OR target!=''))",params![operation_id.to_string(),id],|row|row.get(0)).map_err(|_| state::recovery_required())?;
+    let hand_off = state::synchronization_target(&record.target)
+        .zip(record.authority)
+        .map(|(target, authority)| {
+            crate::repository::recovery::synchronization_index_target(&target, authority.oid())
+        });
+    let unrelated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (repository_id IS NULL OR repository_id!=?2 OR root_path!=(SELECT root_path FROM repositories WHERE id=?2) OR action!='refresh' OR target IS NULL OR (target!='' AND target IS NOT ?3)))",params![record.operation_id.to_string(),id,hand_off],|row|row.get(0)).map_err(|_| state::recovery_required())?;
     if unrelated { Err(mismatch()) } else { Ok(()) }
 }
 
@@ -314,7 +322,11 @@ pub(in super::super) fn owned(
                 owner.operation_id,
             )?;
         }
-        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+        crate::repository::recovery::require_no_pending_local(
+            tx,
+            repository_id,
+            &crate::repository::recovery::CallScope::of_remote(&record.target),
+        )?;
     }
     Ok(record)
 }
@@ -1305,7 +1317,11 @@ impl RepositoryService {
             if record.generation != state::generation(tx, id)? {
                 return Err(state::recovery_required());
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if let Some(other) = state::read_operation_rows(tx, id, true)?
                 .into_iter()
                 .find(|other| other.id != record.id)
@@ -1398,14 +1414,25 @@ impl RepositoryService {
         }
     }
 
+    /// The reservation of a promotion's or a closure's child. A new child,
+    /// one with no row under its ID yet (`new`, as its caller read it before
+    /// this call, as a synchronization reads `existing`), always waits in
+    /// `reserving` for a live operation in its way, whatever refused it: a
+    /// live sync hand-off of its item or of the primary, which a close or a
+    /// promotion waits for (decision 34), a live holder of the reservation,
+    /// or a lease or the registry's lock held while an operation is at work.
+    /// Its parent holds nothing while it waits. A child whose row is there
+    /// makes one attempt and is answered at once, as a synchronization that
+    /// takes up its own row is.
     pub(in super::super) fn reserve_promotion_child(
         &self,
         root: &Path,
         operation_id: OperationId,
         target: &RemoteOperationTarget,
         execution: &crate::repository::promotion::record::ChildExecution,
+        new: bool,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
-        match self.reserve_remote_operation_kind(
+        let reserve = || match self.reserve_remote_operation_kind(
             root,
             operation_id,
             target,
@@ -1415,6 +1442,11 @@ impl RepositoryService {
         )? {
             RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
             RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
+        };
+        if new {
+            self.reserving(root, operation_id, reserve)
+        } else {
+            reserve()
         }
     }
 
@@ -1543,7 +1575,7 @@ impl RepositoryService {
                     && record.phase == RemoteOperationPhase::Completed
                     && is_sync(target)
                 {
-                    validate_index_identity(tx, repository_id, operation_id)?;
+                    validate_index_identity(tx, repository_id, &record)?;
                 } else if local_id {
                     return Err(mismatch());
                 }
@@ -1554,7 +1586,19 @@ impl RepositoryService {
             if local_id {
                 return Err(mismatch());
             }
-            crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            let call = crate::repository::recovery::CallScope::of_remote(target);
+            crate::repository::recovery::require_no_pending_local(tx, repository_id, &call)?;
+            // A new synchronization is held by a classified one of its own
+            // item, or of the primary (design decision 16), that has not yet
+            // begun its hand-off row (design decision 19, question 3). A
+            // poll, a promotion and a close are not.
+            if is_sync(target) {
+                crate::repository::recovery::require_no_remote_index_debt(
+                    tx,
+                    repository_id,
+                    &call,
+                )?;
+            }
             if closure_holds_context(tx, repository_id, target)? {
                 return Ok(RemotePollReservationOutcome::Reservation(
                     RemoteReservationOutcome::Busy,
@@ -1967,7 +2011,11 @@ impl RepositoryService {
             ) {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if record.generation != state::generation(tx, id)?
                 || target.action() != RemoteOperationAction::Poll
                 || poll_kind == state::PollKind::Observe
@@ -3090,6 +3138,9 @@ impl RepositoryService {
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         self.restart_synchronization_guarded(root, operation_id, target, None)
     }
+    /// The restart of a promotion's or a closure's child, which takes up its
+    /// own row: answered at once, with no wait, as a synchronization's
+    /// restart is.
     pub(in super::super) fn restart_promotion_child(
         &self,
         root: &Path,
@@ -3126,7 +3177,7 @@ impl RepositoryService {
                 record.priority,
             )?;
             if record.authority.is_some() {
-                validate_index_identity(tx, id, operation_id)?;
+                validate_index_identity(tx, id, &record)?;
             } else if tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
@@ -3150,7 +3201,11 @@ impl RepositoryService {
             if foreign_conflict {
                 return Err(state::recovery_required());
             }
-            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            crate::repository::recovery::require_no_pending_local(
+                tx,
+                id,
+                &crate::repository::recovery::CallScope::of_remote(target),
+            )?;
             if record.generation != state::generation(tx, id)?
                 || record.sync_checkpoint.is_none()
                     && record.completed_step == Some(RemoteOperationSafePoint::BeforeLocalMutation)
@@ -3640,7 +3695,7 @@ impl RepositoryService {
             if record.authority.is_none() || record.phase != RemoteOperationPhase::Completed {
                 return Err(state::recovery_required());
             }
-            validate_index_identity(tx, id, operation_id)?;
+            validate_index_identity(tx, id, &record)?;
             tx.execute("UPDATE remote_operation_records SET index_pending=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
             Ok(())
         })

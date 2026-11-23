@@ -1270,37 +1270,76 @@ fn comment_publication_competing_plausible_checkpoints_require_recovery() {
 #[test]
 fn comment_publication_authoritative_child_allows_only_its_plain_refresh_and_reopen() {
     // Durable-authority shape is arranged here; actual SSH authority is Task 5.
-    let f = Fixture::new();
-    let (receipt, _, _) = saved(
-        f.service
-            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
-            .unwrap(),
-    );
-    f.configure_remote();
-    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
-    let target = RemoteOperationTarget::for_context(
-        &plan,
-        RemoteOperationAction::SynchronizeContext,
-        receipt.kind,
-        receipt.item_id.clone(),
-    )
-    .unwrap();
-    f.service
-        .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+    // The child's hand-off is its synchronization's replay, which refreshes
+    // under a row of the comment's item at the authoritative commit (P-4);
+    // a plain refresh under its ID with no target, as an older build began
+    // the hand-off, is still allowed.
+    for by_replay in [true, false] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        f.configure_remote();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            receipt.kind,
+            receipt.item_id.clone(),
+        )
         .unwrap();
-    f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
-        params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
-    assert!(matches!(
         f.service
-            .refresh_repository(RefreshRepositoryRequest {
-                root: f.root.path().into(),
-                operation_id: receipt.synchronization_id
-            })
-            .unwrap(),
-        RefreshOutcome::Refreshed { .. }
-    ));
-    RepositoryService::open_at(f.data.path()).unwrap();
-    assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=''", [receipt.synchronization_id.to_string()], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+            .unwrap();
+        f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
+            params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
+        let hand_off = if by_replay {
+            let synchronized = SynchronizationTarget::Context {
+                kind: receipt.kind,
+                item_id: receipt.item_id.clone(),
+            };
+            assert_eq!(
+                f.service
+                    .synchronize_remote(
+                        SynchronizeRemoteRequest {
+                            root: f.root.path().into(),
+                            operation_id: receipt.synchronization_id,
+                            target: synchronized.clone(),
+                            approval: None,
+                            confirmed_identity: None,
+                            restart: false,
+                        },
+                        &mut SessionCredentials::new(NoPrompt),
+                    )
+                    .unwrap(),
+                SynchronizationResult::Complete(SynchronizationOutcome::AlreadyCurrent {
+                    target: synchronized,
+                    oid: receipt.checkpoint_oid,
+                })
+            );
+            format!(
+                "synchronization-index-v1/{}/{}/{}",
+                authoring_kind_segment(&receipt.kind),
+                receipt.item_id,
+                receipt.checkpoint_oid
+            )
+        } else {
+            assert!(matches!(
+                f.service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: f.root.path().into(),
+                        operation_id: receipt.synchronization_id
+                    })
+                    .unwrap(),
+                RefreshOutcome::Refreshed { .. }
+            ));
+            String::new()
+        };
+        RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=?2", params![receipt.synchronization_id.to_string(), hand_off], |r| r.get::<_, i64>(0)).unwrap(), 1, "by replay: {by_replay}");
+    }
 }
 
 #[test]
@@ -1414,7 +1453,10 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
         .db()
         .query_row("SELECT id FROM repositories", [], |r| r.get::<_, i64>(0))
         .unwrap();
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_err());
+    // Asked by a call of the comment's own item, which the waiting comment
+    // holds.
+    let own = recovery::CallScope::item(&f.item);
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_err());
     let (again, state, indexing) = saved(
         f.service
             .retry_comment_publication(
@@ -1443,7 +1485,7 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
             .unwrap()
             .refresh_required
     );
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_ok());
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_ok());
 }
 
 #[test]
@@ -2489,4 +2531,156 @@ fn a_pending_publication_keeps_the_operation_its_synchronization_was_refused_for
     assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
     assert_eq!(error.operation, RepositoryOperation::SubmitComment);
     assert_eq!(error.blocker(), Some(&blocker));
+}
+
+/// A comment's first submission proves its receipt from Git once: the local
+/// checkpoint proves it and records it, and the publication that follows
+/// takes the recorded receipt, of the same commit, without proving it again.
+/// The receipt it answers with is the recorded one.
+#[test]
+fn a_comment_receipt_is_proved_once() {
+    let f = Fixture::new();
+    let request = f.request();
+    let before = comment_publication::receipt_proofs_for_testing();
+    let (receipt, publication, indexing) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert_eq!(
+        comment_publication::receipt_proofs_for_testing() - before,
+        1,
+        "the receipt's proofs"
+    );
+    assert!(matches!(
+        publication,
+        CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::NoPublicationRemote
+        }
+    ));
+    assert!(!indexing.local_pending && !indexing.remote_pending);
+    assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+    let (checkpoint, created_at): (Option<String>, Option<String>) = f
+        .db()
+        .query_row(
+            "SELECT checkpoint_oid, created_at FROM comment_publication_bindings
+              WHERE operation_ulid = ?1",
+            [receipt.operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(checkpoint, Some(receipt.checkpoint_oid.to_string()));
+    assert!(created_at.is_some());
+}
+
+/// A binding corrupted after registry open is audited where it is reused,
+/// as the migration that every such call ran used to audit it: by the
+/// submission that takes the binding up again, and by a refresh begun
+/// under the binding's synchronization ID. Each property the migration
+/// checks is a row: the root's digest, the submission's target, and the
+/// correlation of the synchronization's hand-off row.
+#[test]
+fn a_reused_comment_binding_corrupted_after_open_is_refused() {
+    let mut refusals = Vec::new();
+    for corruption in ["root digest", "target", "hand-off"] {
+        let f = Fixture::new();
+        let request = f.request();
+        saved(
+            f.service
+                .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let (row, root, synchronization): (i64, String, String) = f
+            .db()
+            .query_row(
+                "SELECT o.id,o.root_path,b.synchronization_ulid FROM comment_publication_bindings b
+                  JOIN operation_records o ON o.id=b.local_record_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let root = PathBuf::from(root);
+        let synchronization = OperationId::parse(&synchronization).unwrap();
+        let repository = Repository::open(&root).unwrap();
+        let record = recovery::RecoveryRecord {
+            id: row,
+            is_new: false,
+            is_pending: false,
+            completed_step: None,
+        };
+        let reuse = || {
+            f.service
+                .bind_comment_publication(&repository, &root, &request.comment, record)
+                .map(|_| ())
+        };
+        let hand_off = || {
+            recovery::require_refresh_can_begin(
+                &f.db(),
+                &root,
+                RepositoryOperation::RefreshRepository,
+                synchronization,
+            )
+        };
+        // Intact, the binding is taken up again, and no refresh is due
+        // under its synchronization, which holds no authoritative result.
+        reuse().unwrap();
+        assert_eq!(
+            hand_off().unwrap_err().kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        match corruption {
+            "root digest" => f
+                .db()
+                .execute(
+                    "UPDATE comment_publication_bindings SET root_digest=zeroblob(32)",
+                    [],
+                )
+                .unwrap(),
+            "target" => f
+                .db()
+                .execute(
+                    "UPDATE operation_records SET target=target||'-substituted' WHERE id=?1",
+                    [row],
+                )
+                .unwrap(),
+            _ => f
+                .db()
+                .execute(
+                    "INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at)
+                     VALUES(?1,?2,'refresh',?3,'created',1)",
+                    params![
+                        root.to_str(),
+                        synchronization.to_string(),
+                        format!(
+                            "synchronization-index-v1/document/{}/{}",
+                            canonical::ItemId::generate(),
+                            "0".repeat(40)
+                        )
+                    ],
+                )
+                .unwrap(),
+        };
+        refusals.push((
+            corruption,
+            reuse().err().map(|error| error.kind),
+            hand_off().err().map(|error| error.kind),
+        ));
+    }
+    let refused = Some(RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        refusals,
+        [
+            ("root digest", refused, refused),
+            ("target", refused, refused),
+            ("hand-off", refused, refused),
+        ]
+    );
 }

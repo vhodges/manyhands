@@ -25,7 +25,6 @@ use crate::{
     repository::{
         ExpectedPathObservation, FailurePoint, OperationFamily, OperationId, ReadError,
         RepositoryError, RepositoryOperation, RepositoryService, cache_write_guard,
-        migrate_registry, open_registry,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect, Outcome,
@@ -918,8 +917,7 @@ impl RepositoryService {
             .unwrap_or_else(|| Path::new("."));
         let _cache_guard = cache_write_guard(&self.registry_path, data_directory, operation)?;
         self.require_index_available(operation, None)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})?;
-        migrate_registry(&mut connection)?;
+        let mut connection = self.open_migrated_registry(operation)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let value = write(&transaction)?;
         transaction.commit()?;

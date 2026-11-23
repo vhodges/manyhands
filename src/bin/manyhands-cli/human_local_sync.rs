@@ -51,15 +51,23 @@ fn observe_line(root: &str, item: &str) -> String {
     )
 }
 
-/// What an observation's refusal adds: a save, when the item's effective copy
-/// is primary's and a save of it is allowed, as lifecycle's `ContextMissing`
-/// way out. A context that has lost the item, or a closed ticket, gets none.
-pub(crate) fn no_context(item: &ItemDto, root: &str, id: &str) -> Option<String> {
+/// What an observation's refusal adds: a save, when the item has no editing
+/// context of its own and a save of it is allowed, as lifecycle's
+/// `ContextMissing` way out. `has_context` is the library's answer to whether
+/// the item has one (`item_has_context`), not a reading of `item`: its
+/// presented copy is primary's also when its context has lost the file. A
+/// context that has lost the item, or a closed ticket, gets none.
+pub(crate) fn no_context(
+    item: &ItemDto,
+    has_context: bool,
+    root: &str,
+    id: &str,
+) -> Option<String> {
     let closed = item
         .closure
         .as_ref()
         .is_some_and(|closure| closure.state == ClosureState::Closed);
-    (item.context.kind == ItemContextKind::Primary && !closed).then(|| {
+    (item.context.kind == ItemContextKind::Primary && !has_context && !closed).then(|| {
         format!(
             "next: {}\n{}",
             render::save_line(item.kind, root, id),

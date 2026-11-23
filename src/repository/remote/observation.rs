@@ -1,7 +1,9 @@
 //! Complete authenticated advertisements; no transfer or Git mutation.
 #![allow(clippy::result_large_err)]
 use super::*;
-use crate::repository::{OperationId, RepositoryError, RepositoryService, keys::*, transport::*};
+use crate::repository::{
+    CallRegistry, OperationId, RepositoryError, RepositoryService, keys::*, transport::*,
+};
 use std::{fmt, path::PathBuf};
 
 /// Process-only equality evidence. Never serialized or included in Debug/errors.
@@ -134,15 +136,38 @@ impl RepositoryService {
         root: &std::path::Path,
         plan: &RemoteRefPlan,
     ) -> Result<ObservationConfiguration, RepositoryError> {
+        self.observation_configuration_reading(None, root, plan)
+    }
+
+    /// `observation_configuration` during the remote call `call`: its key
+    /// read goes through the call's registry connection (design decision
+    /// 36), and reads the current rows as the other does.
+    pub(in super::super) fn observation_configuration_in(
+        &self,
+        call: &CallRegistry,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<ObservationConfiguration, RepositoryError> {
+        self.observation_configuration_reading(Some(call), root, plan)
+    }
+
+    pub(super) fn observation_configuration_reading(
+        &self,
+        call: Option<&CallRegistry>,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<ObservationConfiguration, RepositoryError> {
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
-        let selected = self
-            .list_shared_keys()?
-            .into_iter()
-            .find(|key| key.selected)
-            .map(|key| {
-                let source = KeySourceToken::observe(&key.private_key_path).ok();
-                (key.id, key.private_key_path, source)
-            });
+        let selected = match call {
+            Some(call) => self.list_shared_keys_in(call)?,
+            None => self.list_shared_keys()?,
+        }
+        .into_iter()
+        .find(|key| key.selected)
+        .map(|key| {
+            let source = KeySourceToken::observe(&key.private_key_path).ok();
+            (key.id, key.private_key_path, source)
+        });
         Ok(ObservationConfiguration {
             plan: plan.clone(),
             fetch: crate::repository::transport::endpoint::configured_remote_endpoint(
