@@ -172,6 +172,7 @@ fn index_status_of_an_interrupted_refresh_is_stale_and_says_why() {
         &document_source(DOCUMENT_A, "A", ""),
     );
     refresh_completely(&enabled.service, &fixture.root);
+    items::write_again(&document);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, "plain\n").unwrap());
@@ -183,6 +184,26 @@ fn index_status_of_an_interrupted_refresh_is_stale_and_says_why() {
     let status = enabled.service.index_status(&repo).unwrap();
 
     assert_eq!(status.state, IndexStatusState::Stale);
+    // Stale from the context the refresh found changing, which it marked
+    // dirty, and not from a mark on the repository as a whole.
+    let (behind, dirty): (bool, Vec<String>) = {
+        let index = items::index(enabled.data_directory.path());
+        let behind = index
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let dirty = index
+            .prepare("SELECT worktree_path FROM contexts WHERE dirty = 1")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (behind, dirty)
+    };
+    assert!(!behind);
+    assert_eq!(dirty, [repo.root().to_str().unwrap()]);
     assert!(status.refreshed_at.is_some());
     assert_eq!(status.problem_count, Some(status.problems.len() as u64));
     assert!(
@@ -512,6 +533,14 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "worktree": null,
             "updated_at": null,
             "failure_code": "source_missing",
+            "request_id": null,
+            "command": null,
+            "author": null,
+            "host": null,
+            "pid": null,
+            "started_at": null,
+            "comment_id": null,
+            "live": null,
         })
     );
     assert_eq!(remote.family, OperationFamily::Remote);
@@ -522,6 +551,22 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
     assert_eq!(remote.next_action, None);
     assert!(remote.updated_at.is_some());
     assert_eq!(remote.failure_code, None);
+    // A reservation made through the service names this process; the rows
+    // inserted above name no one. This process always exists, so a row of
+    // its own is judged by its heartbeat alone, and a remote row has none:
+    // the call that reserved it has returned, and nothing works under it.
+    assert_eq!(
+        (
+            remote.attribution.host.as_deref(),
+            remote.attribution.pid,
+            remote.attribution.live
+        ),
+        (
+            Some(manyhands::repository::this_host().as_str()),
+            Some(i64::from(std::process::id())),
+            Some(false)
+        )
+    );
     assert_eq!(
         serde_json::to_value(local).unwrap(),
         json!({
@@ -537,6 +582,14 @@ fn the_three_stores_appear_in_one_list_ordered_by_operation_id() {
             "worktree": null,
             "updated_at": STORED_AT_TEXT,
             "failure_code": null,
+            "request_id": null,
+            "command": null,
+            "author": null,
+            "host": null,
+            "pid": null,
+            "started_at": null,
+            "comment_id": null,
+            "live": null,
         })
     );
     assert_eq!(
@@ -1076,6 +1129,31 @@ fn index_status_is_stale_when_the_index_holds_an_item_twice() {
         enabled.service.list_documents(&repo).unwrap().index.state,
         IndexState::Stale
     );
+
+    // The same item in the primary context and in its own worktree's, the
+    // worktree there: what the first edit of an item the primary holds
+    // makes, which is not behind.
+    fs::create_dir_all(repo.root().join(".manyhands/worktrees").join(DOCUMENT_A)).unwrap();
+    items::index(enabled.data_directory.path())
+        .execute(
+            "UPDATE contexts
+                SET worktree_path = replace(worktree_path, '/.manyhands/worktrees/x',
+                                            '/.manyhands/worktrees/' || ?1),
+                    branch = 'manyhands/document/' || ?1, item_id = ?1
+              WHERE kind = 'active'",
+            [DOCUMENT_A],
+        )
+        .unwrap();
+
+    let status = enabled.service.index_status(&repo).unwrap();
+
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(2));
+    assert_eq!(status.item_count, Some(4));
+    assert_eq!(
+        enabled.service.list_documents(&repo).unwrap().index.state,
+        IndexState::Current
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -1351,7 +1429,8 @@ fn status_lists_closure_parent_and_hides_its_reservation() {
     assert_eq!(operation.action, OperationAction::Close);
     assert_eq!(operation.state, "closing");
     assert_eq!(operation.completed_step.as_deref(), Some("closing"));
-    assert_eq!(operation.next_action, None);
+    // An unfinished parent is offered resume (D5 decision 10, E-1).
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
     assert_eq!(operation.item_id.as_deref(), Some(TICKET_A));
     assert_eq!(operation.failure_code, None);
     assert_eq!(&service.show_operation(&repo, id).unwrap(), operation);
@@ -1391,13 +1470,29 @@ fn a_synchronization_and_its_index_refresh_share_an_id_and_are_both_listed() {
     assert_eq!(alone.items[0].family, OperationFamily::Remote);
     assert_eq!(service.show_operation(&repo, id).unwrap(), alone.items[0]);
 
-    // The refresh that hands it to the index, as synchronization begins it.
-    insert_local(data, Some(OPERATION_A), "refresh", "indexing", None);
+    // The refresh that hands it to the index, as synchronization begins it:
+    // the primary's hand-off at the published commit (P-4), owing only its
+    // hand-off.
+    insert_local(
+        data,
+        Some(OPERATION_A),
+        "refresh",
+        "indexing",
+        Some("authoritative_observed"),
+    );
     items::index(data)
-        .execute("UPDATE operation_records SET target = ''", [])
+        .execute(
+            "UPDATE operation_records SET target = ?1",
+            [format!(
+                "synchronization-index-v1/primary/{}",
+                operations::PUBLISHED_OID
+            )],
+        )
         .unwrap();
 
     let list = service.list_operations(&repo).unwrap();
+    // It is reported as a refresh, of no item: the primary's.
+    assert_eq!(list.items[0].item_id, None);
     let pair: Vec<_> = list
         .items
         .iter()
@@ -1692,5 +1787,490 @@ fn an_index_problem_with_an_empty_stored_path_has_none() {
     assert_eq!(problem.code, ProblemCode::ContextProblem);
     assert_eq!(problem.path, None);
     assert_eq!(problem.worktree.as_deref(), repo.root().to_str());
+    assert_git_transport_uninitialized();
+}
+
+/// A promotion parent's own journal row, at `step`, as a run that stopped
+/// there leaves it. `refusal` is the category a consent refusal stored.
+fn insert_promotion(data: &std::path::Path, id: OperationId, step: &str, refusal: Option<&str>) {
+    items::index(data)
+        .execute(
+            "INSERT INTO document_promotions (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                base_oid, updated_at, refusal_category
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', ?3,
+                      '2222222222222222222222222222222222222222', ?4, ?5
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                DOCUMENT_A,
+                step,
+                operations::STORED_AT,
+                refusal
+            ],
+        )
+        .unwrap();
+}
+
+/// A closure parent's own journal row, at `step` (before `closing`, so no
+/// closure checkpoint), as a run that stopped there leaves it. `refusal` is
+/// the category a consent refusal stored.
+fn insert_closure(data: &std::path::Path, id: OperationId, step: &str, refusal: Option<&str>) {
+    items::index(data)
+        .execute(
+            "INSERT INTO ticket_closures (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                context_oid, base_oid, updated_at, refusal_category, closure_kind
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', ?3,
+                      '1111111111111111111111111111111111111111',
+                      '2222222222222222222222222222222222222222', ?4, ?5, 'record'
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                TICKET_A,
+                step,
+                operations::STORED_AT,
+                refusal
+            ],
+        )
+        .unwrap();
+}
+
+/// The one operation the list holds, and the same one shown by its ID.
+fn the_one_listed(
+    service: &manyhands::repository::RepositoryService,
+    repo: &ResolvedRepository,
+    id: OperationId,
+) -> OperationDto {
+    let list = service.list_operations(repo).unwrap();
+    let [operation] = &list.items[..] else {
+        panic!("{list:?}");
+    };
+    assert_eq!(operation.operation_id, Some(id.to_string()));
+    assert_eq!(&service.show_operation(repo, id).unwrap(), operation);
+    operation.clone()
+}
+
+#[test]
+fn an_unfinished_promotion_lists_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_promotion(data, id, "confirmed", None);
+
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Promote);
+    assert_eq!(operation.state, "confirmed");
+    // The run stopped; `operation resume` continues it (D5 decision 10).
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+
+    // A finished promotion owes nothing: shown by its ID, nothing offered.
+    // `complete` carries the columns its record requires of that step.
+    for (step, columns) in [
+        (
+            "complete",
+            "context_oid = '1111111111111111111111111111111111111111',
+             integration_kind = 'merged',
+             integration_oid = '3333333333333333333333333333333333333333',
+             publication_category = 'published'",
+        ),
+        ("superseded", "updated_at = updated_at"),
+    ] {
+        items::index(data)
+            .execute(
+                &format!("UPDATE document_promotions SET step = ?1, {columns}"),
+                [step],
+            )
+            .unwrap();
+        assert!(service.list_operations(&repo).unwrap().items.is_empty());
+        let shown = service.show_operation(&repo, id).unwrap();
+        assert_eq!(shown.state, step);
+        assert_eq!(shown.next_action, None);
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_unfinished_closure_lists_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_closure(data, id, "context_synchronized", None);
+
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.state, "context_synchronized");
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_held_parent_still_lists_resume() {
+    use manyhands::repository::{
+        RequestId,
+        request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
+    };
+    let (fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let id = OperationId::new();
+    insert_closure(data, id, "confirmed", None);
+    // The request that began the closure is still accepted, as a stop, a
+    // quit or a crash leaves it: it holds the parent.
+    let request_id = RequestId::parse("01M4CC0VN2K8DBHNMZ46NTX5JK").unwrap();
+    let scope = ScopeKey::for_repository(&fixture.root).unwrap();
+    service
+        .insert_request(&NewRequest {
+            request_id,
+            scope: scope.clone(),
+            command: "ticket close".to_owned(),
+            target: TICKET_A.to_owned(),
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(request_id),
+                "ticket close",
+                &scope,
+                TICKET_A,
+            )
+            .finish(),
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: OperationFamily::Remote,
+                operation_id: id,
+            }],
+        })
+        .unwrap();
+    assert_eq!(
+        items::index(data)
+            .query_row(
+                "SELECT count(*) FROM request_records WHERE state = 'accepted'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    // Listed with resume all the same: the resume names the holding
+    // request (`original_request_required`), which is what goes on.
+    let operation = the_one_listed(service, &repo, id);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn an_abandoned_refused_parent_lists_no_resume() {
+    let (_fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let promotion = OperationId::new();
+    let closure = OperationId::new();
+    // A refused parent is always abandoned: the schema ties the two.
+    insert_promotion(data, promotion, "abandoned", Some("external_change"));
+    insert_closure(data, closure, "abandoned", Some("reconfirmation_required"));
+
+    // A consent refusal ended each: nothing is left to continue.
+    assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    for (id, action) in [
+        (promotion, OperationAction::Promote),
+        (closure, OperationAction::Close),
+    ] {
+        let shown = service.show_operation(&repo, id).unwrap();
+        assert_eq!(shown.action, action);
+        assert_eq!(shown.state, "abandoned");
+        assert_eq!(shown.next_action, None);
+    }
+    assert_git_transport_uninitialized();
+}
+
+// ---------------------------------------------------------------------
+// Table A of the fast-writes design: which copy of an item the status
+// reads present once each context's rows come only from that context.
+// The worlds are in `support::presentation`. Table A's row on
+// relationships and short codes has no row here: no status read resolves
+// a dependency, a parent or a short code.
+// ---------------------------------------------------------------------
+
+use manyhands::repository::ConfigurationState;
+use rusqlite::OptionalExtension;
+use support::presentation::{
+    self, BROKEN_ON_PRIMARY, EDITED, EDITED_DOCUMENT, Needs, Row, World, worktree_relative,
+};
+
+/// Each problem `index status` lists, as where it is presented: its code,
+/// its path and its worktree.
+fn listed_problems(
+    status: &manyhands::repository::IndexStatusDto,
+) -> Vec<(ProblemCode, Option<&str>, Option<&str>)> {
+    status
+        .problems
+        .iter()
+        .map(|problem| {
+            (
+                problem.code,
+                problem.path.as_deref(),
+                problem.worktree.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// `index status` of a repository whose items are held in two contexts,
+/// beside one only the primary holds: current, and each item counted once.
+fn an_item_only_on_the_primary_is_presented_from_it() {
+    let world = presentation::first_edits();
+    let status = world.service().index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    // Three items edited in worktrees and the one only on the primary.
+    assert_eq!(status.item_count, Some(4));
+}
+
+/// `index status`, the repository list's problem count and the remote
+/// snapshot: what only the primary has under the edited items' directories
+/// is no problem anyone is shown, and the snapshot holds each item once,
+/// from its worktree.
+fn a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale() {
+    let world = presentation::first_edits();
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(listed_problems(&status), []);
+    assert_eq!(status.problem_count, Some(0));
+    assert_eq!(status.state, IndexStatusState::Current);
+    // The primary and the three worktrees.
+    assert_eq!(status.context_count, Some(4));
+    let listed = service.list_repositories().unwrap();
+    assert_eq!(listed.items[0].problem_count, 0);
+
+    let snapshot = service.repository_snapshot(&world.root).unwrap();
+    for id in [EDITED, BROKEN_ON_PRIMARY, EDITED_DOCUMENT] {
+        let copies: Vec<_> = snapshot
+            .items
+            .iter()
+            .filter(|item| item.id.to_string() == id)
+            .map(|item| item.context.clone())
+            .collect();
+        assert_eq!(copies, [world.worktree(id)], "{id}");
+    }
+    service.remote_snapshot(&world.root).unwrap();
+}
+
+/// `index status` and the repository list once only the primary context
+/// is left: one context, the one item, no problem.
+fn assert_only_the_primary_is_left(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(1));
+    assert_eq!(status.item_count, Some(1));
+    assert_eq!(listed_problems(&status), []);
+    assert_eq!(
+        service.list_repositories().unwrap().items[0].problem_count,
+        0
+    );
+}
+
+fn a_released_worktree_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::released());
+}
+
+fn a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::rows_deleted());
+}
+
+fn a_worktree_removed_outside_presents_the_primary_copy_again() {
+    assert_only_the_primary_is_left(&presentation::removed_outside());
+}
+
+/// `index status`, the repository list, `repo inspect` and the remote
+/// snapshot of a repository whose edited ticket's worktree an outside
+/// `git checkout` made invalid. Its problem is presented where it is
+/// today: one problem about the worktree, at its path, in the primary
+/// context. The invalid worktree is counted as no context, as it is today.
+fn assert_the_invalid_worktree_is_presented_as_today(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    let root = world.root_text();
+    let worktree = worktree_relative(EDITED);
+    assert_eq!(
+        listed_problems(&status),
+        [(
+            ProblemCode::ContextProblem,
+            Some(worktree.as_str()),
+            Some(root.as_str())
+        )]
+    );
+    assert_eq!(status.problem_count, Some(1));
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.item_count, Some(1));
+    assert_eq!(status.context_count, Some(1));
+    assert_eq!(
+        service.list_repositories().unwrap().items[0].problem_count,
+        1
+    );
+    let inspected = service.inspect_repository(&world.root).unwrap();
+    assert_eq!(inspected.configuration.state, ConfigurationState::Valid);
+    assert!(
+        inspected.configuration.problems.is_empty(),
+        "{:?}",
+        inspected.configuration.problems
+    );
+    service.remote_snapshot(&world.root).unwrap();
+}
+
+fn an_invalid_worktree_stored_as_its_own_context_presents_its_problems_as_today() {
+    assert_the_invalid_worktree_is_presented_as_today(&presentation::invalid_worktree(true));
+}
+
+/// As above, and the refresh stored the worktree as its own context, kind
+/// `invalid`, with its problem.
+fn an_invalid_worktree_is_stored_as_its_own_context_with_its_problems() {
+    let world = presentation::invalid_worktree(false);
+    assert_the_invalid_worktree_is_presented_as_today(&world);
+    let index = world.index();
+    let stored: Option<(i64, String, Option<String>)> = index
+        .query_row(
+            "SELECT id, kind, item_id FROM contexts WHERE worktree_path = ?1",
+            [world.worktree_text(EDITED)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .unwrap();
+    let Some((context, kind, item)) = stored else {
+        panic!("no context is stored for the invalid worktree");
+    };
+    assert_eq!((kind.as_str(), item.as_deref()), ("invalid", Some(EDITED)));
+    let problems: i64 = index
+        .query_row(
+            "SELECT COUNT(*) FROM problems WHERE context_id = ?1 AND code = 'context'",
+            [context],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        problems, 1,
+        "the worktree's problem is the invalid context's"
+    );
+}
+
+/// `index status` of a ticket and a document only their worktrees hold.
+fn an_item_only_in_a_worktree_is_presented_from_it() {
+    let world = presentation::new_items_in_worktrees();
+    let status = world.service().index_status(&world.repo).unwrap();
+    assert_eq!(status.state, IndexStatusState::Current);
+    assert_eq!(status.context_count, Some(3));
+    assert_eq!(status.item_count, Some(2));
+    assert_eq!(listed_problems(&status), []);
+}
+
+/// `index status`, the repository list and `repo inspect` of a repository
+/// whose configuration is invalid: no item worktree is counted as a
+/// context or for its item, and the problems are the configuration's.
+fn assert_no_item_context_is_presented(world: &World) {
+    let service = world.service();
+    let status = service.index_status(&world.repo).unwrap();
+    assert_eq!(status.context_count, Some(1));
+    // The edited ticket's primary copy; the new ticket is not presented.
+    assert_eq!(status.item_count, Some(1));
+    assert!(
+        !status.problems.is_empty()
+            && status
+                .problems
+                .iter()
+                .all(|problem| problem.code == ProblemCode::MalformedConfiguration),
+        "{:?}",
+        status.problems
+    );
+    let listed = &service.list_repositories().unwrap().items[0];
+    assert_eq!(listed.configuration.state, ConfigurationState::Invalid);
+    assert_eq!(Some(listed.problem_count), status.problem_count);
+    assert_eq!(
+        service
+            .inspect_repository(&world.root)
+            .unwrap()
+            .configuration
+            .state,
+        ConfigurationState::Invalid
+    );
+}
+
+fn an_invalid_configuration_with_stored_item_contexts_presents_none() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(true));
+}
+
+fn an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts() {
+    assert_no_item_context_is_presented(&presentation::invalid_configuration(false));
+}
+
+#[test]
+fn presentation_across_contexts() {
+    presentation::run(&[
+        Row {
+            table_a: "an_item_only_on_the_primary_is_presented_from_it",
+            case: "beside first edits of other items",
+            needs: Needs::Readers,
+            check: an_item_only_on_the_primary_is_presented_from_it,
+        },
+        Row {
+            table_a: "a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale",
+            case: "a ticket and a document edited in their worktrees, and a ticket broken on the primary",
+            needs: Needs::Readers,
+            check: a_primary_item_with_a_valid_worktree_is_presented_once_from_it_and_not_stale,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "released by context release",
+            needs: Needs::Readers,
+            check: a_released_worktree_presents_the_primary_copy_again,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "removed, and its rows deleted without indexing the primary again",
+            needs: Needs::Task7Storage,
+            check: a_worktree_whose_rows_were_deleted_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "a_released_or_removed_worktree_presents_the_primary_copy_again",
+            case: "deleted outside Manyhands, then refreshed",
+            needs: Needs::Readers,
+            check: a_worktree_removed_outside_presents_the_primary_copy_again,
+        },
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "stored as an invalid context",
+            needs: Needs::Readers,
+            check: an_invalid_worktree_stored_as_its_own_context_presents_its_problems_as_today,
+        },
+        // needs Task 7 storage
+        Row {
+            table_a: "an_invalid_worktree_presents_the_primary_copy_and_its_problems",
+            case: "as the refresh stores it, which is as an invalid context",
+            needs: Needs::Task7Storage,
+            check: an_invalid_worktree_is_stored_as_its_own_context_with_its_problems,
+        },
+        Row {
+            table_a: "an_item_only_in_a_worktree_is_presented_from_it",
+            case: "a ticket and a document created in their worktrees",
+            needs: Needs::Readers,
+            check: an_item_only_in_a_worktree_is_presented_from_it,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "each valid worktree stored from its own observation",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_with_stored_item_contexts_presents_none,
+        },
+        Row {
+            table_a: "an_invalid_configuration_presents_no_item_contexts",
+            case: "as the refresh stores it",
+            needs: Needs::Readers,
+            check: an_invalid_configuration_as_the_refresh_stores_it_presents_no_item_contexts,
+        },
+    ]);
     assert_git_transport_uninitialized();
 }

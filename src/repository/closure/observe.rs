@@ -18,7 +18,7 @@ use crate::{
             lifecycle::LifecycleKind,
             observe::{
                 self as shared, ChangeEvidence, Cleanliness, ContextPresence, ObservationSeal,
-                PlannedResult, PrimaryPresence, RemoteContextHistory, digest,
+                PlannedResult, PreviewFacts, PrimaryPresence, RemoteContextHistory, digest,
             },
         },
         remote::sync::{self, CommittingIdentity},
@@ -272,7 +272,7 @@ pub(super) fn preview(
     Ok(prepare_observation(service, request)?.preflight())
 }
 
-/// Outside the lease: discovery, then a full observation.
+/// Outside the lease: the item's preview facts, then a full observation.
 pub(in super::super) fn prepare_observation(
     service: &RepositoryService,
     request: &PreviewTicketClosureRequest,
@@ -297,29 +297,16 @@ fn prepare_observation_at(
     let (repository_id, snapshot, pending_conflict, pending) =
         shared::read_view_with(service, &root, |tx, id| pending_work(tx, id, item))?;
     let (facts, seal) = ObservationSeal::discover(KIND, &repository, &root, &config, item, || {
-        let discovered = super::super::discovery::observe_root(&repository, &root);
-        let active = discovered
-            .active_contexts
-            .iter()
-            .find(|a| a.context.item_id.as_ref() == Some(item));
-        let is_document = |items: &[super::super::discovery::ObservedItem]| {
-            items
-                .iter()
-                .any(|i| i.id == *item && i.kind == super::super::AuthoringKind::Document)
-        };
-        DiscoveryFacts {
-            not_ticket: active.is_some_and(|a| is_document(&a.items))
-                || (active.is_none() && is_document(&discovered.items)),
-            ticket_path: active
-                .filter(|a| a.context.branch.as_deref() == Some(KIND.context_branch(item).as_str()))
-                .and_then(|a| {
-                    a.items
-                        .iter()
-                        .find(|i| i.id == *item && i.kind == KIND.authoring())
-                })
-                .map(|i| i.path.clone()),
-        }
+        shared::item_preview_facts(KIND, service, &root, item)
     })?;
+    let PreviewFacts {
+        kind_mismatch,
+        item_path,
+    } = facts?;
+    let facts = DiscoveryFacts {
+        not_ticket: kind_mismatch,
+        ticket_path: item_path,
+    };
     let observed = observe_git(
         &repository,
         &root,
@@ -373,9 +360,9 @@ pub(in super::super) fn revalidate_under_lease(
     .map_err(|refusal| refusal.blockers))
 }
 
-/// C12. `operation_records.item_id` is null for lifecycle rows: a row's
-/// ticket comes from its target (R-T0-4), parsed by the abandon bridge's own
-/// parser. A comment binding is unfinished while its local row or its
+/// C12. `operation_records.item_id` is null for most lifecycle rows, and for
+/// every row an older build wrote: a row's ticket comes from its target
+/// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is unfinished while its local row or its
 /// publication's remote row is.
 fn pending_work(
     tx: &rusqlite::Transaction<'_>,
@@ -801,6 +788,9 @@ fn observe_git(
             }
             RemoteContextHistory::Unknown => {
                 blockers.insert(HistoryUnknown);
+            }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(HistoryUnresolved);
             }
             RemoteContextHistory::NeverPublished => {}
         }

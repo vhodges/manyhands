@@ -266,6 +266,24 @@ impl Lines {
             }
             _ => {}
         }
+        // A synchronization that can't tell whether the remote holds the item's
+        // branch is final and offers the repair read.
+        if let Some((index, action)) = envelope
+            .recovery
+            .iter()
+            .enumerate()
+            .find(|(_, action)| action.action == RecoveryActionKind::RemoteHistory)
+        {
+            let named = action
+                .arguments
+                .get("root")
+                .and_then(|value| value.as_str());
+            if let Some(root) = named.or(root) {
+                lines.rendered.push(index);
+                lines.next.push(crate::history::remote_history_line(root));
+                lines.notes.push(crate::history::SYNC_NOTE.into());
+            }
+        }
         match envelope.code {
             ResultCode::RemoteBranchDeleted => {
                 let cancel = envelope

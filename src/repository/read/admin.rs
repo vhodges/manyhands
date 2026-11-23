@@ -12,14 +12,15 @@ use super::{
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
     resolve::{at_root, open_exactly, selected_repository},
+    status::index_problems,
 };
 use crate::{
     canonical,
     repository::{
-        ConfigurationInspection, IdentityConfigProvider, IdentityInspection, RemoteInfo,
-        RepositoryError, RepositoryIdentityConfig, RepositoryOperation, RepositoryService,
-        SuppliedIdentityConfig, bridges::identity::local_initials, read_configuration_guarded,
-        remote_info_for, resolve_identity,
+        ConfigurationInspection, DirtyContexts, IdentityConfigProvider, IdentityInspection,
+        RemoteInfo, RepositoryError, RepositoryIdentityConfig, RepositoryOperation,
+        RepositoryService, SuppliedIdentityConfig, bridges::identity::local_initials,
+        read_configuration_guarded, remote_info_for, resolve_identity,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -206,7 +207,8 @@ impl RepositoryService {
     /// Every registration, ordered by root.
     ///
     /// This reads the index and nothing else. A root is reported as it was
-    /// last stored, whatever has since happened to it on disk.
+    /// last stored, whatever has since happened to it on disk. Each counts
+    /// the problems its `index status` lists.
     pub fn list_repositories(&self) -> Result<RepositoryListDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let mut statement = connection.prepare(
@@ -216,46 +218,62 @@ impl RepositoryService {
                         repositories.refresh_required,
                         repositories.refreshed_at,
                         EXISTS(SELECT 1 FROM contexts
-                                WHERE contexts.repository_id = repositories.id),
+                                WHERE contexts.repository_id = repositories.id
+                                  AND contexts.kind != 'invalid'),
                         configuration.state,
                         configuration.primary_branch,
                         configuration.publication_remote,
                         configuration.invalid_code,
-                        (SELECT COUNT(*) FROM problems
-                          WHERE problems.repository_id = repositories.id)
+                        repositories.id
                    FROM repositories
                    LEFT JOIN configuration_observations AS configuration
                      ON configuration.repository_id = repositories.id
                   ORDER BY repositories.root_path ASC",
             )?;
-            let items = statement
+            let rows = statement
                 .query_map([], |row| {
+                    let root: String = row.get(0)?;
                     let enabled_at: i64 = row.get(1)?;
                     let accessibility: String = row.get(2)?;
                     let refresh_required: bool = row.get(3)?;
                     let state: Option<String> = row.get(6)?;
                     let invalid_code: Option<String> = row.get(9)?;
-                    let problem_count: i64 = row.get(10)?;
-                    Ok(RepositorySummaryDto {
-                        root: row.get(0)?,
-                        enabled_at: OffsetDateTime::from_unix_timestamp(enabled_at)
-                            .ok()
-                            .and_then(timestamp_string),
-                        accessibility: match accessibility.as_str() {
-                            "accessible" => Accessibility::Accessible,
-                            _ => Accessibility::Inaccessible,
+                    let registration = row.get::<_, i64>(10)?;
+                    let any_dirty = DirtyContexts::read(connection, registration)?.any();
+                    Ok((
+                        RepositorySummaryDto {
+                            root: root.clone(),
+                            enabled_at: OffsetDateTime::from_unix_timestamp(enabled_at)
+                                .ok()
+                                .and_then(timestamp_string),
+                            accessibility: match accessibility.as_str() {
+                                "accessible" => Accessibility::Accessible,
+                                _ => Accessibility::Inaccessible,
+                            },
+                            configuration: stored_configuration(
+                                state.as_deref(),
+                                row.get(7)?,
+                                row.get(8)?,
+                                invalid_code.as_deref(),
+                            ),
+                            index: index_state(
+                                refresh_required,
+                                row.get(4)?,
+                                row.get(5)?,
+                                any_dirty,
+                            ),
+                            problem_count: 0,
                         },
-                        configuration: stored_configuration(
-                            state.as_deref(),
-                            row.get(7)?,
-                            row.get(8)?,
-                            invalid_code.as_deref(),
-                        ),
-                        index: index_state(refresh_required, row.get(4)?, row.get(5)?),
-                        problem_count: u64::try_from(problem_count).unwrap_or_default(),
-                    })
+                        ResolvedRepository::registered(registration, root.into()),
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
+            let mut items = Vec::new();
+            for (mut item, repo) in rows {
+                item.problem_count =
+                    u64::try_from(index_problems(connection, &repo)?.len()).unwrap_or_default();
+                items.push(item);
+            }
             Ok(RepositoryListDto {
                 items,
                 complete: true,
@@ -281,7 +299,8 @@ impl RepositoryService {
         selected: &Path,
         root: &Path,
     ) -> Result<RepositoryInspectionDto, ReadError> {
-        let registered = self.registration_id(root)?.is_some();
+        let registration = self.registration_id(root)?;
+        let registered = registration.is_some();
         let inspection = self.inspect_reporting_detached_head(root)?;
         // A root that cannot be written as text cannot be enabled either.
         let (Some(selected_path), Some(root)) = (
@@ -290,12 +309,36 @@ impl RepositoryService {
         ) else {
             return Err(ReadError::invalid_path());
         };
-        let configuration = inspected_configuration(inspection.configuration);
+        let mut configuration = inspected_configuration(inspection.configuration);
         // The inspection opened the root; it is opened again here only to
         // ask whether each remote has a helper configured.
         let repository = open_exactly(Path::new(&root)).map_err(|error| {
             ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)
         })?;
+        // The root as the registry stores it, which is the one the
+        // registration was looked up by.
+        //
+        // This is the verb every `recovery_required` points at, so rows that
+        // cannot be read do not refuse it: the list is empty and a problem
+        // says why, so that an empty list is not taken for nothing being
+        // unfinished. A busy or unavailable index is still refused.
+        let operations = match self.inspected_operations(Path::new(&root), registration) {
+            Ok(operations) => operations,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ResultCode::RecoveryRequired | ResultCode::InternalError
+                ) =>
+            {
+                configuration.problems.push(ProblemDto {
+                    code: ProblemCode::OperationsUnreadable,
+                    path: None,
+                    target_id: None,
+                });
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -312,6 +355,7 @@ impl RepositoryService {
                 configuration.publication_remote.as_deref(),
             ),
             configuration,
+            operations,
         })
     }
 

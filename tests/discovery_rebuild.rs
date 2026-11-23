@@ -633,6 +633,10 @@ fn discovery_public_types_hold_metadata_only() {
         DiscoveryActivitySource::UncommittedFilesystem
     ));
     assert!(matches!(
+        DiscoveryContextKind::Invalid,
+        DiscoveryContextKind::Invalid
+    ));
+    assert!(matches!(
         RefreshOutcome::RetryRequired {
             root: PathBuf::from("/repository"),
             context: Some(PathBuf::from("/repository/.manyhands/worktrees/document")),
@@ -991,6 +995,7 @@ fn refresh_scan_race_retains_previous_rows_then_converges_on_retry() {
         .service
         .refresh_repository(refresh_request!(&fixture.root))
         .unwrap();
+    support::items::write_again(&document);
     enabled.service.set_observation_hook_for_testing({
         let document = document.clone();
         move || fs::write(document, "ordinary markdown\n").unwrap()
@@ -1660,6 +1665,7 @@ fn refresh_does_not_persist_private_markdown_while_detecting_source_races() {
     support::assert_operation_records_hold_no_content(enabled.data_directory.path());
 
     let changed_source = source.replace(private_body, "changed private Markdown body");
+    support::items::write_again(&document);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(document, changed_source).unwrap());
@@ -1863,6 +1869,7 @@ fn assert_active_worktree_race_preserves_rows(fixture: &support::TestRepository)
     let changed_active = fs::read_to_string(&active)
         .unwrap()
         .replace("title: Active", "title: Changed");
+    support::items::write_again(&active);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed_active).unwrap());
@@ -1949,6 +1956,7 @@ fn refresh_retry_replaces_a_previously_persisted_context_when_its_observation_ch
     let active_changed = fs::read_to_string(&active)
         .unwrap()
         .replace("title: Active", "title: Raced");
+    support::items::write_again(&active);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, active_changed).unwrap());
@@ -2019,6 +2027,7 @@ fn refresh_retry_replaces_a_persisted_root_when_configuration_problem_changes() 
     let changed = fs::read_to_string(&active)
         .unwrap()
         .replace("title: Active", "title: Raced");
+    support::items::write_again(&active);
     enabled
         .service
         .set_observation_hook_for_testing(move || fs::write(active, changed).unwrap());
@@ -3983,7 +3992,7 @@ fn document_worktree_with_a_second_source_for_its_item_is_rejected() {
                 && problem.context.as_deref() == Some(root.as_path())
                 && problem.path.as_deref() == Some(Path::new(&path)))
     );
-    assert_stored_diagnostic(&shared.enabled.service, &root, "context", &path);
+    assert_stored_diagnostic(&shared.enabled.service, &own, "context", "");
     let rows_before = stored_diagnostics(&shared.enabled.service);
     assert_eq!(
         shared

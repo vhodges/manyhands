@@ -37,6 +37,7 @@ pub(in super::super) fn close<P: SessionCredentialProvider>(
     request: CloseTicketRequest,
     session: &mut SessionCredentials<P>,
     probe: Option<CancellationProbe>,
+    progress: &mut dyn run::RunObserver,
 ) -> Result<TicketClosureResult, TicketClosureError> {
     run::run_lifecycle(
         &TicketClosureLifecycle,
@@ -46,6 +47,7 @@ pub(in super::super) fn close<P: SessionCredentialProvider>(
             ..lifecycle_request(request)
         },
         session,
+        progress,
     )
 }
 

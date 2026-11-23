@@ -771,7 +771,7 @@ fn hook_writes_closing_then_moves_the_context_and_marks_refresh() {
     let r = f.record(ClosureKind::Record);
     let context = f.context_oid();
     f.db()
-        .execute("UPDATE repositories SET refresh_required=0", [])
+        .execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     let (base, merged, tree) = checkpoint_of(f.hook(&r).unwrap());
     let stored = f.reload(&r);
@@ -789,13 +789,7 @@ fn hook_writes_closing_then_moves_the_context_and_marks_refresh() {
         (closed_at.offset(), closed_at.nanosecond()),
         (time::UtcOffset::UTC, 0)
     );
-    let refresh: bool = f
-        .db()
-        .query_row("SELECT refresh_required FROM repositories", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert!(refresh);
+    assert!(f.context_dirty());
     // Integration merges the checkpoint with the exact closure subject.
     let merge = f.integrate(f.hook_resumed(&stored));
     let commit = f.repo.find_commit(merge).unwrap();
@@ -1291,11 +1285,14 @@ impl Fixture {
         .unwrap();
         self.reload(&r)
     }
-    fn refresh_required(&self) -> bool {
+    /// The dirty mark of the ticket's own context.
+    fn context_dirty(&self) -> bool {
         self.db()
-            .query_row("SELECT refresh_required FROM repositories", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT dirty FROM contexts WHERE item_id = ?1",
+                [id().to_string()],
+                |r| r.get(0),
+            )
             .unwrap()
     }
     /// The hook over a given (possibly stale) observation and base.
@@ -1328,11 +1325,11 @@ fn adopted_synchronization_is_integrated_and_the_checkpoint_kept() {
     let (advanced, merge) = f.synchronize_context(checkpoint);
     assert_eq!(f.context_oid(), merge);
     f.db()
-        .execute("UPDATE repositories SET refresh_required=0", [])
+        .execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     let first = f.resume(&stored).unwrap().unwrap();
-    // The context ref has moved: refresh is required again (idempotent).
-    assert!(f.refresh_required());
+    // The context ref has moved: its context is marked again (idempotent).
+    assert!(f.context_dirty());
     let adopted = f.reload(&r);
     assert_eq!(adopted.closure_oid, Some(checkpoint));
     assert_eq!(adopted.adopted_context_oid, Some(merge));

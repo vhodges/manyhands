@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 remote resolve-history preview",
+  "description": "The data of a prepare envelope that gives a preview of remote resolve-history: the repository-wide cache-loss flag is set and no context reads unknown, so it can be cleared. A flag already clear is a no-op (already_applied); a context that still reads unknown is a rejection (recovery_required), whose way out is remote history and item resolve-history.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "What clearing the flag will do.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "marker_present"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "marker_present": {
+          "description": "Whether the cache-loss marker file is there to be deleted after the commit.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

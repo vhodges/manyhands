@@ -108,6 +108,10 @@ pub const CASES: &[ssh_harness::Case] = &[
         c4_interruption_index_hand_off_refused,
     ),
     (
+        "a_publication_killed_after_push_prepared_resumes_to_published",
+        a_publication_killed_after_push_prepared_resumes_to_published,
+    ),
+    (
         "c4_interruption_poll_holds_the_reservation",
         c4_interruption_poll_holds_the_reservation,
     ),
@@ -574,16 +578,23 @@ fn c4_interruption_transport_refusals() -> Result<(), FixtureError> {
             None => assert_eq!(actions, ["request.retry"]),
         }
         assert_eq!(*recovery.last().unwrap(), retry);
+        value
     };
 
     refused("host_approval_required", Some("host.approve"));
     approve(&w)?;
-    refused("unlock_required", None);
+    let holder = refused("unlock_required", None)["operation_id"].clone();
+    // The new request is told which operation holds the reservation, and
+    // offered to look at it.
     let busy = sync(R2, "busy", 5);
     assert_eq!(
         busy["recovery"],
-        serde_json::json!([{"action": "request.retry", "operation_id": null, "arguments": {"request_id": R2}}])
+        serde_json::json!([
+            {"action": "request.retry", "operation_id": null, "arguments": {"request_id": R2}},
+            {"action": "operation.show", "operation_id": holder, "arguments": {}}
+        ])
     );
+    assert_eq!(busy["data"]["blocker"]["operation_id"], holder);
     checked(
         &env,
         &["request", "show", "--request-id", R2],
@@ -721,6 +732,82 @@ fn c4_interruption_index_hand_off_refused() -> Result<(), FixtureError> {
     assert_eq!(
         checkpoints(&a.repo()?, checkpoint, &comment_path(C2))?,
         [checkpoint]
+    );
+    Ok(())
+}
+
+/// A `comment add` killed once its first push is prepared, for a ticket
+/// branch the remote has never had: the server holds the push's commands,
+/// which the client sends only after recording the push intent and passing
+/// the safe point before the push, and the run is killed there (E-57; the
+/// push lists and pushes on one connection, so no connection opens between
+/// the intent and the push). Nothing reached the remote, so
+/// `operation resume` retries the push rather than answering
+/// `recovery_required`: it publishes, and no operation is left unfinished.
+/// SSH is needed because the behaviour is a real first push to a remote
+/// that lacks the branch; the decision itself is pinned by the library test
+/// `an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambiguous`.
+fn a_publication_killed_after_push_prepared_resumes_to_published() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let a = &p.a;
+    private_body();
+    let pushes = remote_world::accepted(&p.server);
+    let hold = p.server.hold_receive_commands()?;
+    let run = started(
+        &a.env,
+        &comment_args(a, ITEM, R1),
+        &comment_input(C1, None, PRIVATE_BODY),
+    );
+    // The first push of the run is held as its commands arrive: the
+    // registry has recorded the push intent by then.
+    let registry = a.env.data.join(repository::REGISTRY_FILE);
+    let prepared = || -> Result<bool, FixtureError> {
+        let db = fixed(rusqlite::Connection::open(&registry))?;
+        // A count, so that a run which has not yet reserved its operation reads as not prepared.
+        let found: i64 = fixed(db.query_row(
+            "SELECT COUNT(*) FROM remote_operation_records \
+             WHERE action='synchronize_context' AND sync_checkpoint='push_prepared'",
+            [],
+            |row| row.get(0),
+        ))?;
+        Ok(found == 1)
+    };
+    hold.wait_until_held()?;
+    assert!(prepared()?, "the push intent is recorded before the push");
+    // Dropping the run kills the process by its handle and reaps it, so no
+    // peer is alive when the resume runs. The server then lets go.
+    drop(run);
+    drop(hold);
+    assert_eq!(p.served(CONTEXT)?, None);
+    assert_eq!(remote_world::accepted(&p.server), pushes);
+    let checkpoint = a.tip(CONTEXT)?.ok_or(FixtureError)?;
+    assert!(holds(&a.repo()?, checkpoint, &comment_path(C1))?);
+
+    let shown = request_show(a, R1);
+    assert_eq!(shown["state"], "accepted", "{shown}");
+    let operations = shown["operations"].as_array().unwrap();
+    let families: Vec<_> = operations
+        .iter()
+        .map(|operation| operation["family"].as_str().unwrap())
+        .collect();
+    assert_eq!(families, ["local", "remote"], "{shown}");
+    let comment = operations[0]["operation_id"].as_str().unwrap().to_owned();
+
+    let resumed = resume(a, &comment, R2, "ok", 0);
+    assert_effects(
+        &resumed,
+        &[("discovery", "current"), ("publication", "published")],
+    );
+    assert_eq!(resumed["data"]["publication"], "published", "{resumed}");
+    assert_eq!(oid(&resumed["effects"]["commit_oid"]), checkpoint);
+    assert!(resumed["recovery"].as_array().unwrap().is_empty());
+    assert_eq!(p.served(CONTEXT)?, Some(checkpoint));
+    assert!(holds(&p.bare()?, checkpoint, &comment_path(C1))?);
+    assert_eq!(remote_world::accepted(&p.server), pushes + 1);
+    let listed = a.json(&["operation", "list", "--repo", a.root()], &[], "ok", 0);
+    assert!(
+        listed["data"]["items"].as_array().unwrap().is_empty(),
+        "{listed}"
     );
     Ok(())
 }
@@ -1175,6 +1262,20 @@ mod pressed {
         operations[0]["operation_id"].as_str().unwrap().to_owned()
     }
 
+    /// `request show` of a comment request: the comment's own operation,
+    /// which the request linked, then the synchronization its submission
+    /// reserved, which names the request. Returns the comment's.
+    fn the_comment_operation(clone: &CliClone, request: &str) -> String {
+        let shown = request_show(clone, request);
+        let operations = shown["operations"].as_array().unwrap();
+        let families: Vec<_> = operations
+            .iter()
+            .map(|operation| operation["family"].as_str().unwrap())
+            .collect();
+        assert_eq!(families, ["local", "remote"], "{shown}");
+        operations[0]["operation_id"].as_str().unwrap().to_owned()
+    }
+
     /// `args` in human mode at a terminal, with `--non-interactive`, and
     /// `input` on stdin.
     fn at_a_terminal(env: &CliEnv, args: &[&str], input: &[u8]) -> PtyCli {
@@ -1292,7 +1393,7 @@ mod pressed {
         pressed_while_held(&mut pty, hold)?;
         let stderr = cancelled(pty);
         let checkpoint = a.tip(CONTEXT)?.ok_or(FixtureError)?;
-        let operation = the_operation(a, R1);
+        let operation = the_comment_operation(a, R1);
         assert!(
             stderr.starts_with(&format!(
                 "{}{CANCELLED}request: {R1}\noperation: {operation}\n\
@@ -1591,11 +1692,16 @@ mod pressed {
         assert_eq!(items[0]["action"], "synchronize_context");
         assert!(items[0]["failure_code"].is_null());
 
+        // It names the interrupted operation, which holds the reservation.
         let busy = item_sync(b, ITEM, R4, "busy", 5);
         assert_eq!(
             busy["recovery"],
-            serde_json::json!([{"action": "request.retry", "operation_id": null, "arguments": {"request_id": R4}}])
+            serde_json::json!([
+                {"action": "request.retry", "operation_id": null, "arguments": {"request_id": R4}},
+                {"action": "operation.show", "operation_id": operation, "arguments": {}}
+            ])
         );
+        assert_eq!(busy["data"]["blocker"]["operation_id"], operation.as_str());
         assert_eq!(remote_world::accepted(&p.server), pushes);
 
         let merged = item_sync(b, ITEM, R3, "ok", 0);

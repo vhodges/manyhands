@@ -186,7 +186,7 @@ fn local_owner_reciprocally_blocks_closure_preview_and_adoption() {
 fn remote(f: &Fixture, item: canonical::ItemId) -> (OperationId, RemoteOperationTarget) {
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&f.service, f.root.path(), |tx, rid| {
-        state::configure(tx, rid, Some(&plan), false)
+        state::configure(tx, rid, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -425,4 +425,160 @@ fn every_later_closure_stage_refuses_and_terminal_history_grants_no_exception() 
             );
         }
     }
+}
+
+/// Table B of the fast-writes design ("Table B: what a pending row holds")
+/// at the `context sync-local` admission (`record.rs` `admit`, ~1008),
+/// through `begin_local_context_sync`. Written before the behaviour (Task 3).
+/// A local synchronization of an item is a sync on that item that rewrites
+/// the index for the whole repository: a row of its own item holds it (Table
+/// B's first column), and so does any row mid-write (design decision 19,
+/// question 4), and the rows of the whole repository; a row of another item
+/// that owes only its hand-off does not. Its own row keeps repository scope
+/// as a row (decision 14), which the local begin's table pins.
+#[test]
+fn table_b_a_context_sync_local_admission_behind_each_pending_row() {
+    table_b_a_context_sync_local_admission_behind(&[
+        ("R1/R2 mid-write", true),
+        ("R1/R2 mid-write", false),
+        (
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
+            true,
+        ),
+        (
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)",
+            false,
+        ),
+        ("R3 owes only its hand-off (authoritative_observed)", true),
+        ("R3 owes only its hand-off (authoritative_observed)", false),
+        ("R3 owes only its hand-off (indexing)", true),
+        ("R3 owes only its hand-off (indexing)", false),
+        ("R3 owes only its hand-off (index_invalidated)", false),
+        ("R3 owes only its hand-off (failed)", false),
+        ("R3 a comment waiting for its registration", true),
+        ("R3 a comment waiting for its registration", false),
+        ("R5 a running whole-repository refresh", false),
+        ("R6 a crashed whole-repository refresh", false),
+        ("R6 a rebuild", false),
+    ]);
+}
+
+/// `table_b_a_context_sync_local_admission_behind_each_pending_row`, behind
+/// the rows of a synchronization's index hand-off, which Task 16's hand-off
+/// rows (P-4) are written for.
+#[test]
+fn table_b_a_context_sync_local_admission_behind_each_synchronization_s_hand_off() {
+    table_b_a_context_sync_local_admission_behind(&[
+        ("R4 a sync's hand-off", true),
+        ("R4 a sync's hand-off", false),
+        ("R4/Q2 a primary sync's hand-off", false),
+    ]);
+}
+
+/// The admission table for `rows`: each row, of the synchronized item
+/// (`true`) or of another one, and whether it holds the admission.
+fn table_b_a_context_sync_local_admission_behind(rows: &[(&str, bool)]) {
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+    let mut mismatches = Vec::new();
+    for &(row, own) in rows {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        let item = if own {
+            f.item.to_string()
+        } else {
+            OTHER.to_owned()
+        };
+        let ticket =
+            format!("authoring-context-v1/ticket/{item}/Edit\0.manyhands/tickets/{item}/ticket.md");
+        let owing = |state: &'static str| {
+            (
+                "save_ticket",
+                ticket.clone(),
+                Some(item.clone()),
+                state,
+                Some("authoring_checkpoint_observed"),
+            )
+        };
+        let (action, target, row_item, state, step): (
+            &str,
+            String,
+            Option<String>,
+            &str,
+            Option<&str>,
+        ) = match row {
+            "R1/R2 mid-write" => (
+                "save_ticket",
+                ticket.clone(),
+                Some(item.clone()),
+                "authoring_destination_observed",
+                Some("authoring_destination_observed"),
+            ),
+            // Its state not yet advanced: owing, by design decision 19,
+            // question 1.
+            "R3 a committed write before its hand-off (authoring_checkpoint_observed)" => {
+                owing("authoring_checkpoint_observed")
+            }
+            "R3 owes only its hand-off (authoritative_observed)" => owing("authoritative_observed"),
+            "R3 owes only its hand-off (indexing)" => owing("indexing"),
+            "R3 owes only its hand-off (index_invalidated)" => owing("index_invalidated"),
+            "R3 owes only its hand-off (failed)" => owing("failed"),
+            "R4 a sync's hand-off" => (
+                "refresh",
+                format!("synchronization-index-v1/ticket/{item}/{OID}"),
+                Some(item.clone()),
+                "indexing",
+                Some("authoritative_observed"),
+            ),
+            "R4/Q2 a primary sync's hand-off" => (
+                "refresh",
+                format!("synchronization-index-v1/primary/{OID}"),
+                None,
+                "indexing",
+                Some("authoritative_observed"),
+            ),
+            "R3 a comment waiting for its registration" => (
+                "submit_comment",
+                format!(
+                    "authoring-context-v1/ticket/{item}/Edit\0.manyhands/comments\001ARZ3NDEKTSV4RRFFQ69G5FCA"
+                ),
+                Some(item.clone()),
+                "completed",
+                Some("comment_registration_pending"),
+            ),
+            "R5 a running whole-repository refresh" => {
+                ("refresh", String::new(), None, "indexing", None)
+            }
+            "R6 a crashed whole-repository refresh" => {
+                ("refresh", String::new(), None, "failed", None)
+            }
+            "R6 a rebuild" => ("rebuild", String::new(), None, "retry", None),
+            _ => unreachable!(),
+        };
+        f.db()
+            .execute(
+                "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,state,completed_step,observed_at)
+                 SELECT id,root_path,?1,?2,?3,?4,?5,?6,1 FROM repositories",
+                rusqlite::params![OperationId::new().to_string(), action, target, row_item, state, step],
+            )
+            .unwrap();
+        let held =
+            own || row.starts_with("R1/R2") || row.starts_with("R5") || row.starts_with("R6");
+        let got = match f.begin(OperationId::new()) {
+            Ok(_) => "proceeds".to_owned(),
+            Err(error) if error.code() == ResultCode::RecoveryRequired => "held".to_owned(),
+            Err(error) => format!("{:?}", error.code()),
+        };
+        let expected = if held { "held" } else { "proceeds" };
+        if got != expected {
+            let column = if own {
+                "C1 its own item's"
+            } else {
+                "C2 another item's"
+            };
+            mismatches.push(format!(
+                "{row} | {column} context sync-local: expected {expected}, today {got}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

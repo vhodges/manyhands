@@ -14,7 +14,11 @@ use zorite_editor::EditorState;
 
 use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
-    model::{navigation::OpenTarget, tabs::TabKey},
+    model::{
+        layout::Side,
+        navigation::{OpenTarget, Pane},
+        tabs::TabKey,
+    },
     services::{
         JobKind, ReadKind,
         drafts::DraftRegistry,
@@ -25,11 +29,14 @@ use crate::desktop::{
         fixtures::{Fixture, item_id},
     },
     view::{
+        activity_support::{act, pending_key},
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
         item::{NOT_REFRESHED, NOT_SAVED, PublicationRemote, tokens::colors},
+        operations::ABANDON,
+        sidebar::SELECTED,
         workspace::{REGIONS, Region},
     },
 };
@@ -191,7 +198,12 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
         workspace.navigation().selected().cloned()
     });
     assert_eq!(selected, Some(key(&b)));
-    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
+    // `b`'s row, the second, carries the chosen repository's mark.
+    assert_eq!(
+        shell.label(("repo-selected", 1usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 0usize), cx));
 }
 
 /// Refresh of `a` reads every open tab of `a` again, once, in place: the
@@ -240,7 +252,7 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
 async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let Two { shell, a, b } = two(cx);
-    shell.click("pane-tickets", cx);
+    shell.use_list(Pane::Tickets, cx);
     shell.select(&b, cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&b, ONE), cx);
@@ -484,7 +496,8 @@ fn the_tab_keys_do_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     open(&shell, ticket(&a, STRANDED), cx);
     assert_eq!(shown(&shell, cx), Some(1));
 
-    shell.click(("pending-abandon", 0usize), cx);
+    let pending = pending_key(&shell, &key(&a), "save_ticket", cx);
+    act(&shell, &pending, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
     shell.keys("ctrl-tab", cx);
     shell.keys("secondary-w", cx);
@@ -709,6 +722,31 @@ fn the_tab_keys_work_from_inside_the_read_view(cx: &mut TestAppContext) {
         source.read_with(cx, |editor, _| editor.text().to_owned()),
         text,
         "no indent was made"
+    );
+}
+
+/// Ctrl B with focus in the read view toggles the left dock: a read-only
+/// editor has no Bold to apply, so the key is the dock's there (decision 2).
+#[gpui_kit::test]
+fn ctrl_b_in_the_read_view_toggles_the_left_dock(cx: &mut TestAppContext) {
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    let left_open = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.layout().is_open(Side::Left))
+    };
+    let before = left_open(&shell, cx);
+
+    let source = focus_read(&shell, cx);
+    let text = source.read_with(cx, |editor, _| editor.text().to_owned());
+    shell.keys("secondary-b", cx);
+    assert_eq!(left_open(&shell, cx), !before, "the dock toggled");
+    shell.keys("secondary-b", cx);
+    assert_eq!(left_open(&shell, cx), before, "and toggled back");
+    assert_eq!(
+        source.read_with(cx, |editor, _| editor.text().to_owned()),
+        text
     );
 }
 

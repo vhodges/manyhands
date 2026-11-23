@@ -72,12 +72,15 @@ commands! {
     ItemRepublish => "item republish",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
+    ContextRetire => "context retire",
     DocumentPromote => "document promote",
     TicketClose => "ticket close",
     PollConfigure => "poll configure",
     PollPause => "poll pause",
     PollResume => "poll resume",
     PollOnce => "poll once",
+    ItemResolveHistory => "item resolve-history",
+    RemoteResolveHistory => "remote resolve-history",
 }
 
 impl Command {
@@ -97,6 +100,7 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // One row of the remote journal, reserved for the explicit poll.
             Self::PollOnce => true,
             Self::LocalContextSync => true,
@@ -154,7 +158,7 @@ impl Command {
             // One write in the request's own transaction, with no operation
             // ID and no row: the record finished with it is
             // what says it was made.
-            Self::PollConfigure | Self::PollPause | Self::PollResume => false,
+            Self::PollConfigure | Self::PollPause | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -193,6 +197,7 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -233,7 +238,9 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -243,6 +250,7 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -285,7 +293,9 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -294,6 +304,7 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
@@ -336,7 +347,9 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -351,6 +364,7 @@ impl Command {
     /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // A poll's own safe points, which its probe reaches.
             Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
@@ -395,7 +409,9 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -424,6 +440,7 @@ impl Command {
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
+            Self::ContextRetire => true,
             // How a replay reads a finished row: it keeps the pinned equality.
             Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
@@ -471,7 +488,7 @@ impl Command {
             | Self::ConflictResolve
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -479,15 +496,17 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            Self::ContextRetire => ProgressStage::Observing,
             // What a poll does first is connect, to fetch.
             Self::PollOnce => ProgressStage::Connecting,
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync
-            | Self::RepoSync
-            | Self::ItemRepublish
-            | Self::DocumentPromote
-            | Self::TicketClose => ProgressStage::Connecting,
+            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
+            // What a promotion or a closure does first is look at its record
+            // and the repository: a local-only or cleanup-only run never
+            // connects, and one that does reports `connecting` itself (D5
+            // decision 11).
+            Self::DocumentPromote | Self::TicketClose => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -534,7 +553,7 @@ impl Command {
             // What a policy verb does is write its one field.
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => ProgressStage::Writing,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => ProgressStage::Writing,
         }
     }
 
@@ -546,6 +565,7 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             // A poll's hand-off is a refresh of the whole repository, and the
             // operation it finished owes nothing of it.
             Self::PollOnce => true,
@@ -594,7 +614,7 @@ impl Command {
             | Self::ContextRelease
             | Self::PollConfigure
             | Self::PollPause
-            | Self::PollResume => false,
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -605,6 +625,7 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
             // One fetch and clean fast-forwards: nothing is lost, and what it
             // finds in the way it leaves.
             Self::PollOnce => false,
@@ -636,7 +657,10 @@ impl Command {
             // Each merges into primary, publishes and retires a context:
             // its caller is shown all of it, and consents to that state.
             | Self::DocumentPromote
-            | Self::TicketClose => true,
+            | Self::TicketClose
+            // A resolution records that a context was never published: its
+            // caller is shown the context, the remote's answer and the choice.
+            | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -679,6 +703,17 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::{Command, ProgressStage};
+
+    #[test]
+    fn retirement_is_an_unconfirmed_local_operation_with_safe_points() {
+        let command = Command::parse("context retire").expect("ordinary retirement is bound");
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(!command.needs_confirmation());
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Observing);
+    }
 
     #[test]
     fn a_stored_name_is_read_back_as_its_command() {
@@ -728,6 +763,7 @@ mod tests {
         assert_eq!(Command::PollPause.name(), "poll pause");
         assert_eq!(Command::PollResume.name(), "poll resume");
         assert_eq!(Command::PollOnce.name(), "poll once");
+        assert_eq!(Command::ContextRetire.name(), "context retire");
     }
 
     #[test]
@@ -748,12 +784,18 @@ mod tests {
                 command,
                 Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
             );
+            // A promotion or a closure looks first, and reports its steps'
+            // stages itself (D5 decision 11).
+            let lifecycle = matches!(command, Command::DocumentPromote | Command::TicketClose);
             let stopping = local
                 || comment
                 || confirmed
                 || matches!(
                     command,
-                    Command::ItemSync | Command::RepoSync | Command::PollOnce
+                    Command::ItemSync
+                        | Command::RepoSync
+                        | Command::PollOnce
+                        | Command::ContextRetire
                 );
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
@@ -765,7 +807,7 @@ mod tests {
                 );
                 assert_eq!(
                     command.stage(),
-                    if local {
+                    if local || lifecycle || command == Command::ContextRetire {
                         ProgressStage::Observing
                     } else if comment {
                         ProgressStage::Writing
@@ -845,6 +887,8 @@ mod tests {
                         | Command::ItemRepublish
                         | Command::DocumentPromote
                         | Command::TicketClose
+                        | Command::ItemResolveHistory
+                        | Command::RemoteResolveHistory
                 ),
                 "{command:?}"
             );
@@ -872,7 +916,8 @@ mod tests {
             // So is a host's pin, written by the pin store's own
             // transaction with no row.
             // So is a polling policy, written in its request's own
-            // transaction with no row.
+            // transaction with no row. So is a history resolution's row of
+            // the remote registry.
             let unjournaled = matches!(
                 command,
                 Command::RepoIdentitySet
@@ -881,6 +926,8 @@ mod tests {
                     | Command::PollConfigure
                     | Command::PollPause
                     | Command::PollResume
+                    | Command::ItemResolveHistory
+                    | Command::RemoteResolveHistory
             );
             assert_eq!(
                 command.has_operation(),
@@ -978,7 +1025,7 @@ mod tests {
             assert!(!command.was_accepted_without_operation(), "{command:?}");
             assert!(!command.restores_index(), "{command:?}");
             assert!(!command.creates_its_repository(), "{command:?}");
-            assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Observing, "{command:?}");
         }
     }
 

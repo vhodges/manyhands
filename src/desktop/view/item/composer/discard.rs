@@ -5,6 +5,10 @@
 //! keeps the text, as Escape does, and focus goes back to the editor.
 //! Discard emits `Discard`. A failed composer's prompt also says the owner's note (P7, P18). The
 //! dialog closes at once, as D3's do, and holds none of the user's text.
+//! It is on the common frame (Wave 04 Cycle 05a design A3): the question in
+//! the Kit's title slot, the owner's note, when there is one, in the body,
+//! and Discard and Keep editing in the footer, the body element's last
+//! child, with Keep editing's ring drawn around its stop.
 
 use std::rc::Rc;
 
@@ -15,17 +19,20 @@ use gpui_kit::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm as DialogConfirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
 
 use super::{Composer, ComposerEvent, ComposerKind, ComposerState};
+use crate::desktop::view::frame::{self, Footer, Header};
 
 const DISCARD_REPLY: &str = "Discard this reply?";
 const DISCARD_COMMENT: &str = "Discard this comment?";
 const DISCARD: &str = "Discard";
 const KEEP_EDITING: &str = "Keep editing";
+/// The header's title: the question, as the Kit's title slot drew it.
+const TITLE_ID: &str = "composer-discard-title";
 
 type Press = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -62,10 +69,16 @@ impl Composer {
                 first: first.clone(),
                 ring: first.is_focused(window).then(|| cx.theme().ring),
             };
-            base.title(title)
+            let header = Header {
+                icon: None,
+                title: title.into(),
+                description: None,
+                ids: (TITLE_ID, None),
+            };
+            frame::dialog(base, header, cx)
                 .close_button(false)
                 .overlay_closable(false)
-                .child(body(title, note.clone(), buttons))
+                .child(body(title, note.clone(), buttons, cx))
                 // Enter and Escape keep editing, closing at once.
                 .on_ok(move |_, window, cx| {
                     ok(window, cx);
@@ -115,7 +128,12 @@ fn button(
 }
 
 /// The prompt's body, named by its question.
-fn body(title: &'static str, note: Option<String>, buttons: Buttons) -> impl IntoElement + use<> {
+fn body(
+    title: &'static str,
+    note: Option<String>,
+    buttons: Buttons,
+    cx: &App,
+) -> impl IntoElement + use<> {
     // Keep editing is a stop of the prompt's own, so that it can be
     // focused as the prompt opens; its button is no stop, and the ring is
     // drawn around it.
@@ -132,30 +150,30 @@ fn body(title: &'static str, note: Option<String>, buttons: Buttons) -> impl Int
             &buttons.keep,
             false,
         ));
+    // The design's order, "Discard · Keep editing"; focus starts on Keep
+    // editing, so a stray Enter keeps the text.
+    let footer_buttons = vec![
+        button("composer-discard-confirm", DISCARD, &buttons.discard, true).into_any_element(),
+        keep.into_any_element(),
+    ];
+    let content = v_flex().children(note.map(|note| {
+        div()
+            .id("composer-discard-note")
+            .test_support()
+            .aria_label(note.clone())
+            .text_sm()
+            .child(note)
+    }));
     v_flex()
         .id("composer-discard-dialog")
         .test_support()
         .aria_label(title)
-        .gap_2()
-        .children(note.map(|note| {
-            div()
-                .id("composer-discard-note")
-                .test_support()
-                .aria_label(note.clone())
-                .text_sm()
-                .child(note)
-        }))
-        .child(
-            // The design's order, "Discard · Keep editing"; focus starts on
-            // Keep editing, so a stray Enter keeps the text.
-            h_flex()
-                .gap_2()
-                .child(button(
-                    "composer-discard-confirm",
-                    DISCARD,
-                    &buttons.discard,
-                    true,
-                ))
-                .child(keep),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons: footer_buttons,
+            },
+            cx,
+        ))
 }

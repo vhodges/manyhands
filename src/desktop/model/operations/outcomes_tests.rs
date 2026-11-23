@@ -49,6 +49,7 @@ fn put(operations: &mut Operations, n: u64, intent: Intent, code: Option<ResultC
         lane: Lane::User,
         attempt: 1,
         state: RequestState::Queued,
+        registered_root: None,
     }));
     operations.apply(WorkerEvent::Started(id));
     if let Some(code) = code {

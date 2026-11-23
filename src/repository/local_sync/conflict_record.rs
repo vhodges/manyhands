@@ -50,9 +50,12 @@ pub(super) fn migrate(db: &Connection) -> Result<(), RepositoryError> {
         db.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| failure())?;
     }
-    audit(db)
+    // The evidence itself is audited with its records, by the audit that
+    // ends the record migration.
+    audit_schema(db)
 }
-pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
+/// The marker, and each table's schema and foreign keys.
+pub(super) fn audit_schema(db: &Connection) -> Result<(), RepositoryError> {
     let marked: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -61,10 +64,6 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         )
         .map_err(|_| failure())?;
     if !marked {
-        return Err(failure());
-    }
-    let missing:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records p WHERE p.execution_required=1 AND (p.state IN ('conflict_pending','resolution_prepared') OR EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=p.operation_ulid AND s.kind='conflict_install')) AND NOT EXISTS(SELECT 1 FROM local_context_sync_conflicts c WHERE c.operation_ulid=p.operation_ulid)) OR EXISTS(SELECT 1 FROM local_context_sync_conflicts c JOIN local_context_sync_records p ON p.operation_ulid=c.operation_ulid WHERE p.active_resolution IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation k WHERE k.operation_ulid=p.operation_ulid AND k.attempt_ulid=p.active_resolution))",[],|r|r.get(0)).map_err(|_|failure())?;
-    if missing {
         return Err(failure());
     }
     let control: String = db
@@ -86,14 +85,6 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     {
         return Err(failure());
     }
-    let invalid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation WHERE typeof(issued)!='integer' OR typeof(acknowledged)!='integer' OR issued<0 OR acknowledged<0 OR acknowledged>issued)",[],|r|r.get(0)).map_err(|_|failure())?;
-    if invalid {
-        return Err(failure());
-    }
-    let orphan:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation c LEFT JOIN local_context_sync_resolutions a ON a.attempt_ulid=c.attempt_ulid AND a.operation_ulid=c.operation_ulid WHERE a.attempt_ulid IS NULL)",[],|r|r.get(0)).map_err(|_|failure())?;
-    if orphan {
-        return Err(failure());
-    }
     let sql: String = db
         .query_row(
             "SELECT sql FROM sqlite_master WHERE name='local_context_sync_conflicts'",
@@ -111,8 +102,39 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     {
         return Err(failure());
     }
-    let mut statement = db.prepare("SELECT c.generation,p.generation,c.manifest FROM local_context_sync_conflicts c JOIN local_context_sync_records p ON p.operation_ulid=c.operation_ulid").map_err(|_| failure())?;
-    let mut rows = statement.query([]).map_err(|_| failure())?;
+    Ok(())
+}
+/// The conflict evidence and cancellation counters of the records `rows`
+/// selects.
+pub(super) fn audit_rows(
+    db: &Connection,
+    rows: super::record::Rows<'_>,
+) -> Result<(), RepositoryError> {
+    let records = rows.records();
+    let exists = |sql: String| -> Result<bool, RepositoryError> {
+        db.query_row(&sql, rows.bound(), |r| r.get(0))
+            .map_err(|_| failure())
+    };
+    let missing = exists(format!(
+        "SELECT EXISTS(SELECT 1 FROM local_context_sync_records p WHERE ({records}) AND p.execution_required=1 AND (p.state IN ('conflict_pending','resolution_prepared') OR EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=p.operation_ulid AND s.kind='conflict_install')) AND NOT EXISTS(SELECT 1 FROM local_context_sync_conflicts c WHERE c.operation_ulid=p.operation_ulid)) OR EXISTS(SELECT 1 FROM local_context_sync_conflicts c JOIN local_context_sync_records p ON p.operation_ulid=c.operation_ulid WHERE ({records}) AND p.active_resolution IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation k WHERE k.operation_ulid=p.operation_ulid AND k.attempt_ulid=p.active_resolution))"
+    ))?;
+    if missing {
+        return Err(failure());
+    }
+    let invalid = exists(format!(
+        "SELECT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation k JOIN local_context_sync_records p ON p.operation_ulid=k.operation_ulid WHERE ({records}) AND (typeof(k.issued)!='integer' OR typeof(k.acknowledged)!='integer' OR k.issued<0 OR k.acknowledged<0 OR k.acknowledged>k.issued))"
+    ))?;
+    if invalid {
+        return Err(failure());
+    }
+    let orphan = exists(format!(
+        "SELECT EXISTS(SELECT 1 FROM local_context_sync_resolution_cancellation c JOIN local_context_sync_records p ON p.operation_ulid=c.operation_ulid LEFT JOIN local_context_sync_resolutions a ON a.attempt_ulid=c.attempt_ulid AND a.operation_ulid=c.operation_ulid WHERE ({records}) AND a.attempt_ulid IS NULL)"
+    ))?;
+    if orphan {
+        return Err(failure());
+    }
+    let mut statement = db.prepare(&format!("SELECT c.generation,p.generation,c.manifest FROM local_context_sync_conflicts c JOIN local_context_sync_records p ON p.operation_ulid=c.operation_ulid WHERE {records}")).map_err(|_| failure())?;
+    let mut rows = statement.query(rows.bound()).map_err(|_| failure())?;
     while let Some(row) = rows.next().map_err(|_| failure())? {
         let generation: i64 = row.get(0).map_err(|_| failure())?;
         if generation <= 0 || generation != row.get::<_, i64>(1).map_err(|_| failure())? {

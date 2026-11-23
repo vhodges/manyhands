@@ -48,17 +48,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::TransactionBehavior;
-
 use super::super::{
-    FailurePoint, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES, OperationId,
-    RefreshOutcome, RefreshRepositoryRequest, RepositoryError, RepositoryErrorKind,
-    RepositoryOperation, RepositoryService,
-    bridges::abandon::stale_heartbeat,
-    cache_read_guard, cache_write_guard, canonical_repository_root, discovery,
-    ensure_safe_owned_parent, mark_document_refresh_required, open_registry,
-    recovery::{self, LocalStanding},
-    registered_repository_id, registry_root_key, repository_lease,
+    ClosedRefresh, FailurePoint, MAX_DOCUMENT_DIRECTORY_DEPTH, MAX_DOCUMENT_DIRECTORY_ENTRIES,
+    OperationId, RefreshOutcome, RefreshRepositoryRequest, RepositoryError, RepositoryErrorKind,
+    RepositoryOperation, RepositoryService, cache_read_guard, canonical_repository_root, discovery,
+    ensure_safe_owned_parent, mark_contexts_dirty, open_registry, recovery,
+    registered_repository_id, repository_lease,
 };
 
 const OPERATION: RepositoryOperation = RepositoryOperation::CreateFolder;
@@ -447,8 +442,8 @@ fn observe(root: &Path, path: &DocumentFolderPath) -> Result<Observed, Repositor
 impl RepositoryService {
     /// Makes the directory `request.path` under `docs/` in the primary
     /// worktree of the registered repository at `request.root`, with
-    /// every directory above it that is missing, and then refreshes the
-    /// index under `request.operation_id`.
+    /// every directory above it that is missing, and then indexes the
+    /// primary under a refresh row of `request.operation_id`.
     ///
     /// It is idempotent: a directory that is there is left as it is,
     /// and the refresh still runs, so that the index holds the folder
@@ -485,7 +480,7 @@ impl RepositoryService {
         };
         // From here the directory is there, and the index has said it
         // is behind since before it was: whatever becomes of the
-        // refresh, it says so until one completes.
+        // refresh, it says so until the primary is indexed again.
         let discovery = self.refresh_for_folder(&root, operation_id);
         Ok(if created {
             CreateFolderOutcome::Created(discovery)
@@ -508,10 +503,18 @@ impl RepositoryService {
         // The mark is written before anything is made, and a call that
         // cannot write it makes nothing: the index never says it is
         // current while it lacks a folder this call made. A mark with
-        // no change behind it costs a refresh and misleads no one.
+        // no change behind it costs a refresh and misleads no one. Only
+        // the primary's own sources hold its folders, so only it is marked.
         let mark = || {
             self.check_failure(FailurePoint::BeforeRegistryWrite, OPERATION, root)
-                .and_then(|()| mark_document_refresh_required(&self.registry_path, root, OPERATION))
+                .and_then(|()| {
+                    mark_contexts_dirty(
+                        &self.registry_path,
+                        root,
+                        &[discovery::ContextKey::Primary],
+                        OPERATION,
+                    )
+                })
                 .map_err(CreateFolderError::before)
         };
         let (first, to_make) = match observe(root, path).map_err(CreateFolderError::before)? {
@@ -563,8 +566,8 @@ impl RepositoryService {
             .map_err(|error| error.for_operation(OPERATION, root))
     }
 
-    /// Refreshes the index under `operation_id` and says whether it now
-    /// holds what the repository does.
+    /// Indexes the primary, the one context a folder is in, under a refresh
+    /// row of `operation_id`, and says whether the index now holds it.
     ///
     /// A refresh that did not complete leaves its row pending, which
     /// refuses every other operation on the repository until a call
@@ -573,20 +576,23 @@ impl RepositoryService {
     /// call that left nothing behind, and the next refresh, under any
     /// ID, is what brings the index up to date.
     fn refresh_for_folder(&self, root: &Path, operation_id: OperationId) -> FolderDiscovery {
-        let refreshed = self.refresh_repository(RefreshRepositoryRequest {
-            root: root.to_owned(),
-            operation_id,
-        });
+        let refreshed = self.refresh_contexts(
+            RefreshRepositoryRequest {
+                root: root.to_owned(),
+                operation_id,
+            },
+            &[discovery::ContextKey::Primary],
+        );
         if matches!(refreshed, Ok(RefreshOutcome::Refreshed { snapshot: _ })) {
             return FolderDiscovery::Current;
         }
         match self.close_refresh(root, operation_id) {
             // Another call under the same ID completed the refresh.
-            Ok(Closed::Completed) => FolderDiscovery::Current,
-            Ok(Closed::NothingPending) => FolderDiscovery::Pending,
+            Ok(ClosedRefresh::Completed) => FolderDiscovery::Current,
+            Ok(ClosedRefresh::NothingPending) => FolderDiscovery::Pending,
             // The row is, or may be, pending still: a call under the
             // same ID is what takes it up.
-            Ok(Closed::AtWork) | Err(_) => FolderDiscovery::PendingUnderOperation,
+            Ok(ClosedRefresh::AtWork) | Err(_) => FolderDiscovery::PendingUnderOperation,
         }
     }
 
@@ -596,51 +602,10 @@ impl RepositoryService {
         &self,
         root: &Path,
         operation_id: OperationId,
-    ) -> Result<Closed, RepositoryError> {
+    ) -> Result<ClosedRefresh, RepositoryError> {
         self.check_failure(FailurePoint::BeforeFolderRefreshClose, OPERATION, root)?;
-        let _cache_guard = cache_write_guard(&self.registry_path, root, OPERATION)?;
-        let root_path = registry_root_key(root, OPERATION)?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|error| error.for_operation(OPERATION, root))?;
-        let sqlite = |error| RepositoryError::sqlite(error).for_operation(OPERATION, root);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(sqlite)?;
-        let row = recovery::local_row(&transaction, root_path, operation_id).map_err(sqlite)?;
-        let closed = match row {
-            None => Closed::NothingPending,
-            Some(row) => match row.standing() {
-                LocalStanding::Completed => Closed::Completed,
-                LocalStanding::Rejected | LocalStanding::Abandoned => Closed::NothingPending,
-                // An index owner whose heartbeat is fresh is at work,
-                // with no lease held: another call of the same request.
-                // Its row is not closed under it.
-                LocalStanding::Pending if row.has_live_heartbeat(stale_heartbeat()) => {
-                    Closed::AtWork
-                }
-                LocalStanding::Pending => {
-                    recovery::discard_operation(&transaction, row.id)
-                        .map_err(|error| error.for_operation(OPERATION, root))?;
-                    Closed::NothingPending
-                }
-            },
-        };
-        transaction.commit().map_err(sqlite)?;
-        Ok(closed)
+        self.close_pending_refresh(root, operation_id, OPERATION)
     }
-}
-
-/// What `close_refresh` found of the refresh's row.
-enum Closed {
-    /// The row has completed: the index was brought up to date under
-    /// the ID, by another call.
-    Completed,
-    /// No row is pending under the ID: there was none, or it was closed
-    /// here or before.
-    NothingPending,
-    /// The row is pending and a call is at work under it. It was left
-    /// as it is.
-    AtWork,
 }
 
 /// What `make_directories` came to.

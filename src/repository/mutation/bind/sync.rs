@@ -61,17 +61,21 @@ use rusqlite::OptionalExtension;
 
 use crate::{
     canonical::ItemId,
-    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
+    results::{
+        DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, RecoveryAction,
+        RecoveryActionKind, ResultCode, Scope,
+    },
 };
 
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
-            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
-            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
-            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, IndexPending, LifecycleIndexStep,
+            OperationFamily, OperationId, ReadError, RemoteOperationSafePoint, RepositoryOperation,
+            RepositoryService, SafePointRequest, SynchronizationError, SynchronizationObserver,
+            SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
+            SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow},
             remote::{conflict_read, sync::RepublishConsent},
             transport::SshTransportErrorKind,
@@ -604,7 +608,7 @@ pub(crate) fn resumed(
         target,
         republish: None,
     }
-    .call(call, accepted, subject, owner, None, true)
+    .taken_up(call, accepted, subject, owner, None)
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, as
@@ -627,7 +631,7 @@ pub(super) fn continued(
         target,
         republish: None,
     }
-    .call(call, accepted, subject, owner, holder, true)
+    .taken_up(call, accepted, subject, owner, holder)
 }
 
 /// What the domain returned of one call of a synchronization: `None`
@@ -951,6 +955,87 @@ impl SyncBinding {
         (Some(Err(error)), ran)
     }
 
+    /// The call of an operation taken up under its own ID, by `operation
+    /// resume` (`resumed`) or by the continuation of `conflict resolve`
+    /// (`continued`), as `call` makes it. A lifecycle's child that completed
+    /// while the index does not hold the context its local update changed
+    /// indexes that context itself, since its parent is not running in this
+    /// call (R-SDD-66), and is answered as a completed child is; only when
+    /// that step does not complete is it answered as `owed_to_its_parent`
+    /// says (decision 8). When the step's row may be pending still, not
+    /// closed or with a call at work under it, it would refuse that refresh:
+    /// the child is then answered as a synchronization whose hand-off is
+    /// owed, as folder create is then, and no refresh is offered. Nothing of
+    /// the call is held by then.
+    fn taken_up(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        subject: Subject,
+        owner: Option<RequestId>,
+        holder: Option<RequestId>,
+    ) -> Ran {
+        let (result, ran) = self.observed(call, accepted, subject, owner, holder, true);
+        match result {
+            Some(Ok(SynchronizationResult::Complete(came_to)))
+                if call.service.lifecycle_child_owes_its_parent(
+                    &accepted.root(),
+                    accepted.operation_id,
+                    &self.target,
+                ) =>
+            {
+                match call
+                    .service
+                    .index_lifecycle_child(&accepted.root(), &self.target)
+                {
+                    LifecycleIndexStep::Indexed => ran,
+                    LifecycleIndexStep::Pending => {
+                        self.owed_to_its_parent(call.service, accepted, came_to)
+                    }
+                    LifecycleIndexStep::PendingUnderOperation => self.finished(
+                        call.service,
+                        accepted,
+                        &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+                    ),
+                }
+            }
+            _ => ran,
+        }
+    }
+
+    /// The answer of a lifecycle's child taken up under its own ID
+    /// (`operation resume <child>`, or `conflict resolve`'s continuation of
+    /// it) that completed while the index does not hold the context its
+    /// local update changed, and whose own index step of it did not
+    /// complete (`taken_up`): that indexing is its parent's exit's (Task
+    /// 22) or any refresh's, and no operation owes it. It is answered as
+    /// a completed save's replay is (R-SDD-16): `discovery_pending`,
+    /// offering the refresh that brings the index up to date, and final, so
+    /// that no resume is offered for what no resume would do.
+    fn owed_to_its_parent(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        came_to: SynchronizationOutcome,
+    ) -> Ran {
+        let Ran { answer, .. } = self.finished(
+            service,
+            accepted,
+            &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+        );
+        Ran {
+            answer: Answer {
+                recovery: crate::results::absolute_path_string(&accepted.root())
+                    .as_deref()
+                    .map(outcome::refresh_the_root)
+                    .into_iter()
+                    .collect(),
+                ..answer
+            },
+            standing: Standing::Final,
+        }
+    }
+
     /// The domain returned a result: the synchronization has its
     /// outcome, and all that can remain is its index hand-off.
     fn finished(
@@ -1034,12 +1119,16 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
+        // The domain ends an operation on unresolved history as it ends a
+        // cancelled one, but it is not the caller's cancellation: the
+        // answer is the error's, and names the repair.
+        let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
-            }) => true,
+            }) => !unresolved,
             Some(
                 JournalRow::Absent
                 | JournalRow::Pending(_)
@@ -1155,13 +1244,33 @@ impl SyncBinding {
                 host_data(error)
             }
         };
+        // The operation the synchronization was refused for: the local
+        // row the reservation found in its way, or, for a reservation
+        // another remote operation holds, that operation.
+        let blocker = error.blocker().cloned().or_else(|| {
+            matches!(error, SynchronizationError::Busy)
+                .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                .flatten()
+        });
+        let recovery = if unresolved {
+            crate::results::absolute_path_string(&accepted.root())
+                .map(|root| {
+                    RecoveryAction::new(RecoveryActionKind::RemoteHistory, [("root", root.into())])
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ran {
             answer: Answer {
                 effects,
                 data,
                 local_change,
+                recovery,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Stopped { journal },
         }
     }
@@ -1454,3 +1563,7 @@ impl Binding for SyncBinding {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

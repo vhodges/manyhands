@@ -65,6 +65,39 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Option<[u8; 32]>> {
     walk(root, root, &mut out);
     out
 }
+
+#[test]
+fn cleanup_retirement_branch_guard_runs_under_ref_lock_before_delete() {
+    for kind in [AuthoringKind::Ticket, AuthoringKind::Document] {
+        let f = Fixture::new(kind);
+        let cleanup = f.cleanup();
+        assert_eq!(f.remove(&cleanup), WorktreeRemoval::Removed);
+        let before = files(f.root.path());
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            cleanup.delete_retirement_branch(kind, &ID.parse().unwrap(), f.oid, || {
+                assert!(
+                    f.repo
+                        .commondir()
+                        .join(format!("{}.lock", f.branch()))
+                        .is_file()
+                );
+                assert_eq!(f.repo.refname_to_id(&f.branch()).unwrap(), f.oid);
+                called.set(true);
+                false
+            }),
+            BranchDeletion::Changed
+        );
+        assert!(called.get());
+        assert!(files(f.root.path()) == before);
+        // Default lifecycle cleanup still uses its original guards, not the
+        // retirement-only authorization or any context-retirement policy.
+        assert_eq!(
+            cleanup.delete_context_branch(kind, &ID.parse().unwrap(), f.oid),
+            BranchDeletion::Deleted
+        );
+    }
+}
 impl Fixture {
     fn new(kind: AuthoringKind) -> Self {
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
@@ -152,7 +185,7 @@ impl Fixture {
         c.precheck_context(self.kind, &ID.parse().unwrap(), self.oid)
     }
     fn remove(&self, c: &ContextCleanup) -> WorktreeRemoval {
-        c.remove_context_worktree(self.kind, &ID.parse().unwrap(), self.oid)
+        c.remove_context_worktree(&self.service, self.kind, &ID.parse().unwrap(), self.oid)
     }
     fn branch(&self) -> String {
         format!(
@@ -166,7 +199,12 @@ impl Fixture {
     fn setup_remote(&self) -> RemoteRefPlan {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         remote::state::with_transaction(&self.service, self.root.path(), |tx, id| {
-            let generation = remote::state::configure(tx, id, Some(&plan), false)?;
+            let generation = remote::state::configure(
+                tx,
+                id,
+                Some(&plan),
+                remote::state::ConfigurationChange::Plan,
+            )?;
             let target = plan.context(self.kind, &ID.parse().unwrap());
             let observation = RemoteRefObservation::from_advertisement(
                 &plan,
@@ -259,40 +297,164 @@ fn cleanup_precheck_clean_and_dirty_cases_preserve_full_git_image() {
 }
 
 #[test]
-fn cleanup_ignored_and_locked_are_preserved() {
-    for case in ["ignored", "locked"] {
+fn cleanup_locked_is_preserved() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.cleanup();
+    f.repo
+        .find_worktree(ID)
+        .unwrap()
+        .lock(Some("fixture"))
+        .unwrap();
+    let before = files(f.root.path());
+    assert_eq!(f.precheck(&c), Precheck::Locked);
+    assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
+    assert_eq!(files(f.root.path()), before);
+}
+
+/// Adds `pattern` to the repository's `info/exclude`, which every linked
+/// worktree reads.
+fn exclude(f: &Fixture, pattern: &str) {
+    let exclude = f.repo.path().join("info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    text.push_str(&format!("\n{pattern}\n"));
+    fs::write(exclude, text).unwrap();
+}
+
+#[test]
+fn cleanup_ignored_files_do_not_block() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.cleanup();
+    exclude(&f, "private/");
+    let worktree = f.linked.workdir().unwrap().to_owned();
+    fs::create_dir_all(worktree.join("private/deep")).unwrap();
+    fs::write(worktree.join("private/keep"), b"ignored").unwrap();
+    fs::write(worktree.join("private/deep/x.o"), b"ignored").unwrap();
+    let read_only = worktree.join("private/ro.bin");
+    fs::write(&read_only, b"ignored").unwrap();
+    let mut permissions = fs::metadata(&read_only).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&read_only, permissions).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/nonexistent", worktree.join("private/dangling")).unwrap();
+    assert_eq!(f.precheck(&c), Precheck::Ok);
+    assert_eq!(
+        c.precheck_release(f.kind, &ID.parse().unwrap(), f.oid),
+        ReleaseCheck::Clean
+    );
+    assert_eq!(f.remove(&c), WorktreeRemoval::Removed);
+    assert!(!worktree.exists());
+    assert!(!f.repo.path().join("worktrees").join(ID).exists());
+}
+
+#[test]
+fn cleanup_ignored_files_beside_other_changes_still_block() {
+    for case in ["untracked", "tracked_matching_an_ignore_pattern", "staged"] {
         let f = Fixture::new(AuthoringKind::Document);
         let c = f.cleanup();
-        if case == "ignored" {
-            let exclude = f.repo.path().join("info/exclude");
-            let mut text = fs::read_to_string(&exclude).unwrap();
-            text.push_str("\nprivate/\n");
-            fs::write(exclude, text).unwrap();
-            fs::create_dir(f.linked.workdir().unwrap().join("private")).unwrap();
-            fs::write(
-                f.linked.workdir().unwrap().join("private/keep"),
-                b"preserve",
-            )
-            .unwrap();
-        } else {
-            f.repo
-                .find_worktree(ID)
-                .unwrap()
-                .lock(Some("fixture"))
-                .unwrap();
+        exclude(&f, "private/");
+        let worktree = f.linked.workdir().unwrap().to_owned();
+        fs::create_dir(worktree.join("private")).unwrap();
+        fs::write(worktree.join("private/keep"), b"ignored").unwrap();
+        match case {
+            "untracked" => fs::write(worktree.join("new"), b"keep").unwrap(),
+            "tracked_matching_an_ignore_pattern" => {
+                // `ordinary` is tracked, so Git reports it modified, not
+                // ignored, whatever the patterns say.
+                exclude(&f, "ordinary");
+                fs::write(worktree.join("ordinary"), b"changed").unwrap();
+            }
+            _ => {
+                fs::write(worktree.join("new"), b"keep").unwrap();
+                let mut index = f.linked.index().unwrap();
+                index.add_path(Path::new("new")).unwrap();
+                index.write().unwrap();
+            }
         }
         let before = files(f.root.path());
+        assert_eq!(f.precheck(&c), Precheck::Changed, "{case}");
         assert_eq!(
-            f.precheck(&c),
-            if case == "ignored" {
-                Precheck::IgnoredFiles
-            } else {
-                Precheck::Locked
-            }
+            c.precheck_release(f.kind, &ID.parse().unwrap(), f.oid),
+            ReleaseCheck::NotClean,
+            "{case}"
         );
-        assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
-        assert_eq!(files(f.root.path()), before);
+        assert_ne!(f.remove(&c), WorktreeRemoval::Removed, "{case}");
+        assert_eq!(files(f.root.path()), before, "{case}");
     }
+}
+
+#[test]
+fn cleanup_ignored_directories_holding_a_repository_or_unreadable_block() {
+    for case in [
+        "git_dir",
+        "gitfile",
+        "three_deep",
+        "unreadable",
+        "untracked_empty_repository",
+    ] {
+        if cfg!(not(unix)) && case == "unreadable" {
+            continue;
+        }
+        let f = Fixture::new(AuthoringKind::Document);
+        let c = f.cleanup();
+        exclude(&f, "vendor/\ntarget/");
+        let worktree = f.linked.workdir().unwrap().to_owned();
+        let mut unreadable = None;
+        match case {
+            "git_dir" => {
+                fs::create_dir(worktree.join("vendor")).unwrap();
+                Repository::init(worktree.join("vendor/clone")).unwrap();
+            }
+            "gitfile" => {
+                fs::create_dir_all(worktree.join("vendor/clone")).unwrap();
+                fs::write(worktree.join("vendor/clone/.git"), b"gitdir: /elsewhere\n").unwrap();
+            }
+            "untracked_empty_repository" => {
+                // Not ignored itself, and holding nothing Git reports: only the
+                // `.git` entry says there are commits to lose.
+                Repository::init(worktree.join("notes")).unwrap();
+            }
+            "three_deep" => {
+                fs::create_dir_all(worktree.join("target/a/b/c")).unwrap();
+                Repository::init(worktree.join("target/a/b/c")).unwrap();
+            }
+            _ => {
+                let path = worktree.join("target/closed");
+                fs::create_dir_all(&path).unwrap();
+                fs::write(path.join("x"), b"ignored").unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+                }
+                unreadable = Some(path);
+            }
+        }
+        // The snapshot walker cannot read the unreadable directory either.
+        let before = unreadable.is_none().then(|| files(f.root.path()));
+        assert_eq!(f.precheck(&c), Precheck::Changed, "{case}");
+        assert_ne!(f.remove(&c), WorktreeRemoval::Removed, "{case}");
+        assert!(worktree.exists(), "{case}");
+        if let Some(before) = before {
+            assert_eq!(files(f.root.path()), before, "{case}");
+        }
+        #[cfg(unix)]
+        if let Some(path) = unreadable {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_directory_that_vanishes_during_the_walk_is_not_a_block() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("target")).unwrap();
+    fs::write(dir.path().join("target/x"), b"ignored").unwrap();
+    let roots = vec![dir.path().join("target"), dir.path().join("gone")];
+    assert!(!super::tree_holds_git_entry(roots).unwrap());
+    fs::create_dir(dir.path().join("target/inner")).unwrap();
+    fs::create_dir(dir.path().join("target/inner/.git")).unwrap();
+    assert!(super::tree_holds_git_entry(vec![dir.path().join("target")]).unwrap());
 }
 
 fn hide_index_entry(repo: &Repository, path: &str, flag: &str) {
@@ -431,7 +593,7 @@ fn submodule_fixture(
 }
 
 #[test]
-fn cleanup_submodule_ignored_files_are_preserved_recursively() {
+fn cleanup_submodule_ignored_files_do_not_block() {
     for depth in [1, 2] {
         let (f, child, nested) = submodule_fixture(depth, true);
         let c = f.cleanup();
@@ -448,12 +610,12 @@ fn cleanup_submodule_ignored_files_are_preserved_recursively() {
             .recurse_ignored_dirs(true)
             .include_untracked(true);
         assert!(f.linked.statuses(Some(&mut options)).unwrap().is_empty());
-        let before = files(f.root.path());
         let data_before = files(f.data.path());
-        assert_eq!(f.precheck(&c), Precheck::IgnoredFiles, "depth {depth}");
-        assert_eq!(f.remove(&c), WorktreeRemoval::Changed);
-        assert_eq!(files(f.root.path()), before);
-        assert_eq!(files(f.data.path()), data_before);
+        assert_eq!(f.precheck(&c), Precheck::Ok, "depth {depth}");
+        assert_eq!(f.remove(&c), WorktreeRemoval::Removed, "depth {depth}");
+        assert_eq!(files(f.data.path()), data_before, "depth {depth}");
+        // The submodule's own Git data lives outside the removal and survives.
+        assert!(child.path().is_dir(), "depth {depth}");
     }
 }
 
@@ -1282,7 +1444,12 @@ fn cleanup_retirement_preserves_other_item_and_historical_observations() {
     let f = Fixture::new(AuthoringKind::Document);
     let plan = f.setup_remote();
     remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
-        let generation = remote::state::configure(tx, id, Some(&plan), false)?;
+        let generation = remote::state::configure(
+            tx,
+            id,
+            Some(&plan),
+            remote::state::ConfigurationChange::Plan,
+        )?;
         let observations = [ID, OTHER].map(|item| {
             RemoteRefObservation::from_advertisement(
                 &plan,

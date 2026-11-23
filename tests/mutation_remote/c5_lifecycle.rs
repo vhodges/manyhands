@@ -282,6 +282,8 @@ pub(super) fn prepared(
             schema::check_published(BLOCKED, &value["data"]).expect("the blocked schema");
         }
         Some(PrepareDataDto::HostReplacement(_)) => panic!("no host is named"),
+        // A lifecycle's preview names what is in its way in its own list.
+        Some(PrepareDataDto::Blocked(_)) => panic!("a lifecycle names its own blockers"),
         None => {}
     }
     assert_eq!(envelope.command, verb.command());
@@ -1519,8 +1521,8 @@ fn superseded(verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// Ignored files in the worktree stop cleanup, and the same request finishes
-/// once they are gone.
+/// Ignored files in the worktree do not stop cleanup: the same request that
+/// was stopped after publication finishes, and the worktree goes with them.
 fn cleanup_ignored_files(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
@@ -1528,18 +1530,14 @@ fn cleanup_ignored_files(verb: Verb) -> Result<(), FixtureError> {
         w.root.join(".git/info/exclude"),
         b"fixture-ignored\n",
     ))?;
-    let ignored = verb.worktree(&w.root).join("fixture-ignored");
-    fixed(std::fs::write(&ignored, b"ignored\n"))?;
-    let stopped = resent(&w.service, FIRST, verb, &w.root);
-    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
-    assert_eq!(stopped.outcome, Outcome::Partial);
-    assert_eq!(
-        lifecycle_of(&stopped).ok_or(FixtureError)?.cleanup_pending,
-        Some(LifecycleCleanupPendingReason::IgnoredFiles)
-    );
-    fixed(std::fs::remove_file(&ignored))?;
+    let worktree = verb.worktree(&w.root);
+    fixed(std::fs::write(
+        worktree.join("fixture-ignored"),
+        b"ignored\n",
+    ))?;
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert!(!worktree.exists());
     Ok(())
 }
 
@@ -2333,7 +2331,29 @@ fn comment_publication_pending() -> Result<(), FixtureError> {
         blockers_of(&preview),
         [LifecycleBlocker::CommentPublicationPending]
     );
-    assert_eq!(prepare_actions(&preview), [RecoveryActionKind::RepoInspect]);
+    // The comment's interrupted synchronization is offered its resume, and
+    // its abandon after it.
+    assert_eq!(
+        prepare_actions(&preview),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    let synchronization: String = fixed(
+        fixed(rusqlite::Connection::open(w.data().join(REGISTRY_FILE)))?.query_row(
+            "SELECT synchronization_ulid FROM comment_publication_bindings",
+            [],
+            |row| row.get(0),
+        ),
+    )?;
+    for action in [&preview.recovery[0], &preview.recovery[2]] {
+        assert_eq!(
+            action.operation_id.as_deref(),
+            Some(synchronization.as_str())
+        );
+    }
     Ok(())
 }
 

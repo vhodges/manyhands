@@ -2,16 +2,19 @@
 // replacement approval. Operations are infrequent; keep that typed value API.
 #![allow(clippy::result_large_err)]
 
+mod agent;
+mod agent_credential;
 mod callbacks;
 pub(super) mod endpoint;
 mod error;
+#[cfg(all(test, unix))]
+pub(crate) mod fake_agent;
 mod operation;
 #[cfg(test)]
 pub(crate) mod operation_tests;
 mod remote;
 pub(super) use remote::AuthenticatedSshRemote;
-#[allow(unused_imports)] // Consumed by the later promotion orchestrator.
-pub(crate) use remote::DeleteObservation;
+pub(crate) use remote::{DeleteAttempt, DeleteObservation};
 #[cfg(test)]
 pub(crate) mod tests;
 pub(super) mod trust;
@@ -60,6 +63,10 @@ pub(super) struct PreparedSshAttempt {
     pub(super) endpoint: endpoint::SshEndpoint,
     pub(super) trust: trust::HostTrustSnapshot,
     pub(super) approval: Option<HostApproval>,
+    /// The registry connection the call's key reads go through, its
+    /// preparation's and every recheck's (design decision 36). It holds no
+    /// guard, no read transaction and nothing read.
+    pub(super) registry: super::CallRegistry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

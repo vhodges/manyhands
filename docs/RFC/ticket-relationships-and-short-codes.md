@@ -130,7 +130,8 @@ not: the initials and prefix come from who created the ticket and where. That
 is why the slug is stored and not recomputed.
 
 A ticket created before this RFC has no `slug`. It stays valid and is shown by
-its ULID. A person can give it one with the explicit assign operation below,
+its ULID (in the desktop list, `—` with the ULID in the row's tooltip; Wave 04
+Cycle 02 decision 4). A person can give it one with the explicit assign operation below,
 which uses the assigning identity's initials.
 
 ## Identity, selection and collisions
@@ -319,8 +320,10 @@ Human output shows the slug beside the ULID wherever a ticket is named.
 
 - Ticket lists and the ticket header show the slug. Copy controls offer the
   slug and the ULID separately.
-- A find-by-slug entry lists every match with its context; choosing one opens
-  that ticket by ULID.
+- The Tickets filter lists every ticket with that short code under the
+  filters chosen and says how many more match outside them, each with its
+  context in its tooltip; choosing one opens that ticket by ULID (Wave 04
+  Cycle 02 decision 2, amended 2026-11-11).
 - Ticket lists can filter to ready or blocked tickets. A blocked ticket shows
   its reasons.
 - The ticket view shows its dependencies, the tickets that depend on it, its

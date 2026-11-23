@@ -19,7 +19,7 @@ use super::super::super::{
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
         closure, promotion,
-        promotion::{ParentView, lifecycle::LifecyclePreview},
+        promotion::{ParentView, lifecycle::LifecyclePreview, run::RunObserver},
         remote::{state, sync},
         transport::SshTransportError,
     },
@@ -112,7 +112,9 @@ pub(in super::super::super) trait LifecycleVerb {
         id: &ItemId,
     ) -> Result<Observed, RepositoryError>;
 
-    /// `None` when the session has no credentials to call it with.
+    /// `None` when the session has no credentials to call it with. `progress`
+    /// is told of each step the run takes (D5 decision 11).
+    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,
@@ -121,6 +123,7 @@ pub(in super::super::super) trait LifecycleVerb {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>>;
 
     fn parent(
@@ -171,6 +174,7 @@ fn promotion_blocker(blocker: PromotionBlocker) -> LifecycleBlocker {
         PromotionBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
         PromotionBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
         PromotionBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
+        PromotionBlocker::HistoryUnresolved => LifecycleBlocker::HistoryUnresolved,
         PromotionBlocker::DocumentInvalidAfterIntegration => {
             LifecycleBlocker::DocumentInvalidAfterIntegration
         }
@@ -196,6 +200,7 @@ fn closure_blocker(blocker: ClosureBlocker) -> LifecycleBlocker {
         ClosureBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
         ClosureBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
         ClosureBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
+        ClosureBlocker::HistoryUnresolved => LifecycleBlocker::HistoryUnresolved,
         ClosureBlocker::AlreadyClosed => LifecycleBlocker::AlreadyClosed,
         ClosureBlocker::PrimaryReopened => LifecycleBlocker::PrimaryReopened,
         ClosureBlocker::TicketInvalidAfterClosure => LifecycleBlocker::TicketInvalidAfterClosure,
@@ -302,6 +307,7 @@ impl LifecycleVerb for Promote {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.promote_document(
             service,
@@ -314,6 +320,7 @@ impl LifecycleVerb for Promote {
                 confirmed_identity: None,
             },
             request_id,
+            progress,
         )?;
         Some(match result {
             Ok(DocumentPromotionResult::Complete(outcome)) => {
@@ -404,6 +411,7 @@ impl LifecycleVerb for Close {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.close_ticket(
             service,
@@ -416,6 +424,7 @@ impl LifecycleVerb for Close {
                 confirmed_identity: None,
             },
             request_id,
+            progress,
         )?;
         Some(match result {
             Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),

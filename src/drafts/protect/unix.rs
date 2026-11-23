@@ -16,20 +16,21 @@ use std::{
     path::Path,
 };
 
-const DRAFTS: &str = "drafts";
-
 impl Folder {
-    pub(crate) fn open(data: &Path) -> Result<Folder, DraftError> {
+    /// `<data>/<folder>`, made or checked and held open; `folder` is a
+    /// single entry name.
+    pub(crate) fn open_named(data: &Path, folder: &str) -> Result<Folder, DraftError> {
+        let handle = open_folder(data, folder)?;
         Ok(Folder {
-            path: data.join(DRAFTS),
-            handle: open_folder(data)?,
+            path: data.join(folder),
+            handle,
         })
     }
 
-    /// Opens `drafts/` again, with the same checks, after the held folder
+    /// Opens the folder again, with the same checks, after the held folder
     /// was removed.
     pub(crate) fn reopen(&mut self) -> Result<(), DraftError> {
-        self.handle = open_folder(self.data()?)?;
+        self.handle = open_folder(self.data()?, self.name()?)?;
         Ok(())
     }
 
@@ -181,8 +182,9 @@ fn errno() -> *mut libc::c_int {
     unsafe { libc::__error() }
 }
 
-/// Opens (making it if absent) `<data>/drafts` and checks both folders.
-fn open_folder(data: &Path) -> Result<File, DraftError> {
+/// Opens (making it if absent) `<data>/<folder>` and checks both folders.
+fn open_folder(data: &Path, folder: &str) -> Result<File, DraftError> {
+    let folder = name(folder)?;
     let open = || {
         OpenOptions::new()
             .read(true)
@@ -202,8 +204,7 @@ fn open_folder(data: &Path) -> Result<File, DraftError> {
     if data_verdict(metadata.mode(), metadata.uid(), unsafe { libc::geteuid() }) != Verdict::Ok {
         return Err(DraftError::new(DraftErrorKind::ProtectionUnavailable));
     }
-    let drafts = name(DRAFTS)?;
-    if unsafe { libc::mkdirat(data.as_raw_fd(), drafts.as_ptr(), 0o700) } == 0 {
+    if unsafe { libc::mkdirat(data.as_raw_fd(), folder.as_ptr(), 0o700) } == 0 {
         data.sync_all()?;
     } else {
         let error = io::Error::last_os_error();
@@ -212,12 +213,12 @@ fn open_folder(data: &Path) -> Result<File, DraftError> {
         }
     }
     let folder =
-        open_at(&data, &drafts, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(protection)?;
+        open_at(&data, &folder, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(protection)?;
     check_folder(&folder)?;
     Ok(folder)
 }
 
-/// `drafts/` must be our directory; group and other bits are cleared.
+/// The folder must be our directory; group and other bits are cleared.
 fn check_folder(folder: &File) -> Result<(), DraftError> {
     let metadata = folder.metadata()?;
     match folder_verdict(

@@ -4673,7 +4673,7 @@ dependencies = [
 
 [[package]]
 name = "manyhands"
-version = "0.1.6"
+version = "0.2.1"
 dependencies = [
  "blake3",
  "clap",
@@ -4684,12 +4684,14 @@ dependencies = [
  "gpui-kit",
  "image",
  "libc",
+ "libgit2-sys",
  "libssh2-sys",
  "rusqlite",
  "russh",
  "serde",
  "serde_json",
  "serde_yaml",
+ "signature 2.2.0",
  "ssh-key 0.6.7",
  "tempfile",
  "time",

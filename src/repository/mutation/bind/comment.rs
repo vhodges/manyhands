@@ -607,7 +607,8 @@ impl CommentAddBinding {
             answer: Answer {
                 effects,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), error.blocker()),
             standing,
         }
     }
@@ -653,6 +654,9 @@ fn saved(
         }
     };
     let mut conflict = None;
+    // The operation the synchronization was refused for, when its answer
+    // names one: the comment's answer names it too, as `data.blocker`.
+    let mut blocker = None;
     let (code, reason, standing) = match publication {
         CommentPublicationState::Published { oid: _ } => {
             let (effect, code, standing) = published(PublicationEffect::Published);
@@ -691,6 +695,7 @@ fn saved(
                 succeeded: false,
             }) => {
                 let Ran { answer, standing } = ran;
+                blocker = answer.blocker;
                 // A push the remote took before the stop is published.
                 if matches!(
                     answer.effects.publication,
@@ -742,6 +747,7 @@ fn saved(
     Ran {
         answer: Answer {
             effects,
+            blocker,
             ..Answer::stopped(code)
         }
         .with_data(MutationDataDto::Comment(data)),
@@ -851,3 +857,7 @@ impl Binding for CommentAddBinding {
         self.submit(call, accepted, true)
     }
 }
+
+#[cfg(test)]
+#[path = "comment_tests.rs"]
+mod tests;

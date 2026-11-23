@@ -289,3 +289,43 @@ fn a_declined_key_is_cleared_through_its_request() {
     );
     assert_eq!(again, ("supplied", true));
 }
+
+/// C3, K-23: Unlock… clears the mark of the key it names, and only that
+/// one. With two keys declined, unlocking A prompts for A again and leaves B
+/// answered `Cancelled` at once.
+#[test]
+fn unlocking_one_key_leaves_another_declined() {
+    let fixture = Fixture::new();
+    let (worker, mut events) = WorkerHandle::spawn(fixture.delaying_backend());
+    let directory = tempfile::tempdir().unwrap();
+    let (a_id, b_id) = (SharedKeyId::new(), SharedKeyId::new());
+    let a = unlock(&directory.path().join("a"), a_id, "a");
+    let b = unlock(&directory.path().join("b"), b_id, "b");
+    for request in [&a, &b] {
+        let declined = ask_through(
+            worker.provider(),
+            request.clone(),
+            &mut events,
+            PromptReply::Cancelled,
+        );
+        assert_eq!(declined, ("cancelled", true));
+    }
+    assert!(worker.clear_declined(a_id));
+
+    let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
+    let again = ask_through(
+        worker.provider(),
+        a,
+        &mut events,
+        PromptReply::Supplied(secret),
+    );
+    assert_eq!(again, ("supplied", true), "A prompts again");
+    let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
+    let still = ask_through(
+        worker.provider(),
+        b,
+        &mut events,
+        PromptReply::Supplied(secret),
+    );
+    assert_eq!(still, ("cancelled", false), "B is still declined");
+}

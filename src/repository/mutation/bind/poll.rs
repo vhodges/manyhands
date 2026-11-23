@@ -281,7 +281,7 @@ impl From<PollOnceInput> for PollOnceBinding {
     }
 }
 
-fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
+pub(crate) fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
     match disposition {
         PollDisposition::Current => PollTargetDisposition::Current,
         PollDisposition::FastForwarded => PollTargetDisposition::FastForwarded,
@@ -298,7 +298,10 @@ fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
         }
         PollDisposition::Malformed => PollTargetDisposition::Malformed,
         PollDisposition::RemotelyDeleted => PollTargetDisposition::RemotelyDeleted,
+        PollDisposition::Closed => PollTargetDisposition::Closed,
+        PollDisposition::Promoted => PollTargetDisposition::Promoted,
         PollDisposition::HistoryUnknown => PollTargetDisposition::HistoryUnknown,
+        PollDisposition::Unpublished => PollTargetDisposition::Unpublished,
         PollDisposition::NotReached => PollTargetDisposition::NotReached,
     }
 }
@@ -320,7 +323,7 @@ fn dto_target(target: &PollTargetReport) -> PollTargetDto {
 }
 
 /// The report as the result's data. `None` for a time that cannot be written.
-fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
+pub(crate) fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
     Some(PollMutationDto {
         operation_id: report.operation_id().to_string(),
         completion: match report.completion() {
@@ -350,7 +353,7 @@ pub(crate) fn ended_failed(journal: &JournalRow) -> bool {
 
 /// The code of a stored category, which a later call reads where the first
 /// call's error named the stop by its own code (design, Polling Verbs).
-fn category_code(category: RemoteOutcomeCategory) -> ResultCode {
+pub(crate) fn category_code(category: RemoteOutcomeCategory) -> ResultCode {
     match category {
         RemoteOutcomeCategory::Completed => ResultCode::Ok,
         RemoteOutcomeCategory::ConfigurationRequired => ResultCode::PublicationRemoteRequired,
@@ -401,7 +404,11 @@ impl PollOnceBinding {
 
     /// The domain's report: the authoritative result first, and whether the
     /// index is behind second.
-    fn reported(call: &CallContext<'_>, accepted: &Accepted, result: RemotePollResult) -> Ran {
+    pub(super) fn reported(
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        result: RemotePollResult,
+    ) -> Ran {
         let (outcome, pending) = match result {
             RemotePollResult::Complete(outcome) => (outcome, false),
             RemotePollResult::IndexPending(pending) => (pending.authoritative, true),
@@ -482,7 +489,11 @@ impl PollOnceBinding {
     }
 
     /// The domain returned an error.
-    fn stopped(call: &CallContext<'_>, accepted: &Accepted, error: RemotePollError) -> Ran {
+    pub(super) fn stopped(
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        error: RemotePollError,
+    ) -> Ran {
         let plain = |code| Self::by_the_row(call, accepted, Answer::stopped(code));
         match error {
             RemotePollError::Transport(error) => {

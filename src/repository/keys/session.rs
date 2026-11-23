@@ -206,6 +206,9 @@ pub enum PassphraseUseFailure {
     Rejected,
     SourceChanged,
     Unavailable,
+    /// The attempt failed for a reason that says nothing about the passphrase,
+    /// such as an unreachable server. A cached passphrase stays cached.
+    Unrelated,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,7 +345,9 @@ impl<P: SessionCredentialProvider> SessionCredentials<P> {
                     .passphrase
                     .expose(),
             );
-            if result.is_err() {
+            // A cached passphrase already unlocked this key, so only a failure
+            // that implicates the passphrase or the key source evicts it.
+            if matches!(result, Err(failure) if failure != PassphraseUseFailure::Unrelated) {
                 self.clear();
             }
             return result.map_err(SessionUnlockFailure::from);
@@ -381,7 +386,9 @@ impl From<PassphraseUseFailure> for SessionUnlockFailure {
         match failure {
             PassphraseUseFailure::Rejected => Self::Rejected,
             PassphraseUseFailure::SourceChanged => Self::SourceChanged,
-            PassphraseUseFailure::Unavailable => Self::Unavailable,
+            PassphraseUseFailure::Unavailable | PassphraseUseFailure::Unrelated => {
+                Self::Unavailable
+            }
         }
     }
 }

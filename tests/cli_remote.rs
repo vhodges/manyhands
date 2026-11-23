@@ -6,6 +6,8 @@ mod cli_pair;
 mod collaboration;
 #[path = "cli_remote/conflicts.rs"]
 mod conflicts;
+#[path = "cli_remote/history.rs"]
+mod history;
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
 #[path = "cli_remote/interruption.rs"]
@@ -44,6 +46,8 @@ mod polling;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/render.rs"]
 mod render;
+#[path = "cli_remote/retirement.rs"]
+mod retirement;
 #[path = "cli_remote/unlock.rs"]
 mod unlock;
 
@@ -108,9 +112,11 @@ fn main() {
         .chain(collaboration::CASES)
         .chain(conflicts::CASES)
         .chain(polling::CASES)
+        .chain(retirement::CASES)
         .chain(lifecycle::BOTH)
         .chain(lifecycle::ONE)
         .chain(journeys_c5::CASES)
+        .chain(history::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

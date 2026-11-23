@@ -1,14 +1,24 @@
-//! The passphrase dialog: what a credential prompt shows (design,
-//! Credential prompts).
+//! The Unlock key dialog: what a credential prompt shows (design,
+//! Credential prompts), on the common frame (Wave 04 Cycle 05a design Part
+//! D; `05`, 2h), 440 px wide.
+//!
+//! The header has the `lock` tile and "Unlock your key"; its description
+//! names what waits, while a share or a post waits on the prompt. The body
+//! is the key card (`card`: the key's label and, once the key list has it,
+//! its fingerprint), the reason's guidance, the "Passphrase" field (named
+//! for the key to assistive technology), the refusal under it, and the
+//! note. The footer is Not now, then Unlock: the action last (R-1,
+//! decision 15).
 //!
 //! The input is masked, with no mask toggle: the Kit's masked input
 //! refuses copy and hides its value from accessibility. Submit, by Enter
 //! or Unlock, refuses an empty passphrase or one containing NUL, as
-//! `SecretPassphrase::new` does; otherwise it moves the text into the one
-//! `SecretPassphrase`, empties the input, lets the input go and replies
-//! `Supplied`. Escape or Cancel replies `Cancelled`. Quitting, or closing
-//! the window, replies `Unavailable`; a dialog dropped unanswered, with
-//! its window, reads as `Unavailable` too.
+//! `SecretPassphrase::new` does, and puts focus back in the field (R-17);
+//! otherwise it moves the text into the one `SecretPassphrase`, empties the
+//! input, lets the input go and replies `Supplied`. Escape or Not now
+//! replies `Cancelled`. Quitting, or closing the window, replies
+//! `Unavailable`; a dialog dropped unanswered, with its window, reads as
+//! `Unavailable` too.
 //!
 //! A prompt that arrives while the confirmation dialog is open shows
 //! above it, so the job that asks, which that dialog may have submitted,
@@ -20,43 +30,65 @@
 //! the control that opened it.
 //!
 //! While a share or a post waits on the prompt, the dialog names its
-//! repository ("Sharing {repository} is waiting for your passphrase.")
-//! and says what Not now leaves (design, The passphrase dialog). One
-//! worker runs one job at a time, so what waits is the request the model
-//! has running, read once the dialog has opened.
+//! repository ("Sharing {repository} is waiting for your passphrase.").
+//! One worker runs one job at a time, so what waits is the request the
+//! model has running, read once the dialog has opened.
 //!
-//! Text is fixed strings, the key's label and ID, the repository's
-//! directory name, and the library's guidance for the reason.
+//! Text is fixed strings, the key's label and fingerprint (public facts,
+//! which Settings' key list shows too), the repository's directory name,
+//! and the library's guidance for the reason. The key's ID and its files
+//! are never drawn.
+
+mod card;
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
-    WeakEntity, Window,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, WeakEntity, Window,
+    assets::IconName,
     component::{
-        ActiveTheme, Root, WindowExt,
+        Icon, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
         h_flex,
         input::{Input, InputEvent, InputState},
         v_flex,
     },
-    div,
+    div, px,
 };
 use manyhands::repository::keys::SecretPassphrase;
 
-use super::{operations::scope_name, workspace::Workspace};
+use super::{
+    frame::{self, Footer, Header, Tone},
+    operations::scope_name,
+    shell::tokens::chrome_colors,
+    workspace::window_workspace,
+};
 use crate::desktop::{
-    model::operations::Progressing,
-    services::prompts::{PromptReply, PromptRequest},
+    model::{operations::Progressing, stamp::Generations},
+    services::{
+        Services,
+        prompts::{PromptReply, PromptRequest},
+    },
 };
 
-pub(crate) const TITLE: &str = "Unlock key";
+pub(crate) const TITLE: &str = "Unlock your key";
 pub(crate) const UNLOCK: &str = "Unlock";
 /// Cancel, relabelled (design, The passphrase dialog).
 pub(crate) const CANCEL: &str = "Not now";
-/// What Not now leaves, while a share waits.
-pub(crate) const NOT_NOW_NOTE: &str = "If you choose Not now, your work stays saved on this \
-     computer. Unlock later from the waiting share, or stop trying to share it.";
+/// The field's label: the key card names the key (decision 14).
+pub(crate) const PASSPHRASE: &str = "Passphrase";
+
+/// The field's accessible name, which names the key the card shows, while
+/// the label on screen stays `PASSPHRASE` (owner Ruling 26).
+pub(crate) fn passphrase_for(label: &str) -> String {
+    format!("{PASSPHRASE} for {label}")
+}
+
+/// What the passphrase becomes and what Not now leaves, always shown
+/// (decision 14).
+pub(crate) const NOT_NOW_NOTE: &str = "Kept in memory only, never written to disk. If you \
+     choose Not now, you can keep working and unlock later from Needs attention.";
 pub(crate) const REFUSED: &str =
     "Enter the passphrase. It cannot be empty or contain a NUL character.";
 
@@ -65,27 +97,31 @@ pub(crate) fn waiting_subtitle(repository: &str) -> String {
     format!("Sharing {repository} is waiting for your passphrase.")
 }
 
-/// The input's label: "Passphrase for <label>".
-pub(crate) fn label_for(label: &str) -> String {
-    format!("Passphrase for {label}")
-}
+/// The dialog's width (`05`, 2h).
+const WIDTH: f32 = 440.;
+/// The header's title and description, by the ids tests find them by.
+const TITLE_ID: &str = "passphrase-title";
+const SUBTITLE_ID: &str = "passphrase-subtitle";
 
 /// Shows `prompt` in a dialog above whatever is open, with focus in its
-/// input. Gives the dialog, which the workspace holds only weakly: the
+/// input, and reads the key list for its key's fingerprint through
+/// `services`. Gives the dialog, which the workspace holds only weakly: the
 /// dialog layer owns it.
 pub(crate) fn open_dialog(
     prompt: PromptRequest,
+    services: &Services,
     window: &mut Window,
     cx: &mut App,
 ) -> WeakEntity<PassphraseDialog> {
     let origin = window.focused(cx);
-    let dialog = cx.new(|cx| PassphraseDialog::new(prompt, origin, window, cx));
+    let dialog = cx.new(|cx| PassphraseDialog::new(prompt, origin, services, window, cx));
     let weak = dialog.downgrade();
     let input = dialog.read(cx).input.clone();
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let submitting = dialog.clone();
         let cancelling = dialog.clone();
-        base.title(TITLE)
+        let header = header(dialog.read(cx).waiting.as_deref());
+        frame::dialog(base.w(px(WIDTH)), header, cx)
             .close_button(false)
             .overlay_closable(false)
             .child(dialog.clone())
@@ -109,11 +145,30 @@ pub(crate) fn open_dialog(
     weak
 }
 
+/// The header: the `lock` tile, the title and, while a share of
+/// `waiting` waits, what waits (Part D item 1).
+fn header(waiting: Option<&str>) -> Header {
+    Header {
+        icon: Some((IconName::Lock, Tone::Accent)),
+        title: TITLE.into(),
+        description: waiting.map(|repository| waiting_subtitle(repository).into()),
+        ids: (TITLE_ID, Some(SUBTITLE_ID)),
+    }
+}
+
 pub(crate) struct PassphraseDialog {
     /// Answered once: taken by the first answer.
     prompt: Option<PromptRequest>,
+    /// The key's label, as the prompt names it.
     label: String,
-    key: String,
+    /// The prompt's key, by the ID the key list gives it: never drawn.
+    key_id: String,
+    /// The key's fingerprint, once the key list has it (`card`).
+    fingerprint: Option<String>,
+    generations: Generations,
+    /// The key list's read, while it runs; dropped once the prompt is
+    /// answered or withdrawn.
+    read: Option<Task<()>>,
     guidance: &'static str,
     /// Let go once the dialog has answered.
     input: Option<Entity<InputState>>,
@@ -130,6 +185,7 @@ impl PassphraseDialog {
     fn new(
         prompt: PromptRequest,
         origin: Option<FocusHandle>,
+        services: &Services,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -145,9 +201,12 @@ impl PassphraseDialog {
             this.waiting = waiting_share(window, cx);
             cx.notify();
         });
-        Self {
-            label: label_for(&prompt.label),
-            key: prompt.key_id.to_string(),
+        let mut dialog = Self {
+            label: prompt.label.clone(),
+            key_id: prompt.key_id.to_string(),
+            fingerprint: None,
+            generations: Generations::default(),
+            read: None,
             guidance: prompt.reason.guidance(),
             prompt: Some(prompt),
             input: Some(input),
@@ -155,7 +214,9 @@ impl PassphraseDialog {
             waiting: None,
             origin,
             _enter: Some(enter),
-        }
+        };
+        dialog.read_key(services, cx);
+        dialog
     }
 
     /// Whether its prompt is still unanswered.
@@ -170,14 +231,16 @@ impl PassphraseDialog {
     }
 
     /// Submit: an acceptable passphrase becomes the one `SecretPassphrase`
-    /// and is supplied; any other is refused, and nothing is replied.
+    /// and is supplied; any other is refused, nothing is replied, and focus
+    /// goes back to the field, also when Unlock was pressed (R-17).
     pub(crate) fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = &self.input else {
+        let Some(input) = self.input.clone() else {
             return;
         };
         let typed = input.read(cx).text().to_string();
         let Ok(passphrase) = SecretPassphrase::new(typed) else {
             self.refused = true;
+            input.update(cx, |input, cx| input.focus(window, cx));
             cx.notify();
             return;
         };
@@ -185,7 +248,7 @@ impl PassphraseDialog {
         self.close(window, cx);
     }
 
-    /// Cancel: replies `Cancelled` and closes.
+    /// Not now: replies `Cancelled` and closes.
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.answer(PromptReply::Cancelled, window, cx) {
             self.close(window, cx);
@@ -205,6 +268,7 @@ impl PassphraseDialog {
         if let Some(prompt) = self.prompt.take() {
             prompt.answer(PromptReply::Unavailable);
         }
+        self.drop_read();
         self.input = None;
         self._enter = None;
         cx.notify();
@@ -212,13 +276,14 @@ impl PassphraseDialog {
 
     /// Quitting saves drafts first: empties the input, lets it go and
     /// gives the prompt back unanswered, to be held while the drafts are
-    /// saved. The caller closes the dialog.
+    /// saved; the key list's read is dropped. The caller closes the dialog.
     pub(crate) fn withdraw(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PromptRequest> {
         self._enter = None;
+        self.drop_read();
         if let Some(input) = self.input.take() {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
@@ -226,10 +291,11 @@ impl PassphraseDialog {
         self.prompt.take()
     }
 
-    /// Empties the input and lets it go, then replies, once. False when
-    /// the prompt was already answered.
+    /// Empties the input and lets it go, drops the key list's read, then
+    /// replies, once. False when the prompt was already answered.
     fn answer(&mut self, reply: PromptReply, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self._enter = None;
+        self.drop_read();
         if let Some(input) = self.input.take() {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
@@ -255,11 +321,15 @@ impl PassphraseDialog {
 /// The repository of the share or post the window's workspace has
 /// running, by its directory name: what waits on the prompt.
 fn waiting_share(window: &Window, cx: &App) -> Option<String> {
-    let root = window.root::<Root>()??;
-    let workspace = root.read(cx).view().clone().downcast::<Workspace>().ok()?;
+    let workspace = window_workspace(window, cx)?;
     let operations = workspace.read(cx).services().operations().read(cx);
     let request = operations.running()?;
-    Progressing::of(&request.intent)?;
+    // Not a Check now: it may prompt too, but it is not a share.
+    matches!(
+        Progressing::of(&request.intent)?,
+        Progressing::Share | Progressing::Post
+    )
+    .then_some(())?;
     Some(scope_name(Some(request.intent.root()?)))
 }
 
@@ -272,7 +342,7 @@ fn text(id: &'static str, value: impl Into<String>) -> impl IntoElement {
         .child(value)
 }
 
-/// A dialog button. Enter on it presses it: its wrapper takes the dialog's
+/// A footer button. Enter on it presses it: its wrapper takes the dialog's
 /// Enter (`Confirm`, dispatched on key down) before the dialog, whose
 /// `on_ok` would submit. Enter in the input, or with no button focused,
 /// still submits.
@@ -281,7 +351,7 @@ fn button(
     label: &'static str,
     primary: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> AnyElement {
     let on_click = std::rc::Rc::new(on_click);
     let on_enter = on_click.clone();
     let button = Button::new((id, 0usize))
@@ -294,11 +364,32 @@ fn button(
         .aria_label(label)
         .on_action(move |_: &Confirm, window, cx| on_enter(&ClickEvent::default(), window, cx))
         .child(button)
+        .into_any_element()
+}
+
+/// The note, always shown, with its `shield-check` (Part D item 6).
+fn note(cx: &App) -> impl IntoElement + use<> {
+    let colors = chrome_colors(cx);
+    h_flex()
+        .id("passphrase-note")
+        .test_support()
+        .aria_label(NOT_NOW_NOTE)
+        .items_start()
+        .gap(px(6.))
+        .text_size(px(12.))
+        .text_color(colors.secondary)
+        .child(
+            Icon::new(IconName::ShieldCheck)
+                .text_color(colors.teal)
+                .w(px(14.))
+                .h(px(14.)),
+        )
+        .child(div().flex_1().min_w_0().child(NOT_NOW_NOTE))
 }
 
 impl Render for PassphraseDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
+        let colors = chrome_colors(cx);
         let unlock = {
             let entity = cx.entity().downgrade();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -311,57 +402,61 @@ impl Render for PassphraseDialog {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));
             }
         };
-        v_flex()
-            .id("passphrase-dialog")
-            .test_support()
-            .gap_2()
-            .children(self.waiting.as_ref().map(|repository| {
-                div()
-                    .text_sm()
-                    .child(text("passphrase-subtitle", waiting_subtitle(repository)))
-            }))
+        let field = v_flex()
+            .gap(px(6.))
             .child(
                 div()
                     .text_sm()
-                    .child(text("passphrase-label", self.label.clone())),
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(text("passphrase-label", PASSPHRASE)),
             )
+            .children(self.input.as_ref().map(|input| {
+                // Named for the key, which the label on screen leaves to
+                // the card (owner Ruling 26).
+                let name = passphrase_for(&self.label);
+                div()
+                    .id("passphrase-input")
+                    .test_support()
+                    .aria_label(name.clone())
+                    .child(Input::new(input).aria_label(name))
+            }))
+            .children(self.refused.then(|| {
+                div()
+                    .text_sm()
+                    .text_color(colors.red)
+                    .child(text("passphrase-refused", REFUSED))
+            }));
+        let content = v_flex()
+            .gap_3()
+            .child(self.card(cx))
             .child(
                 div()
                     .text_sm()
                     .child(text("passphrase-reason", self.guidance)),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text("passphrase-key", format!("Key {}", self.key))),
-            )
-            .children(self.input.as_ref().map(|input| {
-                div()
-                    .id("passphrase-input")
-                    .test_support()
-                    .aria_label(self.label.clone())
-                    .child(Input::new(input).aria_label(self.label.clone()))
-            }))
-            .children(
-                self.refused
-                    .then(|| div().text_sm().child(text("passphrase-refused", REFUSED))),
-            )
-            .children(self.waiting.is_some().then(|| {
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text("passphrase-note", NOT_NOW_NOTE))
-            }))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(button("passphrase-ok", UNLOCK, true, unlock))
-                    .child(button("passphrase-cancel", CANCEL, false, cancel)),
-            )
+            .child(field)
+            .child(note(cx));
+        // Not now first, the action last (Part D item 7; R-1).
+        let buttons = vec![
+            button("passphrase-cancel", CANCEL, false, cancel),
+            button("passphrase-ok", UNLOCK, true, unlock),
+        ];
+        // The footer is the last child of the body element, which privacy
+        // sweeps and focus reads find the buttons inside (R-19).
+        v_flex()
+            .id("passphrase-dialog")
+            .test_support()
+            .child(frame::body(content))
+            .child(frame::footer(
+                Footer {
+                    hint: None,
+                    buttons,
+                },
+                cx,
+            ))
     }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "passphrase_tests.rs"]
-mod tests;
+pub(super) mod tests;

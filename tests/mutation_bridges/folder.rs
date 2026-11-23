@@ -147,6 +147,25 @@ fn assert_refused(
     assert_eq!(world.record(request_id), None, "{code:?}");
 }
 
+/// Asserts that a request was refused as `code` for the operation
+/// `blocker`, which its data names, with nothing else left of it: no
+/// record and no effect.
+fn assert_refused_for(
+    world: &World,
+    request_id: &str,
+    refused: &Envelope<MutationDataDto>,
+    code: ResultCode,
+    blocker: &str,
+) {
+    let named = serde_json::to_value(refused).unwrap()["data"]["blocker"]["operation_id"].clone();
+    assert_eq!(named, blocker, "{refused:?}");
+    let unnamed = Envelope {
+        data: None,
+        ..refused.clone()
+    };
+    assert_refused(world, request_id, &unnamed, code);
+}
+
 /// Checks an envelope of `folder create` against its fixture. What
 /// differs from run to run is replaced.
 fn assert_golden(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
@@ -855,10 +874,10 @@ mod boundary {
     #[test]
     fn a_refresh_that_fails_for_a_folder_that_was_there_is_discovery_pending_too() {
         git_home::isolated();
-        // After the refresh has observed: it records that it failed,
+        // Inside the index step's transaction: it records that it failed,
         // as every failure of a refresh but the death of its process
         // does.
-        let world = failing_at(FailurePoint::AfterContextObservation);
+        let world = failing_at(FailurePoint::BeforeIndexTransactionCommit);
         fs::create_dir(world.root.join("docs/by-hand")).unwrap();
 
         let pending = world.execute(REQUEST_1, create(&world, "docs/by-hand"));
@@ -1107,15 +1126,40 @@ mod boundary {
 
         let refused = world.execute(REQUEST_1, create(&world, "docs/a"));
 
-        assert_refused(&world, REQUEST_1, &refused, ResultCode::RecoveryRequired);
+        // The synchronization is named: no call of it is at work, since the
+        // reservation was made by this process, whose call has returned.
+        let synchronization = reservation.operation_id().to_string();
+        assert_refused_for(
+            &world,
+            REQUEST_1,
+            &refused,
+            ResultCode::RecoveryRequired,
+            &synchronization,
+        );
         assert_eq!(refused.outcome, Outcome::Blocked);
         assert!(before == super::tree(&world.root));
         assert_eq!(journal(&world), rows);
         assert_eq!(listed(&world).1, IndexState::Current);
         // What is offered is to look at the repository, which shows the
-        // synchronization. No refresh is offered: one would be refused,
-        // as this request's own would have been.
-        assert_eq!(recovery_actions(&refused), ["repo.inspect"]);
+        // synchronization, and at the synchronization, and, since no call
+        // is at work under it, its way on and its way out. No refresh is
+        // offered: one would be refused, as this request's own would have
+        // been.
+        assert_eq!(
+            recovery_actions(&refused),
+            [
+                "operation.resume",
+                "repo.inspect",
+                "operation.show",
+                "operation.abandon"
+            ]
+        );
+        for at in [0, 3] {
+            assert_eq!(
+                refused.recovery[at].operation_id.as_deref(),
+                Some(synchronization.as_str())
+            );
+        }
         let own = world.execute(REQUEST_2, refresh(&world));
         assert_eq!(own.code, ResultCode::RecoveryRequired, "{own:?}");
         let inspected = world.service.inspect_repository(&world.root);
@@ -1124,7 +1168,13 @@ mod boundary {
         // would refresh.
         fs::create_dir(world.root.join("docs/by-hand")).unwrap();
         let found = world.execute(REQUEST_2, create(&world, "docs/by-hand"));
-        assert_refused(&world, REQUEST_2, &found, ResultCode::RecoveryRequired);
+        assert_refused_for(
+            &world,
+            REQUEST_2,
+            &found,
+            ResultCode::RecoveryRequired,
+            &synchronization,
+        );
 
         // Once the reservation is let go, the same request makes it.
         drop(reservation);
@@ -1342,15 +1392,23 @@ mod boundary {
 
         let refused = world.execute(REQUEST_2, create(&world, "docs/a"));
 
-        assert_refused(&world, REQUEST_2, &refused, ResultCode::RecoveryRequired);
-        // What is offered is to look at the repository, and to abandon
-        // the operation that is in the way: the refresh, not this
+        let pending = failed.operation_id.clone().unwrap();
+        assert_refused_for(
+            &world,
+            REQUEST_2,
+            &refused,
+            ResultCode::RecoveryRequired,
+            &pending,
+        );
+        // What is offered is to look at the repository and at the operation
+        // that is in the way, and to abandon it: the refresh, not this
         // request's own, which never began.
         assert_eq!(
             recovery_actions(&refused),
-            ["repo.inspect", "operation.abandon"]
+            ["repo.inspect", "operation.show", "operation.abandon"]
         );
         assert_eq!(refused.recovery[1].operation_id, failed.operation_id);
+        assert_eq!(refused.recovery[2].operation_id, failed.operation_id);
         assert!(failed.operation_id.is_some());
         assert!(!world.root.join("docs/a").exists());
         assert_eq!(journal(&world), rows);

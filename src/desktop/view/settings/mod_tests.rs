@@ -1,20 +1,21 @@
-//! The settings in the main window's content region (ruling R-B4):
-//! `secondary-,` and the sidebar's Settings entry show them, the tabs are
-//! kept as they were behind them, Back to tabs and opening an item show
-//! the tabs again, and an open dialog keeps both keys from acting.
+//! The settings, a sheet over the main window (Wave 04 Cycle 04):
+//! `secondary-,` shows them, the tabs are kept as they were behind them,
+//! Escape closes them, and an open dialog keeps the key from acting.
 
 use std::path::PathBuf;
 
 use gpui_kit::{TestAppContext, component::WindowExt, test::TestWindowExt};
 use manyhands::repository::ItemDtoKind;
 
-use super::{BACK_TO_TABS, PAGES, SETTINGS_HEADING, Shown, page_title};
+use super::{
+    CHECKING_PAGE, PAGES, REPOSITORIES_PAGE, SETTINGS_HEADING, SHARING_AND_KEYS_PAGE, Shown,
+    page_title,
+};
 use crate::desktop::{
     model::{navigation::OpenTarget, stamp::SettingsPage, tabs::TabKey},
     test_support::fixtures::{Fixture, item_id},
     view::{
         harness::{Shell, key},
-        tabs::SHOWN,
         workspace::Region,
     },
 };
@@ -65,10 +66,10 @@ fn tab_keys(shell: &Shell, cx: &mut TestAppContext) -> Vec<TabKey> {
         .read_with(cx, |workspace, _| workspace.tab_keys())
 }
 
-/// `secondary-,` shows the Repositories page in the content region, in
-/// place of the tabs, and focuses its entry in the page list, which says
-/// it is shown in text. Back to tabs shows the tabs as they were, the
-/// same tab shown, and focuses it.
+/// `secondary-,` shows the Repositories page in the Settings sheet, over
+/// the tabs, and focuses its entry in the menu, which announces it
+/// selected. Escape closes the sheet and leaves the tabs as they were, the
+/// same tab shown.
 #[gpui_kit::test]
 fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppContext) {
     let (shell, root) = with_tabs(cx);
@@ -88,14 +89,9 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
         shell.label(("settings-page", 0usize), cx).as_deref(),
         Some(page_title(SettingsPage::Repositories))
     );
-    assert_eq!(
-        shell.label(("settings-page-shown", 0usize), cx).as_deref(),
-        Some(SHOWN)
-    );
     assert_eq!(PAGES[0], SettingsPage::Repositories);
     assert!(shell.present("settings-repositories", cx));
-    // The tabs are not drawn, and are kept.
-    assert!(!shell.present(("tab", 0usize), cx));
+    // The tabs are kept.
     assert_eq!(tab_keys(&shell, cx), tabs);
     // Focus is on the page's entry, inside the content region.
     assert!(shell.frame(cx, |window, _| {
@@ -103,11 +99,7 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     }));
     assert!(shell.present(Region::Content.ring_id(), cx));
 
-    assert_eq!(
-        shell.label("settings-close", cx).as_deref(),
-        Some(BACK_TO_TABS)
-    );
-    shell.click("settings-close", cx);
+    shell.keys("escape", cx);
     assert_eq!(shown(&shell, cx), Shown::Tabs);
     assert!(!shell.present("settings", cx));
     assert_eq!(tab_keys(&shell, cx), tabs);
@@ -118,38 +110,8 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     assert_eq!(opened, Some(ticket(&root, TWO)));
 }
 
-/// The sidebar's Settings entry shows the settings too.
-#[gpui_kit::test]
-fn the_sidebar_entry_shows_the_settings(cx: &mut TestAppContext) {
-    let (shell, _) = with_tabs(cx);
-    assert!(shell.present("sidebar-settings", cx));
-    shell.click("sidebar-settings", cx);
-    assert_eq!(
-        shown(&shell, cx),
-        Shown::Settings(SettingsPage::Repositories)
-    );
-    assert!(shell.present("settings-repositories", cx));
-}
-
-/// Opening an item while the settings are shown shows the tabs, with
-/// the item's tab shown.
-#[gpui_kit::test]
-fn opening_an_item_shows_the_tabs_again(cx: &mut TestAppContext) {
-    let (shell, root) = with_tabs(cx);
-    shell.keys("secondary-,", cx);
-    assert!(shell.present("settings", cx));
-
-    open(&shell, &root, ONE, cx);
-    assert_eq!(shown(&shell, cx), Shown::Tabs);
-    assert!(shell.present(("tab", 0usize), cx));
-    let opened = shell
-        .workspace
-        .read_with(cx, |workspace, cx| workspace.opened(cx));
-    assert_eq!(opened, Some(ticket(&root, ONE)));
-}
-
-/// While a dialog is open, neither `secondary-,` nor anything behind it
-/// shows the settings (I2 follow-up).
+/// While a dialog is open, `secondary-,` does not show the settings (I2
+/// follow-up).
 #[gpui_kit::test]
 fn the_settings_key_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     let (shell, _) = with_tabs(cx);
@@ -162,16 +124,85 @@ fn the_settings_key_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext)
     assert!(!shell.present("settings", cx));
 }
 
-/// `secondary-3` with the settings shown focuses the shown page's entry,
-/// so the content region's own focus is the settings.
+/// P16 (B1; R-4, R-27). The menu has three entries in order, with no
+/// fourth. Each opens its first page, by Enter, Space or a click, and only
+/// the active one is announced selected.
 #[gpui_kit::test]
-fn focusing_the_content_region_focuses_the_settings(cx: &mut TestAppContext) {
-    let (shell, _) = with_tabs(cx);
+fn settings_has_three_pages(cx: &mut TestAppContext) {
+    let shell = Shell::open(Fixture::new(), cx);
     shell.keys("secondary-,", cx);
-    shell.keys("secondary-1", cx);
-    assert!(!shell.present(Region::Content.ring_id(), cx));
-    shell.keys("secondary-3", cx);
-    assert!(shell.frame(cx, |window, _| {
-        window.find(("settings-page", 0usize)).focused() == Some(true)
-    }));
+
+    let titles = [REPOSITORIES_PAGE, SHARING_AND_KEYS_PAGE, CHECKING_PAGE];
+    for (ix, title) in titles.into_iter().enumerate() {
+        assert_eq!(
+            shell.label(("settings-page", ix), cx).as_deref(),
+            Some(title)
+        );
+    }
+    assert!(!shell.present(("settings-page", 3usize), cx));
+    assert_eq!(
+        PAGES.to_vec(),
+        [
+            SettingsPage::Repositories,
+            SettingsPage::Keys,
+            SettingsPage::Polling
+        ]
+    );
+
+    let selected = |shell: &Shell, cx: &mut TestAppContext| -> Vec<bool> {
+        (0..3usize)
+            .map(|ix| shell.selected(("settings-page", ix), cx))
+            .collect()
+    };
+    assert_eq!(selected(&shell, cx), [true, false, false]);
+
+    // Enter and Space on a focused entry open it, and so does a click.
+    for (ix, how) in [(1usize, "enter"), (2, "space"), (0, "enter"), (1, "space")] {
+        assert!(shell.tab_reaches(("settings-page", ix), 8, cx), "{ix}");
+        shell.press(how, cx);
+        assert_eq!(shown(&shell, cx), Shown::Settings(PAGES[ix]), "{how} {ix}");
+        let mut only = [false; 3];
+        only[ix] = true;
+        assert_eq!(selected(&shell, cx), only, "{how} {ix}");
+    }
+    for ix in [2usize, 0, 1] {
+        shell.click(("settings-page", ix), cx);
+        assert_eq!(shown(&shell, cx), Shown::Settings(PAGES[ix]), "click {ix}");
+        let mut only = [false; 3];
+        only[ix] = true;
+        assert_eq!(selected(&shell, cx), only, "click {ix}");
+    }
+
+    // The shown page's view is the entry's: Sharing & keys draws the keys.
+    assert!(shell.present("settings-keys", cx));
+}
+
+/// P17 (Part F). The panel's Settings button and the content page's Close
+/// are gone, and the item area never shows Settings: closed, open and closed
+/// again, Settings is the sheet and nothing in the item area, whose tab and
+/// strip stay as they were.
+#[gpui_kit::test]
+fn the_old_settings_places_are_gone(cx: &mut TestAppContext) {
+    let (shell, _) = with_tabs(cx);
+    let gone = |shell: &Shell, cx: &mut TestAppContext| {
+        assert!(!shell.present("sidebar-settings", cx));
+        assert!(!shell.present("sidebar-settings-button", cx));
+        assert!(!shell.present("settings-close", cx));
+        assert!(!shell.present("settings-close-button", cx));
+    };
+    gone(&shell, cx);
+    assert_eq!(shown(&shell, cx), Shown::Tabs);
+
+    shell.keys("secondary-,", cx);
+    assert!(shell.present("settings", cx));
+    gone(&shell, cx);
+    // The item area still draws the tab, not Settings.
+    assert!(shell.present(("tab-active-line", 1usize), cx));
+    assert!(!shell.present("item-area-empty", cx));
+
+    shell.keys("escape", cx);
+    assert_eq!(shown(&shell, cx), Shown::Tabs);
+    assert!(!shell.present("settings", cx));
+    gone(&shell, cx);
+    assert!(shell.present(("tab-active-line", 1usize), cx));
 }

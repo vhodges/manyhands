@@ -8,32 +8,51 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
-    VisualTestContext, Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    TestAppContext, VisualTestContext, Window, WindowHandle,
+    component::{Root, dock::DockPlacement},
+    px, size,
+    test::TestWindowExt,
 };
 use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
     repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
 };
 
-use super::{editor::host::EditorHost, workspace::Workspace};
+use super::{
+    editor::host::EditorHost,
+    settings::RepositoriesPage,
+    workspace::{Region, Workspace},
+};
 use crate::desktop::{
-    keys,
-    model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
+    model::{
+        drafts::create,
+        navigation::{OpenTarget, Pane},
+        operations::Operations,
+        tabs::TabKey,
+    },
     open_test_window_over,
     services::{
+        BUSY_RETRY_DELAYS, Backend,
         prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequest, DesktopRequestId, Intent},
     },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
 
-/// How long a test waits on the worker: long enough on a loaded machine,
-/// inside the scheduler's fifteen seconds of parking.
-pub(crate) const WAIT: Duration = Duration::from_secs(10);
+/// Shared aggregate UI/worker wait; the existing polling and GPUI's
+/// independent per-park guard remain unchanged.
+pub(crate) use crate::desktop::test_support::WAIT;
 
 /// How often a wait looks again while the worker runs.
 const POLL: Duration = Duration::from_millis(10);
+
+/// Make a new key's own Kit button, in its wrapper `keys-make`: where the
+/// key list lands with no usable key (R-22), read by `holds_control`.
+pub(crate) const MAKE_A_NEW_KEY: (&str, usize) = ("keys-make", 0);
+/// Check host's own Kit button, in its wrapper `hosts-check` (R-53), read
+/// by `holds_control`.
+pub(crate) const CHECK_HOST: &str = "hosts-check-button";
 
 /// Waits, with the worker running, until `done` holds of `entity`, then
 /// lets the reads that started finish. Panics after `WAIT` of real time.
@@ -59,6 +78,28 @@ pub(crate) async fn wait_until<T: 'static>(
     }
 }
 
+/// What `Shell::start` does to the window after opening it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Geometry {
+    /// The harness window and an Activity dock tall enough to click in.
+    Harness,
+    /// Nothing: the window and layout of a launch.
+    AsLaunched,
+}
+
+/// The window chrome that is not the item area, the dock sides or Activity:
+/// the title bar (38 px) and the footer (28 px). The item area stays
+/// 860 x 1140, and a window of 1590 x 1726 results (R-26).
+const SHELL_CHROME_HEIGHT: f32 = 66.;
+
+/// The harness window: the side docks (290 and 440 px) leave an item area of
+/// 860 px, and Activity (520 px) and the chrome leave it 1140.
+const WINDOW_WIDTH: f32 = 1590.;
+const WINDOW_HEIGHT: f32 = 1140. + ACTIVITY_HEIGHT + SHELL_CHROME_HEIGHT;
+
+/// Activity's height in the harness: twice today's operation area (R-26).
+const ACTIVITY_HEIGHT: f32 = 520.;
+
 pub(crate) struct Shell {
     pub window: WindowHandle<Root>,
     pub workspace: Entity<Workspace>,
@@ -72,7 +113,49 @@ impl Shell {
     /// refreshed at launch, so a test that does not wait for the worker
     /// need not.
     pub(crate) fn open(fixture: Fixture, cx: &mut TestAppContext) -> Self {
-        Self::start(fixture, false, |_| {}, cx)
+        Self::start(fixture, false, |_| {}, Geometry::Harness, true, cx)
+    }
+
+    /// Opens the main window as the application does, at the application's
+    /// own size and layout: nothing is resized (R-26). For the tests of the
+    /// default layout.
+    pub(crate) fn open_as_launched(fixture: Fixture, cx: &mut TestAppContext) -> Self {
+        Self::start(fixture, false, |_| {}, Geometry::AsLaunched, true, cx)
+    }
+
+    /// Closes the window and opens a new one over the same fixture, as a
+    /// restart does: the data directory, its stores and their seams are the
+    /// fixture's, and nothing is resized (R-26). The Kit and the keys are
+    /// already set up.
+    pub(crate) fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        self.relaunch_over(|backend| backend, cx)
+    }
+
+    /// [`Self::relaunch`], the new window's services over the double
+    /// `wrap` makes of the new delaying backend (a test of the polling
+    /// calls, as `over_double` is).
+    pub(crate) fn relaunch_over(
+        self,
+        wrap: impl FnOnce(Arc<DelayingBackend>) -> Arc<dyn Backend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        let Self {
+            window, fixture, ..
+        } = self;
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        VisualTestContext::from_window(window.into(), cx).run_until_parked();
+        let backend = fixture.delaying_backend();
+        Self::over(
+            fixture,
+            wrap(backend.clone()),
+            backend,
+            false,
+            Geometry::AsLaunched,
+            false,
+            cx,
+        )
     }
 
     /// Opens the main window as the application does, refreshing every
@@ -84,24 +167,67 @@ impl Shell {
         before: impl FnOnce(&DelayingBackend),
         cx: &mut TestAppContext,
     ) -> Self {
-        Self::start(fixture, true, before, cx)
+        Self::start(fixture, true, before, Geometry::Harness, true, cx)
     }
 
     fn start(
         fixture: Fixture,
         launch_refresh: bool,
         before: impl FnOnce(&DelayingBackend),
+        geometry: Geometry,
+        first: bool,
         cx: &mut TestAppContext,
     ) -> Self {
-        cx.update(gpui_kit::init);
-        cx.update(keys::bind);
-        cx.update(super::editor::keys::bind);
-        // Dialogs open without their entrance animation, so a frame finds
-        // them where they rest.
-        cx.update(|cx| cx.set_reduce_motion(true));
         let backend = fixture.delaying_backend();
         before(&backend);
-        let window = cx.update(|cx| open_test_window_over(backend.clone(), launch_refresh, cx));
+        Self::over(
+            fixture,
+            backend.clone(),
+            backend,
+            launch_refresh,
+            geometry,
+            first,
+            cx,
+        )
+    }
+
+    /// Opens the main window over `services_backend`, a double that wraps
+    /// the fixture's `backend` (a test of the poll's calls), with no launch
+    /// refresh.
+    pub(crate) fn over_double(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        Self::over(
+            fixture,
+            services_backend,
+            backend,
+            false,
+            Geometry::Harness,
+            true,
+            cx,
+        )
+    }
+
+    fn over(
+        fixture: Fixture,
+        services_backend: Arc<dyn Backend>,
+        backend: Arc<DelayingBackend>,
+        launch_refresh: bool,
+        geometry: Geometry,
+        first: bool,
+        cx: &mut TestAppContext,
+    ) -> Self {
+        if first {
+            cx.update(gpui_kit::init);
+            cx.update(crate::desktop::bind_all_keys);
+            // Dialogs open without their entrance animation, so a frame
+            // finds them where they rest.
+            cx.update(|cx| cx.set_reduce_motion(true));
+        }
+        let window = cx.update(|cx| open_test_window_over(services_backend, launch_refresh, cx));
         let workspace = window
             .update(cx, |root, _, _| {
                 root.view().clone().downcast::<Workspace>().unwrap()
@@ -113,12 +239,43 @@ impl Shell {
             backend,
             fixture,
         };
-        // Tall enough that an item, its later actions and a few expanded
-        // entries of the operation area are all on screen, where a click
-        // reaches them.
-        shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+        if geometry == Geometry::Harness {
+            // Big enough that an item, its later actions and a few expanded
+            // entries of Activity are all on screen, where a click reaches
+            // them (R-26).
+            shell
+                .visual(cx)
+                .simulate_resize(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)));
+            shell.run(cx);
+            shell.set_activity_height(ACTIVITY_HEIGHT, cx);
+        }
         shell.run(cx);
         shell
+    }
+
+    /// Sets the bottom dock's height, as a person dragging its edge would.
+    pub(crate) fn set_activity_height(&self, height: f32, cx: &mut TestAppContext) {
+        let area = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.dock_area().clone());
+        self.frame(cx, |window, cx| {
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Bottom, px(height), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
+    /// Resizes the window to the size a test asks for, grown by the docks
+    /// and Activity so that the item area keeps the size the test chose
+    /// (E-10): 150 px wider (the side docks are 290 + 440 px, the old
+    /// columns 260 + 320) and the 520 px Activity dock and the chrome
+    /// taller, less the old 260 px operation area.
+    pub(crate) fn resize_keeping_content(&self, width: f32, height: f32, cx: &mut TestAppContext) {
+        let taller = ACTIVITY_HEIGHT - 260. + SHELL_CHROME_HEIGHT;
+        self.visual(cx)
+            .simulate_resize(size(px(width + 150.), px(height + taller)));
+        self.run(cx);
     }
 
     pub(crate) fn visual(&self, cx: &TestAppContext) -> VisualTestContext {
@@ -148,6 +305,19 @@ impl Shell {
         let id = id.into();
         self.frame(cx, |window, cx| window.click(id, cx));
         self.run(cx);
+    }
+
+    /// Clicks the element `id` with the mouse events dispatched one at a
+    /// time, so the events one causes (a tab group's, reaching the
+    /// Workspace) have been handled before the next frame, as in the
+    /// application. `click` dispatches both inside one update and draws
+    /// between them.
+    pub(crate) fn click_settled(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        let position = self.frame(cx, |window, _| window.find(id).bounds().center());
+        let mut visual = self.visual(cx);
+        visual.simulate_click(position, Modifiers::default());
+        visual.run_until_parked();
     }
 
     pub(crate) fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
@@ -216,10 +386,83 @@ impl Shell {
         })
     }
 
+    /// Whether the element `id`, or something in it, holds focus, read
+    /// after two draws with what each starts run after it: where a way into
+    /// Settings landed, read as Wave 04 Cycle 04's design A6 reads a focus,
+    /// so a rule that moves it on the first draw has had its frame.
+    pub(crate) fn holds_focus(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        for _ in 0..2 {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+        }
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.focused()) == Some(true)
+        })
+    }
+
+    /// Lets the Keys page's reads land: draws once, so the page has started
+    /// them, then runs them. A read answered `busy` waits out its retry
+    /// delay on the test clock, which `run` never moves, so each delay is
+    /// advanced here: no real time passes (E-35). A read a test holds does
+    /// not land.
+    pub(crate) fn keys_landed(&self, cx: &mut TestAppContext) {
+        self.frame(cx, |_, _| ());
+        self.run(cx);
+        for delay in BUSY_RETRY_DELAYS {
+            cx.executor().advance_clock(delay);
+            self.run(cx);
+        }
+    }
+
+    /// `holds_focus`, stricter: the element `id` is itself the control
+    /// focus is on, not a wrapper around it. A Kit button draws its focus
+    /// ring, and takes Enter, only while its own handle is focused, so
+    /// focus on its wrapper shows nothing and Enter does nothing: for a Kit
+    /// button, `id` is the button's own ID (`MAKE_A_NEW_KEY`, `CHECK_HOST`),
+    /// not its wrapper's. After the same two-draw read, `id` holds focus,
+    /// it is a control (it has a role), and the focused handle is a tab
+    /// stop, which a wrapper's is not.
+    pub(crate) fn holds_control(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.holds_focus(id.clone(), cx)
+            && self.frame(cx, |window, cx| {
+                let tab_stop = window.focused(cx).is_some_and(|focused| focused.tab_stop);
+                tab_stop
+                    && window
+                        .try_find(id)
+                        .is_some_and(|control| control.role().is_some())
+            })
+    }
+
+    /// `holds_control` for where a Keys route landed (R-22): the control the
+    /// key list gives, read once the keys' reads have landed.
+    pub(crate) fn holds_keys_control(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        self.keys_landed(cx);
+        self.holds_control(id, cx)
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
         self.frame(cx, |window, _| window.try_find(id).is_some())
+    }
+
+    /// Whether the element `id` says it is checked, a switch or a
+    /// checkbox; `None` when it says nothing or is not drawn.
+    pub(crate) fn checked(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &mut TestAppContext,
+    ) -> Option<bool> {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).and_then(|element| element.checked())
+        })
     }
 
     pub(crate) fn selected(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
@@ -237,6 +480,26 @@ impl Shell {
             .collect()
     }
 
+    /// Manage on `root`'s row of the Repositories page, which chooses it
+    /// for the Sharing section and Trusted servers (Cycle 04, R-15).
+    pub(crate) fn manage(&self, root: &Path, cx: &mut TestAppContext) {
+        let rows = self.rows("managed-row", cx);
+        let ix = rows
+            .iter()
+            .position(|row| *row == key(root))
+            .unwrap_or_else(|| panic!("{} listed in {rows:?}", key(root)));
+        self.click(("managed-choose", ix), cx);
+    }
+
+    /// The Repositories page, which Settings has made.
+    pub(crate) fn repositories_page(&self, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
+        let host = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.settings().clone());
+        host.read_with(cx, |host, _| host.made_repositories())
+            .expect("the Repositories page is made")
+    }
+
     /// Selects the repository at `root` and lets its reads finish.
     pub(crate) fn select(&self, root: &Path, cx: &mut TestAppContext) {
         self.workspace.update(cx, |workspace, cx| {
@@ -245,10 +508,35 @@ impl Shell {
         self.run(cx);
     }
 
+    /// Uses the list `pane` last and focuses its region, as clicking its
+    /// choice did (E-2).
+    pub(crate) fn use_list(&self, pane: Pane, cx: &mut TestAppContext) {
+        self.frame(cx, |window, cx| {
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.focus_region(Region::of_pane(pane), window, cx)
+            })
+        });
+        self.run(cx);
+    }
+
     /// The window's request model.
     pub(crate) fn operations(&self, cx: &mut TestAppContext) -> Entity<Operations> {
         self.workspace
             .read_with(cx, |workspace, _| workspace.services().operations().clone())
+    }
+
+    /// Locks the item `id` of `root` as an open lifecycle dialog would
+    /// (R-21), with no dialog: its tabs' edits wait. The lock stays for the
+    /// test. For the controls whose gate a test reaches without a real
+    /// stopped close or merge.
+    pub(crate) fn lock_item(&self, root: &Path, id: &str, cx: &mut TestAppContext) {
+        let holder = self.workspace.entity_id();
+        let locked = crate::desktop::model::lifecycle_lock::LockKey::new(&key(root), id);
+        self.operations(cx).update(cx, |operations, cx| {
+            operations.locks_mut().set_dialog(holder, locked, true);
+            cx.notify();
+        });
+        self.run(cx);
     }
 
     /// The requests of this session that `pick` picks, newest first.
