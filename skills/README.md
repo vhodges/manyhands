@@ -18,7 +18,7 @@ The skills are about using Manyhands. They contain no how-to for the desktop app
 | `manyhands-polling-and-index` | Fetches what collaborators published with `poll once`, explains what a poll changes and leaves alone, retires completed local contexts after showing the person, sets the polling interval, and refreshes or rebuilds the index. | A list or status looks out of date, you need others' work, or a poll or index answer reports a problem. |
 | `manyhands-recovery` | Finds why a command answered `recovery_required` or `busy`, names the unfinished operation holding the work, and says which steps are the agent's and which go to the person. | A command says recovery is required, an operation is listed as unfinished, writes are refused for no visible reason, or `history_unknown` appears. |
 
-Minimum CLI version: 0.2.0
+Minimum CLI version: 0.2.1
 
 Install `manyhands-cli` itself first: take it from the GitHub Releases page, https://github.com/vhodges/manyhands/releases, and follow "Installation and startup" in the `README.md` inside the release archive. This README covers installing the skills only.
 
