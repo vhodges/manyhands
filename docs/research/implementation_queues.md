@@ -54,6 +54,14 @@ manyhands-cli queue dispatch
 manyhands-cli queue run agent --name <agentname>
 ```
 
+We'll probably need to 'auto import' agent and queue settings when:
+
+- Adding a new repo
+- Pulling down changes from one
+- etc
+
+In other words, add creates the settings files that get checked in (and adds them to the db) but you wouldn't use add to add them to the db (maybe an import command, but I have a strong preference to do it during a poll-once)
+
 ## Agents
 
 Agents are 1 to many to repos
@@ -61,4 +69,12 @@ Agents are 1 to many to repos
 ## Queues
 
 Queues are 1 to many to repos
+
+## The Excution Environment
+
+## The dispatcher
+
+## The agent loop
+
+Rewrite the shell script as Rust code.  The issued prompt should come from configuration of the agent.
 
