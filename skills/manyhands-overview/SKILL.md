@@ -5,7 +5,7 @@ description: "Use when starting any task with Manyhands or manyhands-cli (ticket
 
 # Manyhands overview
 
-Minimum CLI version: 0.2.0
+Minimum CLI version: 0.2.1
 
 Read this first, then open the task skill from the table at the end. Every other Manyhands skill links back to the references here instead of repeating them.
 
