@@ -1255,6 +1255,89 @@ fn process_exit_at_every_boundary_reopens_without_repeated_effects() {
     }
 }
 
+/// The final review's F-1 (Review Focus 2, decision 8), for a close: what
+/// a lost process had moved reads owed an indexing until an indexing
+/// stores it, so `index status` reads stale, and the same request, sent
+/// again, finishes and indexes it. The checkpoint marks the ticket's
+/// context before its checkout and ref move, and the merge marks the
+/// primary before it moves main, each under the integration's lease. The
+/// merge's mark is its own: a close whose checkpoint's marks a refresh
+/// cleared between two of its attempts, and whose later attempt is lost
+/// once its merge has moved main, still leaves the primary owed. With no
+/// publication remote, so a cleanup that reserves nothing.
+#[test]
+fn a_close_lost_after_its_checkout_or_its_merge_leaves_what_it_moved_owed_until_it_is_sent_again() {
+    use crate::repository::{
+        IndexStatusState, RefreshOutcome, RefreshRepositoryRequest, discovery::ContextKey,
+    };
+    let refresh = |f: &Fixture| {
+        let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root().into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{refreshed:?}"
+        );
+    };
+    let status = |f: &Fixture, service: &RepositoryService| {
+        service
+            .index_status(&service.resolve_repository(f.root()).unwrap())
+            .unwrap()
+            .state
+    };
+    let mut wrong = Vec::new();
+    // (where the process is lost, its index in `EXITS`, whether an earlier
+    // attempt stopped before the merge and a refresh indexed its checkpoint,
+    // what then reads owed)
+    for (lost, point, stopped_first, owed) in [
+        ("during the checkpoint's checkout", 3, false, [false, true]),
+        ("after the merge, sent again", 6, true, [true, false]),
+    ] {
+        let f = Fixture::new();
+        refresh(&f);
+        let req = f.request();
+        if stopped_first {
+            assert!(
+                f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone())
+                    .is_err(),
+                "{lost}"
+            );
+            assert_eq!(
+                f.stored(req.operation_id).step,
+                ClosureStep::Integrating,
+                "{lost}"
+            );
+            refresh(&f);
+        }
+        assert_eq!(status(&f, &f.service), IndexStatusState::Current, "{lost}");
+        exit_at(&f, &req, point);
+        let reopened = f.reopened();
+        let read = [ContextKey::Primary, ContextKey::Item(id())]
+            .map(|context| !reopened.contexts_indexed(f.root(), &[context]));
+        if read != owed {
+            wrong.push(format!("{lost}: [primary, ticket] read owed {read:?}"));
+        }
+        if status(&f, &reopened) != IndexStatusState::Stale {
+            wrong.push(format!("{lost}: index status {:?}", status(&f, &reopened)));
+        }
+        let retried = f.run_io(&reopened, req, &mut FakeIo::default());
+        if !matches!(&retried, Ok(TicketClosureResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete)
+        {
+            wrong.push(format!("{lost}: sent again, it ended as {retried:?}"));
+        }
+        if !reopened.lifecycle_indexed(f.root(), &id())
+            || status(&f, &reopened) != IndexStatusState::Current
+        {
+            wrong.push(format!(
+                "{lost}: sent again, index status {:?}",
+                status(&f, &reopened)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The adopted context through the F10 and F11 seams: the retirement and
 /// the completion use the merged context, once.
 #[test]

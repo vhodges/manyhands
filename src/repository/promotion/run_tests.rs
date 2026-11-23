@@ -1470,6 +1470,107 @@ fn process_exit_f1_through_f12_and_inside_f10_reopens_without_repeated_effects()
         );
     }
 }
+/// Runs `req` in a child process that exits at `EXIT_POINTS[point]`, as a
+/// process that is lost there leaves the repository.
+fn exit_at(f: &Fixture, req: &PromoteDocumentRequest, point: usize) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "repository::promotion::run_tests::promotion_exit_child",
+        ])
+        .env("MANYHANDS_PROMOTION_EXIT_ROOT", f.root.path())
+        .env("MANYHANDS_PROMOTION_EXIT_DATA", f.data.path())
+        .env("MANYHANDS_PROMOTION_EXIT_POINT", point.to_string())
+        .env("MANYHANDS_PROMOTION_EXIT_OP", req.operation_id.to_string())
+        .env(
+            "MANYHANDS_PROMOTION_EXIT_EXPECTATION",
+            req.expected
+                .to_bytes()
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(FAILURE_POINT_EXIT_STATUS),
+        "boundary {point}"
+    );
+}
+/// The final review's F-1 (Review Focus 2, decision 8): a promotion lost
+/// once its merge has moved main, and before its exit's index step, leaves
+/// the primary reading owed an indexing, so `index status` reads stale: the
+/// merge marks the primary before it moves main, under the integration's
+/// lease, and nothing between the merge and the exit stores it. The same
+/// request, sent again, finishes and indexes it, and the index reads
+/// current. One lost before the merge has moved nothing and marks nothing.
+/// With no publication remote, so a cleanup that reserves nothing.
+#[test]
+fn a_promotion_lost_after_its_merge_leaves_the_primary_owed_until_it_is_sent_again() {
+    let mut wrong = Vec::new();
+    // (where the process is lost, its index in `EXIT_POINTS`, whether main
+    // has moved by then)
+    for (lost, point, merged) in [
+        ("before the merge", 2, false),
+        ("after the merge", 3, true),
+        ("once the cleanup removed the worktree", 8, true),
+    ] {
+        let f = Fixture::new();
+        let root = f.root.path();
+        let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+            root: root.into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{lost}: {refreshed:?}"
+        );
+        let status = |service: &RepositoryService| {
+            service
+                .index_status(&service.resolve_repository(root).unwrap())
+                .unwrap()
+                .state
+        };
+        assert_eq!(status(&f.service), IndexStatusState::Current, "{lost}");
+        let req = f.request();
+        let before = f.primary();
+        exit_at(&f, &req, point);
+        if (f.primary() != before) != merged {
+            wrong.push(format!("{lost}: main moved {}", f.primary() != before));
+        }
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        let owed = !reopened.contexts_indexed(root, &[discovery::ContextKey::Primary]);
+        if owed != merged {
+            wrong.push(format!("{lost}: the primary reads owed {owed}"));
+        }
+        let expected = if merged {
+            IndexStatusState::Stale
+        } else {
+            IndexStatusState::Current
+        };
+        if status(&reopened) != expected {
+            wrong.push(format!("{lost}: index status {:?}", status(&reopened)));
+        }
+        let retried = run::promote_with_io(&reopened, req, &mut FakeIo::default());
+        if !matches!(&retried, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete)
+        {
+            wrong.push(format!("{lost}: sent again, it ended as {retried:?}"));
+        }
+        if !reopened.lifecycle_indexed(root, &ITEM.parse().unwrap())
+            || status(&reopened) != IndexStatusState::Current
+        {
+            wrong.push(format!(
+                "{lost}: sent again, index status {:?}",
+                status(&reopened)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
 fn directory_image(root: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn walk(
         base: &std::path::Path,

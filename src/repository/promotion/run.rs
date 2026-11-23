@@ -827,6 +827,26 @@ fn promote_inner<L: Lifecycle>(
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
+    // The merge moves main, the primary's context, so the primary is marked
+    // owed an indexing before it does, under the integration's lease, which
+    // `candidate` holds: as a synchronization marks the context its local
+    // update moves before Git is touched (R-SDD-49), and folder create the
+    // primary before it makes a directory. Every store takes that lease, so
+    // none can clear the mark before main has moved, and a process lost after
+    // the merge leaves the primary reading owed until an indexing stores it:
+    // its exit's, a refresh's, or the same request's (the final review's F-1).
+    // A mark that cannot be written refuses the integration with nothing
+    // moved, as it refuses a folder's creation. A merge refused once the mark
+    // is written leaves it, and the next store of the primary clears it. A
+    // context the primary already holds is not merged, and marks nothing.
+    if r.integration_kind() == Some(IntegrationKind::Merged) {
+        mark_contexts_dirty(
+            &service.registry_path,
+            &root,
+            &[ContextKey::Primary],
+            RepositoryOperation::RepositorySnapshot,
+        )?;
+    }
     let integrated = L::apply(candidate)?;
     if integrated == integrate::Integrated::RecoveryRequired {
         return Ok(recovery::<L>(service, &root, &mut r));
