@@ -6062,7 +6062,10 @@ impl RepositoryService {
         };
         let root = request.root.clone();
         // The context this call's own local update changes, a merge or a
-        // fast-forward, which its hand-off indexes with no basis check.
+        // fast-forward. Its hand-off observes it with no comparison of its
+        // stored basis first, and checks the observation's basis again under
+        // the lease before it stores it, as every write's index step does
+        // (P-3).
         let mut updated = Vec::new();
         if execution.is_none()
             && existing.is_none()
@@ -6470,8 +6473,10 @@ impl RepositoryService {
         // synchronization whose plan, read from its initial head, makes none
         // leaves it to its push's call: that call's listing is the same
         // Push-direction observation, and its decision refuses an absence
-        // with the same boundary before anything is pushed. A local update
-        // found later, from a head that moved, runs the check first.
+        // with the same boundary before anything is pushed. A merge found
+        // later, or an ordered pass, runs the check first, before it
+        // records anything; a fast-forward plan that would make a local
+        // update after all is refused as an external change.
         let mut absence_deferred = push_absence_boundary.is_some()
             && prior.is_none()
             && graph_plan(

@@ -25,7 +25,6 @@ enum TransferAction {
 /// What one call's guarded delete did. Neither is proof of the result: only
 /// `observe_delete`'s advertisement, on a call of its own, is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Consumed by the later promotion orchestrator.
 pub(crate) enum DeleteAttempt {
     /// The call's advertisement had no such reference, and nothing was sent.
     Absent,
@@ -34,7 +33,6 @@ pub(crate) enum DeleteAttempt {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Consumed by the later promotion orchestrator.
 pub(crate) enum DeleteObservation {
     Deleted,
     StillPresent(git2::Oid),
@@ -268,7 +266,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// a refused or ambiguously lost push; the push closes this connection as
     /// it returns, so that advertisement is `observe_delete`'s, on a call of its
     /// own.
-    #[allow(dead_code)] // Consumed by the later promotion orchestrator.
     pub(crate) fn delete_exact(
         &mut self,
         plan: &RemoteRefPlan,
@@ -308,7 +305,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     }
 
     /// What a sent `delete_exact` left, from this call's own advertisement.
-    #[allow(dead_code)] // Consumed by the later promotion orchestrator.
     pub(crate) fn observe_delete(
         &mut self,
         plan: &RemoteRefPlan,

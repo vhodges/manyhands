@@ -4614,7 +4614,7 @@ impl RepositoryService {
     /// item's context). A command whose write reaches other contexts records
     /// them so before its commit. A row that is not pending, or not there,
     /// records nothing and is `RecoveryRequired`.
-    #[cfg_attr(not(test), allow(dead_code))] // No command's write reaches past its own row's list yet.
+    #[cfg(test)]
     fn record_owed_contexts(
         &self,
         root: &Path,

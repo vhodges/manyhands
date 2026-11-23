@@ -7157,14 +7157,21 @@ impl run::PromotionIo for HeldAtReservation {
 /// names no operation: the registry's cache lock, held while another
 /// operation is at work, which `cache_read_guard` answers `RepositoryBusy`
 /// once its own wait is spent. A new child, one with no row of its own yet,
-/// waits for the operation at work (`waited_holding` names it, live): it
-/// goes on once the lock is let go within the wait, or answers `busy`
-/// naming it, and the primary child's publication is then `busy`, not
-/// `recovery_required`. A child that takes up its own row, a retained one
-/// restarted, is answered at once, with no sleep, as a synchronization that
-/// takes up its own row is. The same request finishes once the lock is let
-/// go. The lock here holds only the transactions of remote operations, and
-/// the clock and sleeps are the test's.
+/// waits for the operation at work: it goes on once the lock is let go
+/// within the wait, or else answers `busy`. A child that takes up its own
+/// row, a retained one restarted, is answered at once, with no sleep, as a
+/// synchronization that takes up its own row is. The same request finishes
+/// once the lock is let go. The clock and sleeps are the test's.
+///
+/// What the spent wait answers rests on this test's hold, which holds only
+/// the transactions of remote operations (`hold_registry_for_testing`): the
+/// waiting child's look at who is at work still reads the registry, so
+/// `waited_holding` names the operation, live, and the primary child's
+/// publication is `busy`. Under a real exclusive lock that look cannot read
+/// the registry either, and the holder reads as unreadable: the item's
+/// child answers a `busy` that names no operation, and the primary child's
+/// publication answers `recovery_required` (`publication_error`). This
+/// pins the first; both answers are the owner's to accept (R-SDD-70).
 #[test]
 fn a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not() {
     use HandOff::*;

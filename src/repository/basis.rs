@@ -316,7 +316,6 @@ impl Basis {
 
     /// The basis a stored text holds; `None` for text that is not one this
     /// version wrote.
-    #[cfg_attr(not(test), allow(dead_code))] // Read by the per-context indexing that follows.
     pub(super) fn decode(stored: &str) -> Option<Self> {
         let stored = serde_json::from_str::<StoredBasis>(stored).ok()?;
         if stored.version != BASIS_VERSION {
