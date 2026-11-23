@@ -78,3 +78,4 @@ Queues are 1 to many to repos
 
 Rewrite the shell script as Rust code.  The issued prompt should come from configuration of the agent.
 
+It should do the equivalent to a poll once at the top of each loop
