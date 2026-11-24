@@ -1849,15 +1849,20 @@ fn a_host_that_is_not_trusted_is_offered_its_approval_before_the_same_request() 
         let twice = with_host_action(actions, code, Some("/repository"), Some("example.test:22"));
         assert_eq!(names(&twice), [action, "request.retry"]);
     }
-    // Neither refusal is of a host or offers an action of its own: only a
-    // request that holds its reservation is offered itself.
-    for code in [ResultCode::PushRejected, ResultCode::PrimaryHasLocalCommits] {
-        assert_eq!(
-            names(&offered(code, Some("/repository"), Some("example.test:22"))),
-            ["request.retry"],
-            "{code:?}"
-        );
-    }
+    // A rejected push is not of a host and offers no action of its own:
+    // only its request, which holds its reservation, is offered itself. A
+    // pull-only refusal always ends its row, so it is never held, and with
+    // nothing held it offers nothing, as
+    // `a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_request`
+    // pins.
+    assert_eq!(
+        names(&offered(
+            ResultCode::PushRejected,
+            Some("/repository"),
+            Some("example.test:22")
+        )),
+        ["request.retry"]
+    );
 }
 
 /// `repo create` has no repository yet to set an identity on.

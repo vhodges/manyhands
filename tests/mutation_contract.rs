@@ -1600,7 +1600,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 68] = [
+const DATA_ROOTS: [&str; 69] = [
     "blocked.schema.json",
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
@@ -1653,6 +1653,7 @@ const DATA_ROOTS: [&str; 68] = [
     "poll_policy_mutation.schema.json",
     "polling_status.schema.json",
     "preview.schema.json",
+    "primary_local_commits.schema.json",
     "public_key.schema.json",
     "relationship_check.schema.json",
     "remote_history.schema.json",
@@ -1786,7 +1787,7 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 4] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
     (
         ResultCode::CommandUnavailable,
         "a CLI code for a planned verb, and no verb is planned once poll once is bound \
@@ -1803,10 +1804,6 @@ const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 4] = [
         "item sync and repo sync merge divergent history (Wave 03 C4, R-16), so no command \
          of execute or prepare returns it; it stays a code of the domain for a caller set to \
          refuse divergence, which no binding is",
-    ),
-    (
-        ResultCode::PrimaryHasLocalCommits,
-        "golden written in Task 8",
     ),
 ];
 
@@ -1842,7 +1839,7 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 8] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
     (
         ResultCode::UsageError,
         "a CLI parse result; no command of execute or prepare returns it",
@@ -1859,10 +1856,6 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 8] = [
         ResultCode::MergeRequired,
         "no command of execute or prepare returns it since item sync and repo sync merge \
          divergent history; see CODES_NO_FIXTURE_CAN_PRODUCE",
-    ),
-    (
-        ResultCode::PrimaryHasLocalCommits,
-        "golden written in Task 8",
     ),
     (
         ResultCode::InvalidId,

@@ -1234,6 +1234,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .map(SynchronizationConflictType::as_str)
                 .to_vec(),
         ),
+        (
+            "primary_local_commits.schema.json",
+            "type",
+            manyhands::repository::PrimaryLocalCommitsType::ALL
+                .map(manyhands::repository::PrimaryLocalCommitsType::as_str)
+                .to_vec(),
+        ),
     ]);
     use manyhands::repository::{CommentMutationType, CommentPendingReason};
     let comment = "comment_mutation.schema.json";
