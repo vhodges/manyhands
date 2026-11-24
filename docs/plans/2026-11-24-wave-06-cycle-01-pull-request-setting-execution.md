@@ -269,3 +269,9 @@ Inference (not run): the byte layout of a serialized `[forge]` table (Task 1's t
 - Commit `7112900c` feat(read): report the repository's mode and forge. Review approved; 3 Minor findings left as they are: no test pins a forge with both a kind and a template (the kind prints); no `Forge:` line for an unknown kind with only a `web_url` (only from a later build's row); a doc comment could also name the unknown `forge.kind`.
 - Tests run by exact name, red then green: `inspect_and_list_report_mode_and_forge` (`--test read_repository`), `repository_inspection_names_mode_and_forge` (`--bin manyhands-cli human::tests`), `a_stored_mode_or_forge_kind_this_build_does_not_know_reads_as_null` (red by mutating `known_integration`); and green: `published_enumerations_list_exactly_the_registered_values`, the four golden tests, the CLI inventory test, the escape-controls test, 18 `read_repository` neighbours and 17 `repository::read::tests`. Desktop `check --tests` clean.
 - Named edits applied: E-5 (7 literals), E-6 (the four goldens gain only `"forge": null` and `"integration": "direct"`), E-7 (11 to 12 lines), E-8 (`integration` and `forge.kind` enums).
+
+## Task 5
+
+- Commit `afd1beff` feat(results): primary_has_local_commits. Review approved; 1 Minor finding carried to Task 7: the "no action" assertion lists in `src/repository/mutation/outcome_tests.rs` do not yet name the new code.
+- Tests run: `results::tests` red after E-10 (2 failed), green after (49 passed); by exact name, green: `published_enumerations_list_exactly_the_registered_values` (`--test read_contract`), both `every_result_code_has_a_*` tests (`--test mutation_contract`), `recovery_tables` (`--test cli`, 5 tests). The CLI contract needed no row yet; Task 9 amends it.
+- Named edits applied: E-10 (71 codes and the message), E-13 (both exclusion tables, reason "golden written in Task 8").
