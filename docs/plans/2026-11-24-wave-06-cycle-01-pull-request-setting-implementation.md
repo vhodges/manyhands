@@ -14,13 +14,13 @@ id: "01M878QXH8MFXHYK3RPMNMA4C8"
 
 **Goal:** Make the repository's mode and forge a validated, visible setting, add forge recognition and the pull request link builder, and make `repo sync` pull-only in a pull-request repository.
 
-**Architecture:** The two new keys stay in `RepositoryConfig`'s table behind typed accessors (`src/canonical.rs`); the index stores them in new columns of `configuration_observations`; a new library module `src/forge.rs` recognises forges and builds links; `repo sync` passes a pull-only `SynchronizationSettings` in a pull-request repository, each remote operation stores the mode it began with, and a pull-only operation refuses local commits after each `graph_plan` and in `push_call`, ending its operation.
+**Architecture:** The two new keys stay in `RepositoryConfig`'s table behind typed accessors (`src/canonical.rs`); the index stores them in new columns of `configuration_observations`; a new library module `src/forge.rs` recognises forges and builds links; the synchronization derives each new primary operation's mode from its configuration and stores it on the operation, and a pull-only operation refuses local commits after its plans and in `push_call`, ending its operation; the bindings and `SynchronizationSettings` do not change.
 
 **Tech Stack:** Rust, `toml` 0.8, `rusqlite`, `git2`, `percent-encoding` 2.3 (new direct dependency), the SSH test harness for one case.
 
-**Spec:** [Cycle 01 design](2026-11-24-wave-06-cycle-01-pull-request-setting-design.md) (revision 3), under the [Cycle document](../Cycles/wave-06-cycle-01-pull-request-setting.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
+**Spec:** [Cycle 01 design](2026-11-24-wave-06-cycle-01-pull-request-setting-design.md) (revision 4), under the [Cycle document](../Cycles/wave-06-cycle-01-pull-request-setting.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft** (revision 3).
+Status: **draft** (revision 4).
 
 ## Global Constraints
 
@@ -44,7 +44,7 @@ Status: **draft** (revision 3).
 
 **Every new check fails first.** Each new test or assertion is run red once, before its code or against a deliberate stub, and the red run is recorded in the ledger. A row that pins unchanged behaviour is exempt (design Testing).
 
-**Test edits.** The design's named edits E-1 to E-14, and the mechanical edits Task 0's sweep finds, under decision 9: an edit that keeps every assertion's intent is applied and logged as E-15 onwards with its reason; an edit that removes or weakens an assertion stops for the owner.
+**Test edits.** The design's named edits E-1 to E-16 (E-11 retired), and the mechanical edits Task 0's sweep finds, under decision 9: an edit that keeps every assertion's intent is applied and logged as E-17 onwards with its reason; an edit that removes or weakens an assertion stops for the owner.
 
 **Main.** Merge `origin/main` into the ticket branch in Task 0, before Task 6, before Task 10, and whenever main moves. Never rebase.
 
@@ -82,9 +82,9 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | 3 | `src/repository/discovery.rs` (`migrate_registry`), `src/repository.rs` (`persist_configuration`), `src/repository/read/admin.rs` (`stored_configuration`), E-9 | 1 |
 | 4 | `src/repository/read/dto.rs`, `src/repository/read/admin.rs`, `schemas/v1/repository_configuration.schema.json`, `src/bin/manyhands-cli/human.rs`, `tests/read_repository.rs`, E-5 to E-8 | 3 |
 | 5 | `src/results.rs`, `src/results_tests.rs`, `src/repository/mutation/outcome.rs`, `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`, E-10 | 0 |
-| 6 | `src/repository/remote/sync.rs`, `src/repository/remote/sync_tests.rs`, the reservation code, `src/repository/remote/conflict_read.rs`, the `MERGING` literal, E-11 | 3, 5 |
+| 6 | `src/repository/remote/sync.rs`, `src/repository/remote/sync_tests.rs`, the reservation code, `src/repository/remote/conflict_read.rs`, `src/repository/mutation/outcome.rs`, the binding's module documentation | 1, 3, 5 |
 | 7 | `src/repository/mutation/bind/sync.rs`, `src/repository/mutation/bind/sync_tests.rs`, the `MutationDataDto` definition (`from_stored`, `authority`), `src/bin/manyhands-cli/human_collaboration.rs` and its tests | 6 |
-| 8 | `tests/mutation_remote.rs`, `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs`, `tests/support/mutation_golden.rs`, the new golden, E-12, E-14 | 7 |
+| 8 | `tests/mutation_remote.rs`, `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs`, `tests/read_contract.rs`, `tests/support/mutation_golden.rs`, the new golden, E-12, E-14, E-15, E-16 | 7 |
 | 9 | `docs/RFC/cli-contract.md`, the three RFCs of D-2, D-3 and D-6, `docs/research/wave-03-api-audit.md`, skills | 5, 8 |
 | 10 | none new | all |
 
@@ -95,7 +95,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - [ ] **Step 1:** In the worktree, `git fetch origin`, `git merge origin/main`, `git merge-base --is-ancestor origin/main HEAD`, `git status --short`. Record the base SHA and HEAD before and after in the ledger.
 - [ ] **Step 2: A2.** Run `git show v0.2.1:src/canonical.rs | grep -n 'unsupported format_version'` and record the line ("unsupported format_version; expected 1") in the ledger.
 - [ ] **Step 3:** Re-check every name and path the design cites (Baseline Facts 1 to 16 and Parts A to D) at the new HEAD, and the test module paths of the Global Constraints. Mark each "existing" or "new" in a ledger table with its current file. Name the `recovery` arm that gives no actions, and the predicate that selects a registration's primary context.
-- [ ] **Step 4: Premise sweep.** Grep for every site of the design's sweep list (Named Edits, last paragraph) and add each hit to the ledger as a named edit E-15 onwards, under decision 9.
+- [ ] **Step 4: Premise sweep.** Grep for every site of the design's sweep list (Named Edits, last paragraph) and add each hit to the ledger as a named edit E-17 onwards, under decision 9.
 - [ ] **Step 5:** Confirm that no CI test list changes: this Cycle adds no test target.
 - [ ] **Step 6:** Commit the ledger. The orchestrator publishes the branch and adds the start checkpoint comment.
 
@@ -164,13 +164,13 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 ## Task 3: The Index Columns (Design Part B, Storage)
 
 **Files:**
-- Modify: `src/repository/discovery.rs` (`migrate_registry` and a new migration function, which also adds `remote_operation_records.pull_only` for Task 6), `src/repository.rs` (`persist_configuration`), `src/repository/read/admin.rs` (`stored_configuration`)
+- Modify: `src/repository/discovery.rs` (`migrate_registry` and a new migration function, which also adds `remote_operation_records.pull_only` and its immutability trigger for Task 6), `src/repository.rs` (`persist_configuration`), `src/repository/read/admin.rs` (`stored_configuration`)
 - Test: the `src/repository/discovery.rs` tests
 - Named edits: E-9
 
 **Interfaces:** Consumes Task 1's accessors. Produces the four columns and `stored_configuration`'s extra values, which Task 4 reads.
 
-- [ ] **Step 1: Write the failing test** `pull_request_mode_migration_adds_columns_once_and_refills`, beside `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` and with its helpers: build a registry without the columns or the marker, holding one refreshed repository whose configuration is a pull-request one and one finished remote operation row; migrate; assert the four configuration columns and `remote_operation_records.pull_only` exist, the old operation row reads `pull_only = 0`, the marker `wave_06_pull_request_mode_v1` is recorded once, and the primary context is dirty; refresh; assert the row's `integration` is `"pull_request"` and its forge columns hold the configured values; migrate again; assert no error and one marker.
+- [ ] **Step 1: Write the failing test** `pull_request_mode_migration_adds_columns_once_and_refills`, beside `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` and with its helpers: build a registry without the columns or the marker, holding one refreshed repository whose configuration is a pull-request one and one finished remote operation row; migrate; assert the four configuration columns and `remote_operation_records.pull_only` exist, the old operation row reads `pull_only = 0` and an `UPDATE` of it aborts, the marker `wave_06_pull_request_mode_v1` is recorded once, and the primary context is dirty; refresh; assert the row's `integration` is `"pull_request"` and its forge columns hold the configured values; migrate again; assert no error and one marker.
 - [ ] **Step 2: Run, expect FAIL**, by exact name. Record the red run.
 - [ ] **Step 3: Implement** the migration (after `context_retirement::record::migrate`, in an immediate transaction that re-checks first; design Part B and R-5), the four columns in `persist_configuration`, and `stored_configuration`'s reading of them, with a null `integration` on a valid row reading as direct. Apply E-9.
 - [ ] **Step 4: Run** the new test and E-9's tests by exact name. Expected: PASS.
@@ -205,45 +205,44 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 ## Task 6: The Pull-Only Decision (Design Part D; Test-First With A Design Checkpoint)
 
-**Files:** `src/repository/remote/sync.rs` (`SynchronizationSettings`, `SynchronizationError`, `local_only_commits`, the decision after each `graph_plan`, `push_call`, `ended_if_unresolved`), the reservation code in `src/repository/remote/` that inserts and takes up an operation row (writes and reads `pull_only`), `src/repository/remote/conflict_read.rs` (its exhaustive match on `SynchronizationError`), `src/repository/mutation/bind/sync.rs` (the `MERGING` literal gains `pull_only: false`), `src/repository/mutation/outcome.rs` (`synchronization_error_code`). Tests: `src/repository/remote/sync_tests.rs`, the reservation tests beside the code that inserts rows. Named edit: E-11.
+**Files:** `src/repository/remote/sync.rs` (`SynchronizationError`, `local_only_commits`, the mode derived for a new operation, the decision after the two plan sites, `push_call`, the pull-only authority, `ended_if_unresolved` and the wrap of the `push_call` site), the reservation code in `src/repository/remote/` (`synchronization_reserve_owned`, `reserve_remote_operation_kind`, `insert_operation_with_kind`, and one helper that reads an owned row's `pull_only`), `src/repository/remote/conflict_read.rs` (its exhaustive match on `SynchronizationError`), `src/repository/mutation/outcome.rs` (`synchronization_error_code`), the module documentation of `src/repository/mutation/bind/sync.rs` (one sentence: in a pull-request repository the synchronization refuses before it would merge). Tests: `src/repository/remote/sync_tests.rs`, the reservation tests beside the insert.
 
 **Interfaces:**
-- Consumes: Task 5's code; Task 3's `pull_only` column.
-- Produces: `SynchronizationSettings { refuse_divergence: bool, pull_only: bool }`; `SynchronizationError::PrimaryHasLocalCommits { commits: Vec<(git2::Oid, String)>, complete: bool }`; `fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: git2::Oid) -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error>`.
+- Consumes: Task 5's code; Task 3's `pull_only` column and trigger; Task 1's `integration()`.
+- Produces: `SynchronizationError::PrimaryHasLocalCommits { commits: Vec<(git2::Oid, String)>, complete: bool }`; `fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: git2::Oid) -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error>`. `SynchronizationSettings` and the public `reserve_remote_operation` do not change.
 
 - [ ] **Step 1:** Merge `origin/main` if it moved.
-- [ ] **Step 2: Write the failing tests first**, at the layers the design's Required Outcomes give, each named for its outcome:
+- [ ] **Step 2: Write the failing tests first**, at the layers the design's Required Outcomes give, each named for its outcomes:
   - `local_only_commits_lists_newest_first_and_caps_at_twenty` (beside the `graph_plan` test, with its `fixture()` and `child()` helpers): equal gives an empty list and `complete`; one local commit gives it with its summary; a divergence gives only the local side; 21 local commits give the 20 newest, newest first, and `complete` false.
-  - `o3_o4_pull_only_refuses_local_commits_after_any_plan`: for each `graph_plan` result (equal, remote ahead, local ahead, diverged), the decision function gives continue, continue, `PrimaryHasLocalCommits`, `PrimaryHasLocalCommits`; for a context target it continues whatever the relation.
-  - `o7_push_call_refuses_in_a_pull_only_operation`: `push_call`'s decision, given a pull-only operation and a candidate the remote lacks, gives `PrimaryHasLocalCommits` and no push.
-  - `o8_o9_an_operation_keeps_the_mode_it_began_with`: a new operation reserved with `PULL_ONLY` stores `pull_only = 1` and one reserved with `MERGING` stores 0; taking up either row with the other setting gives the stored one.
+  - `o3_o4_o8_pull_only_refuses_local_commits_after_a_plan`: for each `graph_plan` result (equal, remote ahead, local ahead, diverged), the decision function on a pull-only operation gives continue, continue, `PrimaryHasLocalCommits`, `PrimaryHasLocalCommits`; on a direct operation or a context target it continues.
+  - `o9_o10_push_call_never_pushes_in_a_pull_only_operation`: `push_call`'s decision for a pull-only operation gives `AlreadyCurrent` when the push endpoint holds the candidate, and `PrimaryHasLocalCommits` listed against the push endpoint's tip (or the fetched primary when none is advertised) when it is behind; never a push and never `Published`.
+  - `o11_o12_o13_the_mode_is_inserted_once_and_read_back`: a new non-child primary operation inserted in a pull-request repository has `pull_only` 1; a context target's, a poll's, a lifecycle child's and the public `reserve_remote_operation`'s rows have 0; the read helper gives the stored value whatever the configuration now says; an `UPDATE` of `pull_only` aborts.
 - [ ] **Step 3: Run each, expect FAIL**, by exact name under `repository::remote::sync::tests::` or the reservation tests' path. Record the red runs.
-- [ ] **Step 4: Design checkpoint.** Before implementing, the implementer writes in its report where each hook sits: the three `graph_plan` call sites and the decision after each, the line in `push_call`, where a new row is inserted and where a taken-up row's settings are read, and how `ended_if_unresolved` is widened with `keep` false. The orchestrator checks them against the Required Outcomes table and the source, and records the result in the ledger, before Step 5.
-- [ ] **Step 5: Implement** as checked. Apply E-11 and the `MERGING` literal.
+- [ ] **Step 4: Design checkpoint.** Before implementing, the implementer writes in its report where each hook sits: where a new operation's mode is derived and passed into the insert; the read helper and every path that takes up an existing row (`existing`, the replay race, `restart`, `local_owner`); the two plan sites and the decision after each; the lines in `push_call` for the authority and the refusal; the wrap of the `push_call` site; and how `keep` is made false for a pull-only operation. The orchestrator checks them against the Required Outcomes table and the source, and records the result in the ledger, before Step 5.
+- [ ] **Step 5: Implement** as checked, with the module documentation sentence.
 - [ ] **Step 6: Run** the tests of Step 2 by exact name. Expected: PASS.
 - [ ] **Step 7: Commit** "feat(sync): pull-only primary synchronization". The orchestrator adds the library checkpoint comment.
 
-## Task 7: The Binding, The Answer And The Human Output
+## Task 7: The Answer And The Human Output
 
-**Files:** `src/repository/mutation/bind/sync.rs` (`PULL_ONLY`, `domain_call`, `stopped`, the refusal's effects and data), the `MutationDataDto` definition and its `from_stored` and `authority`, `src/bin/manyhands-cli/human_collaboration.rs`. Tests: `src/repository/mutation/bind/sync_tests.rs`, the replay tests beside `MutationDataDto::from_stored`'s, `human_collaboration::tests`.
+**Files:** `src/repository/mutation/bind/sync.rs` (`stopped`, the refusal's effects and data), the `MutationDataDto` definition and its `from_stored` and `authority`, `src/bin/manyhands-cli/human_collaboration.rs`. Tests: `src/repository/mutation/bind/sync_tests.rs`, the replay tests beside `MutationDataDto::from_stored`'s, `human_collaboration::tests`.
 
 **Interfaces:**
-- Consumes: Task 6's setting and error; Task 1's `integration()`.
-- Produces: `pub(super) const PULL_ONLY: SynchronizationSettings = SynchronizationSettings { refuse_divergence: false, pull_only: true };`; `MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto)`, serialized with `"type": "primary_local_commits"`, with `pub struct PrimaryLocalCommitsDto { pub local_commits: Vec<LocalCommitDto>, pub complete: bool }` and `pub struct LocalCommitDto { pub oid: String, pub summary: String }`.
+- Consumes: Task 6's error.
+- Produces: `MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto)`, with `pub struct PrimaryLocalCommitsDto { pub r#type: PrimaryLocalCommitsType, pub local_commits: Vec<LocalCommitDto>, pub complete: bool }`, where `PrimaryLocalCommitsType` is a `contract_enum` with the one value `primary_local_commits` (as `SynchronizationConflictMutationDto`'s type), and `pub struct LocalCommitDto { pub oid: String, pub summary: String }`.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `o10_domain_call_passes_the_setting_by_mode` in `bind/sync_tests.rs`: a primary call in a pull-request repository passes `PULL_ONLY`; in a direct repository `MERGING`; an `item sync` in a pull-request repository `MERGING`.
   - `local_commits_refusal_is_answered_as_itself`: beside `unresolved_history_is_answered_with_the_repair_and_no_retry`, the error over a journal row ended as cancelled gives `primary_has_local_commits`, class `Blocked`, no recovery, every effect `not_requested`, and `data` with `type`, `local_commits` (full OIDs and summaries) and `complete`; not `cancelled`.
   - `o5_local_commits_data_reads_back`: the stored data of that answer, through `MutationDataDto::from_stored` for `RepoSync` and for `OperationResume`, gives the same DTO.
   - `local_commits_refusal_lists_each_commit` in `human_collaboration::tests`: `error:`, `code: primary_has_local_commits`, one `local commit: <7-character oid> <summary>` line per commit, a control character in a summary escaped as the output's field escaping does, and `note: more local commits are not listed` when `complete` is false.
 - [ ] **Step 2: Run each, expect FAIL**, by exact name. Record the red runs.
-- [ ] **Step 3: Implement** `PULL_ONLY`, the choice in `domain_call` from `read_configuration_for`, the widening of `stopped`, the effects, the tagged data with its `from_stored` arm and its `authority` arm, and the human lines.
+- [ ] **Step 3: Implement** the widening of `stopped`, the explicit `not_requested` effects, the DTO with its `from_stored` arm (guarded by the tag, before the generic arm) and its `authority` arm, and the human lines.
 - [ ] **Step 4: Run** the tests of Step 1 by exact name. Expected: PASS.
-- [ ] **Step 5: Commit** "feat(sync): repo sync is pull-only in a pull-request repository".
+- [ ] **Step 5: Commit** "feat(sync): answer and show primary_has_local_commits".
 
 ## Task 8: The SSH Case, The Schema And The Golden
 
-**Files:** `tests/mutation_remote.rs` (the case and its row in the case table, beside `c4_conformance_repo_sync`), `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs` (`DATA_ROOTS`, the two `CODES_` tables), `tests/support/mutation_golden.rs` (`CASES`), the golden `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`. Named edits: E-12, E-14.
+**Files:** `tests/mutation_remote.rs` (the case, its row in the case table beside `c4_conformance_repo_sync`, and `assert_golden`'s placeholder), `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs` (`DATA_ROOTS`, the two `CODES_` tables), `tests/read_contract.rs` (`contract_enumerations`), `tests/support/mutation_golden.rs` (`CASES`), the golden `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`. Named edits: E-12, E-14, E-15, E-16.
 
 - [ ] **Step 1: Write the case** `a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits`, with this comment above it: no non-SSH publication remote can be selected, and the property is that nothing reaches the server and nothing is held. The case:
   1. commits a pull-request configuration (the serializer's output) on `w.peer` and pushes it with the harness's peer push, then runs a direct-mode `repo sync` in the clone so that its primary holds the configuration (K-2);
@@ -251,10 +250,10 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   3. commits locally, runs `repo sync` with a fixed request ID, and asserts `primary_has_local_commits`, every effect `not_requested`, `data.local_commits` holding that commit, no recovery, and the server's primary unchanged (O3);
   4. runs the same request again and asserts the identical envelope (O5), as `c4_merging_clean_divergence` checks a retry;
   5. runs `item sync` of an item and asserts it is not `busy` (decision 5);
-  6. writes the golden with the harness's golden writer, as `repo_sync_push_rejected` is written.
-- [ ] **Step 2: Run it red** against a stub `domain_call` that passes `MERGING` (step 3 then pushes): `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits -- --exact`. Record the red run.
-- [ ] **Step 3: Add the schema**, list it in `DATA_ROOTS` (E-12), register the golden in `CASES`, generate it with `MANYHANDS_UPDATE_GOLDEN=1` on the same command, and read it. Apply E-14.
-- [ ] **Step 4: Run** the case again without the update variable, then by exact name both `every_result_code_has_a_*` tests, `every_schema_is_reachable_from_a_published_root` and the data-root golden test of `tests/mutation_contract.rs`. Expected: PASS.
+  6. writes the golden with the harness's golden writer, as `repo_sync_push_rejected` is written, with `data.local_commits[].oid` replaced by a placeholder (E-16).
+- [ ] **Step 2: Run it red** against a stub that inserts every operation with `pull_only` 0 (step 3 then pushes): `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits -- --exact`. Record the red run.
+- [ ] **Step 3: Add the schema**, list it in `DATA_ROOTS` (E-12) and its `type` enum in `contract_enumerations` (E-15), register the golden in `CASES`, generate it with `MANYHANDS_UPDATE_GOLDEN=1` on the same command, and read it. Apply E-14.
+- [ ] **Step 4: Run** the case again without the update variable, then by exact name both `every_result_code_has_a_*` tests, `every_schema_is_reachable_from_a_published_root` and the data-root golden test of `tests/mutation_contract.rs`, and `published_enumerations_list_exactly_the_registered_values` of `tests/read_contract.rs`. Expected: PASS.
 - [ ] **Step 5: Commit** "test(sync): pull-only repo sync end to end". The orchestrator adds the checkpoint comment.
 
 ## Task 9: Documents And Skills (Design D-1 To D-6)
@@ -284,7 +283,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | A5 | 3 |
 | A6 | 2 |
 | A7 | 2 (Step 6) |
-| A8 (Required Outcomes O1 to O12) | 6, 7, 8 |
+| A8 (Required Outcomes O1 to O15) | 6, 7, 8 |
 | A9 | 8 |
 | A10 | 5, 8 |
 | A11 | 10 |
@@ -295,11 +294,10 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | R-7 | 6 |
 | R-9 | 8 |
 | R-10 | 5 |
-| R-11, R-15 | 6 |
-| R-14 | 7 |
+| R-11, R-14, R-15 | 6 |
 | R-16 | Cycle document K-7 |
 | R-12 | 10 |
 | R-13 | 9 |
 | Review Focus lines | 1, 2, 8 |
 
-Checked: every design Part has a task (Part E has none, by decision 4); the types named in Interfaces match across tasks (`Integration`, `ForgeKind`, `ForgeSetting`, `Forge`, `PullRequestLink`, `PULL_ONLY`, `PrimaryHasLocalCommits`, `local_only_commits`, `PrimaryLocalCommitsDto`, `pull_only`); no placeholder steps; the plan adds no test target, so no CI list changes.
+Checked: every design Part has a task (Part E has none, by decision 4); the types named in Interfaces match across tasks (`Integration`, `ForgeKind`, `ForgeSetting`, `Forge`, `PullRequestLink`, `PrimaryHasLocalCommits`, `local_only_commits`, `PrimaryLocalCommitsDto`, `PrimaryLocalCommitsType`, `pull_only`); no placeholder steps; the plan adds no test target, so no CI list changes.
