@@ -692,7 +692,7 @@ force the path. The groups are:
 | `item republish` | M + R + C + I + T + Y + `ticket_closed` | 42 | Republish, required outcomes; decision 17 |
 | `conflict show` | P + S + `repository_not_registered operation_not_found invalid_input` | 12 | Conflict Inspection, required outcomes; R-12 (`busy`). Amended 2026-10-30 by C4 (Task 0's review): this row read R and counted 13. A read answers a never-enabled root as `repository_not_registered` (`read/mod.rs`, `repository_error_code`), so `repository_not_enabled` is not one of its codes. The union is unchanged |
 | `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required` | 40 | Conflict Resolution steps 1–7; interrupted-resolution table |
-| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path` | 40 | Resume (R-20); `bind/resume.rs:104-483` |
+| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path primary_has_local_commits` | 41 | Resume (R-20); `bind/resume.rs:104-483`. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added, because a resume of a pull-only `repo sync` can answer it. |
 | `operation abandon` | M + R + C + `operation_not_found invalid_input already_applied recovery_required invalid_path` | 23 | `bind/abandon.rs:104-413` (unchanged); decision 6 |
 
 Notes on the sets, from the source:

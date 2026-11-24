@@ -111,7 +111,7 @@ The types live in `src/canonical.rs`, each with `as_str`. The accessors are infa
 
 A new library module, `src/forge.rs`, declared in `src/lib.rs`, with no GPUI dependency.
 
-**Remote location (R-2).** `RemoteLocation::parse(url: &str) -> Option<RemoteLocation>`, with `host` (lowercased), `port` (`Option<u16>`) and `path` (no leading `/`, no trailing `/` or `.git`). It accepts `ssh://[user@]host[:port]/path` and scp-like `[user@]host:path`, and answers `None` for anything else. It is used only to build links: never to connect, and never for host trust.
+**Remote location (R-2).** The free function `forge::parse(url: &str) -> Option<RemoteLocation>` in `src/forge.rs` (amended during execution, 2026-11-24: not an associated function), giving a `RemoteLocation` with `host` (lowercased), `port` (`Option<u16>`) and `path` (no leading `/`, no trailing `/` or `.git`). It accepts `ssh://[user@]host[:port]/path` and scp-like `[user@]host:path`, and answers `None` for anything else. It is used only to build links: never to connect, and never for host trust.
 
 **Recognition.** `recognise(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Option<Forge>`, where `Forge { kind: Option<ForgeKind>, location: Option<RemoteLocation>, web_url: Option<String>, template: Option<String> }`:
 
@@ -147,7 +147,7 @@ Three review rounds found faults in this mechanism, so it is stated as required 
 **The decision.** A pull-only operation never merges and never pushes:
 
 - right after the `graph_plan` call of the divergence block and the one under the repository lease (Baseline Fact 18), a plan with `push_needed`, or `MergeRequired`, stops the operation with `SynchronizationError::PrimaryHasLocalCommits { commits, complete }`, before any merge window or local update;
-- in `push_call`, a pull-only operation never pushes. It uses `Authority::AlreadyCurrent` when the push endpoint holds the candidate; when the push endpoint is behind the candidate (a separate push URL behind the fetch URL, or a rewind of the push endpoint after the fetch), it stops with the same error, after the local fast-forward and with nothing pushed (R-15). Its list is taken against the push endpoint's advertised tip, or against the fetched remote primary when the push endpoint advertises none.
+- in `push_call`, a pull-only operation never pushes. It uses `Authority::AlreadyCurrent` when the push endpoint holds the candidate; when the push endpoint does not hold the candidate, it stops with the same error, after the local fast-forward and with nothing pushed (R-15). Amended during execution, 2026-11-24: that is three cases, and in none of them has the person a local-only commit. The push endpoint advertises no primary: the list is the candidate's 20 newest commits (all are missing from it), `complete` false if there are more. The push endpoint is strictly behind the candidate: the list is the candidate's commits it lacks, taken against its advertised tip. The push endpoint is strictly ahead of the candidate (a teammate's merge landing mid-sync, or a separate push URL ahead): it lacks none of the candidate's commits, so the list is empty and `complete` is true (K-9). Running `repo sync` again fetches again; if it persists, the push URL (`remote.<name>.pushurl`) is out of step with the fetch URL.
 
 The list comes from a pure function:
 
@@ -162,7 +162,7 @@ It walks from `local`, hiding `remote`, in `git2::Sort::TOPOLOGICAL | git2::Sort
 
 **A finished pull-only operation's authority.** A pull-only operation always settles with `Authority::AlreadyCurrent`, on a first call and on a resume after `PushVerified`, so its answer is never `published` (decision 4).
 
-**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", and no recovery action (R-10). Its effects are `not_requested` throughout, set explicitly, `publication` included: nothing was or will be pushed. Its data is a new `MutationDataDto` variant, `PrimaryLocalCommitsDto { type, local_commits: [{ oid, summary }], complete }`, whose `type` is a contract enum with the one value `primary_local_commits`, as `SynchronizationConflictMutationDto`'s is, because `MutationDataDto` is untagged. The `oid` is the full 40 characters. A `PrimaryLocalCommitsDto::from_stored` arm, guarded by the tag and placed before the generic arm, reads it back on a replay. Its schema `schemas/v1/primary_local_commits.schema.json` is listed in `DATA_ROOTS` with the SSH case's golden, and its `type` enum in `contract_enumerations`. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <7-character oid> <summary>` line per commit through the human output's field escaping, and `note: more local commits are not listed` when `complete` is false.
+**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", and no recovery action (R-10). Its effects are `not_requested` throughout, set explicitly, `publication` included: nothing was or will be pushed. Its data is a new `MutationDataDto` variant, `PrimaryLocalCommitsDto { type, local_commits: [{ oid, summary }], complete }`, whose `type` is a contract enum with the one value `primary_local_commits`, as `SynchronizationConflictMutationDto`'s is, because `MutationDataDto` is untagged. The `oid` is the full 40 characters. A `PrimaryLocalCommitsDto::from_stored` arm, guarded by the tag and placed before the generic arm, reads it back on a replay. Its schema `schemas/v1/primary_local_commits.schema.json` is listed in `DATA_ROOTS` with the SSH case's golden, and its `type` enum in `contract_enumerations`. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <7-character oid> <summary>` line per commit through the human output's field escaping, and `note: more local commits are not listed` when `complete` is false. Amended during execution, 2026-11-24: with no commit to list it prints one `note: no local-only commits are listed; the push endpoint is out of step with the fetch, so run repo sync again` line instead.
 
 ### Required Outcomes Of Part D
 
@@ -176,7 +176,7 @@ It walks from `local`, hiding `remote`, in `git2::Sort::TOPOLOGICAL | git2::Sort
 | O6 | A crash after O3's ending and before its request record is final; then a retry | `cancelled`; a new `repo sync` answers O3 again | Known Limit K-7; not tested |
 | O7 | A pull-only operation resumed after the local head moved | `recovery_required` from `reconcile_synchronization`, as for any synchronization today; nothing pushed; held until `request cancel` | existing reconciliation tests, unchanged |
 | O8 | A crash after the fetch of a pull-only operation, with local commits already there and the head unchanged; then a resume | the plan's check refuses with `primary_has_local_commits`; operation ended | the decision function on the stored value |
-| O9 | A pull-only operation whose push endpoint is behind the candidate | `primary_has_local_commits` after the fast-forward, listed against the push endpoint's tip; nothing pushed; operation ended | `push_call`'s refusal unit test |
+| O9 | A pull-only operation whose push endpoint does not hold the candidate (amended during execution, 2026-11-24): it advertises no primary, is behind, or is ahead | `primary_has_local_commits` after the fast-forward; nothing pushed; operation ended. No primary: the candidate's 20 newest commits (`complete` false if more). Behind: the candidate's commits it lacks, listed against its tip. Ahead: an empty list, `complete` true | `push_call`'s refusal unit test |
 | O10 | A resume after `PushVerified` of a pull-only operation | `already_applied`, `current`, never `published` | the authority unit test |
 | O11 | A pull-only operation resumed in a repository switched back to direct mode | stays pull-only | the stored-value helper's unit test |
 | O12 | A direct-mode operation (merge pending or push prepared) resumed after the repository switched to pull-request mode | finishes in direct mode, as today | the stored-value helper's unit test |
@@ -261,11 +261,11 @@ Each: decision — why — cost if wrong. Revision 1's R-4 and R-6 became the ow
 
 ## Known Limits
 
-The Cycle document's K-1 to K-8.
+The Cycle document's K-1 to K-9.
 
 ## Unverified
 
-- **U-1** The Data Center, GitHub and GitLab URL shapes are the forges' documented forms, not checked against a live forge (decision 7 checks Bitbucket Cloud).
+- **U-1** The Data Center, GitHub and GitLab URL shapes are the forges' documented forms, not checked against a live forge. Amended during execution, 2026-11-24: decision 7's check was the owner confirming the Bitbucket Cloud shape by eye on a link built for a placeholder repository (the owner's choice); no shape was opened against a live forge.
 
 ## Alternatives Rejected
 

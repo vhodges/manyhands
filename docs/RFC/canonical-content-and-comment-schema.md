@@ -90,15 +90,15 @@ Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the configuration also holds 
 
 ```toml
 format_version = 2
+integration = "pull_request"
 primary_branch = "main"
 publication_remote = "origin"
-integration = "pull_request"
 
 [forge]
 kind = "bitbucket-cloud"
 ```
 
-`integration = "pull_request"` requires `format_version = 2` and a `publication_remote`: a version 1 file that asks for pull requests is invalid, so a build that predates the mode never acts on one in direct mode. The mode and the forge are validated when the file is read and again when it is written. The [Pull-Request Mode RFC](pull-request-mode.md) defines what the mode means.
+`integration = "pull_request"` requires `format_version = 2` and a `publication_remote`: a version 1 file that asks for pull requests is invalid. The guarantee for older builds is this: every configuration this build accepts as a pull-request configuration is version 2, every writer writes pull-request mode as version 2, and builds before this one refuse version 2 (a pre-mode build treats `integration` as an unknown key, so a version 1 file with it would not protect them). The mode and the forge are validated when the file is read and again when it is written. The [Pull-Request Mode RFC](pull-request-mode.md) defines what the mode means.
 
 An absent, malformed, unsupported-version, or invalid configuration is a
 visible repository problem. It MUST NOT cause Markdown content to be omitted or
