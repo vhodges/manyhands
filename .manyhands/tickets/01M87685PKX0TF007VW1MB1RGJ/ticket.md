@@ -7,7 +7,7 @@ deps:
 - 01M876851FT3NPSH9KDXKXR1AJ
 id: 01M87685PKX0TF007VW1MB1RGJ
 title: 'Wave 06 Cycle 06: Desktop for pull-request mode'
-type: feature
+type: cycle
 status: open
 project: manyhands
 team: core
