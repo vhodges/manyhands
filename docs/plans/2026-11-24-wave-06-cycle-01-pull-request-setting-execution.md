@@ -247,3 +247,9 @@ Inference (not run): the byte layout of a serialized `[forge]` table (Task 1's t
 - Named edits applied: E-1 (2 tests in `src/repository/discovery.rs`), E-2, E-4 (2 cases). E-3 dropped (Task 0).
 - Ruling: the URL check's host rule is loose (`https://@` passes) and is kept — the design asks only for a non-empty host, and `web_url` only builds links — a malformed `web_url` yields a broken link, never a connection.
 - Minor findings left as they are: the version check inside `validate_mode_and_forge` is unreachable from its callers (defensive); the P3 test stages the configuration in the index without a comment; `as_str` values are checked only through parse and write.
+
+## Task 2
+
+- Commit `d8abc5d7` feat(forge): forge recognition, default mode and pull request links (`src/forge.rs`, `src/lib.rs`, `Cargo.toml`, `Cargo.lock`). Review approved; 4 Minor findings, left as they are: a drive-letter or bracketed scp form parses to an odd host (no cloud match); `.` and `..` path segments pass unencoded; no encoding row for the Data Center key or the target; the dependency's position in `Cargo.toml`.
+- Tests run: `forge::tests` (4 tests: `remote_locations`, `recognition_and_default_mode`, `pull_request_urls`, `human_lines`), red against `unimplemented!()` stubs, then green; `scripts/check-cli-no-gpui.sh` clean.
+- A7 (decision 7): the owner chose a placeholder repository over a real one. The builder's Bitbucket Cloud link for `git@bitbucket.org:acme/widgets.git`, primary `development`, is `https://bitbucket.org/acme/widgets/pull-requests/new?source=manyhands/ticket/01M87683441PRAYQJQBQBG96YY&dest=development`; the owner confirmed its shape by eye ("Looks right"). The link was not opened against a live repository.
