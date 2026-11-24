@@ -4,7 +4,7 @@ deps:
 - 01M87683441PRAYQJQBQBG96YY
 id: 01M87683QK8E34EYY8KS4VQG9Y
 title: 'Wave 06 Cycle 03: Ticket close in pull-request mode, the closing state and withdraw'
-type: feature
+type: cycle
 status: open
 project: manyhands
 team: core
