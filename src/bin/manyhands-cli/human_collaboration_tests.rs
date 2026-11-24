@@ -375,7 +375,8 @@ fn local_commits_refusal_lists_each_commit() {
         stderr(&incomplete).replace("note: more local commits are not listed\n", "")
     );
     // No commits to list (the push endpoint is ahead of what was fetched):
-    // the refusal prints with no commit lines and no data fields.
+    // the refusal prints with no commit lines and no data fields, and a
+    // note saying why the list is empty.
     let none = refusal(&[], true);
     assert_eq!(none.status, 3);
     assert_eq!(
@@ -383,7 +384,8 @@ fn local_commits_refusal_lists_each_commit() {
         "error: The local primary branch has commits the remote does not have.\n\
          code: primary_has_local_commits\n\
          request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n\
-         operation: <operation>\n"
+         operation: <operation>\n\
+         note: no local-only commits are listed; the push endpoint is out of step with the fetch, so run repo sync again\n"
     );
 }
 

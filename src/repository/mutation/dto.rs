@@ -991,7 +991,9 @@ pub struct BlockedDto {
 }
 
 /// The `data` of a mutation's envelope: the shape of the command's family.
-/// It may accompany any outcome and never holds a body or a source.
+/// It may accompany any outcome and never holds a body or a source. The one
+/// text it carries from the person's own work is `PrimaryLocalCommitsDto`'s
+/// commit summaries: the person's own commit text, shown back to that person.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum MutationDataDto {
@@ -1743,7 +1745,8 @@ impl LocalCommitDto {
 /// synchronization never merges or pushes. `local_commits` are the newest
 /// of them, newest first, and `complete` says whether that is all of them.
 /// The list is empty when the push endpoint is ahead of what was fetched.
-/// Nothing was published.
+/// The summaries are the person's own commit text, shown back to that
+/// person. Nothing was published.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrimaryLocalCommitsDto {
     pub r#type: PrimaryLocalCommitsType,
