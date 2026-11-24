@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 01 Implementation Plan: Pull-Request Setting, Link Builder And Pull-Only Repo Sync"
 date: 2026-11-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -20,7 +20,7 @@ id: "01M878QXH8MFXHYK3RPMNMA4C8"
 
 **Spec:** [Cycle 01 design](2026-11-24-wave-06-cycle-01-pull-request-setting-design.md) (revision 4), under the [Cycle document](../Cycles/wave-06-cycle-01-pull-request-setting.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft** (revision 4).
+Status: **approved 2026-11-24** (revision 4).
 
 ## Global Constraints
 

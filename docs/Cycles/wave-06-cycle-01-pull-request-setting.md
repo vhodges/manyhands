@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 01: Pull-Request Setting, Link Builder And Pull-Only Repo Sync"
 date: 2026-11-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M878QWAET79VP1S0EXVCEMAC"
 
 Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`), branch `manyhands/ticket/01M87683441PRAYQJQBQBG96YY`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 01 design](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-design.md). Plan: [Cycle 01 implementation plan](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-implementation.md).
 
-Status: **draft** (revision 4).
+Status: **approved 2026-11-24** (revision 4).
 
 Revision history:
 
@@ -117,7 +117,9 @@ Authorities, in order:
 10. **No release until Cycle 04 lands.** The skills describe the new keys and pull-only `repo sync`, and say that pull-request mode is not usable end to end until close and promote support it.
 11. **An operation finishes in the mode it began.** Each remote operation records whether it is pull-only when it starts, and every later call of it (resume, conflict continuation, cancellation, rerun) keeps that mode. A direct-mode `repo sync` interrupted and resumed after the repository switched finishes as direct, and may push the primary once more, as it intended.
 
-At approval: to be recorded.
+12. **Test edits are approved.** At approval the owner approved the named edits and any other test edit this Cycle needs, which widens decision 9 to every test edit, each logged in the ledger with its reason.
+
+At approval (2026-11-24): the owner approved the three documents at revision 4 (`6c45a2b5`) without a further review round, approved the test edits (decision 12), chose subagent-driven execution, and authorized implementation. Not authorized: any push other than the ticket branch, the close and its merge, a release (decision 10), and native CI.
 
 ## Known Limits
 
@@ -155,3 +157,4 @@ None.
 | Review round 2, scoped re-review with adversarial round | 3 Blocking, 4 Important, 6 Minor | — | All resolved in revision 3; see the design's Review Record | This revision |
 | Review round 2 | A setting read afresh per call strands an operation begun in the other mode | decision | The mode belongs to the operation (decision 11) | `sync.rs` merge-child and push-prepared refusals under `refuse_divergence` |
 | Review round 3, scoped re-review with adversarial round | 0 Blocking, 5 Important, 5 Minor | — | Resolved in revision 4, not independently reviewed; see the design's Review Record | This revision |
+| Approval | Documents, test edits, execution method, implementation | decision | Approved 2026-11-24 (decision 12 and the approval line) | Owner, in the planning chat |

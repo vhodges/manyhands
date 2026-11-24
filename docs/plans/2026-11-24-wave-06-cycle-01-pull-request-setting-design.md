@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 01 Design: Pull-Request Setting, Link Builder And Pull-Only Repo Sync"
 date: 2026-11-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M878QWXT8RVAKS7FB68PH3D7"
 
 Cycle document: [Wave 06 Cycle 01](../Cycles/wave-06-cycle-01-pull-request-setting.md). Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md) and the Cycle document's Product-Owner Decisions.
 
-Status: **draft** (revision 4).
+Status: **approved 2026-11-24** (revision 4).
 
 ## Intent And Approval Boundary
 
