@@ -7,8 +7,8 @@ use git2::{Config, ConfigLevel, Repository};
 use time::OffsetDateTime;
 
 use super::{
-    Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
-    IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
+    Accessibility, ConfigurationDto, ConfigurationState, ForgeDto, IdentityAvailability,
+    IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
     resolve::{at_root, open_exactly, selected_repository},
@@ -63,7 +63,50 @@ fn configuration_dto(
         primary_branch,
         publication_remote,
         problems: problem.map(configuration_problem).into_iter().collect(),
+        integration: None,
+        forge: None,
     }
+}
+
+/// A valid configuration's object: `configuration_dto` with its mode and
+/// forge.
+fn valid_configuration_dto(
+    primary_branch: String,
+    publication_remote: Option<String>,
+    integration: Option<String>,
+    forge: Option<ForgeDto>,
+) -> ConfigurationDto {
+    ConfigurationDto {
+        integration,
+        forge,
+        ..configuration_dto(
+            ConfigurationState::Valid,
+            Some(primary_branch),
+            publication_remote,
+            None,
+        )
+    }
+}
+
+/// `value` when it is the contract spelling of a mode this build knows.
+fn known_integration(value: &str) -> Option<String> {
+    use canonical::Integration::{Direct, PullRequest};
+    [Direct.as_str(), PullRequest.as_str()]
+        .contains(&value)
+        .then(|| value.to_owned())
+}
+
+/// `value` when it is the contract spelling of a forge kind this build knows.
+fn known_forge_kind(value: &str) -> Option<String> {
+    use canonical::ForgeKind::{BitbucketCloud, BitbucketDataCenter, Github, Gitlab};
+    [
+        BitbucketCloud.as_str(),
+        BitbucketDataCenter.as_str(),
+        Github.as_str(),
+        Gitlab.as_str(),
+    ]
+    .contains(&value)
+    .then(|| value.to_owned())
 }
 
 /// The mode and `[forge]` columns of a stored configuration row:
@@ -116,14 +159,18 @@ pub(super) fn stored_configuration(
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
         (Some("valid"), Some(primary_branch)) => {
-            // The configuration object reports them once it has the fields
-            // for them (Task 4).
-            let (_integration, _forge) = mode.read();
-            configuration_dto(
-                ConfigurationState::Valid,
-                Some(primary_branch),
+            let (integration, forge) = mode.read();
+            // A value a later build wrote, which this one does not know,
+            // reads as null, so the object always satisfies the schema.
+            valid_configuration_dto(
+                primary_branch,
                 publication_remote,
-                None,
+                known_integration(&integration),
+                forge.map(|(kind, web_url, pull_request_url)| ForgeDto {
+                    kind: kind.and_then(|kind| known_forge_kind(&kind)),
+                    web_url,
+                    pull_request_url,
+                }),
             )
         }
         (Some("invalid"), _) => configuration_dto(
@@ -146,12 +193,20 @@ fn inspected_configuration(configuration: ConfigurationInspection) -> Configurat
         ConfigurationInspection::Missing => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        ConfigurationInspection::Valid(configuration) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(configuration.primary_branch),
-            configuration.publication_remote,
-            None,
-        ),
+        ConfigurationInspection::Valid(configuration) => {
+            let integration = configuration.integration().as_str().to_owned();
+            let forge = configuration.forge().map(|forge| ForgeDto {
+                kind: forge.kind.map(|kind| kind.as_str().to_owned()),
+                web_url: forge.web_url,
+                pull_request_url: forge.pull_request_url,
+            });
+            valid_configuration_dto(
+                configuration.primary_branch,
+                configuration.publication_remote,
+                Some(integration),
+                forge,
+            )
+        }
         ConfigurationInspection::Invalid(problem) => configuration_dto(
             ConfigurationState::Invalid,
             None,

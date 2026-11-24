@@ -3,6 +3,8 @@
   "command": "repo inspect",
   "data": {
     "configuration": {
+      "forge": null,
+      "integration": "direct",
       "primary_branch": "main",
       "problems": [],
       "publication_remote": null,

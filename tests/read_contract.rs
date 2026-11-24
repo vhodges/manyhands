@@ -724,6 +724,7 @@ fn abandoned_actions() -> Vec<&'static str> {
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
+    use manyhands::canonical::{ForgeKind, Integration};
     use manyhands::repository::{
         LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
@@ -732,6 +733,25 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         PollMutationCompletion, PollTargetDisposition,
     };
     let mut enumerations = vec![
+        (
+            "repository_configuration.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "repository_configuration.schema.json",
+            "forge.kind",
+            [
+                ForgeKind::BitbucketCloud,
+                ForgeKind::BitbucketDataCenter,
+                ForgeKind::Github,
+                ForgeKind::Gitlab,
+            ]
+            .map(ForgeKind::as_str)
+            .to_vec(),
+        ),
         (
             "lifecycle_blocked.schema.json",
             "blockers.items",
