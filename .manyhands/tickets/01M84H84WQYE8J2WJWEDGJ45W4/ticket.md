@@ -1,5 +1,7 @@
 ---
 slug: vh-c97se
+deps:
+- 01M87683441PRAYQJQBQBG96YY
 id: 01M84H84WQYE8J2WJWEDGJ45W4
 title: Onboarding an existing repository should put the Manyhands setup on a branch for a pull request, not commit to the primary branch
 type: feature
