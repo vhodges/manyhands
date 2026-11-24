@@ -8,9 +8,9 @@ manyhands_kind: document
 
 ## Theme
 
-vh-f3wts (fast writes, closed 2026-11-23) met its targets: item sync 1.9 s, comment add 1.6 s, close --confirm 4.9 s. Its profile and reviews left follow-on work in three strands. Speed: each remote call still reopens the registry and repeats local checks, each write still walks the item's whole Git tree, and the test suite itself takes over two hours. Correctness: the new index marks and the once-per-process registry audit leave a cleanup window and some changed answers to check. Consolidation: a rule and a set of security checks written twice, two very large files, and the final review's list of small fixes and test gaps.
+vh-f3wts (fast writes, closed 2026-11-23) met its targets: item sync 1.9 s, comment add 1.6 s, close --confirm 4.9 s. Its profile and reviews left follow-on work in three strands. Speed: each remote call still reopens the registry and repeats local checks, each write still walks the item's whole Git tree, operation attribution and the blocker wait add their own reads and retries, and the test suite itself takes over two hours. Correctness: the new index marks and the once-per-process registry audit leave a cleanup window and some changed answers to check. Consolidation: a rule and a set of security checks written twice, two very large files, and the final review's list of small fixes and test gaps.
 
-Each ticket is one Cycle with its own branch and worktree. vh-mpvkc and vh-necew were filed earlier; vh-f3wts added a comment to each. Tick a ticket's last box when `ticket close` has merged it.
+Each ticket is one Cycle with its own branch and worktree. vh-mpvkc and vh-necew were filed earlier; vh-f3wts added a comment to each. vh-44q1k is a follow-on from vh-bhepg (concurrent writers, closed 2026-11-19). Tick a ticket's last box when `ticket close` has merged it.
 
 ## Speed
 
@@ -39,6 +39,16 @@ Each ticket is one Cycle with its own branch and worktree. vh-mpvkc and vh-necew
 - [ ] Real sleeps of 1 s or more replaced by an injected clock or duration
 - [ ] `cargo-nextest` in Devenv, with a documented slowest-tests command
 - [ ] SSH tier at 25 minutes or less, before and after times recorded
+- [ ] Reviewed and closed
+
+### vh-44q1k: Performance of operation attribution, the blocker wait and its retries
+
+- [ ] CLI retry on top of the 5 s blocker wait: retry, shorten or keep, decided from a measured two-writer run on a loaded machine
+- [ ] Holders N+1: the status path's per-row reads
+- [ ] `read_live_holder`'s second `repository_operations` run, with its local_sync audit
+- [ ] `RowOrigin::here` hoisted out of the wait loop
+- [ ] Each item has before and after numbers from a scripted run, or a decision to leave it
+- [ ] Wait budget and poll interval stay injectable; no new real sleeps
 - [ ] Reviewed and closed
 
 ## Correctness
