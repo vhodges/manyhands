@@ -3618,14 +3618,14 @@ pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
 
     /// `(integration, forge_kind, forge_web_url, forge_pull_request_url)` of
     /// the valid configuration stored for `registration`.
-    type StoredMode = (
+    type ModeColumns = (
         Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
     );
 
-    fn stored_mode(connection: &Connection, registration: i64) -> StoredMode {
+    fn stored_mode(connection: &Connection, registration: i64) -> ModeColumns {
         connection
             .query_row(
                 "SELECT integration, forge_kind, forge_web_url, forge_pull_request_url
@@ -3729,7 +3729,7 @@ pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
         assert_eq!(context_marks(&older), marks(0, 0));
         drop(older);
 
-        // Opening the registry is what migrates it.
+        // Migrating the registry, as opening it through the service does.
         let mut connection = open_registry(&path, &mut |_| {}).unwrap();
         migrate_registry(&mut connection).unwrap();
 
@@ -3802,6 +3802,43 @@ pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
         assert_pull_request_mode_columns_once(&again);
         assert_eq!(pull_request_mode_markers(&again), 1);
         assert_eq!(context_marks(&again), marks(0, 1));
+    }
+
+    // A registry that is marked but lost the operation's mode, its trigger
+    // and a forge column (tables made again by a build that did not know
+    // them) gets them back, and no context is marked again: the schema
+    // decides what is added, and the marker only the one-time marks.
+    #[test]
+    fn a_marked_registry_that_lost_the_pull_request_mode_schema_gets_it_back_unmarked() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');",
+            )
+            .unwrap();
+        let clean = BTreeMap::from([((1, None), 0)]);
+        assert_eq!(pull_request_mode_markers(&connection), 1);
+        assert_eq!(context_marks(&connection), clean);
+        // The trigger goes before the column it is on.
+        connection
+            .execute_batch(
+                "DROP TRIGGER remote_pull_only_immutable;
+                 ALTER TABLE remote_operation_records DROP COLUMN pull_only;
+                 ALTER TABLE configuration_observations DROP COLUMN forge_kind;",
+            )
+            .unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+
+        assert_pull_request_mode_columns_once(&connection);
+        assert_eq!(pull_request_mode_markers(&connection), 1);
+        assert_eq!(context_marks(&connection), clean);
     }
 
     #[test]
