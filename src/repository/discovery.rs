@@ -4460,7 +4460,7 @@ mod tests {
     fn missing_or_malformed_configuration_is_unverified_but_keeps_documents() {
         for config in [
             None,
-            Some("format_version = 2\nprimary_branch = \"main\"\n"),
+            Some("format_version = 3\nprimary_branch = \"main\"\n"),
         ] {
             let (directory, repository) = repository_on_main();
             if let Some(config) = config {
@@ -4690,7 +4690,7 @@ mod tests {
         let (directory, repository) = repository_on_main();
         write_config(
             directory.path(),
-            "format_version = 2\nprimary_branch = \"main\"\n",
+            "format_version = 3\nprimary_branch = \"main\"\n",
         );
         let worktree = active_worktree(
             &repository,
