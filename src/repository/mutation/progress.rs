@@ -34,7 +34,7 @@ use super::{
         SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
         SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
-        promotion::lifecycle::CancellationProbe,
+        promotion::{lifecycle::CancellationProbe, run::RunObserver},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
         transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
@@ -83,6 +83,15 @@ contract_enum!(
     /// A resume reports `observing` before it looks at the operation it
     /// names, then `indexing` before a hand-off it runs, or the stages
     /// of a synchronization it takes up.
+    ///
+    /// A promotion or a closure reports `observing` before its run, then
+    /// the stages of the steps it runs (D5 decision 11): `connecting` when
+    /// it starts its context's synchronization, and that synchronization's
+    /// `fetching`, `updating_local` and `pushing`; `recording` before it
+    /// writes a closure's checkpoint; `integrating` before it moves primary
+    /// to a merge; `publishing` once, when it starts primary's publication;
+    /// and `cleaning_up` before it retires the context. A step it does not
+    /// run reports nothing.
     ProgressStage {
         Accepted => "accepted",
         Observing => "observing",
@@ -93,6 +102,10 @@ contract_enum!(
         Pushing => "pushing",
         Verifying => "verifying",
         Indexing => "indexing",
+        Recording => "recording",
+        Integrating => "integrating",
+        Publishing => "publishing",
+        CleaningUp => "cleaning_up",
         Stopping => "stopping",
     }
 );
@@ -103,7 +116,9 @@ contract_enum!(
 /// the request carries or meets: no body or source, no commit message,
 /// no remote location, no credential and no text a server sent.
 /// `effects` is what the request has completed so far; the request's
-/// result is what names a commit.
+/// result is what names a commit. A promotion's or a closure's stage events
+/// carry no effects, as `not_requested` throughout (D5 decision 11): its
+/// result is what reports them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProgressEvent {
     pub request_id: String,
@@ -124,7 +139,8 @@ pub struct ProgressEvent {
 ///
 /// A sink must not call back into the library. Two of a
 /// synchronization's stages, `updating_local` and the `observing` that
-/// follows it, are reported while the repository's lease is held.
+/// follows it, are reported while the repository's lease is held, and so
+/// is a promotion's or a closure's `integrating`.
 ///
 /// A sink that panics is sent nothing more by that call. The panic goes
 /// no further: the request runs on as if the sink had returned.
@@ -164,6 +180,18 @@ impl Subject {
         }
     }
 
+    /// A subject of the request `request_id` of `command`, for a test that
+    /// has no binding or accepted request.
+    #[cfg(test)]
+    pub(crate) fn for_testing(request_id: &str, command: &'static str) -> Self {
+        Self {
+            request_id: request_id.to_owned(),
+            operation_id: None,
+            command,
+            scope: Scope::default(),
+        }
+    }
+
     pub(crate) fn event(&self, stage: ProgressStage, effects: Effects) -> ProgressEvent {
         ProgressEvent {
             request_id: self.request_id.clone(),
@@ -190,6 +218,15 @@ pub(crate) trait Session {
 
     /// Sends `event` to the call's sink.
     fn report(&self, event: &ProgressEvent);
+
+    fn retire_context(
+        &self,
+        service: &RepositoryService,
+        request: crate::repository::RetireContextRequest,
+        accepted: &Accepted,
+        reentry: bool,
+        initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>>;
 
     /// Synchronizes with the session's credentials; see
     /// `RepositoryService::synchronize_remote_observed`. `None` when the
@@ -219,22 +256,26 @@ pub(crate) trait Session {
     /// call's token and by the flag of the request `asked_of`; see
     /// `RepositoryService::promote_document`. `None` when the session has
     /// no credentials, or they are in use: nothing was called.
+    /// `progress` is told of each step the run takes (D5 decision 11).
     fn promote_document(
         &self,
         service: &RepositoryService,
         request: PromoteDocumentRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>>;
 
     /// Closes a ticket with the session's credentials, stopped by the call's
     /// token and by the flag of the request `asked_of`; see
     /// `RepositoryService::close_ticket`. `None` when the session has no
     /// credentials, or they are in use: nothing was called.
+    /// `progress` is told of each step the run takes (D5 decision 11).
     fn close_ticket(
         &self,
         service: &RepositoryService,
         request: CloseTicketRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
     /// Polls with the session's credentials, stopped by the call's token and by
@@ -247,6 +288,20 @@ pub(crate) trait Session {
         request: PollPublicationRemoteRequest,
         asked_of: RequestId,
     ) -> Option<Result<RemotePollResult, RemotePollError>>;
+    fn poll_once_retiring(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    >;
 
     /// Connects to the host of the publication remote with the session's
     /// credentials and sees the key it presents; see
@@ -301,6 +356,37 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         self.cancel.is_cancelled()
     }
 
+    fn retire_context(
+        &self,
+        service: &RepositoryService,
+        request: crate::repository::RetireContextRequest,
+        accepted: &Accepted,
+        reentry: bool,
+        initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        if self.cancelled() {
+            // Persist consent withdrawal before entering any domain safe point.
+            let _ = service.request_cancellation(accepted.request_id);
+        }
+        if let Some(initial) = initial {
+            return Some(service.retire_context_initial(
+                request,
+                accepted,
+                initial,
+                &mut credentials,
+                self.cancel.clone(),
+            ));
+        }
+        Some(service.execute_retirement_request(
+            request,
+            accepted,
+            reentry,
+            &mut credentials,
+            self.cancel.clone(),
+        ))
+    }
+
     /// A sink that panics is the caller's fault and not the request's:
     /// the panic is caught here, the sink is sent nothing more, and the
     /// request goes on. A sink that is already being written to, which
@@ -345,10 +431,11 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         service: &RepositoryService,
         request: PromoteDocumentRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.promote_document_observed(request, &mut credentials, probe))
+        Some(service.promote_document_observed(request, &mut credentials, probe, progress))
     }
 
     fn close_ticket(
@@ -356,10 +443,11 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         service: &RepositoryService,
         request: CloseTicketRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.close_ticket_observed(request, &mut credentials, probe))
+        Some(service.close_ticket_observed(request, &mut credentials, probe, progress))
     }
 
     fn poll_once(
@@ -381,6 +469,28 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.verify_ssh_transport(request, &mut credentials))
     }
+    fn poll_once_retiring(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    > {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.poll_original_retirement(
+            request,
+            &mut credentials,
+            CancellationProbe::new(self.cancel.clone(), accepted.request_id),
+            accepted,
+        ))
+    }
 }
 
 /// What `prepare` gives a binding in place of a call's session: a
@@ -394,6 +504,17 @@ impl Session for NoSession {
     }
 
     fn report(&self, _event: &ProgressEvent) {}
+
+    fn retire_context(
+        &self,
+        _service: &RepositoryService,
+        _request: crate::repository::RetireContextRequest,
+        _accepted: &Accepted,
+        _reentry: bool,
+        _initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
+        None
+    }
 
     fn synchronize(
         &self,
@@ -420,6 +541,7 @@ impl Session for NoSession {
         _service: &RepositoryService,
         _request: PromoteDocumentRequest,
         _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         None
     }
@@ -429,6 +551,7 @@ impl Session for NoSession {
         _service: &RepositoryService,
         _request: CloseTicketRequest,
         _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         None
     }
@@ -449,6 +572,22 @@ impl Session for NoSession {
     ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }
+    fn poll_once_retiring(
+        &self,
+        _service: &RepositoryService,
+        _request: PollPublicationRemoteRequest,
+        _accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    > {
+        None
+    }
 }
 
 impl RepositoryService {
@@ -458,6 +597,16 @@ impl RepositoryService {
     /// The record is changed only if it is still accepted at the
     /// attempt it was read at, as every settlement is.
     fn finish_fenced(&self, record: &RequestRecord) -> Option<Result<(), ReadError>> {
+        if Command::parse(&record.command) == Some(Command::ContextRetire) {
+            return None;
+        }
+        if Command::parse(&record.command) == Some(Command::PollOnce) {
+            match super::super::context_retirement::pass::is_opted_request(record) {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(_) => return Some(Err(ReadError::new(ResultCode::RecoveryRequired))),
+            }
+        }
         let accepted = Accepted::of_record(record, record.attempt)?;
         let journal = accepted.journal_row(self);
         // A poll's row that ended `failed` is read by its next call, whatever
@@ -558,6 +707,82 @@ impl RepositoryService {
             requested,
             acknowledged,
         };
+        let captured_retirement = if record.state == RequestState::Accepted
+            && Command::parse(&record.command) == Some(Command::PollOnce)
+        {
+            // Prove the mode BEFORE consulting its mandatory companion. Loss
+            // or an audit failure is not permission for ordinary finalization.
+            let captured = super::super::context_retirement::pass::is_opted_request(&record)
+                .and_then(|opted| {
+                    if opted {
+                        super::super::context_retirement::pass::has_capture(
+                            self,
+                            Path::new(record.scope.as_str()),
+                            record.operations[0].operation_id,
+                        )
+                    } else {
+                        Ok(false)
+                    }
+                });
+            match captured {
+                Ok(captured) => captured,
+                Err(_) => {
+                    return Envelope::failure(
+                        REQUEST_CANCEL,
+                        scope,
+                        ResultCode::RecoveryRequired,
+                        Vec::new(),
+                    );
+                }
+            }
+        } else {
+            false
+        };
+        if captured_retirement {
+            // Only opted, already captured passes use this route. The common
+            // lease serializes the immutable cut with normal child admission
+            // and guarded effects. No Git transaction is interrupted.
+            if let Err(e) = self.request_cancellation(request_id) {
+                return e.to_envelope(REQUEST_CANCEL);
+            }
+            let Some(accepted) = Accepted::of_record(&record, record.attempt) else {
+                return Envelope::failure(
+                    REQUEST_CANCEL,
+                    scope,
+                    ResultCode::RecoveryRequired,
+                    Vec::new(),
+                );
+            };
+            return match super::super::context_retirement::pass::finish(
+                self,
+                &accepted,
+                None,
+                Some(ResultCode::Cancelled),
+            ) {
+                Ok(cut) => {
+                    for child in cut
+                        .retirements
+                        .iter()
+                        .filter(|r| r.state == super::dto::PollRetirementItemState::Pending)
+                    {
+                        if let Ok(id) = RequestId::parse(&child.request_id) {
+                            let _ = self.cancel_request(id);
+                        }
+                    }
+                    Envelope::read_success(
+                        REQUEST_CANCEL,
+                        scope,
+                        dto(true, cut.stop_code == Some(ResultCode::Cancelled)),
+                    )
+                }
+                Err(_) => Envelope::failure(
+                    REQUEST_CANCEL,
+                    scope,
+                    ResultCode::RecoveryRequired,
+                    Vec::new(),
+                ),
+            };
+        }
         let data = match (record.state, stops) {
             // What the request came to is its stored result.
             (RequestState::Finished, _) => dto(

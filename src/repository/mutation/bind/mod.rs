@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     super::{
-        AuthoringKind, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
+        AuthoringKind, Blocker, ExpectedPathObservation, OperationFamily, OperationId, ReadError,
         RepositoryError, RepositoryService, ResolvedRepository,
         recovery::{FinalKind, JournalRow, PendingOperation, RecordedStep},
     },
@@ -23,7 +23,8 @@ use super::{
     confirm::{Row, Seen},
     context::context_names,
     dto::{
-        HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto, PreviewEffect,
+        BlockerDto, HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto,
+        PreviewEffect,
     },
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
@@ -45,13 +46,17 @@ pub(crate) mod key;
 pub(crate) mod lifecycle;
 pub(crate) mod local_sync;
 pub(crate) mod poll;
+pub(crate) mod poll_retirement;
 pub(crate) mod remote;
+pub(crate) mod remote_resolve_history;
 pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
 pub(crate) mod republish;
+pub(crate) mod resolve_history;
 pub(crate) mod resume;
+pub(crate) mod retire;
 pub(crate) mod save;
 pub(crate) mod sync;
 pub(crate) mod ticket;
@@ -295,9 +300,26 @@ pub(crate) struct Answer {
     /// What a preview of `document promote` or `ticket close` is refused
     /// for. An answer of `execute` holds the same blockers in its `data`.
     pub(crate) lifecycle_blocked: Option<LifecycleBlockedDto>,
+    /// The operation whose unfinished row the request was refused for,
+    /// as `naming` reads it. A `busy` or `recovery_required` envelope
+    /// carries it as its data, in place of the command's own, and offers
+    /// `operation.show` for it. It is no part of a stored result.
+    pub(crate) blocker: Option<Box<BlockerDto>>,
 }
 
 impl Answer {
+    /// Retirement cancellation after an owned/possible removal is partial,
+    /// not an empty cancelled refusal. Other commands retain their old rule.
+    pub(crate) fn cancelled_outcome(&self) -> bool {
+        self.code == ResultCode::Cancelled
+            && !(self.local_change
+                && matches!(
+                    self.data,
+                    Some(
+                        MutationDataDto::ContextRetirement(_) | MutationDataDto::PollRetirement(_)
+                    )
+                ))
+    }
     /// A request that stopped having done nothing.
     pub(crate) fn stopped(code: ResultCode) -> Self {
         Self {
@@ -309,6 +331,7 @@ impl Answer {
             offers_nothing: false,
             host_replacement: None,
             lifecycle_blocked: None,
+            blocker: None,
         }
     }
 
@@ -323,6 +346,63 @@ impl Answer {
 
     pub(crate) fn with_data(mut self, data: MutationDataDto) -> Self {
         self.data = Some(data);
+        self
+    }
+
+    /// The answer, naming `blocker`, the operation the domain refused the
+    /// request for, as the read of its row at `root` gives it. Only a
+    /// `busy` or a `recovery_required` answer names one. A holder that
+    /// still works makes the answer `busy`, whichever of the two it was:
+    /// the request is refused only because another call is at work, and
+    /// the same request sent again goes on once it is done. A blocker the
+    /// domain found live is named by what it knew of it when its row cannot
+    /// be read now; one whose row is gone since, and one not found live
+    /// whose row cannot be read, is not named.
+    pub(crate) fn naming(
+        mut self,
+        service: &RepositoryService,
+        root: &Path,
+        blocker: Option<&Blocker>,
+    ) -> Self {
+        let Some(blocker) = blocker else {
+            return self;
+        };
+        if !matches!(self.code, ResultCode::Busy | ResultCode::RecoveryRequired) {
+            return self;
+        }
+        let mut named = match service.blocking_operation(root, blocker) {
+            crate::repository::BlockerRow::Found { operation, .. } => {
+                BlockerDto::of(&operation, blocker.operation_id.to_string())
+            }
+            // A holder the domain found at work is named whatever this
+            // read finds of its row: by the row as the wait last read it,
+            // or else by what the domain knew of it, which is enough to
+            // name it; `operation.show` reads the rest.
+            crate::repository::BlockerRow::Unreadable if blocker.live == Some(true) => {
+                match &blocker.seen {
+                    // As the wait last read it.
+                    Some(seen) => BlockerDto::of(seen, blocker.operation_id.to_string()),
+                    None => BlockerDto::known(blocker),
+                }
+            }
+            // The row is gone since, as when it was abandoned: nothing of
+            // it is left to show, and the same request, which a `busy`
+            // offers, does not meet it. Nor is an unread stale or unjudged
+            // row named: nothing but its ID would be.
+            crate::repository::BlockerRow::Unreadable | crate::repository::BlockerRow::Gone => {
+                return self;
+            }
+        };
+        // The domain's finding that the holder still works is what the
+        // answer is `busy` for, and stands. Any other judgment is this read's
+        // own, made now.
+        if blocker.live == Some(true) {
+            named.live = Some(true);
+        }
+        if named.live == Some(true) {
+            self.code = ResultCode::Busy;
+        }
+        self.blocker = Some(Box::new(named));
         self
     }
 }
@@ -793,6 +873,18 @@ pub(crate) trait OneTransaction {
 }
 
 pub(crate) trait Binding {
+    fn admission_root(&self) -> Option<&Path> {
+        None
+    }
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        accepted: &Accepted,
+    ) -> Result<(), ReadError> {
+        super::super::context_retirement::pass::require_unreserved(tx, accepted.request_id)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+    }
     /// The command. Its name is what the envelope gives.
     fn command(&self) -> Command;
 
@@ -1067,6 +1159,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // Answered above, from the pin store: this is not reached.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
+        // A history resolution is one registry transaction: nothing of it
+        // is ever done with work remaining.
+        Some(Command::ItemResolveHistory | Command::RemoteResolveHistory) => Recorded::nothing(),
         // A directory is shown by no effect, and nothing records that
         // the request made one: its one row is its refresh's, and a
         // refresh in flight has made no durable effect. A directory at
@@ -1085,6 +1180,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::ContextRelease) => Recorded {
             effects: Effects::not_requested(),
             local_change: context::released_and_unfinished(journal.as_ref()),
+        },
+        Some(Command::ContextRetire) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: retire::recorded_change(service, &accepted),
         },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
@@ -1133,3 +1232,7 @@ mod before_tests;
 #[cfg(test)]
 #[path = "enabled_tests.rs"]
 mod enabled_tests;
+
+#[cfg(test)]
+#[path = "naming_tests.rs"]
+mod naming_tests;

@@ -272,10 +272,9 @@ fn holds(root: &Path, branch: &str, at: usize, path: &str) -> bool {
 
 /// The paths the document tree shows, in its order.
 fn tree_paths(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
-    let nodes = shell.rows("doc-node", cx).len();
-    (0..nodes)
-        .filter_map(|ix| shell.label(("doc-path", ix), cx))
-        .collect()
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace.documents_pane().document_paths(cx)
+    })
 }
 
 fn failing_at(shell: &Shell, point: FailurePoint) {
@@ -339,6 +338,13 @@ async fn move_from_the_sheet_commits_both_paths_and_the_tab_follows(cx: &mut Tes
         fixture.create_folder(root, "docs/archive");
     });
     open(&shell, &root, DOCUMENT, cx);
+    // The destination folder is one the person collapsed: the move
+    // reveals it (R-27).
+    shell.workspace.update(cx, |workspace, _| {
+        workspace
+            .documents_mut()
+            .set_expanded("docs/archive", false)
+    });
     let before = shown(&shell, &root, DOCUMENT);
     let branch = before
         .context

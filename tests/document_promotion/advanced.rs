@@ -351,6 +351,7 @@ pub(super) fn retired_push_guard(verified: bool) -> Result<(), FixtureError> {
     if verified {
         peer_delete(&p)?;
     }
+    let cancelled = request.operation_id;
     fixed(
         p.a.service
             .cancel_remote_operation(&p.a.root, request.operation_id),
@@ -372,10 +373,16 @@ pub(super) fn retired_push_guard(verified: bool) -> Result<(), FixtureError> {
             Err(SynchronizationError::RemoteContextDeleted)
         ));
     } else {
-        assert!(matches!(
-            result,
-            Err(SynchronizationError::RecoveryRequired)
-        ));
+        // The cancelled operation's push intent is ambiguous to a new
+        // synchronization, which is refused for it, naming it.
+        let Err(SynchronizationError::Repository(error)) = &result else {
+            panic!("not refused for the cancelled operation: {result:?}");
+        };
+        assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+        assert_eq!(
+            error.blocker().map(|blocker| blocker.operation_id),
+            Some(cancelled)
+        );
     }
     assert_eq!(p.server.receive_updates(), receives);
     p.privacy()

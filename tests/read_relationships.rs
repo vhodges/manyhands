@@ -965,6 +965,7 @@ fn closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_ob
     assert_eq!(batches(&plan(service, &repo)), [(1, vec![TICKET_B])]);
 
     // The index follows the files: A's still says it is open.
+    support::items::write_again(&a);
     refresh_completely(service, root);
     assert_eq!(ids(&blocked(service, &repo)), [TICKET_B]);
     // Closed in its own worktree and refreshed, it unblocks B, whose file

@@ -1,0 +1,19 @@
+---
+id: 01M7VJ73VK05CEA0EMZKF3ZRVP
+item_id: 01M7RDVNZDCCVSMWHDY9503852
+created_at: 2026-11-20T04:07:47.15427293Z
+created_by: Vince Hodges <vince@imbas.ca>
+manyhands_managed: true
+manyhands_kind: comment
+---
+Design checkpoint (Task 3), 2026-11-19. Status set to `waiting` for the owner. Tasks 0–2 are complete; Task 3's tests are committed and ignored (`b11d2bed`, `0bb041e6`, `a3112dd8`), and no implementation of Tables A or B has started.
+
+**Baseline (Task 1)**, `scripts/measure-writes` at `ad3527dd`, release build, scratch replica (61 materialized worktrees), SSH to localhost, medians of 3 runs: ticket save 13.9 s, document save 14.1 s, ticket create 14.2 s, item sync 20.9 s, comment add 35.2 s (local checkpoint 14.4 s), promote and close prepare 7.0 / 7.1 s, promote and close confirm 94.3 / 94.9 s, index refresh 14.0 s, poll once 17.2 s. Full table in `docs/plans/2026-11-19-fast-writes-execution.md`.
+
+**Table B tests:** 13 table-driven tests, one per check site (local begin and `in_the_way`; reservation begin, held next write, restart and guarded restart; poll guard; `context sync-local` admission; retirement `blocking_debt`, execution, `local_owner`, re-entry, configuration refusal; the poll-retirement pass through `claim_initial` and `refuse_fresh_scoped`), 532 cells, 257 fail today, each where Table B changes the answer. **Table A tests:** `presentation_across_contexts` in `tests/read_items.rs` (11 rows, 5 fail today), `tests/read_comments.rs` (10, 3) and `tests/read_status.rs` (10, 6), plus `an_invalid_context_row_does_not_refuse_poll_remote_snapshot_or_history_reads`. They found two reader failures today: the repository and remote snapshots refuse an item held by the primary and its worktree, and a problem with an empty path.
+
+**Independent review:** one review of both parts (opus) found 0 critical and 3 important issues (the poll retirement's own-item hold unpinned; a fixture that relied on a whole refresh; no row for a save whose commit landed before its state advanced); fixed in `a3112dd8` and re-reviewed clean.
+
+**Proposed named edits for approval** (from the inventory in the execution ledger): E-12 `retirement_specfix_s3_completed_sync_index_debt_blocks_before_claim` (a primary sync owing its hand-off no longer holds an item's retirement); E-13 the two `publication_wait.rs` tests at Task 16 (their peer hand-off row takes the P-4 target); E-14 two signature edits passing `require_no_pending_local` the call's scope, no change of answer. E-6 changes less than its text said (seeds with no step count as mid-write).
+
+**Questions for the owner** (each with the recommended answer the tests are written to): Q1 a save whose commit landed but whose state has not advanced (`authoring_checkpoint_observed`) owes only its hand-off (recommended: yes, the design's definition). Q2 a comment waiting for its registration (`comment_registration_pending`) holds writes on its own item (new refusal; recommended: yes). Q3 a classified sync with `index_pending` and no local hand-off row yet holds a new sync of its own item (new refusal; recommended: yes). Q4 `context sync-local` stays held by any mid-write row; a primary sync proceeds past another item's mid-write row (recommended: yes). Q5 an invalid worktree's problem stays listed in the primary's frame at `.manyhands/worktrees/<id>`, the context count is Task 6's (recommended: yes). Q6 an invalid context's problem path: Task 7 chooses between storing no path and letting the remote snapshot accept an empty one (recommended: Task 7 chooses). Q7 folder create waits behind a primary sync's hand-off, since it writes the primary (recommended: yes).

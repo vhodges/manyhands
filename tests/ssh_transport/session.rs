@@ -7,11 +7,19 @@ use std::{cell::RefCell, collections::VecDeque, path::PathBuf, rc::Rc};
 pub const CASES: &[crate::ssh_harness::Case] = &[
     ("verify_plain", verify_plain),
     ("verify_encrypted", verify_encrypted),
+    #[cfg(unix)]
+    ("verify_through_agent", verify_through_agent),
     ("wrong_passphrase_retry", wrong_passphrase_retry),
     ("cancelled_retry", cancelled_retry),
     ("unavailable_retry", unavailable_retry),
-    ("wrong_plain_key_prompts", wrong_plain_key_prompts),
-    ("cached_rejection", cached_rejection),
+    (
+        "wrong_plain_key_is_rejected_without_prompt",
+        wrong_plain_key_is_rejected_without_prompt,
+    ),
+    (
+        "cached_passphrase_survives_rejection",
+        cached_passphrase_survives_rejection,
+    ),
     ("advertisement_failure", advertisement_failure),
 ];
 
@@ -104,6 +112,14 @@ impl Case {
             directory,
         })
     }
+    /// Reach the ssh-agent at `socket`, as SSH_AUTH_SOCK would name it.
+    #[cfg(unix)]
+    pub fn with_agent(mut self, socket: &std::path::Path) -> Self {
+        self.service = self
+            .service
+            .with_agent_socket_for_testing(Some(socket.to_owned()));
+        self
+    }
     pub fn request(&self) -> VerifySshTransportRequest {
         VerifySshTransportRequest {
             root: self.root.clone(),
@@ -155,6 +171,50 @@ fn verify_key(encrypted: bool) -> Result<(), FixtureError> {
     assert_eq!(before, snapshot(&case.root)?);
     assert!(fixed(std::fs::read(case.fixture.client_key_path()))? == private);
     assert_eq!(registrations, fixed(case.service.list_shared_keys())?);
+    Ok(())
+}
+// The selected key is passphrase-protected on disk and its unlocked form is in
+// the agent, listed after a decoy key. This is the one case that needs SSH: only
+// a real handshake proves libssh2 accepts what the agent signs. Everything
+// about the agent's protocol and failures is a library unit test.
+#[cfg(unix)]
+fn verify_through_agent() -> Result<(), FixtureError> {
+    use crate::repository::transport::fake_agent::{Behavior, FakeAgent};
+    let case = Case::new(true)?;
+    let unlocked = fixed(
+        fixed(ssh_key::PrivateKey::read_openssh_file(
+            case.fixture.client_key_path(),
+        ))?
+        .decrypt(PASSWORD),
+    )?;
+    let decoy = fixed(ssh_key::PrivateKey::random(
+        &mut ssh_key::rand_core::OsRng,
+        ssh_key::Algorithm::Ed25519,
+    ))?;
+    let selected_blob = fixed(unlocked.public_key().to_bytes())?;
+    let agent = fixed(FakeAgent::start(vec![decoy, unlocked.clone()]))?;
+    let mut case = case.with_agent(agent.socket());
+    // The provider has no responses: any prompt fails the case.
+    let (mut credentials, requests) = session(vec![]);
+    let verified = fixed(case.verify(&mut credentials))?;
+    assert_eq!(verified.selected_key_id, case.registration.id);
+    assert_eq!(requests.borrow().len(), 0);
+    assert_eq!(agent.signed(), vec![selected_blob]);
+    assert_eq!(
+        case.fixture.accepted_keys(),
+        vec![case.fixture.allowed_client_public_key()]
+    );
+    // An agent that refuses to sign falls back to the key file and its prompt.
+    let refusing = fixed(FakeAgent::start_with(vec![unlocked], Behavior::RefuseSign))?;
+    case = case.with_agent(refusing.socket());
+    let (mut credentials, requests) = session(vec![secret(PASSWORD)]);
+    fixed(case.verify(&mut credentials))?;
+    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(refusing.signed().len(), 1);
+    assert_eq!(
+        case.fixture.accepted_keys(),
+        vec![case.fixture.allowed_client_public_key(); 2]
+    );
     Ok(())
 }
 pub fn snapshot(root: &std::path::Path) -> Result<Vec<(PathBuf, Vec<u8>)>, FixtureError> {
@@ -212,32 +272,36 @@ fn retry(first: PassphraseResponse, expected: SshTransportErrorKind) -> Result<(
     assert_eq!(requests.borrow().len(), 2);
     Ok(())
 }
-fn wrong_plain_key_prompts() -> Result<(), FixtureError> {
+// An unencrypted key has no passphrase to ask for: the server's rejection is
+// the answer, and the provider is never asked.
+fn wrong_plain_key_is_rejected_without_prompt() -> Result<(), FixtureError> {
     let case = Case::new(false)?;
     case.fixture.reject_client();
-    let (mut credentials, requests) = session(vec![PassphraseResponse::Cancelled]);
+    let (mut credentials, requests) = session(vec![]);
     assert_eq!(
         case.verify(&mut credentials).unwrap_err().kind,
-        SshTransportErrorKind::UnlockCancelled
+        SshTransportErrorKind::KeyRejected
     );
-    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(requests.borrow().len(), 0);
     assert_eq!(case.fixture.helper_invocations(), 0);
     Ok(())
 }
-fn cached_rejection() -> Result<(), FixtureError> {
+// A passphrase that already unlocked the key is shared by every repository, so
+// one server rejecting the key must not lose it for the others.
+fn cached_passphrase_survives_rejection() -> Result<(), FixtureError> {
     let case = Case::new(true)?;
-    let (mut credentials, requests) = session(vec![secret(PASSWORD), secret(PASSWORD)]);
+    let (mut credentials, requests) = session(vec![secret(PASSWORD)]);
     fixed(case.verify(&mut credentials))?;
     case.fixture.reject_client();
     assert_eq!(
         case.verify(&mut credentials).unwrap_err().kind,
-        SshTransportErrorKind::UnlockFailed
+        SshTransportErrorKind::KeyRejected
     );
     assert_eq!(requests.borrow().len(), 1);
-    assert!(!credentials.has_cached_passphrase(&requests.borrow()[0]));
+    assert!(credentials.has_cached_passphrase(&requests.borrow()[0]));
     case.fixture.restore_client();
     fixed(case.verify(&mut credentials))?;
-    assert_eq!(requests.borrow().len(), 2);
+    assert_eq!(requests.borrow().len(), 1);
     Ok(())
 }
 fn advertisement_failure() -> Result<(), FixtureError> {

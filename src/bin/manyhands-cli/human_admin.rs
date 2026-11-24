@@ -100,11 +100,23 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
         PreviewDetailsDto::KeyDeletion(d) => fields(d),
-        PreviewDetailsDto::OperationAbandon(d) => fields(d),
+        PreviewDetailsDto::OperationAbandon(d) => {
+            // What a local operation has no part in is left out.
+            let absent: Vec<&str> = [
+                ("retirement", d.retirement.is_none()),
+                ("evidence", d.evidence.is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(key, none)| none.then_some(key))
+            .collect();
+            fields_without(d, &absent)
+        }
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
         PreviewDetailsDto::Republish(d) => fields(d),
+        PreviewDetailsDto::ResolveHistory(d) => fields(d),
+        PreviewDetailsDto::ResolveCacheLoss(d) => fields(d),
         PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
@@ -171,6 +183,7 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::PublicKeyFileDeleted => "delete the public key file",
         PreviewEffect::KeyUnregistered => "unregister the key",
         PreviewEffect::OperationClosed => "close the operation",
+        PreviewEffect::PushMarkedRejected => "record its push as refused",
         PreviewEffect::RequestReleased => "release the request",
         PreviewEffect::HostPinned => "pin the host key",
         PreviewEffect::HostPinReplaced => "replace the host pin",
@@ -179,6 +192,8 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SourceWritten => "write the corrected source",
         PreviewEffect::CheckpointCommitted => "commit the checkpoint",
         PreviewEffect::BranchRepublished => "push the deleted branch again at the local commit",
+        PreviewEffect::HistoryFlagCleared => "clear the remote history flag",
+        PreviewEffect::HistoryResolved => "record the context as never published",
         PreviewEffect::ContextSynchronized => "synchronize the editing branch with the remote",
         PreviewEffect::ClosureRecorded => "record the closure on the editing branch",
         PreviewEffect::PrimaryIntegrated => "merge the editing branch into primary",

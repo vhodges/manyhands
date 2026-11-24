@@ -24,6 +24,10 @@ mod comment_domain;
 mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/context_retirement.rs"]
+mod context_retirement;
+#[path = "mutation_remote/d5_progress.rs"]
+mod d5_progress;
 #[allow(dead_code)]
 #[path = "support/golden.rs"]
 mod golden;
@@ -71,6 +75,7 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(context_retirement::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
@@ -82,6 +87,7 @@ fn main() {
         .chain(c5_cancel::CHILD_CONFLICT)
         .chain(c5_made_ready::CASES)
         .chain(c5_poll::CASES)
+        .chain(d5_progress::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -778,13 +784,15 @@ fn call_before_the_stores_hold_anything(
     // A resume that took up a synchronization carries that
     // synchronization's data: a host's, or a conflict's, by its tag. One
     // that took up a comment's publication carries the comment's, and one
-    // of a local-context sync the gate's (R-20).
+    // of a local-context sync the gate's (R-20). One refused for another
+    // operation's unfinished row names that operation instead.
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
         let data_schema = match value["data"]["type"].as_str() {
+            _ if value["data"]["blocker"].is_object() => BLOCKED_SCHEMA,
             Some("synchronization_conflict") => CONFLICT_SCHEMA,
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
@@ -1253,9 +1261,32 @@ const LOCAL_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ2";
 /// same path, and the synchronization of primary into the ticket's branch
 /// stops on the two. It is unfinished, which refuses every remote
 /// reservation of the repository (fact 80, R-38). Returns its operation.
+///
+/// The world commits its `publication_remote` outside Manyhands after
+/// `repo enable` indexed the primary, and a create indexes only its new
+/// context (decision 2), so the observation first refuses on the stored
+/// configuration; an `index refresh`, as a person runs after an outside
+/// change (decision 7), lets it seal (named edit E-61).
 fn leave_local_sync_conflict(w: &World) -> OperationId {
     let created = execute(w, LOCAL_SYNC_CREATE, create_other(w));
     assert_eq!(created.code, ResultCode::Ok);
+    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
+    let repository = w.service.resolve_repository(&w.root).unwrap();
+    assert_eq!(
+        w.service
+            .observe_local_context_sync(&repository, AuthoringKind::Ticket, &id)
+            .unwrap_err()
+            .code(),
+        ResultCode::ExternalChange,
+        "the create left the primary's outside configuration commit unindexed"
+    );
+    assert!(matches!(
+        w.service.refresh_repository(RefreshRepositoryRequest {
+            root: w.root.clone(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\n\
          title: Primary\ntype: task\nstatus: open\n---\nBody of Primary.\n"
@@ -1267,7 +1298,6 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
         source.as_bytes(),
     )
     .expect("a commit on primary");
-    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
     let observed = w
         .service
         .observe_local_context_sync(
@@ -1289,6 +1319,21 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
     assert_eq!(stopped.code, ResultCode::RecoveryRequired);
     OperationId::parse(stopped.operation_id.as_deref().expect("its operation"))
         .expect("an operation ID")
+}
+
+/// The data of an answer refused for another operation's unfinished row.
+const BLOCKED_SCHEMA: &str = "blocked.schema.json";
+
+/// Asserts that `envelope` was refused for the local synchronization
+/// `operation` that `leave_local_sync_conflict` left: its data names that
+/// operation, which no call is at work under, in place of the command's
+/// own.
+fn assert_blocked_by_local_sync(envelope: &Envelope<MutationDataDto>, operation: OperationId) {
+    let data = serde_json::to_value(envelope).expect("an envelope serializes")["data"].clone();
+    schema::check_published(BLOCKED_SCHEMA, &data).expect("the blocked schema");
+    assert_eq!(data["blocker"]["operation_id"], operation.to_string());
+    assert_eq!(data["blocker"]["family"], "local");
+    assert_eq!(data["blocker"]["live"], false);
 }
 
 /// A synchronization that stops with an error after it reserved.
@@ -1396,10 +1441,21 @@ fn pin_a_held_reservation(
         assert!(record(w, REQUEST_2).is_none());
     }
 
-    // Another synchronization.
+    // Another synchronization, which names the operation that holds the
+    // reservation.
     let other = execute(w, REQUEST_3, repo_sync(w));
     assert_eq!(other.code, ResultCode::Busy);
-    assert_eq!(actions(&other), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        actions(&other),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_eq!(
+        other.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(record(w, REQUEST_3).is_none());
 
     // The same request, with the cause still there.
@@ -2416,14 +2472,16 @@ fn an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so()
     let operation = OperationId::parse(interrupted.operation_id.as_deref().ok_or(FixtureError)?)
         .map_err(|_| FixtureError)?;
     assert_eq!(phase(&w, operation)?, "interrupted");
-    // Interrupted, and not cancelled: the row is what says which.
+    // Interrupted, and not cancelled: the row is what says which. The
+    // same request is the way on, and the abandon the way out.
     assert_eq!(interrupted.code, ResultCode::RecoveryRequired);
     assert_eq!(interrupted.outcome, Outcome::Blocked);
     assert_eq!(
         actions(&interrupted),
         [
             RecoveryActionKind::RequestRetry,
-            RecoveryActionKind::RepoInspect
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
         ]
     );
     assert_eq!(accepted(&w.server), pushes);
@@ -3123,7 +3181,8 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
     let opened = connections(&w);
 
     // The push may have been taken. Nothing says it was, and nothing
-    // says it was not: the answer is neither.
+    // says it was not: the answer is neither, and the person, who can
+    // look, is offered the abandon.
     let fenced = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Blocked);
@@ -3134,7 +3193,14 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&fenced), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&fenced),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(fenced.recovery[1].operation_id, lost.operation_id);
     assert_eq!(fenced.operation_id, lost.operation_id);
     assert_eq!(connections(&w), opened);
     assert_final(&w, REQUEST_1, &fenced)
@@ -3214,7 +3280,9 @@ fn a_row_cancelled_as_its_push_returns_says_the_push_returned() -> Result<(), Fi
 /// The final answer of a request that was stopped, or fenced, with a
 /// push intended and nothing known of it: not confirmed, which is
 /// neither published nor not published. It offers a look at the
-/// repository and not the same request, and replays as it is.
+/// repository and, since no call is at work under the operation, its
+/// abandon, the person's way out; not the same request. It replays as it
+/// is.
 fn assert_not_confirmed(
     w: &World,
     id: &str,
@@ -3229,7 +3297,14 @@ fn assert_not_confirmed(
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(answer), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(answer),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(answer.recovery[1].operation_id, answer.operation_id);
     assert_final(w, id, answer)
 }
 
@@ -3958,12 +4033,22 @@ fn a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up() -> Result
     assert_eq!(accepted(&w.server), pushes);
     // A cancelled operation is never taken up again. Its row says that
     // Git may hold something of what it began, so the repository is
-    // what is looked at.
+    // what is looked at, and its abandon lets that go.
     let opened = connections(&w);
     let left = execute(&w, REQUEST_3, resume(&w, &operation));
     assert_eq!(left.outcome, Outcome::Blocked);
     assert_eq!(left.code, ResultCode::RecoveryRequired);
-    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&left),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        left.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert_no_record_of(&w, REQUEST_3, &left);
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4214,7 +4299,18 @@ fn a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replay
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // No call is at work under it: its abandon is offered.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        ended.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(!reserved(&w));
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,

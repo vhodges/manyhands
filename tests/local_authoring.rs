@@ -2205,7 +2205,10 @@ fn document_exact_create_retry_checkpoints_once_then_is_a_no_op() {
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(first)
     );
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        1
+    );
 }
 
 #[test]
@@ -2598,7 +2601,10 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
             ..
         } if pending == commit_oid
     ));
-    assert_eq!(registry_refresh_required(&enabled.service), 0);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        0
+    );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)
@@ -2614,7 +2620,10 @@ fn document_completed_move_retry_retries_only_registry_invalidation() {
             ..
         }
     ));
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        1
+    );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)
@@ -2991,7 +3000,10 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
     assert!(
         matches!(outcome, SaveOutcome::Saved { checkpoint: LocalCheckpoint::Checkpointed { commit_oid } , .. } if commit_oid == oid)
     );
-    assert_eq!(registry_refresh_required(&enabled.service), 0);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        0
+    );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(oid)
@@ -3004,7 +3016,10 @@ fn document_noop_registry_failure_returns_pending_then_invalidates_without_commi
             ..
         }
     ));
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        1
+    );
     assert_eq!(
         support::head_commit(&Repository::open(context.worktree).unwrap()),
         Some(oid)
@@ -3216,6 +3231,8 @@ fn recovery_document_registry_failure_returns_refresh_pending_and_retry_does_not
     assert_eq!(checkpoint_retry, checkpoint_failure);
     assert_retry_only_updates_registry_state(&failure_state, &retry_state);
     assert_registry_refresh_is_the_only_row_change(
+        &enabled.service,
+        &context,
         &failure_state.registry_rows,
         &retry_state.registry_rows,
     );
@@ -4166,7 +4183,10 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
         &context,
         commit_oid,
     );
-    assert_eq!(registry_refresh_required(&enabled.service), 0);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        0
+    );
 
     let outcome = enabled.service.save_ticket(request()).unwrap();
     assert!(matches!(
@@ -4176,7 +4196,10 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
             ..
         }
     ));
-    assert_eq!(registry_refresh_required(&enabled.service), 1);
+    assert_eq!(
+        registry_context_dirty(&enabled.service, &context.worktree),
+        1
+    );
     assert_eq!(
         support::head_commit(&Repository::open(&context.worktree).unwrap()),
         Some(commit_oid)
@@ -4186,6 +4209,8 @@ fn recovery_ticket_registry_failure_returns_refresh_pending_then_invalidates_wit
     assert_eq!(checkpoint_retry, checkpoint_failure);
     assert_retry_only_updates_registry_state(&failure_state, &retry_state);
     assert_registry_refresh_is_the_only_row_change(
+        &enabled.service,
+        &context,
         &failure_state.registry_rows,
         &retry_state.registry_rows,
     );
@@ -6373,7 +6398,14 @@ fn reference_state(repository: &Repository) -> Vec<(String, bool, Option<git2::O
     references
 }
 
-fn assert_registry_refresh_is_the_only_row_change(before: &[RegistryRow], after: &[RegistryRow]) {
+/// A retry's only change to the registry is the dirty mark of the context it
+/// checkpointed: the repository's own row is as it was.
+fn assert_registry_refresh_is_the_only_row_change(
+    service: &RepositoryService,
+    context: &manyhands::repository::ItemContext,
+    before: &[RegistryRow],
+    after: &[RegistryRow],
+) {
     assert_eq!(after.len(), before.len());
     for (before, after) in before.iter().zip(after) {
         assert_eq!(after.id, before.id);
@@ -6382,8 +6414,9 @@ fn assert_registry_refresh_is_the_only_row_change(before: &[RegistryRow], after:
         assert_eq!(after.accessibility, before.accessibility);
         assert_eq!(after.config_blob_oid, before.config_blob_oid);
         assert_eq!(before.refresh_required, 0);
-        assert_eq!(after.refresh_required, 1);
+        assert_eq!(after.refresh_required, 0);
     }
+    assert_eq!(registry_context_dirty(service, &context.worktree), 1);
 }
 
 fn index_entries_excluding(repository: &Repository, owned: &[&std::path::Path]) -> Vec<String> {
@@ -7020,6 +7053,21 @@ fn registry_rows(service: &RepositoryService) -> Vec<RegistryRow> {
                 .unwrap()
                 .map(Result::unwrap)
                 .collect()
+        })
+        .unwrap()
+}
+
+/// The dirty mark of the context whose worktree is `worktree`.
+fn registry_context_dirty(service: &RepositoryService, worktree: &std::path::Path) -> i64 {
+    service
+        .with_registry_connection_for_testing(|connection| {
+            connection
+                .query_row(
+                    "SELECT dirty FROM contexts WHERE worktree_path = ?1",
+                    [worktree.to_str().unwrap()],
+                    |row| row.get(0),
+                )
+                .unwrap()
         })
         .unwrap()
 }
@@ -8107,20 +8155,34 @@ fn context_git_failure_after_branch_creation_stays_pending_until_exact_retry() {
         RepositoryErrorKind::Git
     );
     let fresh = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+    // The pending row holds its own item: a preparation of the item under
+    // another operation ID is refused for it.
     assert_eq!(
         context_error(fresh.prepare_context(target(
             &fixture.root,
-            AuthoringKind::Ticket,
-            support::ticket_id(),
+            AuthoringKind::Document,
+            support::document_id(),
             ContextIntent::Create,
         )))
         .kind,
         RepositoryErrorKind::RecoveryRequired,
     );
+    // It holds no other item: another item's preparation goes on.
+    assert!(matches!(
+        fresh.prepare_context(target(
+            &fixture.root,
+            AuthoringKind::Ticket,
+            support::ticket_id(),
+            ContextIntent::Create,
+        )),
+        Ok(ContextProvisionOutcome::Created(_))
+    ));
+    // The exact retry finishes the row.
     assert!(matches!(
         fresh.prepare_context(request()),
         Ok(ContextProvisionOutcome::Created(_))
     ));
+    assert!(fresh.recovery_inspection(&fixture.root).unwrap().is_empty());
 }
 
 const FIXTURE_AUTHOR: &str = "Manyhands Test <manyhands-test@example.invalid>";

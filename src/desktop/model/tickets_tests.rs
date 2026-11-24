@@ -1,54 +1,101 @@
 //! The ticket query, rows made from the library's entries, and the
-//! model's stamps: a filter change drops the read made under the last
-//! filter.
+//! model's stamps: a read lands only for the repository and load it was
+//! made for.
 
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, ClosureState, ItemDtoKind, ItemListDto, ReadinessFilter, TicketFilter,
+        ClosureFilter, ClosureState, ItemDtoKind, ItemListDto, ReadinessFilter, ReadinessState,
+        TicketFilter,
     },
-    results::ProblemCode,
+    results::{ProblemCode, ResultCode},
 };
 
 use super::{
-    DEPENDENCY_CYCLE, INCOMPLETE, Lifecycle, OPEN_DEPENDENCY, TicketQuery, TicketRead, TicketRow,
-    Tickets, UNRESOLVED_DEPENDENCY, blocked_reasons,
+    DEPENDENCY_CYCLE, INCOMPLETE, Lifecycle, OPEN_DEPENDENCY, SortColumn, TicketQuery, TicketRow,
+    TicketSort, Tickets, UNRESOLVED_DEPENDENCY, blocked_reasons, read_filter,
 };
 use crate::desktop::{
-    model::{list_state::ListState, navigation::OpenTarget},
-    services::ReadResult,
+    model::{
+        list_state::ListState, navigation::OpenTarget, stamp::Stamp, unreadable::UnreadableFile,
+    },
+    services::{ReadFailure, ReadResult},
     test_support::fixtures::Fixture,
 };
 
+/// The default query lists open tickets, ready or not, unfiltered, in the
+/// default order; the one read is the library's default filter whatever
+/// the query (R-1).
 #[test]
 fn the_default_query_lists_open_tickets() {
+    let query = TicketQuery::default();
+    assert_eq!(query.closure, ClosureFilter::Open);
+    assert_eq!(query.readiness, None);
+    assert_eq!(query.text, "");
     assert_eq!(
-        TicketQuery::default().to_filter().closure,
-        ClosureFilter::Open
-    );
-    assert_eq!(
-        TicketQuery::default().to_filter(),
-        TicketFilter {
-            closure: ClosureFilter::Open,
-            ..TicketFilter::default()
+        query.sort,
+        TicketSort {
+            column: SortColumn::Updated,
+            ascending: true,
         }
     );
+    assert_eq!(read_filter(), TicketFilter::default());
 }
 
+/// Text or a readiness narrows the list; a lifecycle or the sort does not.
 #[test]
-fn the_query_maps_closure_and_readiness_and_nothing_else() {
-    let query = TicketQuery {
-        closure: ClosureFilter::All,
-        readiness: Some(ReadinessFilter::Blocked),
-    };
-    assert_eq!(
-        query.to_filter(),
-        TicketFilter {
-            closure: ClosureFilter::All,
-            readiness: Some(ReadinessFilter::Blocked),
-            ..TicketFilter::default()
-        }
-    );
+fn only_text_or_readiness_narrows_the_query() {
+    for (name, query, narrowed) in [
+        ("the default", TicketQuery::default(), false),
+        ("blank text", text(" \t"), false),
+        ("text", text(" dock "), true),
+        (
+            "Ready",
+            TicketQuery::default().with_readiness(Some(ReadinessFilter::Ready)),
+            true,
+        ),
+        (
+            "Closed and sorted",
+            TicketQuery {
+                sort: TicketSort::default().toggled(SortColumn::Title),
+                ..TicketQuery::default().with_closure(ClosureFilter::Closed)
+            },
+            false,
+        ),
+    ] {
+        assert_eq!(query.narrowed(), narrowed, "{name}");
+    }
+}
+
+fn text(text: &str) -> TicketQuery {
+    TicketQuery {
+        text: text.to_owned(),
+        ..TicketQuery::default()
+    }
+}
+
+/// A new column sorts ascending; the same column again reverses.
+#[test]
+fn a_sort_toggles_by_column() {
+    let (code, title) = (SortColumn::Code, SortColumn::Title);
+    let sort = |column, ascending| TicketSort { column, ascending };
+    for (from, column, to) in [
+        (
+            sort(SortColumn::Updated, true),
+            SortColumn::Updated,
+            sort(SortColumn::Updated, false),
+        ),
+        (
+            sort(SortColumn::Updated, false),
+            SortColumn::Updated,
+            sort(SortColumn::Updated, true),
+        ),
+        (sort(SortColumn::Updated, true), code, sort(code, true)),
+        (sort(code, false), title, sort(title, true)),
+        (sort(title, true), title, sort(title, false)),
+    ] {
+        assert_eq!(from.toggled(column), to, "{from:?} then {column:?}");
+    }
 }
 
 const OPEN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
@@ -131,41 +178,291 @@ fn rows_are_made_from_the_librarys_entries() {
     );
 }
 
-fn empty(fixture: &Fixture) -> ItemListDto {
-    let root = fixture.create_repository("empty");
-    let service = fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    service
-        .list_tickets(&repo, &TicketFilter::default())
-        .unwrap()
-}
-
-/// Review Focus 1: a read under the last filter, or for the last
-/// repository, is dropped when it completes.
+/// Review Focus 4: a read lands only for the repository and the load it
+/// was made for, and its blocked rows carry reasons named from all its
+/// rows. A reload of the same repository keeps the rows; another
+/// repository drops them. A query change reads nothing and derives at
+/// once, and a clear does not forget the last-loaded repository.
 #[test]
-fn a_filter_change_drops_the_last_filters_read() {
+fn a_read_lands_only_for_its_repository_and_load() {
+    struct Run {
+        model: Tickets,
+        stamps: Vec<Stamp>,
+        list: ItemListDto,
+        by_id: std::collections::HashMap<String, manyhands::repository::ItemDto>,
+    }
+    type Step = (&'static str, Box<dyn Fn(&mut Run)>);
+
     let fixture = Fixture::new();
-    let list = empty(&fixture);
-    let mut model = Tickets::default();
-    let open = model.load("/a".to_owned());
-    let closed = model.set_closure(ClosureFilter::Closed).unwrap();
-    assert_eq!(model.query().closure, ClosureFilter::Closed);
-    assert!(!model.apply(open, ReadResult::Ok(list.clone())));
-    assert!(matches!(model.state(), ListState::Loading));
-    assert!(model.apply(closed, ReadResult::Ok(list.clone())));
-    assert!(matches!(model.state(), ListState::Ready { .. }));
+    let root = related(&fixture);
+    let (list, by_id) = listed(&fixture, &root, &TicketFilter::default());
+    let blocked_items = list
+        .items
+        .iter()
+        .filter(|item| {
+            item.readiness
+                .as_ref()
+                .is_some_and(|readiness| readiness.state == ReadinessState::Blocked)
+        })
+        .count();
+    let open_items = list
+        .items
+        .iter()
+        .filter(|item| {
+            item.closure
+                .as_ref()
+                .is_some_and(|closure| closure.state == ClosureState::Open)
+        })
+        .count();
+    assert!(blocked_items > 0 && blocked_items < open_items, "{list:?}");
+    let blocked = TicketQuery {
+        closure: ClosureFilter::All,
+        readiness: Some(ReadinessFilter::Blocked),
+        ..TicketQuery::default()
+    };
 
-    let a = model.load("/a".to_owned());
-    let _b = model.load("/b".to_owned());
-    assert!(!model.apply(a, ReadResult::Ok(list.clone())));
+    fn load(run: &mut Run, repo: &str, changed: bool) {
+        let (stamp, was) = run.model.load(repo.to_owned());
+        assert_eq!(was, changed, "{repo} changed the repository");
+        run.stamps.push(stamp);
+    }
+    fn apply(run: &mut Run, stamp: usize, landed: bool) {
+        let read = ReadResult::Ok(run.list.clone());
+        assert_eq!(run.model.apply(run.stamps[stamp].clone(), read), landed);
+    }
+    fn file(name: &str) -> UnreadableFile {
+        UnreadableFile {
+            path: format!(".manyhands/tickets/{name}/ticket.md"),
+            worktree: "/a".to_owned(),
+            primary: true,
+        }
+    }
+    /// The status read of load `stamp` answers `result`.
+    fn status(run: &mut Run, stamp: usize, result: ReadResult<Vec<UnreadableFile>>, landed: bool) {
+        assert_eq!(
+            run.model
+                .apply_unreadable(run.stamps[stamp].clone(), result),
+            landed
+        );
+    }
+    fn failed() -> ReadResult<Vec<UnreadableFile>> {
+        ReadResult::Failed(ReadFailure {
+            code: ResultCode::RepositoryInaccessible,
+            recovery: Vec::new(),
+        })
+    }
+    /// The files the model holds, and that its view lists them last, after
+    /// every other row, counted apart from the tickets shown (R-9, P6).
+    fn holds(run: &Run, names: &[&str]) {
+        let files: Vec<_> = names.iter().map(|name| file(name)).collect();
+        assert_eq!(run.model.unreadable(), files);
+        let view = run.model.view();
+        assert_eq!(view.unreadable, files.len());
+        let tail: Vec<_> = view
+            .rows
+            .iter()
+            .filter_map(|row| row.unreadable.clone())
+            .collect();
+        assert_eq!(tail, files, "listed in the status's order");
+        assert!(
+            view.rows
+                .iter()
+                .skip(view.rows.len() - files.len())
+                .all(|row| row.unreadable.is_some()),
+            "after every other row"
+        );
+    }
 
-    let b = model.load("/b".to_owned());
-    model.clear();
-    assert!(!model.apply(b, ReadResult::Ok(list)));
-    assert_eq!(model.repo(), None);
-    // With nothing loaded, a filter change reads nothing, and is kept.
-    assert_eq!(model.set_closure(ClosureFilter::All), None);
-    assert_eq!(model.query().closure, ClosureFilter::All);
+    let steps: Vec<Step> = vec![
+        (
+            "a query set before any load is kept and derives",
+            Box::new({
+                let blocked = blocked.clone();
+                move |run| {
+                    run.model.set_query(blocked.clone());
+                    assert_eq!(run.model.query(), &blocked);
+                    assert_eq!(run.model.repo(), None);
+                    assert_eq!(run.model.view().listed, 0);
+                }
+            }),
+        ),
+        (
+            "a first load is a change of repository",
+            Box::new(|run| load(run, "/a", true)),
+        ),
+        (
+            "the read for the load in flight lands, blocked rows with reasons from all rows",
+            Box::new(move |run| {
+                apply(run, 0, true);
+                let rows = run.model.list().rows().unwrap();
+                assert_eq!(rows.len(), run.list.items.len());
+                for (row, item) in rows.iter().zip(&run.list.items) {
+                    let reasons = if row.readiness == Some(ReadinessState::Blocked) {
+                        blocked_reasons(item, &run.by_id)
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(row.reasons, reasons, "{:?}", row.title);
+                    assert_eq!(
+                        row.readiness,
+                        item.readiness.as_ref().map(|readiness| readiness.state)
+                    );
+                    assert_eq!(row.context.worktree, item.context.worktree);
+                    assert_eq!(row.context.kind, item.context.kind);
+                    assert_eq!(row.context.branch, item.context.branch);
+                }
+                assert_eq!(
+                    rows.iter().filter(|row| !row.reasons.is_empty()).count(),
+                    blocked_items
+                );
+                // The query kept before the load shows its blocked rows.
+                assert_eq!(run.model.view().listed, blocked_items);
+                assert!(
+                    run.model
+                        .view()
+                        .rows
+                        .iter()
+                        .all(|row| row.readiness == Some(ReadinessState::Blocked))
+                );
+            }),
+        ),
+        (
+            "a query change starts no read, derives at once and keeps the read in flight wanted",
+            Box::new(move |run| {
+                run.model.set_query(TicketQuery::default());
+                assert_eq!(run.model.view().listed, open_items);
+                assert!(matches!(run.model.state(), ListState::Ready { .. }));
+                apply(run, 0, true);
+                // Reasons are filled for every blocked row whatever the
+                // query, so the Open view carries them too (R-18).
+                let kept = run.model.list().rows().unwrap();
+                for (row, item) in kept.iter().zip(&run.list.items) {
+                    if row.readiness == Some(ReadinessState::Blocked) {
+                        assert_eq!(row.reasons, blocked_reasons(item, &run.by_id));
+                    }
+                }
+                let blocked_in_view: Vec<_> = run
+                    .model
+                    .view()
+                    .rows
+                    .iter()
+                    .filter(|row| row.readiness == Some(ReadinessState::Blocked))
+                    .collect();
+                assert_eq!(blocked_in_view.len(), blocked_items);
+                assert!(blocked_in_view.iter().all(|row| !row.reasons.is_empty()));
+            }),
+        ),
+        (
+            "a status read that lands replaces the unreadable files, listed last",
+            Box::new(|run| {
+                holds(run, &[]);
+                status(run, 0, ReadResult::Ok(vec![file("U1")]), true);
+                holds(run, &["U1"]);
+                status(run, 0, ReadResult::Ok(vec![file("U1"), file("U2")]), true);
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
+            "a busy or a failed status read keeps them",
+            Box::new(|run| {
+                status(run, 0, ReadResult::Busy, true);
+                holds(run, &["U1", "U2"]);
+                status(run, 0, failed(), true);
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
+            "a reload of the same repository keeps its rows and is no change",
+            Box::new(|run| {
+                load(run, "/a", false);
+                assert!(run.model.list().reloading());
+                assert!(!run.model.view().rows.is_empty());
+                // The unreadable files stay while the reload runs.
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
+            "a read for an earlier load is dropped, a status read too",
+            Box::new(|run| {
+                apply(run, 0, false);
+                assert!(run.model.list().reloading());
+                status(run, 0, ReadResult::Ok(Vec::new()), false);
+                holds(run, &["U1", "U2"]);
+            }),
+        ),
+        (
+            "the read of the current load lands, and its status read replaces the files",
+            Box::new(|run| {
+                apply(run, 1, true);
+                assert!(!run.model.list().reloading());
+                holds(run, &["U1", "U2"]);
+                status(run, 1, ReadResult::Ok(vec![file("U3")]), true);
+                holds(run, &["U3"]);
+                status(run, 1, ReadResult::Ok(Vec::new()), true);
+                holds(run, &[]);
+                status(run, 1, ReadResult::Ok(vec![file("U3")]), true);
+                holds(run, &["U3"]);
+            }),
+        ),
+        (
+            "another repository is a change and drops the kept rows and the files",
+            Box::new(|run| {
+                load(run, "/b", true);
+                assert!(run.model.list().rows().is_none());
+                assert_eq!(run.model.view().listed, 0);
+                assert_eq!(run.model.view().counts, None);
+                assert!(run.model.unreadable().is_empty());
+            }),
+        ),
+        (
+            "a read for the repository left is dropped, a status read too",
+            Box::new(|run| {
+                apply(run, 1, false);
+                status(run, 1, ReadResult::Ok(vec![file("U4")]), false);
+                assert!(run.model.unreadable().is_empty());
+                // A status read may land before the tickets: nothing shows
+                // until they do.
+                status(run, 2, ReadResult::Ok(vec![file("U5")]), true);
+                assert_eq!(run.model.view().listed, 0);
+                apply(run, 2, true);
+                holds(run, &["U5"]);
+            }),
+        ),
+        (
+            "a read after clear is dropped",
+            Box::new(|run| {
+                run.model.clear();
+                apply(run, 2, false);
+                status(run, 2, ReadResult::Ok(vec![file("U6")]), false);
+                assert!(run.model.unreadable().is_empty());
+                assert_eq!(run.model.repo(), None);
+                assert!(matches!(run.model.state(), ListState::Loading));
+                assert!(run.model.list().rows().is_none());
+            }),
+        ),
+        (
+            "after clear, the last-loaded repository is no change",
+            Box::new(|run| load(run, "/b", false)),
+        ),
+        (
+            "and another repository is",
+            Box::new(|run| {
+                run.model.clear();
+                load(run, "/c", true);
+            }),
+        ),
+    ];
+
+    let mut run = Run {
+        model: Tickets::default(),
+        stamps: Vec::new(),
+        list,
+        by_id,
+    };
+    for (name, step) in steps {
+        eprintln!("{name}");
+        step(&mut run);
+    }
 }
 
 const BLOCKER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
@@ -231,11 +528,11 @@ fn blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle() {
     let (blocked, by_id) = listed(
         &fixture,
         &root,
-        &TicketQuery {
+        &TicketFilter {
             closure: ClosureFilter::Open,
             readiness: Some(ReadinessFilter::Blocked),
-        }
-        .to_filter(),
+            ..TicketFilter::default()
+        },
     );
     let blocker = by_id.get(BLOCKER).unwrap();
     let slug = blocker.slug.clone().expect("create gives a short code");
@@ -277,11 +574,11 @@ fn an_untitled_blocker_is_named_by_its_short_code() {
     let (blocked, mut by_id) = listed(
         &fixture,
         &root,
-        &TicketQuery {
+        &TicketFilter {
             closure: ClosureFilter::Open,
             readiness: Some(ReadinessFilter::Blocked),
-        }
-        .to_filter(),
+            ..TicketFilter::default()
+        },
     );
     let blocker = by_id.get_mut(BLOCKER).unwrap();
     let slug = blocker.slug.clone().expect("create gives a short code");
@@ -316,61 +613,4 @@ fn an_incomplete_reason_is_labeled_incomplete() {
     for reason in reasons {
         assert!(reason.ends_with(&format!(" ({INCOMPLETE})")), "{reason}");
     }
-}
-
-/// Rows read under Blocked carry their reasons; under any other
-/// readiness they carry none.
-#[test]
-fn rows_read_under_blocked_carry_their_reasons() {
-    let fixture = Fixture::new();
-    let root = related(&fixture);
-    let (blocked, by_id) = listed(
-        &fixture,
-        &root,
-        &TicketFilter {
-            closure: ClosureFilter::Open,
-            readiness: Some(ReadinessFilter::Blocked),
-            ..TicketFilter::default()
-        },
-    );
-    let names = TicketFilter::default();
-    let (all, _) = listed(&fixture, &root, &names);
-    let mut model = Tickets::default();
-    model.load("/related".to_owned());
-    let stamp = model.set_readiness(Some(ReadinessFilter::Blocked)).unwrap();
-    assert_eq!(model.query().readiness, Some(ReadinessFilter::Blocked));
-    assert!(model.apply(
-        stamp,
-        ReadResult::Ok(TicketRead {
-            list: blocked.clone(),
-            names: Some(all.clone()),
-        })
-    ));
-    let rows = model.state().rows().unwrap();
-    assert_eq!(rows.len(), blocked.items.len());
-    for (row, item) in rows.iter().zip(&blocked.items) {
-        assert_eq!(row.reasons, blocked_reasons(item, &by_id));
-        assert!(!row.reasons.is_empty());
-    }
-
-    let stamp = model.set_readiness(None).unwrap();
-    assert!(model.apply(stamp, ReadResult::Ok(all)));
-    let rows = model.state().rows().unwrap();
-    assert!(rows.iter().all(|row| row.reasons.is_empty()));
-}
-
-/// Review Focus 1: a read under the last readiness is dropped.
-#[test]
-fn a_readiness_change_drops_the_last_readinesss_read() {
-    let fixture = Fixture::new();
-    let list = empty(&fixture);
-    let mut model = Tickets::default();
-    let any = model.load("/a".to_owned());
-    let ready = model.set_readiness(Some(ReadinessFilter::Ready)).unwrap();
-    assert!(!model.apply(any, ReadResult::Ok(list.clone())));
-    assert!(matches!(model.state(), ListState::Loading));
-    assert!(model.apply(ready, ReadResult::Ok(list)));
-    model.clear();
-    assert_eq!(model.set_readiness(Some(ReadinessFilter::Blocked)), None);
-    assert_eq!(model.query().readiness, Some(ReadinessFilter::Blocked));
 }

@@ -62,9 +62,9 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, OperationFamily, OperationId, ReadError, RefreshRepositoryRequest,
-            RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationTarget,
-            closure, keys, promotion,
+            AuthoringKind, Blocker, OperationFamily, OperationId, ReadError,
+            RefreshRepositoryRequest, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+            SynchronizationTarget, closure, keys, promotion,
             promotion::lifecycle::{LifecycleRecord, ParentStep},
             recovery::{self, FinalKind, JournalRow, LocalStanding, PendingOperation},
             remote::{self, state::ResolutionAttemptPhase},
@@ -242,32 +242,24 @@ enum Named {
 
 /// How a parent stands for a resume, from what its record holds. A complete
 /// parent is complete, whoever holds it, and one that ended or was
-/// superseded has nothing left to continue, whoever holds it.
+/// superseded, or that a consent refusal ended, has nothing left to
+/// continue, whoever holds it. Which parents are left to continue is
+/// `promotion::lifecycle::resumable`'s, which the operation list shares
+/// (D5 decision 10).
 fn lifecycle_standing(
     connection: &rusqlite::Connection,
     root: &str,
     operation_id: OperationId,
     command: Command,
     record: &impl LifecycleRecord,
-    ended_by_refusal: bool,
 ) -> rusqlite::Result<Named> {
-    Ok(match record.step() {
-        ParentStep::Complete => Named::Complete {
+    Ok(if record.step() == ParentStep::Complete {
+        Named::Complete {
             command,
             item_id: record.item_id().clone(),
-        },
-        ParentStep::Abandoned | ParentStep::Superseded => Named::NotResumable,
-        _ if ended_by_refusal => Named::NotResumable,
-        ParentStep::Confirmed
-        | ParentStep::ContextSynchronized
-        | ParentStep::Integrating
-        | ParentStep::Integrated
-        | ParentStep::Published
-        | ParentStep::PublicationPending
-        | ParentStep::RemoteDeleted
-        | ParentStep::WorktreeRemoving
-        | ParentStep::WorktreeRemoved
-        | ParentStep::BranchDeleted => left_to_its_request(
+        }
+    } else if promotion::lifecycle::resumable(record) {
+        left_to_its_request(
             connection,
             OperationFamily::Remote,
             root,
@@ -276,7 +268,9 @@ fn lifecycle_standing(
                 command,
                 item_id: record.item_id().clone(),
             },
-        )?,
+        )?
+    } else {
+        Named::NotResumable
     })
 }
 
@@ -311,7 +305,6 @@ fn found_lifecycle(
             operation_id,
             Command::DocumentPromote,
             &record,
-            record.refusal().is_some(),
         )?));
     }
     if recovery::has_table(connection, closure::record::TABLE)?
@@ -323,7 +316,6 @@ fn found_lifecycle(
             operation_id,
             Command::TicketClose,
             &record,
-            record.refusal().is_some(),
         )?));
     }
     Ok(None)
@@ -704,6 +696,10 @@ fn found_local(
     let Some(row) = recovery::local_row(connection, root, operation_id)? else {
         return Ok(Named::NotFound);
     };
+    if row.action == "retire_context" {
+        super::super::super::context_retirement::record::audit_connection(connection)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
+    }
     if !row.is_well_formed() {
         return Err(unreadable());
     }
@@ -758,6 +754,50 @@ fn named(
         }
         found_local(connection, root, operation_id)
     })
+}
+
+/// The refusal of a call that would take up, or close, the operation
+/// `blocker` names while another process is still at work under it: its
+/// row, unfinished, names a holder of another process that still works,
+/// as an operation read judges it. Such an operation is not taken from
+/// it: the answer is `busy`, naming it, and nothing is recorded. `None` for
+/// an operation no one is at work under, one whose row is gone, and one
+/// this process holds, which the domain takes up or refuses as before. A
+/// row that cannot be read cannot be shown to be no one's: that is `busy`
+/// too, naming nothing.
+pub(crate) fn held_by_another_process(
+    service: &RepositoryService,
+    root: &Path,
+    blocker: Blocker,
+) -> Option<Answer> {
+    let (operation, unfinished) = match service.blocking_operation(root, &blocker) {
+        crate::repository::BlockerRow::Found {
+            operation,
+            unfinished,
+        } => (operation, unfinished),
+        crate::repository::BlockerRow::Gone => return None,
+        crate::repository::BlockerRow::Unreadable => {
+            return Some(Answer::stopped(ResultCode::Busy));
+        }
+    };
+    // A row this process holds is left to the domain, which takes it
+    // up or refuses it as it always has: this process's own call that
+    // claimed it may have just ended, and its claim's last beat is
+    // fresh for a moment after.
+    let this_process = operation.attribution.host.as_deref()
+        == Some(super::super::super::this_host().as_str())
+        && operation.attribution.pid == Some(i64::from(std::process::id()));
+    if !unfinished || this_process || operation.attribution.live != Some(true) {
+        return None;
+    }
+    Some(Answer::stopped(ResultCode::Busy).naming(
+        service,
+        root,
+        Some(&Blocker {
+            live: Some(true),
+            ..blocker
+        }),
+    ))
 }
 
 /// Whether a resume of the operation would take it up now: the one
@@ -943,6 +983,53 @@ impl OperationResumeBinding {
         })
     }
 
+    /// The refusal of a resume of an operation another process is still at
+    /// work under: its row, unfinished, names a holder of another process
+    /// that still works, as an operation read judges it. Such an operation
+    /// is not taken over: the answer is `busy`, naming it, and nothing is
+    /// recorded. `None` for an operation no one is at work under, or one
+    /// this process holds, which is taken up, or refused, as before. The
+    /// row looked at is the one a resume would take up: a local hand-off's
+    /// own, or the remote row of a synchronization, of a comment's
+    /// publication or of a lifecycle's reservation.
+    fn held(&self, service: &RepositoryService, root: &Path, found: &Named) -> Option<Answer> {
+        let (family, operation_id) = match found {
+            Named::HandOff => (OperationFamily::Local, self.operation_id),
+            Named::Synchronization(_)
+            | Named::Lifecycle {
+                command: _,
+                item_id: _,
+            } => (OperationFamily::Remote, self.operation_id),
+            Named::Comment {
+                comment: _,
+                synchronization,
+                target: _,
+            } => (OperationFamily::Remote, *synchronization),
+            Named::NotFound
+            | Named::Abandoned
+            | Named::Ended { synchronization: _ }
+            | Named::LeftToInspect { synchronization: _ }
+            | Named::OriginalRequest { request: _ }
+            | Named::Complete {
+                command: _,
+                item_id: _,
+            }
+            | Named::Fenced
+            | Named::Unowned
+            | Named::NotResumable => return None,
+        };
+        held_by_another_process(
+            service,
+            root,
+            Blocker {
+                family,
+                operation_id,
+                live: None,
+                seen: None,
+            },
+        )
+    }
+
     /// The request whose unfinished record holds the operation
     /// `operation_id`, in the journal `family`: the one that owns it.
     /// `None` when no such record does. It is the operation the resume
@@ -1017,12 +1104,17 @@ impl OperationResumeBinding {
         let _ = service.finish(request, attempt, answer);
     }
 
-    /// The index hand-off of a local operation: a refresh under the
-    /// operation's ID, which claims the row, observes the repository and
-    /// completes the row. The caller has just read that the hand-off is
-    /// all the row owes.
+    /// The index hand-off of a local operation, under the operation's ID: it
+    /// claims the row, indexes the contexts the row records it owes (the
+    /// whole repository for a row that records none) and completes the row.
+    /// A recorded context that is gone counts as indexed. The caller has
+    /// just read that the hand-off is all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
+        if let Some(ran) = super::retire::resume_handoff(call, &accepted.root(), self.operation_id)
+        {
+            return self.kept(ran);
+        }
         if let Err(answer) = Self::owner(
             service,
             &accepted.scope,
@@ -1038,7 +1130,7 @@ impl OperationResumeBinding {
         call.session.report(
             &Subject::of(self, accepted).event(ProgressStage::Indexing, Effects::not_requested()),
         );
-        let refreshed = service.refresh_repository(RefreshRepositoryRequest {
+        let refreshed = service.resume_hand_off(RefreshRepositoryRequest {
             root: accepted.root(),
             operation_id: self.operation_id,
         });
@@ -1517,6 +1609,9 @@ impl Binding for OperationResumeBinding {
         }
         let (scope, found) = self.observe(call.service)?;
         if let Some(answer) = Self::refusal(&found) {
+            return Err(answer);
+        }
+        if let Some(answer) = self.held(call.service, Path::new(scope.as_str()), &found) {
             return Err(answer);
         }
         // A synchronization's result can name the commit it published:

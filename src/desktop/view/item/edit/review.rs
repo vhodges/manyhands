@@ -39,20 +39,22 @@
 //!   touched, and resumes the feed. The draft and its file are unchanged.
 //!
 //! Switching the body's choice once its result holds edits asks first:
-//! "Replace your edits?". Nothing here derives `Debug`: the review holds
-//! draft text.
+//! "Replace your edits?". That dialog is on the common frame (Wave 04 Cycle
+//! 05a design A3): the question, `review-replace-message`, in the Kit's
+//! title slot, its detail in the body, and Keep my edits and Replace in the
+//! footer, the body element's last child. Nothing here derives `Debug`: the
+//! review holds draft text.
 
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
-    Window,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window,
     component::{
         WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
@@ -70,9 +72,13 @@ use crate::desktop::{
     },
     view::{
         editor::host::{EditorHost, EditorHostEvent},
+        frame::{self, Footer, Header},
         item::ItemPane,
     },
 };
+
+/// The element id of the question, in the dialog's header.
+const REPLACE_MESSAGE_ID: &str = "review-replace-message";
 
 /// What Replace does once "Replace your edits?" is answered.
 type Replace = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -252,11 +258,20 @@ impl ItemPane {
             });
         });
         let origin = window.focused(cx);
-        window.open_dialog(cx, move |base, _, _| {
+        window.open_dialog(cx, move |base, _, cx| {
             let close = origin.clone();
-            base.close_button(false)
+            // The question, which the body drew as its first line, is the
+            // header's title, with the id it had.
+            let header = Header {
+                icon: None,
+                title: REPLACE_YOUR_EDITS.into(),
+                description: None,
+                ids: (REPLACE_MESSAGE_ID, None),
+            };
+            frame::dialog(base, header, cx)
+                .close_button(false)
                 .overlay_closable(false)
-                .child(replace_body(&replace))
+                .child(replace_body(&replace, cx))
                 // Enter: Keep my edits, the default; the Kit closes it.
                 .on_ok(|_, _, _| true)
                 .on_cancel(|_, _, _| true)
@@ -415,9 +430,9 @@ impl ItemPane {
     }
 }
 
-/// The dialog's message and its two buttons, each pressed by a click or by
-/// Enter on it.
-fn replace_body(replace: &Replace) -> impl IntoElement + use<> {
+/// The dialog's detail in the body and its two buttons in the footer, each
+/// pressed by a click or by Enter on it.
+fn replace_body(replace: &Replace, cx: &App) -> impl IntoElement + use<> {
     let button = |id: &'static str, label: &'static str, proceed: bool| {
         let replace = replace.clone();
         let press = Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -438,31 +453,27 @@ fn replace_body(replace: &Replace) -> impl IntoElement + use<> {
             .on_action(move |_: &Confirm, window, cx| press(window, cx))
             .child(button.on_click(move |_: &ClickEvent, window, cx| click(window, cx)))
     };
+    let content = v_flex().child(
+        div()
+            .id("review-replace-detail")
+            .test_support()
+            .aria_label(REPLACE_DETAIL)
+            .text_sm()
+            .child(REPLACE_DETAIL),
+    );
+    let buttons = vec![
+        button("review-replace-no", KEEP_MY_EDITS, false).into_any_element(),
+        button("review-replace-yes", REPLACE, true).into_any_element(),
+    ];
     v_flex()
         .id("review-replace-dialog")
         .test_support()
-        .gap_2()
-        .child(
-            div()
-                .id("review-replace-message")
-                .test_support()
-                .aria_label(REPLACE_YOUR_EDITS)
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(REPLACE_YOUR_EDITS),
-        )
-        .child(
-            div()
-                .id("review-replace-detail")
-                .test_support()
-                .aria_label(REPLACE_DETAIL)
-                .text_sm()
-                .child(REPLACE_DETAIL),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                .child(button("review-replace-no", KEEP_MY_EDITS, false))
-                .child(button("review-replace-yes", REPLACE, true)),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 item resolve-history preview",
+  "description": "The data of a prepare envelope that gives a preview of item resolve-history with the choice publish: a context whose publication history is unknown and that the latest complete fetch did not find on the remote, which will be recorded as never published so that the next item sync may publish it. A preview reads what is stored and contacts no remote: remote history is the read that fetches. The confirmation binds every field of the details, the branch the latest fetch advertised (or its absence), the configuration generation and the fetch evidence: a newer fetch that changed any of them before the request is accepted is external_change, and a fresh prepare follows. Anything else gives no preview data: a no-op (already_applied) for a context that is already resolved or that the remote has, a rejection naming item republish (remote_branch_deleted) for a context published and then seen gone, and a rejection (invalid_input) for the choice release, which is never previewed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The context that will be recorded as never published. Nothing is pushed or fetched and no branch moves.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "kind",
+        "item_id",
+        "branch",
+        "local_oid",
+        "tracking_ref_exists",
+        "cache_loss"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The item's kind.",
+          "type": "string",
+          "enum": [
+            "document",
+            "ticket"
+          ]
+        },
+        "item_id": {
+          "description": "The item whose context will be recorded.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "The item's editing branch, as its short name.",
+          "type": "string"
+        },
+        "local_oid": {
+          "description": "The local tip of the branch. Null when the branch has no local ref.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracking_ref_exists": {
+          "description": "Whether the context's remote-tracking ref exists locally.",
+          "type": "boolean"
+        },
+        "cache_loss": {
+          "description": "Whether the repository-wide cache-loss flag is set; the last resolution clears it.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

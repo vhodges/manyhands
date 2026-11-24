@@ -21,6 +21,29 @@ pub(crate) enum SettingsPage {
     Remotes,
     Keys,
     Hosts,
+    /// "Checking for updates" (D6 C2).
+    Polling,
+}
+
+/// The Settings menu's three entries (Wave 04 Cycle 04 design B1; R-4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SettingsNav {
+    Repositories,
+    SharingAndKeys,
+    Checking,
+}
+
+impl SettingsPage {
+    /// The menu entry that shows this page: Repositories and Remotes under
+    /// Repositories; Keys and Hosts under Sharing & keys; Polling under
+    /// Checking for updates.
+    pub(crate) fn nav(self) -> SettingsNav {
+        match self {
+            Self::Repositories | Self::Remotes => SettingsNav::Repositories,
+            Self::Keys | Self::Hosts => SettingsNav::SharingAndKeys,
+            Self::Polling => SettingsNav::Checking,
+        }
+    }
 }
 
 /// What asked for a result.
@@ -38,6 +61,9 @@ pub(crate) enum ViewScope {
     /// The Find input's search. One scope: a new search drops the last.
     Find,
     Settings(SettingsPage),
+    /// The Add repository forms' folder check (Wave 04 Cycle 05a, R-9). The
+    /// forms keep their own generations.
+    AddRepository,
     Operations(RepoKey),
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
@@ -49,6 +75,26 @@ pub(crate) enum ViewScope {
     /// The draft registry's listing of the store. One scope: a new listing
     /// drops the last.
     Drafts,
+    /// The Unlock key dialog's read of the key list, for its key's
+    /// fingerprint (Wave 04 Cycle 05a, Part D). Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Unlock,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 design, A3). Each dialog keeps its own generations,
+    /// so one scope serves them all.
+    MadeReady,
+    /// The Workspace's read of the titles of the items a repository has not
+    /// shared yet (Cycle 03a, R-9). Its answer is merged whatever the
+    /// generation: a title is a fact.
+    ShareTitles(RepoKey),
+    /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
+    /// sheet keeps its own generations, so one scope serves them all.
+    Conflict,
+    /// The resolve conflict sheet's read of its item's work folder (B4).
+    ConflictFolder,
+    /// Which of a repository's pending rows hold a conflict to review
+    /// (D5 B5), read once its rows have landed.
+    PendingConflicts(RepoKey),
     /// One Drafts page row's reads of its item. A new listing, or Retry,
     /// moves it on, so a late read never lands on a newer row.
     DraftRow(manyhands::drafts::DraftId),

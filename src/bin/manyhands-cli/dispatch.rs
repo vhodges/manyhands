@@ -580,6 +580,13 @@ pub fn dispatch(
         "item republish" => {
             return crate::collaboration::item_republish(service, session, command, args);
         }
+        "item resolve-history" => {
+            return crate::history::item_resolve(service, session, command, args);
+        }
+        "remote history" => return crate::history::remote_history(service, session, command, args),
+        "remote resolve-history" => {
+            return crate::history::remote_resolve(service, session, command, args);
+        }
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
         "document promote" => {
             return crate::lifecycle::document_promote(service, session, command, args);
@@ -589,6 +596,7 @@ pub fn dispatch(
         "poll configure" => return crate::polling::configure(service, session, command, args),
         "poll pause" => return crate::polling::pause(service, session, command, args),
         "poll resume" => return crate::polling::resume(service, session, command, args),
+        "context retire" => return crate::retirement::retire(service, session, command, args),
         "context observe-local" => {
             return crate::local_sync::observe(service, session, command, args);
         }

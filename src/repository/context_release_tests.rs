@@ -452,15 +452,14 @@ fn with_neither_the_worktree_nor_the_branch_nothing_is_touched_and_the_row_is_di
 type Change = fn(&Path);
 
 #[test]
-fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean() {
-    let changes: [(&str, Change); 3] = [
+fn check_a_a_worktree_with_a_change_or_an_untracked_file_is_not_clean() {
+    let changes: [(&str, Change); 2] = [
         ("untracked", |worktree| {
             write(worktree, "notes.txt", "draft\n")
         }),
         ("modified", |worktree| {
             write(worktree, &ticket_path(TICKET), "edited, not committed\n");
         }),
-        ("ignored", |worktree| write(worktree, IGNORED, "scratch\n")),
     ];
     for (name, change) in changes {
         let f = Fixture::new();
@@ -474,6 +473,16 @@ fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean
             name,
         );
     }
+}
+
+#[test]
+fn check_a_a_worktree_with_only_an_ignored_file_is_released() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    write(&f.worktree(TICKET), IGNORED, "scratch\n");
+
+    assert_eq!(f.release(TICKET).unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
 }
 
 #[test]
@@ -589,15 +598,23 @@ fn check_c_a_verified_push_of_the_context_is_an_external_change() {
     assert_refused_and_left(&f, TICKET, RepositoryErrorKind::ExternalChange);
 }
 
-/// R-43: every re-selection of the remote leaves the publication history
-/// unknown for good. With no tracking ref and no commit of its own, the
-/// context is released.
+/// R-43: a change of the remote's identity leaves the publication history
+/// unknown. With no tracking ref and no commit of its own, the context is
+/// released.
 #[test]
 fn check_c_an_unknown_publication_history_with_no_tracking_ref_is_released() {
     let f = Fixture::new();
     f.select_origin();
-    f.select(None);
     f.edit(TICKET);
+    f.service
+        .add_remote(AddRemoteRequest {
+            root: f.root(),
+            name: "elsewhere".into(),
+            url: "ssh://fixture@localhost/elsewhere".into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    f.select(Some("elsewhere"));
     assert_eq!(
         f.evidence(TICKET),
         RemotePublicationEvidence::HistoryUnknown
@@ -729,18 +746,16 @@ fn ownership_a_closed_ticket_is_ticket_closed() {
     assert_refused_and_left(&f, TICKET, RepositoryErrorKind::TicketClosed);
 }
 
+/// A pending row of the whole repository, here a refresh that stopped
+/// before it stored the index, is in the way of every release.
 #[test]
 fn another_pending_row_on_the_root_is_recovery_required() {
     let f = Fixture::new();
     f.edit(TICKET);
-    // A preparation of another item, stopped before its worktree.
     let stopped = f
-        .failing(FailurePoint::BeforeWorktreeCreation)
-        .prepare_context(AuthoringTarget {
+        .failing(FailurePoint::BeforeIndexTransactionCommit)
+        .refresh_repository(RefreshRepositoryRequest {
             root: f.root(),
-            kind: AuthoringKind::Ticket,
-            item_id: OTHER.parse().unwrap(),
-            intent: ContextIntent::Edit,
             operation_id: OperationId::new(),
         });
     assert_eq!(
@@ -754,6 +769,35 @@ fn another_pending_row_on_the_root_is_recovery_required() {
         RepositoryErrorKind::RecoveryRequired
     );
     assert_eq!(f.state(AuthoringKind::Ticket, TICKET), before);
+}
+
+/// A pending row of another item, here a preparation stopped before its
+/// worktree, holds that item alone: the release goes on, and the row is
+/// left as it was.
+#[test]
+fn another_item_s_pending_row_does_not_stop_the_release() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    let preparation = OperationId::new();
+    let stopped = f
+        .failing(FailurePoint::BeforeWorktreeCreation)
+        .prepare_context(AuthoringTarget {
+            root: f.root(),
+            kind: AuthoringKind::Ticket,
+            item_id: OTHER.parse().unwrap(),
+            intent: ContextIntent::Edit,
+            operation_id: preparation,
+        });
+    assert_eq!(
+        kind_of(stopped.map(|_| ())),
+        RepositoryErrorKind::InjectedFailure
+    );
+    let left = f.row(preparation);
+    assert_ne!(left.0, "completed");
+
+    assert_eq!(f.release(TICKET).unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
+    assert_eq!(f.row(preparation), left);
 }
 
 // Re-entry.
@@ -777,10 +821,22 @@ fn interrupted_before_the_branch_release_the_same_operation_deletes_the_branch()
             Some("context_worktree_released".to_owned())
         )
     );
-    // Every other operation waits for the row.
+    // Another operation of the item waits for the row, and so does work on
+    // the whole repository. Another item's does not.
     assert_eq!(
-        kind_of(f.release(OTHER)),
+        kind_of(f.release(TICKET)),
         RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        kind_of(f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root(),
+            operation_id: OperationId::new(),
+        })),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        f.release(OTHER).unwrap(),
+        ContextReleaseOutcome::AlreadyAbsent
     );
 
     let finished = f.release_with(&f.service, AuthoringKind::Ticket, TICKET, operation_id);
@@ -955,10 +1011,33 @@ fn a_failed_hand_off_is_index_pending_and_a_refresh_under_its_id_finishes_it() {
         .unwrap();
     assert_eq!(row.step.as_deref(), Some("context_branch_released"));
     assert!(row.owes_only_its_hand_off(), "state {}", row.state);
+    // The row holds its own item: a release of the item under another ID
+    // is refused for it. It holds no other item: a release of one goes on,
+    // and finds nothing to release. Owing only its hand-off, it is not in
+    // the way of a whole-repository refresh (Table B, E-75): a refresh under
+    // a new ID goes on and indexes its context, which is gone, so its rows
+    // are deleted; the row stays pending for its own resume or retry.
     assert_eq!(
-        kind_of(f.release(OTHER)),
+        kind_of(f.release(TICKET)),
         RepositoryErrorKind::RecoveryRequired
     );
+    assert_eq!(
+        f.release(OTHER).unwrap(),
+        ContextReleaseOutcome::AlreadyAbsent
+    );
+    let other = f
+        .service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: f.root(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(matches!(other, RefreshOutcome::Refreshed { .. }));
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
+    let row = recovery::local_row(&f.db(), &root, operation_id)
+        .unwrap()
+        .unwrap();
+    assert!(row.owes_only_its_hand_off(), "state {}", row.state);
 
     let refreshed = f
         .service

@@ -54,22 +54,25 @@ pub use dto::{
     IdentitySource, IndexProblemDto, IndexState, IndexStateDto, IndexStatusDto, IndexStatusState,
     InitialsSource, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto,
     KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto,
-    OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
-    OperationOwner, PathObservationDto, PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto,
-    ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto,
-    ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, RemoteDto, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode,
-    UnplannableReasonDto, UnplannableTicketDto,
+    OperationAction, OperationAttributionDto, OperationDto, OperationFamily, OperationListDto,
+    OperationNextAction, OperationOwner, PathObservationDto, PlanBatchDto, PlanDto, PollingOutcome,
+    PollingStatusDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
+    ReadinessReasonDto, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, RemoteDto,
+    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
+    UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
-pub(crate) use items::{is_plain_relative, observe_in_context};
+pub(crate) use items::{
+    invalid_context_problem_path, is_in_item_directories, is_plain_relative, observe_in_context,
+    presents_context, presents_item_contexts,
+};
 pub use local_sync::{
     LocalContextConflictContentDto, LocalContextConflictEntryDto, LocalContextSyncDataType,
     LocalContextSyncEligibility, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
     LocalContextSyncNextAction, LocalContextSyncReason, LocalContextSyncState,
 };
 pub use resolve::ResolvedRepository;
-pub(crate) use status::local_action;
+pub(crate) use status::{local_action, remote_action, remote_phase, remote_step};
 
 /// The argument of a recovery action that names a repository root. The
 /// conflict read places its failures with it too.
@@ -89,16 +92,20 @@ fn root_action(action: RecoveryActionKind, root: Option<&str>) -> RecoveryAction
 /// context: nothing has ever been stored for it. An index that holds
 /// contexts and no refresh time was written before that time was recorded;
 /// it has rows worth listing and is `stale`, with a null `refreshed_at`.
+/// Otherwise it is `stale` while the repository is marked behind as a whole
+/// (`refresh_required`) or any context is owed an indexing (`any_dirty`:
+/// one is marked dirty, or a pending row owes it).
 fn index_state(
     refresh_required: bool,
     refreshed_at: Option<i64>,
     has_contexts: bool,
+    any_dirty: bool,
 ) -> IndexStateDto {
     IndexStateDto {
         state: match refreshed_at {
             None if !has_contexts => IndexState::NeverRefreshed,
             None => IndexState::Stale,
-            Some(_) if refresh_required => IndexState::Stale,
+            Some(_) if refresh_required || any_dirty => IndexState::Stale,
             Some(_) => IndexState::Current,
         },
         refreshed_at: refreshed_at
@@ -454,6 +461,31 @@ impl RepositoryService {
         let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Deferred)?;
         let result = read(&transaction);
         // Dropping the transaction rolls it back as well; this states it.
+        let _ = transaction.rollback();
+        result
+    }
+
+    /// `read_session`, for a writer that reads about the operation in its
+    /// way: the same guard, checks and refusal of writes, on a connection
+    /// opened as a writer opens one. A read-only connection that is the
+    /// last to close leaves the index's write-ahead files behind; a writer
+    /// that was refused leaves nothing.
+    pub(super) fn writer_read_session<T>(
+        &self,
+        operation: RepositoryOperation,
+        read: impl FnOnce(&Connection) -> Result<T, ReadError>,
+    ) -> Result<T, ReadError> {
+        let data_directory = self
+            .registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let _cache_guard = cache_read_guard(&self.registry_path, data_directory, operation)?;
+        self.require_index_available(operation, None)?;
+        let connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        connection.pragma_update(None, "query_only", true)?;
+        forbid_attached_databases(&connection);
+        let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Deferred)?;
+        let result = read(&transaction);
         let _ = transaction.rollback();
         result
     }

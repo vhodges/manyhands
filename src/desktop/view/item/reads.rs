@@ -167,6 +167,9 @@ impl ItemPane {
         self.follow_close_save(cx);
         self.share_progressed(cx);
         self.posts_progressed(cx);
+        // The lifecycle lock reads the request model (D5 A2).
+        self.lock_changed(cx);
+        cx.notify();
         let Some(id) = self.refreshing else {
             return;
         };

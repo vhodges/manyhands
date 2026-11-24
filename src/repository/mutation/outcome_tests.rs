@@ -643,6 +643,7 @@ fn synchronization_errors() -> Vec<(SynchronizationError, ResultCode)> {
         (Error::PrimaryMissing, Code::InvalidConfiguration),
         (Error::RemoteContextDeleted, Code::RemoteBranchDeleted),
         (Error::HistoryUnknown, Code::RecoveryRequired),
+        (Error::HistoryUnresolved, Code::RecoveryRequired),
         (
             Error::ConflictPending {
                 target: context_target(),
@@ -691,13 +692,14 @@ fn synchronization_error_count(error: &SynchronizationError) -> usize {
         | Error::PrimaryMissing
         | Error::RemoteContextDeleted
         | Error::HistoryUnknown
+        | Error::HistoryUnresolved
         | Error::ConflictPending { .. }
         | Error::IdentityRequired { .. }
         | Error::ExternalResolutionRequired { .. }
         | Error::MergeRequired { .. }
         | Error::PushRejected
         | Error::ExternalChange
-        | Error::RecoveryRequired => 18,
+        | Error::RecoveryRequired => 19,
     }
 }
 
@@ -2365,4 +2367,115 @@ fn a_failed_host_observation_offers_its_code_s_own_action_and_no_request() {
     assert_eq!(kept, suggested);
     // With no root there is nothing to rebuild.
     assert!(offered_by_observation(ResultCode::IndexUnavailable, None, Vec::new()).is_empty());
+}
+
+/// A synchronization that a cancellation ended as its push returned is no
+/// operation the list shows, and the abandon of it is not offered in every
+/// result that says to look at the repository. A result that names it as
+/// the operation in its way, as a later synchronization's refusal does,
+/// is offered its abandon, after `operation.show`: the push it counts as
+/// unanswered is the person's to answer. Named or not, an operation the
+/// abandon would not close is not offered.
+#[test]
+fn a_named_remote_blocker_whose_push_a_cancellation_left_unanswered_is_offered_its_abandon() {
+    use crate::repository::{
+        AuthoringKind, REGISTRY_FILE, RemoteOperationAction, RemoteOperationTarget, RemoteRefPlan,
+        RemoteReservationOutcome, remote::state,
+    };
+    let data = tempfile::tempdir().expect("a directory");
+    let parent = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let root = parent.path().to_str().unwrap().to_owned();
+    let service = RepositoryService::open_at(data.path()).expect("a service");
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(
+        "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+        [&root],
+    )
+    .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, Path::new(&root), |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    )
+    .unwrap();
+    let stranded = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_operation(Path::new(&root), stranded, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    // As the acknowledgement of a cancellation leaves it when the push
+    // returns: cancelled, at the step before the push, its push intent
+    // recorded and nothing proving it.
+    let tip = "1111111111111111111111111111111111111111";
+    db.execute(
+        "UPDATE remote_operation_records
+            SET phase = 'cancelled', outcome = 'cancelled', sync_checkpoint = 'push_returned',
+                completed_step = 'before_push', expected_oid = ?2, local_oid = ?2,
+                primary_tracking_oid = ?2, push_oid = ?2
+          WHERE operation_ulid = ?1",
+        [stranded.to_string(), tip.to_owned()],
+    )
+    .unwrap();
+    let refused = |recovery: Vec<RecoveryAction>| {
+        Envelope::<()>::classified_mutation(
+            Command::ItemSync.name(),
+            crate::results::Scope {
+                repository: Some(root.clone()),
+                ..crate::results::Scope::default()
+            },
+            false,
+            ResultCode::RecoveryRequired,
+            crate::results::Effects::not_requested(),
+            false,
+        )
+        .with_recovery(recovery)
+    };
+    let inspect = || {
+        RecoveryAction::new(
+            RecoveryActionKind::RepoInspect,
+            [(ROOT_ARGUMENT, root.as_str().into())],
+        )
+    };
+    let actions = |envelope: &Envelope<()>| -> Vec<(&'static str, Option<String>)> {
+        envelope
+            .recovery
+            .iter()
+            .map(|action| (action.action.as_str(), action.operation_id.clone()))
+            .collect()
+    };
+    let id = stranded.to_string();
+
+    // Named as the operation in the way.
+    let named = service.offering(refused(showing(vec![inspect()], &id)), CallKind::Execute);
+    assert_eq!(
+        actions(&named),
+        [
+            ("repo.inspect", None),
+            ("operation.show", Some(id.clone())),
+            ("operation.abandon", Some(id.clone()))
+        ]
+    );
+    // Not named: it is no pending operation of the list.
+    let unnamed = service.offering(refused(vec![inspect()]), CallKind::Execute);
+    assert_eq!(actions(&unnamed), [("repo.inspect", None)]);
+    // Once its push is recorded refused, it has ended: named, nothing more
+    // is offered for it.
+    db.execute(
+        "UPDATE remote_operation_records SET outcome = 'protocol_rejected' WHERE operation_ulid = ?1",
+        [&id],
+    )
+    .unwrap();
+    let answered = service.offering(refused(showing(vec![inspect()], &id)), CallKind::Execute);
+    assert_eq!(
+        actions(&answered),
+        [("repo.inspect", None), ("operation.show", Some(id.clone()))]
+    );
 }

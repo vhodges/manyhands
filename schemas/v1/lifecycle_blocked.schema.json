@@ -31,6 +31,7 @@
           "integration_conflict",
           "remote_context_deleted",
           "history_unknown",
+          "history_unresolved",
           "already_closed",
           "primary_reopened",
           "document_invalid_after_integration",

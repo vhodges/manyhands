@@ -1,5 +1,7 @@
 use super::*;
-use crate::repository::{CommitIdentity, EnableRepositoryRequest, LeaseKind, REGISTRY_FILE};
+use crate::repository::{
+    CommitIdentity, EnableRepositoryRequest, LeaseKind, REGISTRY_FILE, open_registry,
+};
 
 thread_local! {
     static BEFORE_CACHE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };

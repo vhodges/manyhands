@@ -1,4 +1,18 @@
+use git2::Repository;
+
 use super::*;
+use crate::{
+    repository::{
+        Mutation, MutationDataDto, ProposedRelationships, RelationshipWrite, TicketDraft,
+        TicketSaveInput,
+        basis::{Basis, BasisCheck, check},
+        command_index_tests::{
+            Fixture, OTHER, SPARE, TICKET, commit, item, ticket_path, ticket_source, write,
+        },
+        discovery::{ListedContext, listed_context, stat_basis},
+    },
+    results::ResultCode,
+};
 
 /// A ticket of the graph. IDs here are short names: the graph compares
 /// them and nothing more.
@@ -872,4 +886,265 @@ fn made_ready_is_empty_with_no_dependents() {
         graph([closed("t", &[])]).made_ready("t"),
         Some((vec![], true))
     );
+}
+
+/// A comment on B, which only a commit made outside Manyhands adds.
+const COMMENT_ON_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD9";
+
+/// B's ticket depending on A.
+fn other_on_ticket() -> String {
+    ticket_source(OTHER, "Other", &format!("deps:\n- {TICKET}\n"))
+}
+
+/// Commits `text` at `path` in B's worktree with Git alone.
+fn commit_in_other(f: &Fixture, path: &str, text: &str) {
+    write(&f.worktree(OTHER), path, text);
+    commit(&Repository::open(f.worktree(OTHER)).unwrap(), &[path]);
+}
+
+/// B's context as listing finds it.
+fn other_context(f: &Fixture) -> ListedContext {
+    listed_context(&f.root, &ContextKey::Item(item(OTHER))).unwrap()
+}
+
+/// The basis the index stores for B's context, and when it was indexed.
+fn stored_basis_of_other(f: &Fixture) -> (Basis, i64) {
+    let (basis, indexed_at): (String, i64) = f
+        .index()
+        .query_row(
+            "SELECT basis, indexed_at FROM contexts WHERE item_id = ?1",
+            [OTHER],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    (Basis::decode(&basis).unwrap(), indexed_at)
+}
+
+/// Whether B's context holds a file written too close to when it was
+/// indexed for its stat to be trusted.
+fn other_is_racy(f: &Fixture) -> bool {
+    let (stored, indexed_at) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let now = stat_basis(&git, &f.root, &other_context(f), Some(&stored), indexed_at);
+    matches!(check(&stored, &now, indexed_at), BasisCheck::Racy(_))
+}
+
+/// B comes to depend on A by an edit its stat does not show, as within one
+/// tick of a filesystem with coarse timestamps: the stored basis is given
+/// the stat of B's files as they are after the edit, and keeps the hashes of
+/// what they held before.
+fn edit_other_under_its_stored_stat(f: &Fixture) {
+    write(&f.worktree(OTHER), &ticket_path(OTHER), &other_on_ticket());
+    let (stored, _) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let mut now = stat_basis(&git, &f.root, &other_context(f), None, 0);
+    for file in &mut now.files {
+        file.hash = stored
+            .files
+            .iter()
+            .find(|before| before.path == file.path)
+            .and_then(|before| before.hash);
+    }
+    f.index()
+        .execute(
+            "UPDATE contexts SET basis = ?1 WHERE item_id = ?2",
+            rusqlite::params![now.encode(), OTHER],
+        )
+        .unwrap();
+}
+
+/// A save that sets a ticket's relationships checks them against every
+/// context, and reads from disk each one whose basis no longer holds since
+/// the index stored it, writing nothing to the index; `ticket check` reads
+/// the index alone. A is the fixture's `TICKET` and B its `OTHER`, each in a
+/// worktree of its own, and C its `SPARE`, on the primary only. In each case
+/// one context changes outside Manyhands, B's or the primary's, so the index
+/// still holds it as it was.
+///
+/// Every context was written moments before it was indexed, so its stat
+/// alone cannot vouch for it: a context nothing changed is not read, as its
+/// files still hold what the index hashed, and one whose file changed under
+/// the same stat is.
+#[test]
+fn a_relationship_check_reads_a_moved_context_from_disk() {
+    /// (case, how a context changes, the context that moved and is read,
+    /// what a save of A sets as its one dependency, and the code and IDs it
+    /// is refused with)
+    type Case = (
+        &'static str,
+        fn(&Fixture),
+        &'static str,
+        &'static str,
+        ResultCode,
+        &'static [&'static str],
+    );
+    let cases: [Case; 4] = [
+        (
+            "B comes to depend on A by a commit",
+            |f| commit_in_other(f, &ticket_path(OTHER), &other_on_ticket()),
+            "OTHER",
+            OTHER,
+            ResultCode::RelationshipCycle,
+            &[TICKET, OTHER],
+        ),
+        (
+            "C comes to depend on A by a commit on the primary",
+            |f| {
+                let path = ticket_path(SPARE);
+                write(
+                    &f.root,
+                    &path,
+                    &ticket_source(SPARE, "Spare", &format!("deps:\n- {TICKET}\n")),
+                );
+                commit(&Repository::open(&f.root).unwrap(), &[&path]);
+            },
+            "primary",
+            SPARE,
+            ResultCode::RelationshipCycle,
+            &[TICKET, SPARE],
+        ),
+        (
+            "a comment on B is committed",
+            |f| {
+                commit_in_other(
+                    f,
+                    &format!(".manyhands/comments/{OTHER}/{COMMENT_ON_OTHER}.md"),
+                    &format!(
+                        "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
+                         id: {COMMENT_ON_OTHER}\nitem_id: {OTHER}\n\
+                         created_at: 2026-11-01T00:00:00Z\n---\nA comment.\n"
+                    ),
+                );
+            },
+            "OTHER",
+            COMMENT_ON_OTHER,
+            ResultCode::InvalidRelationship,
+            &[COMMENT_ON_OTHER],
+        ),
+        (
+            "B comes to depend on A by an edit its stat does not show",
+            edit_other_under_its_stored_stat,
+            "OTHER",
+            OTHER,
+            ResultCode::RelationshipCycle,
+            &[TICKET, OTHER],
+        ),
+    ];
+    for (case, change, moved, target, code, rejected) in cases {
+        let f = Fixture::new();
+        let repo = f.service.resolve_repository(&f.root).unwrap();
+        let proposed = ProposedRelationships {
+            deps: vec![item(target)],
+            parent: None,
+        };
+
+        // With nothing changed since it was stored, no context is read,
+        // though B, written just before it was indexed, is racy.
+        assert!(other_is_racy(&f), "{case}");
+        let unmoved = f.watch(|| {
+            let check = f
+                .service
+                .check_ticket_relationships_reading_moved_contexts(&repo, &item(TICKET), &proposed)
+                .unwrap();
+            assert_eq!(check.rejection, None, "{case}");
+        });
+        assert!(unmoved.observed.is_empty(), "{case}: {:?}", unmoved.counts);
+
+        change(&f);
+        let index_only = f
+            .service
+            .check_ticket_relationships(&repo, &item(TICKET), &proposed)
+            .unwrap();
+        assert_eq!(index_only.rejection, None, "{case}");
+
+        let observation = f
+            .service
+            .show_item(&repo, &item(TICKET))
+            .unwrap()
+            .observation
+            .unwrap();
+        let saved = f.watch(|| {
+            let envelope = f.execute(Mutation::TicketSave(TicketSaveInput {
+                root: f.root.clone(),
+                id: item(TICKET),
+                draft: TicketDraft {
+                    title: "Ticket".to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: "open".to_owned(),
+                    project: None,
+                    team: None,
+                    body: "Body of Ticket.\n".to_owned(),
+                },
+                deps: RelationshipWrite::Set(vec![target.to_owned()]),
+                parent: RelationshipWrite::Unchanged,
+                observation,
+            }));
+            assert_eq!(envelope.code, code, "{case}: {envelope:?}");
+            let Some(MutationDataDto::Ticket(data)) = &envelope.data else {
+                panic!("{case}: no ticket data: {envelope:?}");
+            };
+            assert_eq!(data.rejected, rejected, "{case}");
+        });
+        // That context alone moved, and was read; the index is as it was.
+        assert_eq!(saved.observed, BTreeSet::from([moved]), "{case}");
+        assert_eq!(saved.after, saved.before, "{case}");
+    }
+}
+
+/// The save's check observes a moved context before its read session, and
+/// a store of that context can land between the two. A store with a later
+/// indexed time than the observation's start came from an observation begun
+/// after it: the read keeps its stored rows and does not use the one it
+/// made. A store from before the observation began is what it replaces.
+///
+/// B comes to depend on A in its worktree, outside Manyhands, and is
+/// observed. Its stored rows still hold it as depending on nothing, so
+/// whether B reads as blocked by A says which copy the read took; its
+/// indexed time is set by hand on either side of the observation's start.
+#[test]
+fn a_store_landing_after_the_check_observed_a_context_keeps_its_rows() {
+    let f = Fixture::new();
+    let repo = f.service.resolve_repository(&f.root).unwrap();
+    commit_in_other(&f, &ticket_path(OTHER), &other_on_ticket());
+    let moved = MovedContexts::observe(&f.service, &repo).unwrap();
+    let started_at = moved
+        .0
+        .iter()
+        .find(|(key, _)| *key == ContextKey::Item(item(OTHER)))
+        .map(|(_, observation)| observation.started_at_ns)
+        .expect("B moved");
+
+    // (case, B's stored indexed time, what B reads as)
+    let cases = [
+        (
+            "stored before it was observed",
+            started_at - 1,
+            ReadinessState::Blocked,
+        ),
+        (
+            "stored as it was observed",
+            started_at,
+            ReadinessState::Blocked,
+        ),
+        (
+            "stored after it was observed",
+            started_at + 1,
+            ReadinessState::Ready,
+        ),
+    ];
+    for (case, indexed_at, readiness) in cases {
+        f.index()
+            .execute(
+                "UPDATE contexts SET indexed_at = ?1 WHERE item_id = ?2",
+                rusqlite::params![indexed_at, OTHER],
+            )
+            .unwrap();
+        let read = f
+            .service
+            .read_tickets_naming(&repo, &[], Some(&moved), |tickets| {
+                Ok(tickets.graph().readiness_state(OTHER))
+            })
+            .unwrap();
+        assert_eq!(read, Some(readiness), "{case}");
+    }
 }

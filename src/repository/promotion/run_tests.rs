@@ -49,6 +49,61 @@ pub(super) fn tracking_deleted(service: &RepositoryService, root: &std::path::Pa
         hook(service);
     }
 }
+/// What the previews of a lifecycle run at `root` read: how many times a
+/// preview read the item's facts (`observe::set_preview_facts_hook`), and
+/// how many whole-repository observations ran (`discovery::set_scan_hook`).
+/// Both are taken when the run reaches its index step (the `RefreshFailure`
+/// boundary, before the refresh an exit runs, which Task 22 replaces), or
+/// as they stand if it reaches none. It holds the root's boundary hook.
+pub(in super::super) struct PreviewCount {
+    root: PathBuf,
+    previews: Rc<std::cell::Cell<usize>>,
+    scans: Rc<std::cell::Cell<usize>>,
+    at_index_step: Rc<std::cell::Cell<Option<(usize, usize)>>>,
+}
+impl PreviewCount {
+    pub(in super::super) fn start(root: &std::path::Path) -> Self {
+        let count = Self {
+            root: root.to_owned(),
+            previews: Rc::default(),
+            scans: Rc::default(),
+            at_index_step: Rc::default(),
+        };
+        let previews = count.previews.clone();
+        observe::set_preview_facts_hook(root.to_owned(), move || previews.set(previews.get() + 1));
+        let scans = count.scans.clone();
+        discovery::set_scan_hook(root.to_owned(), move || scans.set(scans.get() + 1));
+        let (previews, scans, taken) = (
+            count.previews.clone(),
+            count.scans.clone(),
+            count.at_index_step.clone(),
+        );
+        HOOKS.with(|h| {
+            h.borrow_mut().insert(
+                root.to_owned(),
+                Box::new(move |_, point| {
+                    if point == FailurePoint::RefreshFailure && taken.get().is_none() {
+                        taken.set(Some((previews.get(), scans.get())));
+                    }
+                }),
+            )
+        });
+        count
+    }
+    /// `(previews, whole-repository observations)`.
+    pub(in super::super) fn taken(&self) -> (usize, usize) {
+        self.at_index_step
+            .get()
+            .unwrap_or((self.previews.get(), self.scans.get()))
+    }
+}
+impl Drop for PreviewCount {
+    fn drop(&mut self) {
+        observe::clear_preview_facts_hook(&self.root);
+        discovery::clear_scan_hook(&self.root);
+        HOOKS.with(|h| h.borrow_mut().remove(&self.root));
+    }
+}
 fn hook(f: &Fixture, callback: impl FnMut(&RepositoryService, FailurePoint) + 'static) {
     HOOKS.with(|h| {
         h.borrow_mut()
@@ -252,9 +307,6 @@ impl Fixture {
                 "fixture",
             )
             .unwrap();
-        self.db()
-            .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-            .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let configuration = self
             .service
@@ -329,9 +381,20 @@ impl run::PromotionIo for FakeIo {
         };
         let plan = RemoteRefPlan::from_configuration("origin", &config.primary_branch).unwrap();
         let target = req.target.operation_target(&plan);
-        let reservation = service
-            .reserve_promotion_child(&req.root, req.operation_id, &target, execution)
-            .unwrap();
+        // A refused reservation is the child's answer, as a real child's is
+        // (E-78). Whether the child is new is read first, as a real child's
+        // `open_synchronization` reads it (E-81).
+        let new = state::with_transaction(service, &req.root, |tx, id| {
+            Ok(state::read_operation(tx, id, req.operation_id)?.is_none())
+        })
+        .unwrap();
+        let reservation = service.reserve_promotion_child(
+            &req.root,
+            req.operation_id,
+            &target,
+            execution,
+            new,
+        )?;
         if matches!(reservation, RemoteReservationOutcome::Replay(_)) {
             service
                 .restart_promotion_child(&req.root, req.operation_id, &target, execution)
@@ -875,7 +938,7 @@ impl run::PromotionIo for MatrixIo {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let target = req.target.operation_target(&plan);
         let RemoteReservationOutcome::Reserved(owner) = s
-            .reserve_promotion_child(&req.root, req.operation_id, &target, execution)
+            .reserve_promotion_child(&req.root, req.operation_id, &target, execution, true)
             .unwrap()
         else {
             panic!("expected reserved child")
@@ -1406,6 +1469,107 @@ fn process_exit_f1_through_f12_and_inside_f10_reopens_without_repeated_effects()
             result
         );
     }
+}
+/// Runs `req` in a child process that exits at `EXIT_POINTS[point]`, as a
+/// process that is lost there leaves the repository.
+fn exit_at(f: &Fixture, req: &PromoteDocumentRequest, point: usize) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "repository::promotion::run_tests::promotion_exit_child",
+        ])
+        .env("MANYHANDS_PROMOTION_EXIT_ROOT", f.root.path())
+        .env("MANYHANDS_PROMOTION_EXIT_DATA", f.data.path())
+        .env("MANYHANDS_PROMOTION_EXIT_POINT", point.to_string())
+        .env("MANYHANDS_PROMOTION_EXIT_OP", req.operation_id.to_string())
+        .env(
+            "MANYHANDS_PROMOTION_EXIT_EXPECTATION",
+            req.expected
+                .to_bytes()
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(FAILURE_POINT_EXIT_STATUS),
+        "boundary {point}"
+    );
+}
+/// The final review's F-1 (Review Focus 2, decision 8): a promotion lost
+/// once its merge has moved main, and before its exit's index step, leaves
+/// the primary reading owed an indexing, so `index status` reads stale: the
+/// merge marks the primary before it moves main, under the integration's
+/// lease, and nothing between the merge and the exit stores it. The same
+/// request, sent again, finishes and indexes it, and the index reads
+/// current. One lost before the merge has moved nothing and marks nothing.
+/// With no publication remote, so a cleanup that reserves nothing.
+#[test]
+fn a_promotion_lost_after_its_merge_leaves_the_primary_owed_until_it_is_sent_again() {
+    let mut wrong = Vec::new();
+    // (where the process is lost, its index in `EXIT_POINTS`, whether main
+    // has moved by then)
+    for (lost, point, merged) in [
+        ("before the merge", 2, false),
+        ("after the merge", 3, true),
+        ("once the cleanup removed the worktree", 8, true),
+    ] {
+        let f = Fixture::new();
+        let root = f.root.path();
+        let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+            root: root.into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{lost}: {refreshed:?}"
+        );
+        let status = |service: &RepositoryService| {
+            service
+                .index_status(&service.resolve_repository(root).unwrap())
+                .unwrap()
+                .state
+        };
+        assert_eq!(status(&f.service), IndexStatusState::Current, "{lost}");
+        let req = f.request();
+        let before = f.primary();
+        exit_at(&f, &req, point);
+        if (f.primary() != before) != merged {
+            wrong.push(format!("{lost}: main moved {}", f.primary() != before));
+        }
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        let owed = !reopened.contexts_indexed(root, &[discovery::ContextKey::Primary]);
+        if owed != merged {
+            wrong.push(format!("{lost}: the primary reads owed {owed}"));
+        }
+        let expected = if merged {
+            IndexStatusState::Stale
+        } else {
+            IndexStatusState::Current
+        };
+        if status(&reopened) != expected {
+            wrong.push(format!("{lost}: index status {:?}", status(&reopened)));
+        }
+        let retried = run::promote_with_io(&reopened, req, &mut FakeIo::default());
+        if !matches!(&retried, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete)
+        {
+            wrong.push(format!("{lost}: sent again, it ended as {retried:?}"));
+        }
+        if !reopened.lifecycle_indexed(root, &ITEM.parse().unwrap())
+            || status(&reopened) != IndexStatusState::Current
+        {
+            wrong.push(format!(
+                "{lost}: sent again, index status {:?}",
+                status(&reopened)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 fn directory_image(root: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn walk(
@@ -2239,52 +2403,112 @@ fn contained_remote_cache_recovery_skips_deleted_context_child_and_does_not_reme
 }
 
 #[test]
-fn f6_rechecks_dirty_or_ignored_context_under_lease_before_deletion() {
-    for ignored in [false, true] {
-        let f = Fixture::new();
-        f.remote();
-        let req = f.request();
-        let root = f.root.path().to_owned();
-        hook(&f, move |_, p| {
-            if p == FailurePoint::BeforeRemoteDeletion {
-                let path = if ignored {
-                    "late-ignored"
-                } else {
-                    "late-untracked"
-                };
-                if ignored {
-                    fs::write(
-                        git2::Repository::open(&root)
-                            .unwrap()
-                            .path()
-                            .join("info/exclude"),
-                        "late-ignored\n",
-                    )
-                    .unwrap();
-                }
-                write(
-                    &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
-                    path,
-                    "preserve",
-                );
-            }
-        });
-        let mut io = FakeIo::default();
-        let result = authoritative(f.run_io(req, &mut io).unwrap());
-        assert_eq!(
-            result.cleanup(),
-            PromotionCleanup::Pending {
-                reason: if ignored {
-                    PromotionCleanupPending::IgnoredFiles
-                } else {
-                    PromotionCleanupPending::ContextChanged
-                }
-            }
-        );
-        assert_eq!(io.calls.borrow().deletes, 0);
-        assert!(f.context.workdir().unwrap().exists());
-    }
+fn f6_rechecks_a_dirty_context_under_lease_before_deletion() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::BeforeRemoteDeletion {
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "late-untracked",
+                "preserve",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let result = authoritative(f.run_io(req, &mut io).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::ContextChanged
+        }
+    );
+    assert_eq!(io.calls.borrow().deletes, 0);
+    assert!(f.context.workdir().unwrap().exists());
 }
+
+/// Ignores `name` in the repository and writes an ignored file of that name
+/// into the context's worktree.
+fn write_ignored(f: &Fixture, name: &str) {
+    fs::write(
+        git2::Repository::open(f.root.path())
+            .unwrap()
+            .path()
+            .join("info/exclude"),
+        format!("{name}\n"),
+    )
+    .unwrap();
+    write(&f.context, name, "ignored");
+}
+
+#[test]
+fn an_ignored_file_does_not_stop_the_cleanup_of_a_run() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::BeforeRemoteDeletion {
+            fs::write(
+                git2::Repository::open(&root)
+                    .unwrap()
+                    .path()
+                    .join("info/exclude"),
+                "late-ignored\n",
+            )
+            .unwrap();
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "late-ignored",
+                "ignored",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let result = outcome(f.run_io(req, &mut io).unwrap());
+    assert_eq!(result.cleanup(), PromotionCleanup::Complete);
+    assert!(!f.context.workdir().unwrap().exists());
+}
+
+#[test]
+fn a_cleanup_left_at_ignored_files_by_an_older_build_finishes_on_resend() {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    hook(&f, move |_, p| {
+        if p == FailurePoint::AfterPublication {
+            write(
+                &git2::Repository::open(root.join(".manyhands/worktrees").join(ITEM)).unwrap(),
+                "untracked",
+                "keep",
+            );
+        }
+    });
+    let mut io = FakeIo::default();
+    let stopped = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+    assert!(matches!(
+        stopped.cleanup(),
+        PromotionCleanup::Pending { .. }
+    ));
+    HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+    // What an older build left: the stop recorded as `ignored_files`, over a
+    // worktree that now holds only an ignored file.
+    f.db()
+        .execute(
+            "UPDATE document_promotions SET cleanup_category='ignored_files' WHERE operation_id=?1",
+            [req.operation_id.to_string()],
+        )
+        .unwrap();
+    fs::remove_file(f.context.workdir().unwrap().join("untracked")).unwrap();
+    write_ignored(&f, "build-output");
+    let done = outcome(f.run_io(req, &mut io).unwrap());
+    assert_eq!(done.cleanup(), PromotionCleanup::Complete);
+    assert!(!f.context.workdir().unwrap().exists());
+}
+
 struct ConsentIo {
     inner: FakeIo,
     approval: HostApproval,
@@ -3317,16 +3541,21 @@ fn spec4_assert_unleased_scans(f: &Fixture) -> Rc<std::cell::Cell<usize>> {
         f.root.path().to_owned(),
         f.root.path().join(".manyhands/worktrees").join(ITEM),
     ] {
-        let data = f.data.path().to_owned();
-        let checked = root.clone();
-        let count = count.clone();
-        discovery::set_scan_hook(root, move || {
-            assert!(
-                coordination::leases_are_free(&data, &checked),
-                "actual filesystem discovery entry must not run under the common lease"
-            );
-            count.set(count.get() + 1);
-        });
+        // Counts `observe_root` scans and `observe_context` scans alike.
+        let scan = || {
+            let data = f.data.path().to_owned();
+            let checked = root.clone();
+            let count = count.clone();
+            move || {
+                assert!(
+                    coordination::leases_are_free(&data, &checked),
+                    "actual filesystem discovery entry must not run under the common lease"
+                );
+                count.set(count.get() + 1);
+            }
+        };
+        discovery::set_scan_hook(root.clone(), scan());
+        discovery::set_context_scan_hook(root.clone(), scan());
     }
     count
 }
@@ -3545,6 +3774,27 @@ fn spec4_outside_inside_races_refuse_without_superseding_the_old_owner() {
     }
 }
 
+/// Task 21 (design, "Two previews per attempt"): a confirmed promotion
+/// previews once against the consent digest and once at integration, and
+/// no preview observes the whole repository. With a remote, the context
+/// child runs between the two.
+#[test]
+fn a_confirmed_promotion_takes_at_most_two_previews_and_no_whole_repository_observation() {
+    for remote in [false, true] {
+        let f = Fixture::new();
+        if remote {
+            f.remote();
+        }
+        let req = f.request();
+        let count = PreviewCount::start(f.root.path());
+        let mut io = FakeIo::default();
+        outcome(f.run_io(req, &mut io).unwrap());
+        let children = io.calls.borrow().children.len();
+        assert_eq!(children, if remote { 2 } else { 0 }, "remote: {remote}");
+        assert_eq!(count.taken(), (2, 0), "remote: {remote}");
+    }
+}
+
 fn spec5_context_entry_mode(f: &Fixture, mode: u32) -> (Oid, Vec<u8>) {
     let source = fs::read(f.context.workdir().unwrap().join(DOC)).unwrap();
     let parent = f.context.head().unwrap().peel_to_commit().unwrap();
@@ -3650,7 +3900,12 @@ fn spec5_cleanup_symlink_front_matter_and_gitlink_cannot_fulfill_target() {
             "mode {mode:o}"
         );
         assert_eq!(
-            cleanup.remove_context_worktree(AuthoringKind::Document, &ITEM.parse().unwrap(), oid),
+            cleanup.remove_context_worktree(
+                &f.service,
+                AuthoringKind::Document,
+                &ITEM.parse().unwrap(),
+                oid
+            ),
             crate::repository::cleanup::WorktreeRemoval::Changed
         );
         assert!(before == spec5_mode_image(&f));
@@ -4736,12 +4991,28 @@ fn integrated_configuration_failure_is_ok_pending_even_when_configuration_is_inv
 fn partial_worktree_prune_requires_recovery_and_never_finishes_a_stub() {
     let f = Fixture::new();
     let req = f.request();
-    let root = f.root.path().to_owned();
-    hook(&f, move |_, p| {
-        if p == FailurePoint::DuringWorktreeRemoval {
-            fs::remove_file(root.join(".manyhands/worktrees").join(ITEM).join(".git")).unwrap();
-        }
-    });
+    // E-80: an attempt stopped once it recorded `worktree_removing`, and a
+    // prune that began then lost the worktree's `.git`. A resume at that
+    // step reads it as a removal that did not finish. (The attempt that
+    // records the step reads a change there as the person's: R-SDD-71.)
+    let stopped = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::DuringWorktreeRemoval,
+    )
+    .unwrap();
+    authoritative(run::promote_with_io(&stopped, req.clone(), &mut FakeIo::default()).unwrap());
+    assert_eq!(
+        f.stored(req.operation_id).step,
+        record::PromotionStep::WorktreeRemoving
+    );
+    fs::remove_file(
+        f.root
+            .path()
+            .join(".manyhands/worktrees")
+            .join(ITEM)
+            .join(".git"),
+    )
+    .unwrap();
     let result = authoritative(f.run(req.clone()).unwrap());
     assert_eq!(
         result.cleanup(),
@@ -5011,8 +5282,8 @@ fn deletion_changed_and_still_present_keep_context_and_retry() {
     }
 }
 #[test]
-fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_delete() {
-    for mode in 0..4 {
+fn cleanup_precheck_preserves_dirty_untracked_and_moved_before_remote_delete() {
+    for mode in 0..3 {
         let f = Fixture::new();
         f.remote();
         let req = f.request();
@@ -5024,20 +5295,9 @@ fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_de
                 match mode {
                     0 => write(&repo, DOC, "dirty"),
                     1 => write(&repo, "untracked", "preserve"),
-                    2 => {
+                    _ => {
                         write(&repo, "moved", "preserve");
                         commit(&repo);
-                    }
-                    _ => {
-                        fs::write(
-                            git2::Repository::open(&root)
-                                .unwrap()
-                                .path()
-                                .join("info/exclude"),
-                            "ignored\n",
-                        )
-                        .unwrap();
-                        write(&repo, "ignored", "preserve");
                     }
                 }
             }
@@ -5047,11 +5307,7 @@ fn cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_de
         assert_eq!(
             result.cleanup(),
             PromotionCleanup::Pending {
-                reason: if mode == 3 {
-                    PromotionCleanupPending::IgnoredFiles
-                } else {
-                    PromotionCleanupPending::ContextChanged
-                }
+                reason: PromotionCleanupPending::ContextChanged
             }
         );
         assert_eq!(io.calls.borrow().deletes, 0);
@@ -5187,4 +5443,1831 @@ fn an_unreadable_flag_stops_a_child() {
         &mut io,
     );
     assert!(matches!(*answer.borrow(), Some(SafePointRequest::Stop)));
+}
+
+/// What a run tells its observer, in order.
+pub(in super::super) struct Told(pub(in super::super) Vec<run::RunEvent>);
+impl run::RunObserver for Told {
+    fn event(&mut self, event: run::RunEvent) {
+        self.0.push(event);
+    }
+}
+
+/// D5 decision 11, R-14, R-16: a promotion tells its observer only the steps
+/// that run, in the order they run. A context primary already holds is not
+/// merged; with no publication remote nothing is synchronized or published;
+/// a request sent again past its context's synchronization starts no
+/// context child.
+#[test]
+fn a_promotion_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &lifecycle::DocumentPromotionLifecycle,
+            service,
+            run::lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    // No publication remote: the merge and the tidy-up only.
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Integrating, E::CleaningUp]
+    );
+    // The context is already in the primary, and there is no remote: only
+    // the tidy-up (R-14, R-16).
+    let f = Fixture::new();
+    checkout(&f.repo, f.context.head().unwrap().target().unwrap());
+    assert_eq!(told(&f.service, f.request()), [E::CleaningUp]);
+    // A remote: the context's child, the merge, the primary's child.
+    let f = Fixture::new();
+    f.remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, E::Integrating, primary, E::CleaningUp]
+    );
+    // The context is already in the primary, and a remote: the children
+    // run and the primary's publishes, with no merge between them (R-14).
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, primary, E::CleaningUp]
+    );
+    // The same, and the remote never saw the context (no tracking branch
+    // for it): the cleanup-only path starts no context child either.
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    f.repo
+        .find_reference(&format!("refs/remotes/origin/manyhands/document/{ITEM}"))
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(told(&f.service, f.request()), [primary, E::CleaningUp]);
+    // Sent again past the context's synchronization: no context child.
+    let f = Fixture::new();
+    f.remote();
+    let request = f.request();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::AfterContextSync,
+    )
+    .unwrap();
+    let _ = run::promote_with_io(&failing, request.clone(), &mut FakeIo::default());
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(
+        told(&reopened, request),
+        [E::Integrating, primary, E::CleaningUp]
+    );
+}
+
+/// A lifecycle's child run as the synchronization runs one, its transport
+/// stood in for by `inner`, which completes its row: a child of a role
+/// `updates` names made a local update, which marks its context dirty under
+/// its lease (R-SDD-49); its row owes its index hand-off, as its
+/// classification leaves it; and the synchronization's own replay of the row
+/// then runs that hand-off.
+struct HandingOffChild<I> {
+    inner: I,
+    /// Whether the context's child, and the primary's, made a local update.
+    updates: (bool, bool),
+}
+impl<I: run::PromotionIo> run::PromotionIo for HandingOffChild<I> {
+    fn synchronize(
+        &mut self,
+        s: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &record::ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        let primary = req.target == SynchronizationTarget::Primary;
+        self.inner
+            .synchronize(s, req.clone(), observer, execution)?;
+        if if primary {
+            self.updates.1
+        } else {
+            self.updates.0
+        } {
+            let context = if primary {
+                discovery::ContextKey::Primary
+            } else {
+                discovery::ContextKey::Item(ITEM.parse().unwrap())
+            };
+            mark_contexts_dirty(
+                &s.registry_path,
+                &req.root,
+                &[context],
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        state::with_transaction(s, &req.root, |tx, _| {
+            tx.execute(
+                "UPDATE remote_operation_records SET index_pending=1 WHERE operation_ulid=?1",
+                [req.operation_id.to_string()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+        .unwrap();
+        s.synchronize_promotion_child_observed(
+            req,
+            &mut SessionCredentials::new(NoCredentials),
+            observer,
+            execution,
+        )
+    }
+    fn delete(
+        &mut self,
+        s: &RepositoryService,
+        req: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        config: &ObservationConfiguration,
+        oid: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner.delete(s, req, plan, owner, config, oid, item)
+    }
+}
+
+/// The local refresh rows, by ID: `(ID, operation, owed contexts, state)`.
+type RefreshRow = (i64, String, Option<String>, String);
+fn refresh_rows(f: &Fixture) -> Vec<RefreshRow> {
+    f.db()
+        .prepare(
+            "SELECT id, operation_ulid, owed_contexts, state FROM operation_records
+              WHERE action = 'refresh' ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Task 22 (design, Phase 3, "One index update per exit"): a lifecycle's
+/// children begin no index hand-off of their own. What a child's local
+/// update changed is marked dirty under its lease, and its parent's record
+/// names it by its role; every exit of the parent then indexes, in one step
+/// under one refresh row of its own that records what it owes, the contexts
+/// its children changed and its own, and runs no refresh of the whole
+/// repository. Before integration the parent has written nothing of its own,
+/// so an exit there indexes only what a child left dirty; after it, the
+/// primary, which the merge moved, and the item's context, which the cleanup
+/// removes (its rows are deleted) or the child changed. A stop at awaiting
+/// publication indexes once, and its later finish once, not twice. No exit
+/// marks the repository behind for a context that is gone and has nothing
+/// stored (a retry after the worktree's removal, a replay); a context that
+/// is there and has nothing stored is indexed.
+#[test]
+fn every_lifecycle_exit_indexes_the_contexts_its_children_changed_once() {
+    type Run = Result<DocumentPromotionResult, DocumentPromotionError>;
+    /// One call of `req`, its children run by `inner`: its result, the
+    /// refresh rows it began, and how many times it observed the whole
+    /// repository.
+    fn call(
+        f: &Fixture,
+        req: &PromoteDocumentRequest,
+        inner: impl run::PromotionIo,
+        updates: (bool, bool),
+    ) -> (Run, Vec<RefreshRow>, usize) {
+        let before = refresh_rows(f)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        let scans = Rc::new(std::cell::Cell::new(0));
+        let counted = scans.clone();
+        discovery::set_scan_hook(f.root.path().to_owned(), move || {
+            counted.set(counted.get() + 1)
+        });
+        let result = f.run_io(req.clone(), &mut HandingOffChild { inner, updates });
+        discovery::clear_scan_hook(f.root.path());
+        let begun = refresh_rows(f)
+            .into_iter()
+            .filter(|row| !before.contains(&row.0))
+            .collect();
+        (result, begun, scans.get())
+    }
+    fn cancel_at(f: &Fixture, req: &PromoteDocumentRequest, at: FailurePoint) {
+        let (root, op) = (f.root.path().to_owned(), req.operation_id);
+        let mut once = false;
+        hook(f, move |s, point| {
+            if point == at && !once {
+                once = true;
+                assert!(s.cancel_document_promotion(&root, op).unwrap());
+            }
+        });
+    }
+    let finished = |result: &Run| matches!(result, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete);
+    let cleanup = |result: &Run, reason: PromotionCleanupPending| matches!(result, Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Pending { reason });
+    let both: &[&str] = &["primary", ITEM];
+    let context: &[&str] = &[ITEM];
+    let mut wrong = Vec::new();
+    /// What is wrong with the exit `exit` of `req` that `called` came to:
+    /// `ended` says whether it ended as it should, and `owed` names what its
+    /// one index step should have indexed.
+    fn check(
+        wrong: &mut Vec<String>,
+        exit: &str,
+        f: &Fixture,
+        req: &PromoteDocumentRequest,
+        called: (Run, Vec<RefreshRow>, usize),
+        ended: bool,
+        owed: &[&str],
+    ) {
+        let (result, begun, scans) = called;
+        if !ended {
+            wrong.push(format!("{exit}: ended as {result:?}"));
+        }
+        if scans != 0 {
+            wrong.push(format!("{exit}: {scans} whole-repository observations"));
+        }
+        let stored = f.stored(req.operation_id);
+        let children = [stored.context_sync_id, stored.primary_sync_id]
+            .into_iter()
+            .flatten()
+            .map(|child| child.to_string())
+            .collect::<Vec<_>>();
+        let expected = owed
+            .iter()
+            .map(|owed| owed.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        match begun.as_slice() {
+            [(_, operation, recorded, state)] => {
+                if children.contains(operation) {
+                    wrong.push(format!("{exit}: the one index step is a child's"));
+                }
+                let recorded = recorded
+                    .as_deref()
+                    .and_then(|owed| serde_json::from_str::<Vec<String>>(owed).ok())
+                    .map(|owed| owed.into_iter().collect::<std::collections::BTreeSet<_>>());
+                if recorded.as_ref() != Some(&expected) {
+                    wrong.push(format!("{exit}: indexed {recorded:?}, not {expected:?}"));
+                }
+                if state != "completed" {
+                    wrong.push(format!("{exit}: its index step is {state}"));
+                }
+            }
+            begun => wrong.push(format!(
+                "{exit}: {} index steps, not one: {begun:?} (children {children:?})",
+                begun.len()
+            )),
+        }
+        if !f
+            .service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!("{exit}: the lifecycle's contexts are owed still"));
+        }
+    }
+
+    // Finish: the context's child merged into the context.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = finished(&called.0);
+    check(&mut wrong, "finish", &f, &req, called, ended, both);
+
+    // Abandon: the context's child brought a new path, which the consent
+    // does not cover.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let mutating = MutatingChild {
+        inner: FakeIo::default(),
+        new_path: true,
+        once: false,
+    };
+    let called = call(&f, &req, mutating, (true, false));
+    let ended = matches!(
+        called.0,
+        Err(DocumentPromotionError::ReconfirmationRequired)
+    ) && f.stored(req.operation_id).step == record::PromotionStep::Abandoned;
+    check(&mut wrong, "abandon", &f, &req, called, ended, context);
+
+    // Interrupted: cancelled once the context's child is done.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::AfterContextSync);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = matches!(called.0, Err(DocumentPromotionError::Interrupted));
+    check(&mut wrong, "interrupted", &f, &req, called, ended, context);
+
+    // Primary advanced: main moved on once the context's child was done.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let root = f.root.path().to_owned();
+    let mut once = false;
+    hook(&f, move |_, point| {
+        if point == FailurePoint::AfterContextSync && !once {
+            once = true;
+            let repo = git2::Repository::open(&root).unwrap();
+            write(&repo, "primary-only", "advance");
+            let oid = commit(&repo);
+            repo.reference("refs/remotes/origin/main", oid, true, "fixture")
+                .unwrap();
+        }
+    });
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = matches!(called.0, Err(DocumentPromotionError::PrimaryAdvanced));
+    check(
+        &mut wrong,
+        "primary advanced",
+        &f,
+        &req,
+        called,
+        ended,
+        context,
+    );
+
+    // Cancel: cancelled once the merge is made.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::AfterIntegrationRef);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::Cancelled);
+    check(&mut wrong, "cancel", &f, &req, called, ended, both);
+
+    // A stop at awaiting publication: the primary's child did not reach the
+    // remote. Its later finish: the same request, which publishes.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let unreachable = FakeIo {
+        failure: Some((
+            true,
+            transport_error(SshTransportErrorKind::RemoteUnavailable),
+        )),
+        ..FakeIo::default()
+    };
+    let called = call(&f, &req, unreachable, (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::AwaitingPublication);
+    check(
+        &mut wrong,
+        "a stop at awaiting publication",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+    let called = call(&f, &req, FakeIo::default(), (false, true));
+    let ended = finished(&called.0);
+    check(
+        &mut wrong,
+        "its later finish",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+
+    // A cancel once the worktree is removed: its exit deletes the context's
+    // rows. Its retry finishes, and neither its completion nor its exit
+    // marks the repository behind for a context that is gone and has
+    // nothing stored. With no publication remote, so with no remote
+    // deletion: a cleanup that holds its reservation for one keeps every
+    // refresh row from beginning while it is stopped, its exit's included.
+    let f = Fixture::new();
+    let req = f.request();
+    cancel_at(&f, &req, FailurePoint::BeforeBranchDeletion);
+    let called = call(&f, &req, FakeIo::default(), (true, false));
+    let ended = cleanup(&called.0, PromotionCleanupPending::Cancelled)
+        && !f.context.workdir().unwrap().exists();
+    check(
+        &mut wrong,
+        "a cancel once the worktree is removed",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    let ended = finished(&called.0);
+    check(&mut wrong, "its retry", &f, &req, called, ended, both);
+
+    // A replay of a finished promotion while the primary is owed an
+    // indexing: it indexes the primary, and marks nothing for the context
+    // it removed.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    assert!(finished(&called.0), "{:?}", called.0);
+    mark_contexts_dirty(
+        &f.service.registry_path,
+        f.root.path(),
+        &[discovery::ContextKey::Primary],
+        RepositoryOperation::RepositorySnapshot,
+    )
+    .unwrap();
+    let called = call(&f, &req, FakeIo::default(), (false, false));
+    let ended = finished(&called.0);
+    check(
+        &mut wrong,
+        "a replay with the primary owed",
+        &f,
+        &req,
+        called,
+        ended,
+        both,
+    );
+
+    // Abandon, with nothing stored for the context its child changed: the
+    // child's mark could only mark the repository behind, and the exit
+    // indexes the context, which is there. Only a whole refresh clears that
+    // mark, so what is checked is the context's own rows.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    f.db()
+        .execute_batch(&format!(
+            "PRAGMA foreign_keys=ON; DELETE FROM contexts WHERE item_id='{ITEM}'"
+        ))
+        .unwrap();
+    let mutating = MutatingChild {
+        inner: FakeIo::default(),
+        new_path: true,
+        once: false,
+    };
+    let (result, begun, scans) = call(&f, &req, mutating, (true, false));
+    let exit = "abandon, the child's context unstored";
+    if !matches!(result, Err(DocumentPromotionError::ReconfirmationRequired)) {
+        wrong.push(format!("{exit}: ended as {result:?}"));
+    }
+    if scans != 0 {
+        wrong.push(format!("{exit}: {scans} whole-repository observations"));
+    }
+    let owing = format!("[\"{ITEM}\"]");
+    if !matches!(
+        begun.as_slice(),
+        [(_, _, Some(owed), state)] if *owed == owing && state == "completed"
+    ) {
+        wrong.push(format!("{exit}: index steps {begun:?}"));
+    }
+    let stored: Vec<i64> = f
+        .db()
+        .prepare("SELECT dirty FROM contexts WHERE item_id = ?1")
+        .unwrap()
+        .query_map([ITEM], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    if stored != [0] {
+        wrong.push(format!("{exit}: the context's rows are {stored:?}"));
+    }
+
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// An exit whose one index step does not complete, because it failed or
+/// because a context it observed moved before it was stored
+/// (`RetryRequired`), closes the refresh row it began under its fresh ID,
+/// as folder create's step and an own-ID child's do: nothing would take
+/// that row up, and with the whole repository's scope it would refuse
+/// every refresh, poll and write, and the next exit's step. Its contexts
+/// stay marked, so the exit answers index pending, and a later refresh,
+/// or the same request sent again (R-7), indexes them.
+#[test]
+fn a_failed_exit_index_step_leaves_no_row_in_the_way() {
+    let mut wrong = Vec::new();
+    for (case, failing, then_retry) in [
+        ("a failed step, then a refresh", true, false),
+        ("a failed step, then its retry", true, true),
+        ("a step left dirty, then a refresh", false, false),
+        ("a step left dirty, then its retry", false, true),
+    ] {
+        let f = Fixture::new();
+        let req = f.request();
+        let before = refresh_rows(&f)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<std::collections::BTreeSet<_>>();
+        let failing_service = failing.then(|| {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeIndexTransactionCommit,
+            )
+            .unwrap()
+        });
+        if !failing {
+            // The primary moves once the step has observed it and before it
+            // stores it: the step leaves it dirty and its row at `retry`.
+            let doc = f.root.path().join(DOC);
+            f.service.set_observation_hook_for_testing(move || {
+                let mut text = fs::read_to_string(&doc).unwrap();
+                text.push_str("a person's line\n");
+                fs::write(&doc, text).unwrap();
+            });
+        }
+        let service = failing_service.as_ref().unwrap_or(&f.service);
+        match run::promote_with_io(service, req.clone(), &mut FakeIo::default()) {
+            Ok(DocumentPromotionResult::IndexPending(p))
+                if p.authoritative.cleanup() == PromotionCleanup::Complete => {}
+            other => wrong.push(format!("{case}: ended as {other:?}")),
+        }
+        let left = refresh_rows(&f)
+            .into_iter()
+            .filter(|row| !before.contains(&row.0) && row.3 != "completed")
+            .collect::<Vec<_>>();
+        if !left.is_empty() {
+            wrong.push(format!("{case}: rows left pending: {left:?}"));
+        }
+        if f.service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!(
+                "{case}: read as indexed while its contexts are owed"
+            ));
+        }
+        if then_retry {
+            match f.run(req) {
+                Ok(DocumentPromotionResult::Complete(o))
+                    if o.cleanup() == PromotionCleanup::Complete => {}
+                other => wrong.push(format!("{case}: its retry: {other:?}")),
+            }
+        } else {
+            let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+            });
+            if !matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })) {
+                wrong.push(format!("{case}: a refresh: {refreshed:?}"));
+            }
+        }
+        if !f
+            .service
+            .lifecycle_indexed(f.root.path(), &ITEM.parse().unwrap())
+        {
+            wrong.push(format!("{case}: its contexts are owed still"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+// --- Task 22b: P-1's cleanup checks and decision 34's wait ----------------
+
+/// What a person leaves in a context's worktree, which its cleanup keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dirt {
+    /// A tracked file edited.
+    Tracked,
+    /// A file Git does not track.
+    Untracked,
+    /// A commit of the person's: the worktree's HEAD moved.
+    Moved,
+    /// The worktree locked.
+    Locked,
+    /// A tracked file edited under an assume-unchanged index entry, which
+    /// no status shows.
+    Hidden,
+    /// A tracked file removed.
+    Removed,
+    /// A repository of its own in an ignored directory: commits only it may
+    /// hold.
+    NestedRepository,
+    /// An ignored directory that cannot be read.
+    Unreadable,
+    /// The worktree removed with its registration.
+    Gone,
+    /// The worktree's directory removed, its registration kept.
+    HalfGone,
+    /// The worktree's `.git` file taken away, its directory and its
+    /// registration kept.
+    GitLost,
+}
+
+/// The context worktree of the fixture at `root`.
+fn worktree_of(root: &std::path::Path) -> PathBuf {
+    root.join(".manyhands/worktrees").join(ITEM)
+}
+
+/// Where `Dirt::GitLost` keeps the context worktree's `.git` file of the
+/// fixture at `root`: in the repository's own directory, out of the way.
+fn lost_git_of(root: &std::path::Path) -> PathBuf {
+    git2::Repository::open(root)
+        .unwrap()
+        .path()
+        .join("lost-worktree-git")
+}
+
+/// Leaves `dirt` in the context worktree of the fixture at `root`.
+fn make_dirt(root: &std::path::Path, dirt: Dirt) {
+    let worktree = worktree_of(root);
+    let linked = git2::Repository::open(&worktree).unwrap();
+    let exclude = |pattern: &str| {
+        let path = git2::Repository::open(root)
+            .unwrap()
+            .path()
+            .join("info/exclude");
+        let mut text = fs::read_to_string(&path).unwrap_or_default();
+        text.push_str(&format!("\n{pattern}\n"));
+        fs::write(path, text).unwrap();
+    };
+    match dirt {
+        Dirt::Tracked => write(&linked, DOC, "a person's edit\n"),
+        Dirt::Untracked => write(&linked, "untracked", "keep\n"),
+        Dirt::Moved => {
+            write(&linked, "moved", "a person's commit\n");
+            commit(&linked);
+        }
+        Dirt::Locked => git2::Repository::open(root)
+            .unwrap()
+            .find_worktree(ITEM)
+            .unwrap()
+            .lock(Some("a person's lock"))
+            .unwrap(),
+        Dirt::Hidden => {
+            let set = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args(["update-index", "--assume-unchanged", "--", DOC])
+                .output()
+                .unwrap();
+            assert!(set.status.success(), "fixture index flag setup");
+            write(&linked, DOC, "a hidden edit\n");
+            assert!(linked.statuses(None).unwrap().is_empty());
+        }
+        Dirt::Removed => fs::remove_file(worktree.join(DOC)).unwrap(),
+        Dirt::NestedRepository => {
+            exclude("vendor/");
+            fs::create_dir_all(worktree.join("vendor")).unwrap();
+            git2::Repository::init(worktree.join("vendor/clone")).unwrap();
+        }
+        Dirt::Gone => {
+            fs::remove_dir_all(&worktree).unwrap();
+            fs::remove_dir_all(
+                git2::Repository::open(root)
+                    .unwrap()
+                    .path()
+                    .join("worktrees")
+                    .join(ITEM),
+            )
+            .unwrap();
+        }
+        Dirt::HalfGone => fs::remove_dir_all(&worktree).unwrap(),
+        Dirt::GitLost => fs::rename(worktree.join(".git"), lost_git_of(root)).unwrap(),
+        Dirt::Unreadable => {
+            exclude("target/");
+            let closed = worktree.join("target/closed");
+            fs::create_dir_all(&closed).unwrap();
+            fs::write(closed.join("x"), b"ignored").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+            }
+        }
+    }
+}
+
+/// Takes `dirt` back out of the context worktree at `root`, as the person
+/// would, so that the cleanup can go on.
+fn clear_dirt(root: &std::path::Path, dirt: Dirt) {
+    let worktree = worktree_of(root);
+    match dirt {
+        Dirt::Tracked | Dirt::Removed => git2::Repository::open(&worktree)
+            .unwrap()
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap(),
+        Dirt::Untracked => fs::remove_file(worktree.join("untracked")).unwrap(),
+        Dirt::Locked => git2::Repository::open(root)
+            .unwrap()
+            .find_worktree(ITEM)
+            .unwrap()
+            .unlock()
+            .unwrap(),
+        Dirt::NestedRepository => fs::remove_dir_all(worktree.join("vendor")).unwrap(),
+        Dirt::GitLost => fs::rename(lost_git_of(root), worktree.join(".git")).unwrap(),
+        Dirt::Unreadable => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    worktree.join("target/closed"),
+                    fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            fs::remove_dir_all(worktree.join("target")).unwrap();
+        }
+        Dirt::Moved | Dirt::Hidden | Dirt::Gone | Dirt::HalfGone => {
+            unreachable!("not cleared by these tests")
+        }
+    }
+}
+
+/// The context worktree's files, or an empty image once it is gone.
+fn worktree_image(root: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let worktree = worktree_of(root);
+    if worktree.exists() {
+        directory_image(&worktree)
+    } else {
+        BTreeMap::new()
+    }
+}
+
+/// How many remote rows are under `operation`.
+fn remote_rows(f: &Fixture, operation: OperationId) -> i64 {
+    f.db()
+        .query_row(
+            "SELECT count(*) FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// P-1 (design, Phase 3, "Cleanup checks"): the
+/// full check runs inside the worktree's removal; just before the remote
+/// delete only a cheap check of the worktree's head and status runs, so a
+/// dirty worktree still stops the delete. When a remote delete is due the
+/// full check is asked before the cleanup reserves too (R-SDD-73), so dirt
+/// that was there by then stops it with nothing reserved and its exit
+/// indexes as before, and the cheap one again just before the delete, for
+/// dirt that came after the reservation. Whatever stops it, the worktree is
+/// kept as the person left it, and the delete is not sent. No check walks
+/// the item's tree but through the service's cache: the whole cleanup walks
+/// it once at most.
+#[test]
+fn a_dirty_worktree_stops_the_remote_delete() {
+    let mut wrong = Vec::new();
+    let walks = crate::repository::context_tree_walks_for_testing;
+    for at in [
+        FailurePoint::AfterPublication,
+        FailurePoint::BeforeRemoteDeletion,
+    ] {
+        for dirt in [
+            Dirt::Tracked,
+            Dirt::Untracked,
+            Dirt::Moved,
+            Dirt::Locked,
+            Dirt::Hidden,
+        ] {
+            let case = format!("{dirt:?} at {at:?}");
+            let f = Fixture::new();
+            f.remote();
+            let req = f.request();
+            let root = f.root.path().to_owned();
+            let left = Rc::new(RefCell::new(None));
+            let image = left.clone();
+            hook(&f, move |_, point| {
+                if point == at && image.borrow().is_none() {
+                    make_dirt(&root, dirt);
+                    *image.borrow_mut() = Some(worktree_image(&root));
+                }
+            });
+            let mut io = FakeIo::default();
+            let before = walks();
+            let result = f.run_io(req.clone(), &mut io).unwrap();
+            let walked = walks() - before;
+            HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+            let reserved = remote_rows(&f, req.operation_id);
+            let complete = matches!(result, DocumentPromotionResult::Complete(_));
+            let cleanup = authoritative(result).cleanup();
+            if cleanup
+                != (PromotionCleanup::Pending {
+                    reason: PromotionCleanupPending::ContextChanged,
+                })
+            {
+                wrong.push(format!("{case}: cleanup {cleanup:?}"));
+            }
+            if io.calls.borrow().deletes != 0 {
+                wrong.push(format!("{case}: the remote delete was sent"));
+            }
+            let step = f.stored(req.operation_id).step;
+            if step != record::PromotionStep::Published {
+                wrong.push(format!("{case}: stopped at {step:?}"));
+            }
+            if Some(worktree_image(f.root.path())) != *left.borrow() {
+                wrong.push(format!("{case}: the worktree was not kept"));
+            }
+            if walked > 1 {
+                wrong.push(format!("{case}: the item's tree walked {walked} times"));
+            }
+            // Before the reservation: nothing reserved, and the exit's index
+            // step runs. After it: the cleanup's reservation is held.
+            let expected = if at == FailurePoint::AfterPublication {
+                if !complete {
+                    wrong.push(format!("{case}: its exit did not index"));
+                }
+                0
+            } else {
+                1
+            };
+            if reserved != expected {
+                wrong.push(format!("{case}: {reserved} cleanup reservations"));
+            }
+        }
+    }
+    // A clean worktree: the delete is sent and the cleanup finishes, its
+    // tree walked once at most.
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let before = walks();
+    let result = outcome(f.run_io(req, &mut io).unwrap());
+    let walked = walks() - before;
+    if result.cleanup() != PromotionCleanup::Complete || io.calls.borrow().deletes != 1 {
+        wrong.push(format!(
+            "clean: cleanup {:?}, {} deletes",
+            result.cleanup(),
+            io.calls.borrow().deletes
+        ));
+    }
+    if walked > 1 {
+        wrong.push(format!("clean: the item's tree walked {walked} times"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// P-1's first changed outcome (design, Phase 3), which only a race reaches
+/// (R-SDD-73): what only the full check finds, a repository nested in an
+/// ignored directory or a directory that cannot be read, stops the close
+/// after the remote branch is deleted when it appears after the full check
+/// before the cleanup's reservation, between the two checks or after the
+/// delete, since the check of the head and status just before the delete
+/// cannot see one. The work is merged and the remote branch is gone; the
+/// cleanup is pending, `context_changed`, and recorded at
+/// `worktree_removing` (P-1's second changed outcome); what was there is
+/// kept. Once it is gone the same request finishes, and deletes nothing
+/// more. One that was there already is found by the full check before the
+/// reservation, as before P-1: the close stops with nothing reserved and
+/// the remote branch kept, its exit indexes, and the same request finishes
+/// once it is gone, deleting the remote branch then.
+#[test]
+fn a_nested_repository_created_after_the_remote_delete_stops_the_removal_at_worktree_removing() {
+    let mut wrong = Vec::new();
+    // (the case, where what only the full check finds is made, what it is,
+    // whether it is there before the cleanup's first check)
+    let rows = [
+        (
+            "a nested repository made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            Dirt::NestedRepository,
+            false,
+        ),
+        (
+            "an unreadable directory made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            Dirt::Unreadable,
+            false,
+        ),
+        (
+            "a nested repository made between the two checks",
+            FailurePoint::BeforeRemoteDeletion,
+            Dirt::NestedRepository,
+            false,
+        ),
+        (
+            "a nested repository there before the first check",
+            FailurePoint::AfterPublication,
+            Dirt::NestedRepository,
+            true,
+        ),
+        (
+            "an unreadable directory there before the first check",
+            FailurePoint::AfterPublication,
+            Dirt::Unreadable,
+            true,
+        ),
+    ];
+    for (case, at, dirt, before) in rows {
+        if cfg!(not(unix)) && dirt == Dirt::Unreadable {
+            continue;
+        }
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let mut made = false;
+        hook(&f, move |_, point| {
+            if point == at && !made {
+                made = true;
+                make_dirt(&root, dirt);
+            }
+        });
+        let mut io = FakeIo::default();
+        // A stop after the delete holds the cleanup's reservation, which
+        // refuses its exit's own index step: the answer is index pending.
+        // One before the reservation holds nothing, and its exit indexes.
+        let stopped = match (before, f.run_io(req.clone(), &mut io).unwrap()) {
+            (false, DocumentPromotionResult::IndexPending(pending)) => pending.authoritative,
+            (true, DocumentPromotionResult::Complete(o)) => o,
+            (_, other) => {
+                wrong.push(format!("{case}: its exit's index step: {other:?}"));
+                authoritative(other)
+            }
+        };
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        if stopped.cleanup()
+            != (PromotionCleanup::Pending {
+                reason: PromotionCleanupPending::ContextChanged,
+            })
+        {
+            wrong.push(format!("{case}: cleanup {:?}", stopped.cleanup()));
+        }
+        let merged = match stopped.integration() {
+            PromotionIntegration::Merged { oid } => oid,
+            other => {
+                wrong.push(format!("{case}: integration {other:?}"));
+                continue;
+            }
+        };
+        if f.primary() != merged {
+            wrong.push(format!("{case}: the primary does not hold the work"));
+        }
+        let (deletes, at_step, reserved) = if before {
+            (0, record::PromotionStep::Published, 0)
+        } else {
+            (1, record::PromotionStep::WorktreeRemoving, 1)
+        };
+        if io.calls.borrow().deletes != deletes {
+            wrong.push(format!(
+                "{case}: {} remote deletes",
+                io.calls.borrow().deletes
+            ));
+        }
+        let step = f.stored(req.operation_id).step;
+        if step != at_step {
+            wrong.push(format!("{case}: stopped at {step:?}"));
+        }
+        if remote_rows(&f, req.operation_id) != reserved {
+            wrong.push(format!(
+                "{case}: {} cleanup reservations",
+                remote_rows(&f, req.operation_id)
+            ));
+        }
+        let kept = match dirt {
+            Dirt::NestedRepository => worktree_of(f.root.path()).join("vendor/clone/.git"),
+            _ => worktree_of(f.root.path()).join("target/closed"),
+        };
+        if !kept.exists() {
+            wrong.push(format!("{case}: what was nested is gone"));
+        }
+        clear_dirt(f.root.path(), dirt);
+        // The retry ends the reservation before its exit's index step.
+        let finished = match f.run_io(req, &mut io).unwrap() {
+            DocumentPromotionResult::Complete(o) => o,
+            other => {
+                wrong.push(format!("{case}: its retry did not index: {other:?}"));
+                authoritative(other)
+            }
+        };
+        if finished.cleanup() != PromotionCleanup::Complete {
+            wrong.push(format!(
+                "{case}: its retry: cleanup {:?}",
+                finished.cleanup()
+            ));
+        } else {
+            f.assert_cleaned();
+        }
+        // One remote delete in all: the stop's, or else the retry's.
+        if io.calls.borrow().deletes != 1 {
+            wrong.push(format!(
+                "{case}: {} remote deletes with its retry",
+                io.calls.borrow().deletes
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A wait that passes no time: each sleep returns at once.
+struct NoSleep;
+impl Sleeper for NoSleep {
+    fn sleep(&self, _: std::time::Duration) {}
+}
+
+/// The remote row under `operation`, every column as text.
+fn remote_row_image(f: &Fixture, operation: OperationId) -> Vec<String> {
+    let db = f.db();
+    let mut query = db
+        .prepare("SELECT * FROM remote_operation_records WHERE operation_ulid = ?1")
+        .unwrap();
+    let columns = query.column_count();
+    query
+        .query_row([operation.to_string()], |row| {
+            (0..columns)
+                .map(|i| {
+                    row.get::<_, rusqlite::types::Value>(i)
+                        .map(|v| format!("{v:?}"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+}
+
+/// What a stop after the remote delete holds (P-1's first outcome, which
+/// only a race reaches, R-SDD-73): the cleanup's reservation, which it keeps
+/// until the same request finishes the cleanup. While it holds it, with the
+/// process that stopped gone: another item's save is refused at once,
+/// `recovery_required`, naming the close's operation, judged not live; an
+/// `index refresh` is refused at once, `recovery_required`, naming it with
+/// no judgment; a `poll once` is `busy`. None of them changes the
+/// reservation. Once the same request has finished, the save and the
+/// refresh go on. A nested repository that was there before the cleanup's
+/// first check stops it before the reservation, and that stop holds none of
+/// them: the save and the refresh go on while it stands.
+#[test]
+fn a_stop_after_the_remote_delete_holds_the_repository_until_it_finishes() {
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+    let mut wrong = Vec::new();
+    for (case, at, held) in [
+        (
+            "made after the remote delete",
+            FailurePoint::AfterRemoteDeletion,
+            true,
+        ),
+        (
+            "there before the first check",
+            FailurePoint::AfterPublication,
+            false,
+        ),
+    ] {
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let mut made = false;
+        hook(&f, move |_, point| {
+            if point == at && !made {
+                made = true;
+                make_dirt(&root, Dirt::NestedRepository);
+            }
+        });
+        let mut io = FakeIo::default();
+        let stopped = f.run_io(req.clone(), &mut io).unwrap();
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        let (indexed, step) = if held {
+            (false, record::PromotionStep::WorktreeRemoving)
+        } else {
+            (true, record::PromotionStep::Published)
+        };
+        if matches!(stopped, DocumentPromotionResult::Complete(_)) != indexed
+            || f.stored(req.operation_id).step != step
+            || remote_rows(&f, req.operation_id) != i64::from(held)
+        {
+            wrong.push(format!(
+                "{case}: stopped as {stopped:?} at {:?}",
+                f.stored(req.operation_id).step
+            ));
+            continue;
+        }
+        let reservation = held.then(|| remote_row_image(&f, req.operation_id));
+        // The calls after it, made once the process that stopped is gone: no
+        // process of this host but one that is not this one is there.
+        let after = RepositoryService::open_at(f.data.path())
+            .unwrap()
+            .with_sleeper_for_testing(std::sync::Arc::new(NoSleep))
+            .with_wait_policy_for_testing(WAIT_POLICY)
+            .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
+        let save = |service: &RepositoryService| {
+            service.save_document(SaveDocumentRequest {
+                target: AuthoringTarget {
+                    root: f.root.path().into(),
+                    kind: AuthoringKind::Document,
+                    item_id: OTHER.parse().unwrap(),
+                    intent: ContextIntent::Create,
+                    operation_id: OperationId::new(),
+                },
+                source_path: None,
+                destination_path: "docs/other.md".into(),
+                draft: DocumentDraft {
+                    title: "another document".into(),
+                    body: "another body\n".into(),
+                },
+                expected_source: None,
+                expected_destination: ExpectedPathObservation::Missing,
+            })
+        };
+        let refresh = |service: &RepositoryService| {
+            service.refresh_repository(RefreshRepositoryRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+            })
+        };
+        // Refused, naming the close's operation, judged as `live` says.
+        let names_the_close = |error: &RepositoryError, live: Option<bool>| {
+            error.kind == RepositoryErrorKind::RecoveryRequired
+                && error
+                    .blocker()
+                    .is_some_and(|b| b.operation_id == req.operation_id && b.live == live)
+        };
+        if !held {
+            if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
+                wrong.push(format!("{case}: another item's save"));
+            }
+            if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
+                wrong.push(format!("{case}: an index refresh"));
+            }
+            clear_dirt(f.root.path(), Dirt::NestedRepository);
+            match f.run_io(req, &mut io) {
+                Ok(DocumentPromotionResult::Complete(o))
+                    if o.cleanup() == PromotionCleanup::Complete => {}
+                other => wrong.push(format!("{case}: its retry: {other:?}")),
+            }
+            continue;
+        }
+        match save(&after) {
+            Err(error) if names_the_close(&error, Some(false)) => (),
+            Err(error) => wrong.push(format!("{case}: another item's save: {error:?}")),
+            Ok(_) => wrong.push(format!("{case}: another item's save went on")),
+        }
+        match refresh(&after) {
+            Err(error) if names_the_close(&error, None) => (),
+            other => wrong.push(format!("{case}: an index refresh: {other:?}")),
+        }
+        let polled = after.poll_publication_remote(
+            PollPublicationRemoteRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new(),
+                invocation: RemotePollInvocation::Explicit,
+                approval: None,
+                restart: false,
+            },
+            &mut SessionCredentials::new(NoCredentials),
+        );
+        if !matches!(polled, Err(RemotePollError::Busy)) {
+            wrong.push(format!("{case}: a poll once: {polled:?}"));
+        }
+        if Some(remote_row_image(&f, req.operation_id)) != reservation {
+            wrong.push(format!("{case}: the cleanup's reservation changed"));
+        }
+        if f.stored(req.operation_id).step != record::PromotionStep::WorktreeRemoving {
+            wrong.push(format!("{case}: the close moved on"));
+        }
+        // The same request finishes once what was nested is gone, and lets
+        // the reservation go: the save and the refresh go on.
+        clear_dirt(f.root.path(), Dirt::NestedRepository);
+        match f.run_io(req.clone(), &mut io) {
+            Ok(DocumentPromotionResult::Complete(o))
+                if o.cleanup() == PromotionCleanup::Complete => {}
+            other => wrong.push(format!("{case}: its retry: {other:?}")),
+        }
+        if !matches!(save(&after), Ok(SaveOutcome::Saved { .. })) {
+            wrong.push(format!("{case}: another item's save after the retry"));
+        }
+        if !matches!(refresh(&after), Ok(RefreshOutcome::Refreshed { .. })) {
+            wrong.push(format!("{case}: an index refresh after the retry"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// What follows a refused removal's stop, in
+/// `a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable`.
+#[derive(Clone, Copy, Debug)]
+enum Then {
+    /// The person takes back out what they left, and the same request
+    /// finishes.
+    ClearAndRetry,
+    /// The person puts back what they took, and a new request supersedes
+    /// the stop and finishes, as a `context_changed` stop lets it.
+    ClearAndSupersede,
+    /// The same request resumes at `worktree_removing` under the removal's
+    /// own rules: a worktree gone with its registration is a removal that
+    /// finished, and the cleanup completes.
+    RetryCompletes,
+    /// The same, for a worktree half gone: a removal that may have begun,
+    /// `recovery_required`.
+    RetryRecoveryRequired,
+}
+
+/// P-1's second changed outcome (design, Phase 3): with no check before the
+/// removal of the worktree but the full one inside it, a close records
+/// `worktree_removing` before that check refuses. In the attempt that
+/// records it no prune has run, so the full check answers first, before the
+/// removal's own reading of a worktree that is gone or half gone, and
+/// whatever it finds is the person's: the cleanup is pending,
+/// `context_changed`, as the old check before the removal answered
+/// (R-SDD-71), and what the person left is kept. So is a worktree's `.git`
+/// lost in that attempt once the step is recorded, before the removal (the
+/// window E-80 no longer reaches): `context_changed`, which a new request
+/// supersedes once it is back. A resume of the same request at
+/// `worktree_removing` keeps the removal's own rules, and finishes once
+/// what was left is gone.
+#[test]
+fn a_refused_removal_leaves_the_close_at_worktree_removing_and_resumable() {
+    let mut wrong = Vec::new();
+    // (what the person leaves, what follows, where they leave it)
+    let rows = [
+        (
+            Dirt::Untracked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Tracked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Locked,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::NestedRepository,
+            Then::ClearAndRetry,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Removed,
+            Then::ClearAndSupersede,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::Gone,
+            Then::RetryCompletes,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::HalfGone,
+            Then::RetryRecoveryRequired,
+            FailurePoint::AfterPublication,
+        ),
+        (
+            Dirt::GitLost,
+            Then::ClearAndSupersede,
+            FailurePoint::DuringWorktreeRemoval,
+        ),
+    ];
+    for (dirt, then, at) in rows {
+        let case = format!("{dirt:?} at {at:?}");
+        let f = Fixture::new();
+        let req = f.request();
+        let root = f.root.path().to_owned();
+        let left = Rc::new(RefCell::new(None));
+        let image = left.clone();
+        hook(&f, move |_, point| {
+            if point == at && image.borrow().is_none() {
+                make_dirt(&root, dirt);
+                *image.borrow_mut() = Some(worktree_image(&root));
+            }
+        });
+        let stopped = authoritative(f.run(req.clone()).unwrap());
+        HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        let changed = PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::ContextChanged,
+        };
+        if stopped.cleanup() != changed {
+            wrong.push(format!("{case}: cleanup {:?}", stopped.cleanup()));
+        }
+        let step = f.stored(req.operation_id).step;
+        if step != record::PromotionStep::WorktreeRemoving {
+            wrong.push(format!("{case}: stopped at {step:?}"));
+        }
+        if Some(worktree_image(f.root.path())) != *left.borrow() {
+            wrong.push(format!("{case}: the worktree was not kept"));
+        }
+        if f.repo
+            .find_reference(&format!("refs/heads/manyhands/document/{ITEM}"))
+            .is_err()
+        {
+            wrong.push(format!("{case}: the context's branch is gone"));
+        }
+        let finished = match then {
+            Then::ClearAndRetry => {
+                clear_dirt(f.root.path(), dirt);
+                authoritative(f.run(req).unwrap())
+            }
+            Then::ClearAndSupersede => {
+                clear_dirt(f.root.path(), dirt);
+                let finished = match f.run(f.request()) {
+                    Ok(result) => authoritative(result),
+                    Err(error) => {
+                        wrong.push(format!("{case}: a new request: {error:?}"));
+                        continue;
+                    }
+                };
+                let step = f.stored(req.operation_id).step;
+                if step != record::PromotionStep::Superseded {
+                    wrong.push(format!("{case}: the stop is {step:?}, not superseded"));
+                }
+                finished
+            }
+            Then::RetryCompletes => authoritative(f.run(req).unwrap()),
+            Then::RetryRecoveryRequired => {
+                let resumed = authoritative(f.run(req.clone()).unwrap());
+                let step = f.stored(req.operation_id).step;
+                if resumed.cleanup()
+                    != (PromotionCleanup::Pending {
+                        reason: PromotionCleanupPending::RecoveryRequired,
+                    })
+                    || step != record::PromotionStep::WorktreeRemoving
+                {
+                    wrong.push(format!(
+                        "{case}: its resume: cleanup {:?} at {step:?}",
+                        resumed.cleanup()
+                    ));
+                }
+                continue;
+            }
+        };
+        if finished.cleanup() != PromotionCleanup::Complete {
+            wrong.push(format!(
+                "{case}: then {then:?}: cleanup {:?}",
+                finished.cleanup()
+            ));
+        } else {
+            f.assert_cleaned();
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The process of this host that a live hand-off's holder is, and one that
+/// is gone (`OnlyTheHandOff`).
+const HAND_OFF_LIVE_PID: u32 = 4242;
+const HAND_OFF_GONE_PID: u32 = 4243;
+
+/// A process table that holds only `HAND_OFF_LIVE_PID`.
+struct OnlyTheHandOff;
+impl ProcessProbe for OnlyTheHandOff {
+    fn exists(&self, pid: u32) -> bool {
+        pid == HAND_OFF_LIVE_PID
+    }
+}
+
+/// How a synchronization's hand-off stands while a lifecycle waits behind
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum HandOff {
+    /// Its holder works, and it finishes after the waiting call's second
+    /// sleep.
+    Released,
+    /// Its holder works until the wait is spent.
+    Live,
+    /// Its holder is gone.
+    Stale,
+}
+
+/// The sleeps of a wait (`WAIT_POLICY`) that the hand-off outlives.
+pub(in super::super) const SPENT_WAIT: u64 = 5;
+
+/// The wait a lifecycle behind a hand-off is given in these tests: five
+/// looks, fifty milliseconds apart.
+const WAIT_POLICY: WaitPolicy = WaitPolicy {
+    budget: std::time::Duration::from_millis(250),
+    poll: std::time::Duration::from_millis(50),
+};
+
+/// The index hand-off (P-4) of a synchronization of `of` under way in the
+/// registry at `data`, under `id`, as its row stands while it indexes: a
+/// `refresh` of the target P-4 writes, owing only its hand-off, its
+/// heartbeat beaten at `at`, by a process of this host that `holder` says
+/// is there or gone.
+pub(in super::super) fn begin_hand_off(
+    data: &std::path::Path,
+    id: OperationId,
+    of: &SynchronizationTarget,
+    oid: Oid,
+    holder: HandOff,
+    at: i64,
+) {
+    let (item, owed) = match of {
+        SynchronizationTarget::Primary => (None, discovery::ContextKey::Primary),
+        SynchronizationTarget::Context { item_id, .. } => (
+            Some(item_id.to_string()),
+            discovery::ContextKey::Item(item_id.clone()),
+        ),
+    };
+    let pid = if holder == HandOff::Stale {
+        HAND_OFF_GONE_PID
+    } else {
+        HAND_OFF_LIVE_PID
+    };
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .execute(
+            "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,owed_contexts,state,completed_step,observed_at,index_owner_epoch,host,pid)
+             SELECT id,root_path,?1,'refresh',?2,?3,?4,'indexing','authoritative_observed',?5,1,?6,?7 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                crate::repository::recovery::synchronization_index_target(of, oid),
+                item,
+                crate::repository::encode_owed_contexts(&[owed]),
+                at,
+                this_host(),
+                pid,
+            ],
+        )
+        .unwrap();
+}
+
+/// Ends the hand-off `id` in the registry at `data`, as its own call does.
+pub(in super::super) fn end_hand_off(data: &std::path::Path, id: OperationId) {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .execute(
+            "UPDATE operation_records SET state='completed' WHERE operation_ulid=?1",
+            [id.to_string()],
+        )
+        .unwrap();
+}
+
+/// The time of a call waiting behind a hand-off: a clock that moves only
+/// when the call sleeps on it, by the sleep's length, and that ends the
+/// hand-off at the second sleep when it is to be `Released`, letting go of
+/// any registry cache lock the test holds as well.
+pub(in super::super) struct HandOffTime {
+    at: time::OffsetDateTime,
+    nanos: std::sync::atomic::AtomicU64,
+    slept: std::sync::atomic::AtomicU64,
+    data: PathBuf,
+    hand_off: OperationId,
+    holder: HandOff,
+}
+impl HandOffTime {
+    /// How many times the waiting call slept.
+    pub(in super::super) fn slept(&self) -> u64 {
+        self.slept.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl Clock for HandOffTime {
+    fn now(&self) -> time::OffsetDateTime {
+        self.at
+            + time::Duration::nanoseconds(
+                i64::try_from(self.nanos.load(std::sync::atomic::Ordering::SeqCst)).unwrap(),
+            )
+    }
+}
+impl Sleeper for HandOffTime {
+    fn sleep(&self, duration: std::time::Duration) {
+        use std::sync::atomic::Ordering;
+        self.nanos.fetch_add(
+            u64::try_from(duration.as_nanos()).unwrap(),
+            Ordering::SeqCst,
+        );
+        let slept = self.slept.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.holder == HandOff::Released && slept == 2 {
+            end_hand_off(&self.data, self.hand_off);
+            state::release_registries_for_testing();
+        }
+    }
+}
+
+/// A service over the registry at `data` for a call behind the hand-off
+/// `hand_off`, which stands as `holder` says: its clock and sleeps are a
+/// `HandOffTime`, its processes `OnlyTheHandOff`, and it waits as the
+/// default one does for five looks. Returns it with its time, and the time
+/// the hand-off's heartbeat is fresh at.
+pub(in super::super) fn behind_hand_off(
+    data: &std::path::Path,
+    hand_off: OperationId,
+    holder: HandOff,
+) -> (RepositoryService, std::sync::Arc<HandOffTime>, i64) {
+    let now = time::OffsetDateTime::now_utc();
+    let at = now - time::Duration::nanoseconds(i64::from(now.nanosecond()));
+    let time = std::sync::Arc::new(HandOffTime {
+        at,
+        nanos: Default::default(),
+        slept: Default::default(),
+        data: data.to_owned(),
+        hand_off,
+        holder,
+    });
+    let service = RepositoryService::open_at(data)
+        .unwrap()
+        .with_clock_for_testing(time.clone())
+        .with_sleeper_for_testing(time.clone())
+        .with_wait_policy_for_testing(WAIT_POLICY)
+        .with_process_probe_for_testing(std::sync::Arc::new(OnlyTheHandOff));
+    (service, time, at.unix_timestamp())
+}
+
+/// Where a lifecycle meets a synchronization's hand-off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum Meets {
+    /// Its own item's, under way when it starts: at its context child.
+    Item,
+    /// The primary's, under way when it starts: at its primary child.
+    Primary,
+    /// The primary's, begun once its children are done: at its cleanup's
+    /// reservation.
+    PrimaryAtCleanup,
+}
+
+/// Whether `error`, the repository error a lifecycle's child stopped on, is
+/// `kind`, naming the hand-off `id` judged `live`.
+pub(in super::super) fn names_hand_off(
+    error: &SynchronizationError,
+    kind: RepositoryErrorKind,
+    id: OperationId,
+    live: bool,
+) -> bool {
+    matches!(
+        error,
+        SynchronizationError::Repository(error)
+            if error.kind == kind
+                && error.blocker().map(|blocker| (blocker.operation_id, blocker.live))
+                    == Some((id, Some(live)))
+    )
+}
+
+/// Decision 34 (design; it supersedes R-SDD-46): a promotion behind its own
+/// item's live synchronization hand-off, or the primary's, waits as the
+/// other per-item writers wait (vh-bhepg, `RepositoryService::reserving`),
+/// holding nothing, and once the hand-off ends within the wait goes on as it
+/// would have had the hand-off been gone. Still live when the wait is spent,
+/// it answers `busy`, naming it; a stale hand-off is answered at once,
+/// `recovery_required`. It meets its item's hand-off at its context child,
+/// the primary's at its primary child, and one begun after its children at
+/// its cleanup's reservation, where the wait's end has no category of its
+/// own and the cleanup stays pending as when it is refused. The same request
+/// finishes once the hand-off is done. The tests' clock and sleeps are their
+/// own.
+#[test]
+fn a_close_or_promotion_behind_a_live_hand_off_waits() {
+    use HandOff::*;
+    let mut wrong = Vec::new();
+    for meets in [Meets::Item, Meets::Primary, Meets::PrimaryAtCleanup] {
+        for holder in [Released, Live, Stale] {
+            let case = format!("{meets:?}, {holder:?}");
+            let f = Fixture::new();
+            f.remote();
+            let req = f.request();
+            let hand_off = OperationId::new();
+            let (service, time, at) = behind_hand_off(f.data.path(), hand_off, holder);
+            let of = match meets {
+                Meets::Item => SynchronizationTarget::Context {
+                    kind: AuthoringKind::Document,
+                    item_id: ITEM.parse().unwrap(),
+                },
+                Meets::Primary | Meets::PrimaryAtCleanup => SynchronizationTarget::Primary,
+            };
+            let oid = f.primary();
+            if meets == Meets::PrimaryAtCleanup {
+                let data = f.data.path().to_owned();
+                let mut begun = false;
+                hook(&f, move |_, point| {
+                    if point == FailurePoint::AfterPublication && !begun {
+                        begun = true;
+                        begin_hand_off(&data, hand_off, &of, oid, holder, at);
+                    }
+                });
+            } else {
+                begin_hand_off(f.data.path(), hand_off, &of, oid, holder, at);
+            }
+            let mut io = FakeIo::default();
+            let result = run::promote_with_io(&service, req.clone(), &mut io);
+            HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+            let sleeps = match holder {
+                Released => 2,
+                Live => SPENT_WAIT,
+                Stale => 0,
+            };
+            if time.slept() != sleeps {
+                wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+            }
+            let pending = |reason| PromotionCleanup::Pending { reason };
+            let ended = match (meets, holder, &result) {
+                (_, Released, Ok(DocumentPromotionResult::Complete(o))) => {
+                    o.cleanup() == PromotionCleanup::Complete
+                        && matches!(o.publication(), PromotionPublication::Published { .. })
+                        && io.calls.borrow().children.len() == 2
+                        && io.calls.borrow().deletes == 1
+                }
+                (
+                    Meets::Item,
+                    Live | Stale,
+                    Err(DocumentPromotionError::ContextSynchronization(e)),
+                ) => {
+                    let (kind, live) = if holder == Live {
+                        (RepositoryErrorKind::RepositoryBusy, true)
+                    } else {
+                        (RepositoryErrorKind::RecoveryRequired, false)
+                    };
+                    // Nothing was begun on the remote for it.
+                    names_hand_off(e, kind, hand_off, live)
+                        && f.db()
+                            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| {
+                                r.get::<_, i64>(0)
+                            })
+                            .unwrap()
+                            == 0
+                }
+                (Meets::Primary, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    let category = if holder == Live {
+                        PromotionSynchronizationCategory::Busy
+                    } else {
+                        PromotionSynchronizationCategory::RecoveryRequired
+                    };
+                    o.publication()
+                        == PromotionPublication::Pending {
+                            reason: PromotionPublicationPending::Synchronization(category),
+                        }
+                        && o.cleanup() == pending(PromotionCleanupPending::AwaitingPublication)
+                }
+                (Meets::PrimaryAtCleanup, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    matches!(o.publication(), PromotionPublication::Published { .. })
+                        && o.cleanup() == pending(PromotionCleanupPending::RecoveryRequired)
+                        && io.calls.borrow().deletes == 0
+                }
+                _ => false,
+            };
+            if !ended {
+                wrong.push(format!("{case}: ended as {result:?}"));
+            }
+            if holder != Released {
+                end_hand_off(f.data.path(), hand_off);
+                let finished = f.run_io(req, &mut io);
+                if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+                {
+                    wrong.push(format!("{case}: its retry ended as {finished:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Children run by `FakeIo`, whose child of the primary (`primary`) or of
+/// the item finds the registry's cache lock held from the first attempt of
+/// its reservation on (`hold_registry_for_testing`), until the call's time
+/// lets it go or the child returns.
+struct HeldAtReservation {
+    inner: FakeIo,
+    primary: bool,
+}
+impl run::PromotionIo for HeldAtReservation {
+    fn synchronize(
+        &mut self,
+        s: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &record::ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        if (req.target == SynchronizationTarget::Primary) == self.primary {
+            let root = req.root.clone();
+            crate::repository::remote::reservation::set_promotion_reservation_hook(
+                req.operation_id,
+                move || state::hold_registry_for_testing(&root, true),
+            );
+        }
+        let result = self.inner.synchronize(s, req, observer, execution);
+        state::release_registries_for_testing();
+        result
+    }
+    fn delete(
+        &mut self,
+        s: &RepositoryService,
+        req: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        config: &ObservationConfiguration,
+        oid: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner.delete(s, req, plan, owner, config, oid, item)
+    }
+}
+
+/// Decision 34 with R-SDD-70, for what refuses a child's reservation and
+/// names no operation: the registry's cache lock, held while another
+/// operation is at work, which `cache_read_guard` answers `RepositoryBusy`
+/// once its own wait is spent. A new child, one with no row of its own yet,
+/// waits for the operation at work: it goes on once the lock is let go
+/// within the wait, or else answers `busy`. A child that takes up its own
+/// row, a retained one restarted, is answered at once, with no sleep, as a
+/// synchronization that takes up its own row is. The same request finishes
+/// once the lock is let go. The clock and sleeps are the test's.
+///
+/// What the spent wait answers rests on this test's hold, which holds only
+/// the transactions of remote operations (`hold_registry_for_testing`): the
+/// waiting child's look at who is at work still reads the registry, so
+/// `waited_holding` names the operation, live, and the primary child's
+/// publication is `busy`. Under a real exclusive lock that look cannot read
+/// the registry either, and the holder reads as unreadable: the item's
+/// child answers a `busy` that names no operation, and the primary child's
+/// publication answers `recovery_required` (`publication_error`). This
+/// pins the first; both answers are the owner's to accept (R-SDD-70).
+#[test]
+fn a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not() {
+    use HandOff::*;
+    let mut wrong = Vec::new();
+    // (the primary's child or the item's, a restarting child, how the
+    // holder stands)
+    let rows = [
+        (true, false, Released),
+        (true, false, Live),
+        (false, false, Released),
+        (false, false, Live),
+        (true, true, Live),
+        (false, true, Live),
+    ];
+    for (primary, restarting, holder) in rows {
+        let case = format!("primary {primary}, restarting {restarting}, {holder:?}");
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        if restarting {
+            // A first attempt leaves the child retained: reserved, prepared
+            // and interrupted, its row kept for its restart.
+            let mut io = MatrixIo {
+                inner: FakeIo::default(),
+                mode: ChildMode::RetainedInterrupted,
+                primary,
+                injected: false,
+            };
+            let _ = f.run_io(req.clone(), &mut io);
+        }
+        // Another item's hand-off, at work: what the lock's holder is seen
+        // as. It owes only its hand-off, so it is in no child's way itself.
+        let at_work = OperationId::new();
+        let (service, time, at) = behind_hand_off(f.data.path(), at_work, holder);
+        begin_hand_off(
+            f.data.path(),
+            at_work,
+            &SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+            },
+            f.primary(),
+            holder,
+            at,
+        );
+        let mut io = HeldAtReservation {
+            inner: FakeIo::default(),
+            primary,
+        };
+        let result = run::promote_with_io(&service, req.clone(), &mut io);
+        let sleeps = match (restarting, holder) {
+            (true, _) => 0,
+            (false, Released) => 2,
+            _ => SPENT_WAIT,
+        };
+        if time.slept() != sleeps {
+            wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+        }
+        let publication = |category| PromotionPublication::Pending {
+            reason: PromotionPublicationPending::Synchronization(category),
+        };
+        let ended = match (primary, restarting, holder, &result) {
+            (_, false, Released, Ok(DocumentPromotionResult::Complete(o))) => {
+                o.cleanup() == PromotionCleanup::Complete
+                    && matches!(o.publication(), PromotionPublication::Published { .. })
+            }
+            (true, false, Live, Ok(result)) => {
+                authoritative(result.clone()).publication()
+                    == publication(PromotionSynchronizationCategory::Busy)
+            }
+            (false, false, Live, Err(DocumentPromotionError::ContextSynchronization(e))) => {
+                names_hand_off(e, RepositoryErrorKind::RepositoryBusy, at_work, true)
+            }
+            (true, true, _, Ok(result)) => {
+                authoritative(result.clone()).publication()
+                    == publication(PromotionSynchronizationCategory::RecoveryRequired)
+            }
+            (false, true, _, Err(DocumentPromotionError::ContextSynchronization(e))) => matches!(
+                &**e,
+                SynchronizationError::Repository(error)
+                    if error.kind == RepositoryErrorKind::RepositoryBusy
+                        && error.blocker().is_none()
+            ),
+            _ => false,
+        };
+        if !ended {
+            wrong.push(format!("{case}: ended as {result:?}"));
+        }
+        if holder != Released || restarting {
+            end_hand_off(f.data.path(), at_work);
+            let finished = f.run_io(req, &mut FakeIo::default());
+            if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+            {
+                wrong.push(format!("{case}: its retry ended as {finished:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

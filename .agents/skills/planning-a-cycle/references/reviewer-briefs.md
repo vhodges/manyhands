@@ -83,7 +83,7 @@ Your lens: CONTRACT, CONSISTENCY AND COMPLETENESS. Check the documents
 against their authorities and against each other; not against the Rust
 source. Authorities:
 - AGENTS.md (Devenv, native CI after merge, ticket workflow, merge not
-  rebase, ticket closure before merge)
+  rebase, closure through `ticket close`, which performs the merge)
 - docs/Waves/<wave>.md: this Cycle's section (scope, exclusions, exit
   evidence), the neighbouring Cycles' sections, the track rules
 - <governing RFCs, including their dated amendments>

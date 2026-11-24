@@ -7,6 +7,11 @@ cask "manyhands" do
   desc "Local-first, Git-backed project management and documentation"
   homepage "https://github.com/$REPOSITORY"
 
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
   depends_on arch: :arm64
   $MACOS_DEPENDENCY
 
@@ -15,8 +20,17 @@ cask "manyhands" do
 
   caveats <<~EOS
     This personal-tap build is ad-hoc signed, not Developer ID signed or notarized.
-    macOS may block opening it; use macOS's normal approval flow if you trust it.
-    The CLI's libraries and disclosures remain in the Caskroom beside bin/.
+    macOS quarantines it and blocks it until you approve it. Only do this if you
+    trust the build.
+
+    The CLI loads libraries from lib/ beside bin/, and each file needs approval
+    too, or it fails with "Library load disallowed by system policy". Clear the
+    whole install in one step:
+      xattr -dr com.apple.quarantine "#{staged_path}"
+
+    The app: open it once, then choose "Open Anyway" under System Settings,
+    Privacy & Security. This needs an administrator.
+
     Do not move the CLI out of that layout. Uninstall preserves your user data.
   EOS
 end

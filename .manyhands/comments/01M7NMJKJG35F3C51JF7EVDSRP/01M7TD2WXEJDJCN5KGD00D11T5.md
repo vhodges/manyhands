@@ -1,0 +1,19 @@
+---
+id: 01M7TD2WXEJDJCN5KGD00D11T5
+item_id: 01M7NMJKJG35F3C51JF7EVDSRP
+created_at: 2026-11-19T17:18:55.667457994Z
+created_by: Vince Hodges <vince@imbas.ca>
+manyhands_managed: true
+manyhands_kind: comment
+---
+Review-ready on branch manyhands/ticket/01M7NMJKJG35F3C51JF7EVDSRP at 25da8539 (main b4a8d69e merged, `git merge-tree` clean, branch pushed). Final review has no open Critical or Important findings; the fix waves are re-reviewed.
+
+What changed: every operation row now says whose it is (request id, command, author, host, pid, start time, item, comment id) in `operation list` / `operation show` / `repo inspect`; a second writer waits up to 5 s for a live peer and then answers `busy`; `busy` and `recovery_required` name the blocker in `data.blocker` (it replaces the command's own data in that answer); an unfinished operation now blocks only its own item and repository-wide requests; an interrupted first push to a context branch the remote never had is retried automatically; a remote operation stranded at `push_prepared` can be cleared by `operation abandon` with `--prepare` then `--confirm`, and the preview shows the evidence; the skills are updated.
+
+Tests run on the final head: static gates (check, fmt, clippy all targets, whole tree) green. Fast tier: lib (1607 pass, then the one load-dependent test fixed in 9908049a and run by name), both bin test binaries (desktop 1979 pass; manyhands-cli 316 pass after the stale `human_admin` test fix 25da8539), cli, local_authoring, mutation_bridges, mutation_confirmation, mutation_contract, mutation_relationships, mutation_replay, read_repository, read_status, remote_reservation, repository_enablement, recovery_foundation_gate all pass. SSH tier: mutation_remote, ssh_transport, remote_synchronization, remote_merge_recovery, remote_polling, cli_remote, document_promotion, ticket_closure, comment_publication and `--lib repository::local_sync::` all pass. Not re-run on the final head because their code paths did not change since a green run on 36e45551: read_boundary, read_characterization, read_comments, read_contract, read_credentials, read_items, read_relationships, canonical_foundation, discovery_rebuild, drafts, journal_rejection, key_material, key_storage, session_credentials, shared_key_registry, remote_observation. The incident was re-run by hand in scratch repositories: the killed-publication case resumed to `published` 6 of 6 (the old build left `recovery_required` with no blocker); the two-writer pairs left no operation behind in 40 pairs, but the original rate was about 4 in 260, so 40 pairs cannot show the race is gone, and the local pairs never produced `busy` (the blocker and the 5 s wait were seen on the SSH path only).
+
+Merge note: the registry migrates one-way (`cycle_operation_attribution`), so run a build from this branch on real data only from main after merge. On `busy` and `recovery_required` the answer's `data` is now `{blocker}` and no longer carries the command's own data. The installed `.agents/skills` copies on main are stale and need the install step after merge.
+
+Known gaps and follow-ups, not created without the owner: host identity comes from the hostname, so `live: false` can be wrong across a hostname change (a stable per-data-directory installation id would fix it); the lease records no holder, so a leftover row in a lease-holding state can be named when the lease is held; a lock timeout while writing request records can still answer a `busy` with no blocker under heavy IO; the human `next: operation.show` line omits the operation id; remote publication reservations stay repository-scoped (decision D2, a follow-up); the CLI retry (100/200/400 ms) multiplies the 5 s wait to about 25 s in the worst case for `comment add`; the added autonomy bullet for `operation abandon` needs the owner's confirmation.
+
+Not closed: closing needs the owner's approval.

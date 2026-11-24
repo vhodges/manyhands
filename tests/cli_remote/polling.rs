@@ -15,6 +15,18 @@ use ssh_remote::{FixtureError, fixed};
 
 pub const CASES: &[ssh_harness::Case] = &[
     (
+        "c5_polling_closed_deleted_context_preserved",
+        c5_polling_closed_deleted_context_preserved,
+    ),
+    (
+        "c5_polling_closed_deleted_dirty_context_preserved",
+        c5_polling_closed_deleted_dirty_context_preserved,
+    ),
+    (
+        "c5_polling_tracking_closure_without_local_primary_advance",
+        c5_polling_tracking_closure_without_local_primary_advance,
+    ),
+    (
         "c5_polling_fast_forward_and_materialize_once",
         c5_polling_fast_forward_and_materialize_once,
     ),
@@ -128,7 +140,7 @@ fn json_once(env: &CliEnv, root: &str, request: &str, code: &str, status: i32) -
     value
 }
 
-fn polled(clone: &CliClone, request: &str) -> Value {
+pub(super) fn polled(clone: &CliClone, request: &str) -> Value {
     json_once(&clone.env, clone.root(), request, "ok", 0)
 }
 
@@ -252,12 +264,19 @@ fn sync_item(clone: &CliClone, request: &str) -> Value {
 }
 
 /// `clone`'s save of `ITEM`, published on the remote.
-fn published(clone: &CliClone, save_request: &str, sync_request: &str, body: &str) -> Value {
+pub(super) fn published(
+    clone: &CliClone,
+    save_request: &str,
+    sync_request: &str,
+    body: &str,
+) -> Value {
     save(clone, save_request, body);
     sync_item(clone, sync_request)
 }
 
-fn refs(repository: &git2::Repository) -> Result<BTreeMap<String, git2::Oid>, FixtureError> {
+pub(super) fn refs(
+    repository: &git2::Repository,
+) -> Result<BTreeMap<String, git2::Oid>, FixtureError> {
     let mut found = BTreeMap::new();
     for reference in fixed(repository.references())? {
         let reference = fixed(reference)?;
@@ -513,6 +532,73 @@ fn c5_polling_deleted_context_preserved() -> Result<(), FixtureError> {
     Ok(())
 }
 
+fn c5_polling_closed_deleted_context_preserved() -> Result<(), FixtureError> {
+    completed_deleted(false, false)
+}
+fn c5_polling_closed_deleted_dirty_context_preserved() -> Result<(), FixtureError> {
+    completed_deleted(true, false)
+}
+fn c5_polling_tracking_closure_without_local_primary_advance() -> Result<(), FixtureError> {
+    completed_deleted(false, true)
+}
+
+fn completed_deleted(dirty_context: bool, dirty_primary: bool) -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let (a, b) = (&p.a, &p.b);
+    published(a, R1, R2, "Saved in clone A.\n");
+    assert_eq!(disposition(&polled(b, R1), CONTEXT), "materialized");
+    let old = b.tip(CONTEXT)?;
+    let primary = b.tip(PRIMARY)?;
+    close_in_a(&p, R3)?;
+    let context_file = b
+        .context()
+        .join(format!(".manyhands/tickets/{ITEM}/ticket.md"));
+    let original = fixed(std::fs::read(&context_file))?;
+    if dirty_context {
+        fixed(std::fs::write(&context_file, b"private dirty context"))?;
+    }
+    let primary_file = b.root.join(format!(".manyhands/tickets/{ITEM}/ticket.md"));
+    if dirty_primary {
+        fixed(std::fs::write(&primary_file, b"private dirty primary"))?;
+    }
+    let pushes = remote_world::accepted(&p.server);
+    let value = polled(b, R2);
+    assert_eq!(
+        disposition(&value, CONTEXT),
+        if dirty_primary {
+            "remotely_deleted"
+        } else {
+            "closed"
+        }
+    );
+    if dirty_primary {
+        assert_eq!(disposition(&value, PRIMARY), "dirty");
+        assert_eq!(b.tip(PRIMARY)?, primary);
+        holds_the_closure(b, "refs/remotes/origin/main")?;
+        assert_eq!(
+            fixed(std::fs::read(primary_file))?,
+            b"private dirty primary"
+        );
+    } else {
+        holds_the_closure(b, PRIMARY)?;
+    }
+    assert_eq!(b.tip(CONTEXT)?, old);
+    assert!(b.context().is_dir());
+    assert_eq!(
+        fixed(std::fs::read(&context_file))?,
+        if dirty_context {
+            b"private dirty context".to_vec()
+        } else {
+            original
+        }
+    );
+    assert_eq!(p.served(CONTEXT)?, None);
+    assert_eq!(remote_world::accepted(&p.server), pushes);
+    let replay = polled(b, R2);
+    assert_eq!(replay["data"], value["data"]);
+    Ok(())
+}
+
 /// A commit on the remote's primary that writes `path` as `bytes`.
 fn commit_on_primary(p: &CliPair, path: &str, bytes: &[u8]) -> Result<git2::Oid, FixtureError> {
     let bare = p.bare()?;
@@ -546,7 +632,7 @@ fn commit_on_primary(p: &CliPair, path: &str, bytes: &[u8]) -> Result<git2::Oid,
 }
 
 /// `OTHER_ITEM` depends on `ITEM`, on primary, in both clones.
-fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
+pub(super) fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\ntitle: Other\n\
          type: task\nstatus: open\ndeps: [{ITEM}]\n---\nBody of Other.\n"
@@ -564,7 +650,7 @@ fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
 }
 
 /// `ITEM` closed by clone A through the binary.
-fn close_in_a(p: &CliPair, request: &str) -> Result<(), FixtureError> {
+pub(super) fn close_in_a(p: &CliPair, request: &str) -> Result<(), FixtureError> {
     let a = &p.a;
     let args = ["ticket", "close", "--repo", a.root(), "--id", ITEM];
     let mut prepare = args.to_vec();

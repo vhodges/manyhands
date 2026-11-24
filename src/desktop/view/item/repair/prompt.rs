@@ -16,7 +16,7 @@ use gpui_kit::{
         WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm,
-        h_flex, v_flex,
+        v_flex,
     },
     div,
 };
@@ -25,10 +25,13 @@ use super::Repairing;
 use crate::desktop::view::{
     close_draft::DISCARD,
     confirm::CANCEL,
+    frame::{self, Footer, Header},
     item::{CloseThisTab, ItemPane},
 };
 
 pub(crate) const DISCARD_TITLE: &str = "Discard your repair?";
+/// The header's title: the question, as the Kit's title slot drew it.
+const TITLE_ID: &str = "repair-discard-title";
 pub(crate) const DISCARD_BODY: &str = "Your changes to this file are not saved anywhere.";
 /// The question's words once the repair was sent: while it runs, or after
 /// an answer whose effect is unknown.
@@ -85,12 +88,18 @@ fn ask(
     let choose: Choose = Rc::new(choose);
     let origin = window.focused(cx);
     let words = if sent { SENT_BODY } else { DISCARD_BODY };
-    window.open_dialog(cx, move |base, _, _| {
+    window.open_dialog(cx, move |base, _, cx| {
         let (ok, cancel, close) = (choose.clone(), choose.clone(), origin.clone());
-        base.title(DISCARD_TITLE)
+        let header = Header {
+            icon: None,
+            title: DISCARD_TITLE.into(),
+            description: None,
+            ids: (TITLE_ID, None),
+        };
+        frame::dialog(base, header, cx)
             .close_button(false)
             .overlay_closable(false)
-            .child(body(&choose, words))
+            .child(body(&choose, words, cx))
             // Enter: Cancel, the default; the Kit closes the dialog.
             .on_ok(move |_, window, cx| {
                 ok(Choice::Cancel, window, cx);
@@ -108,7 +117,7 @@ fn ask(
     });
 }
 
-fn body(choose: &Choose, words: &'static str) -> impl IntoElement + use<> {
+fn body(choose: &Choose, words: &'static str, cx: &App) -> impl IntoElement + use<> {
     let button = |part: &str, label: &'static str, choice: Choice| {
         let id = format!("repair-discard-{part}");
         let choose = choose.clone();
@@ -132,25 +141,30 @@ fn body(choose: &Choose, words: &'static str) -> impl IntoElement + use<> {
             .on_action(move |_: &Confirm, window, cx| enter(window, cx))
             .child(button.on_click(move |_: &ClickEvent, window, cx| press(window, cx)))
     };
+    let content = v_flex().child(
+        div()
+            .id("repair-discard-message")
+            .test_support()
+            .aria_label(words)
+            .text_sm()
+            .child(words),
+    );
+    // The safe choice is the first Tab stop.
+    let buttons = vec![
+        button("cancel", CANCEL, Choice::Cancel).into_any_element(),
+        button("discard", DISCARD, Choice::Discard).into_any_element(),
+    ];
     v_flex()
         .id("repair-discard-dialog")
         .test_support()
         // Named by its title, which the Kit draws above it.
         .aria_label(DISCARD_TITLE)
-        .gap_2()
-        .child(
-            div()
-                .id("repair-discard-message")
-                .test_support()
-                .aria_label(words)
-                .text_sm()
-                .child(words),
-        )
-        .child(
-            h_flex()
-                .gap_2()
-                // The safe choice is the first Tab stop.
-                .child(button("cancel", CANCEL, Choice::Cancel))
-                .child(button("discard", DISCARD, Choice::Discard)),
-        )
+        .child(frame::body(content))
+        .child(frame::footer(
+            Footer {
+                hint: None,
+                buttons,
+            },
+            cx,
+        ))
 }

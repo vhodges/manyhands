@@ -13,6 +13,7 @@ use crate::{
         RepositoryService,
         cleanup::{self, RetirementEvidence},
         closure::record::ClosureRecord,
+        lifecycle_contexts, mark_registered_lifecycle_contexts_dirty,
         promotion::record::PromotionRecord,
         remote::{
             reservation::{self, RemoteReservation},
@@ -725,6 +726,36 @@ pub(in super::super) fn validate_remote_identity(
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
 }
+
+/// Only the poll dispatcher supplies its actual UPDATE kind. The exception is
+/// scoped to the incoming registered repository and manual priority BEFORE any
+/// reservation write; public O and lifecycle callers use the strict path above.
+pub(in super::super) fn validate_poll_identity(
+    db: &Connection,
+    id: i64,
+    op: OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+    poll_kind: Option<state::PollKind>,
+) -> Result<(), RepositoryError> {
+    if poll_kind == Some(state::PollKind::Update)
+        && target.action() == RemoteOperationAction::Poll
+        && crate::repository::context_retirement::pass::ordinary_poll_recovery(
+            db,
+            id,
+            &op.to_string(),
+            priority,
+        )?
+    {
+        if crate::repository::local_sync::record::owned_identity(db, &op.to_string())? {
+            return Err(state::recovery_required());
+        }
+        remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
+        crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
+    } else {
+        validate_remote_identity(db, id, op, target, priority)
+    }
+}
 /// A reservation under any of one table's parent or child IDs must be
 /// exactly that binding's.
 pub(in super::super) fn remote_identity_of<R: ParentRecord>(
@@ -755,7 +786,10 @@ pub(in super::super) fn remote_identity_of<R: ParentRecord>(
     Ok(())
 }
 /// The local journal may never begin under a parent ID, and under a child
-/// ID only as that child's exact authoritative refresh hand-off.
+/// ID only as that child's exact authoritative refresh hand-off: a row with
+/// no target, as an older build began it. This build begins none under a
+/// child ID, whose hand-off is its parent's exit (Task 22); it takes up only
+/// what an older build began there.
 pub(in super::super) fn validate_local_identity(
     kind: LifecycleKind,
     db: &Connection,
@@ -778,17 +812,7 @@ pub(in super::super) fn validate_local_identity(
     if parent {
         return Err(mismatch(kind));
     }
-    let child: Option<i64> = db
-        .query_row(
-            &format!(
-                "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
-            ),
-            [op],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|_| state::recovery_required())?;
-    if let Some(id) = child {
+    if let Some(id) = child_repository(kind, db, op)? {
         let registered: String = db
             .query_row(
                 "SELECT root_path FROM repositories WHERE id=?1",
@@ -809,6 +833,49 @@ pub(in super::super) fn validate_local_identity(
         }
     }
     Ok(())
+}
+/// The repository of the `kind` parent whose child `op` is: its context's
+/// or its primary's synchronization. `None` when `op` is no child of that
+/// table, or the table is not there yet.
+fn child_repository(
+    kind: LifecycleKind,
+    db: &Connection,
+    op: &str,
+) -> Result<Option<i64>, RepositoryError> {
+    let table = kind.table();
+    if !crate::repository::recovery::has_table(db, table).map_err(|_| state::recovery_required())? {
+        return Ok(None);
+    }
+    db.query_row(
+        &format!(
+            "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
+        ),
+        [op],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|_| state::recovery_required())
+}
+/// Whether `op` is a lifecycle's child, a promotion's or a closure's, as
+/// its parent's record says, whoever runs it: the ID under which
+/// `validate_local_identity` lets the local journal hold only the plain
+/// refresh hand-off an older build began, with no target. Such a child
+/// begins no hand-off of its own: its parent's exit indexes what it changed
+/// (Task 22).
+pub(in super::super) fn is_child(
+    db: &Connection,
+    op: OperationId,
+) -> Result<bool, RepositoryError> {
+    let op = op.to_string();
+    for kind in [
+        LifecycleKind::DocumentPromotion,
+        LifecycleKind::TicketClosure,
+    ] {
+        if child_repository(kind, db, &op)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 pub(in super::super) fn audit<R: ParentRecord>(db: &Connection) -> Result<(), RepositoryError> {
     R::validate_schema(db)?;
@@ -906,10 +973,21 @@ pub(in super::super) fn complete_record<R: ParentRecord>(
     crate::repository::recovery::invalidate_index_observations(tx, id)?;
     // Completion may be followed immediately by process exit (F11). Its
     // index-only handoff must be durable in this same transaction so replay
-    // cannot mistake pre-cleanup discovery for an already-refreshed outcome.
-    tx.execute(
-        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-        [id],
+    // cannot mistake pre-cleanup discovery for an already-refreshed outcome:
+    // the contexts it changed are marked, the retired one's until its rows go
+    // (none is marked for it once they are gone).
+    let root: String = tx
+        .query_row(
+            "SELECT root_path FROM repositories WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    mark_registered_lifecycle_contexts_dirty(
+        tx,
+        id,
+        std::path::Path::new(&root),
+        &lifecycle_contexts(r.item_id()),
     )
     .map_err(|_| state::recovery_required())?;
     tx.execute(&format!("UPDATE {} SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",R::KIND.table()),params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;

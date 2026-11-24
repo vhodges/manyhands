@@ -830,6 +830,7 @@ fn read_error(error: SynchronizationError) -> ReadError {
         | SynchronizationError::Interrupted
         | SynchronizationError::RemoteContextDeleted
         | SynchronizationError::HistoryUnknown
+        | SynchronizationError::HistoryUnresolved
         | SynchronizationError::IdentityRequired { .. }
         | SynchronizationError::MergeRequired { .. }
         | SynchronizationError::PushRejected => ReadError::new(ResultCode::InternalError),

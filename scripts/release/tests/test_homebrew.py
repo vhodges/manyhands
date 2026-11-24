@@ -125,8 +125,17 @@ class HomebrewTests(unittest.TestCase):
         cask = self.render()
         self.assertIn("ad-hoc", cask)
         self.assertIn("notarized", cask)
-        for forbidden in ("zap ", "uninstall ", "xattr", "spctl", "no-quarantine", "system_command"):
-            self.assertNotIn(forbidden, cask)
+        # The caveats may tell the user how to approve the build; no stanza may
+        # do it for them.
+        stanzas, caveats = cask.split("caveats <<~EOS")
+        for forbidden in ("zap ", "uninstall ", "xattr", "spctl", "no-quarantine", "system_command", "postflight"):
+            self.assertNotIn(forbidden, stanzas)
+        self.assertIn("xattr -dr com.apple.quarantine", caveats)
+        self.assertIn("Open Anyway", caveats)
+
+    def test_latest_stable_release_is_what_livecheck_follows(self):
+        cask = self.render()
+        self.assertIn("strategy :github_latest", cask)
 
     def test_prerelease_version_is_not_truncated(self):
         self.release.update(tag="v0.2.0-rc.1", version="0.2.0-rc.1", prerelease=True)

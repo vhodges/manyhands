@@ -545,6 +545,7 @@ fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     owner.transaction(|tx,row| {
         let next=row.owner_epoch.checked_add(1).ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
         if tx.execute("UPDATE local_context_sync_records SET owner_epoch=?2 WHERE operation_ulid=?1 AND owner_epoch=?3 AND generation=?4",params![row.operation_id.to_string(),next,row.owner_epoch,row.generation])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        super::record::hold_envelope(tx, row.operation_id)?;
         Ok(())
     })?;
     boundary(owner, FailurePoint::LocalSyncAfterIntent)?;
@@ -882,27 +883,47 @@ fn integrated(owner: &mut Owner<'_>, result: Option<git2::Oid>) -> Result<(), Fa
     }
     owner.transaction(|tx,row| {tx.execute("UPDATE local_context_sync_records SET state='integrated',result_oid=?2,integration_proven=1,artifacts_released=1,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",params![row.operation_id.to_string(),result.map(|o|o.to_string())])?;Ok(())})
 }
+/// The index step of a local sync: the one context it changed, its item's,
+/// observed once and stored after a check of its basis (P-3's order, with the
+/// sync's lease held throughout: its row holds the whole repository, decision
+/// 14). Nothing else is stored, and nothing whole-repository is touched: not
+/// the repository's `refresh_required`, nor its `refreshed_at`.
 pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     owner.authorize()?;
     let git = git2::Repository::open(owner.repo.root())?;
-    let observed_from = time::OffsetDateTime::now_utc().unix_timestamp();
-    let before = observe_root(&git, owner.repo.root());
+    let root = owner.repo.root();
+    let context = ContextKey::Item(owner.row.item_id.clone());
+    let listed = discovery::listed_context(root, &context).ok_or_else(Fault::foreign)?;
+    let observed =
+        discovery::observe_context(&git, root, &listed, &mut PrimaryActivityMap::default());
     boundary(owner, FailurePoint::BeforeIndexTransactionCommit)?;
     super::control::safe_point(owner)?;
-    let after = observe_root(&git, owner.repo.root());
-    if !changed_contexts(&before, &after, owner.repo.root()).is_empty() {
+    if observed.left_dirty
+        || !discovery::basis_holds(&git, root, &listed, &observed.basis, observed.started_at_ns)
+    {
+        // Nothing is stored: the context keeps its rows, marked as owed an
+        // indexing. The answer is the same whether or not the mark can be
+        // written: the row still owes its index step, which observes again
+        // when it is resumed. The row records no contexts it owes, so a mark
+        // that cannot be written leaves the raced context reading as it was
+        // stored until then.
+        let _ = mark_contexts_dirty(
+            &owner.service.registry_path,
+            root,
+            &[context],
+            RepositoryOperation::ContextSyncLocal,
+        );
         return Err(Fault::foreign());
     }
     // Matching discovery snapshots do not establish integration authority: both
     // may observe the same foreign ref/log/lock state. Recheck the actual frozen
     // disposition/release proof after all index boundaries, before terminal SQL.
     recover::verify_released_integration(owner)?;
-    let root = owner.repo.root();
     let authoritative = owner.request.is_some();
     let cancelled=owner.transaction(|tx,row| {
         if super::control::acknowledge_pending(tx,row,authoritative)? {return Ok(true);}
-        persist_observation(tx,row.repository_id,&before,root)?;
-        tx.execute("UPDATE repositories SET accessibility='accessible',refresh_required=0,refreshed_at=?2 WHERE id=?1",params![row.repository_id,observed_from])?;
+        persist_context_index(tx,row.repository_id,&observed)?;
+        tx.execute("UPDATE repositories SET accessibility='accessible' WHERE id=?1",[row.repository_id])?;
         tx.execute("UPDATE local_context_sync_records SET state='complete',index_complete=1,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",[row.operation_id.to_string()])?;
         if let Some(attempt)=row.active_resolution
             && tx.execute("UPDATE local_context_sync_resolutions SET state='complete' WHERE attempt_ulid=?1 AND operation_ulid=?2",params![attempt.to_string(),row.operation_id.to_string()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}

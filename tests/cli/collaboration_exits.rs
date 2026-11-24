@@ -140,7 +140,7 @@ const ROWS: &[Row] = &[
     binary(
         "confirmation_required",
         3,
-        "an_abandon_of_a_remote_operation_is_refused_and_changes_nothing",
+        "an_abandon_of_a_remote_operation_needs_its_holder_gone_and_a_confirmation",
     ),
     binary(
         "confirmation_not_found",

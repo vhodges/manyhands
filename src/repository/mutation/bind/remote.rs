@@ -243,7 +243,9 @@ impl RemoteAddBinding {
                 let journal = accepted.journal_row(service);
                 let changed = changed_and_unfinished(journal.as_ref());
                 Ran {
-                    answer: self.ended_answer(code, changed, owed_hand_off(changed)),
+                    answer: self
+                        .ended_answer(code, changed, owed_hand_off(changed))
+                        .naming(service, &accepted.root(), error.blocker()),
                     standing: Standing::Stopped { journal },
                 }
             }
@@ -1263,7 +1265,9 @@ impl RemoteRemoveBinding {
                 let journal = accepted.journal_row(service);
                 let removed = self.removed_and_unfinished(&root, journal.as_ref());
                 Ran {
-                    answer: self.ended_answer(code, removed, owed_hand_off(removed)),
+                    answer: self
+                        .ended_answer(code, removed, owed_hand_off(removed))
+                        .naming(service, &accepted.root(), error.blocker()),
                     standing: Standing::Stopped { journal },
                 }
             }

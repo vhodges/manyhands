@@ -132,7 +132,7 @@ fn every_details_shape_renders_its_fields() {
         initials: None,
         initials_source: InitialsSource::None,
     };
-    let cases = vec![
+    let mut cases = vec![
         PreviewDetailsDto::Repository(RepositoryPreviewDto {
             root: "root\n".into(),
             primary_branch: "branch".into(),
@@ -166,6 +166,7 @@ fn every_details_shape_renders_its_fields() {
             public_key_path: Some("public-path".into()),
         }),
         PreviewDetailsDto::OperationAbandon(OperationAbandonPreviewDto {
+            retirement: None,
             root: "root".into(),
             operation_id: "operation".into(),
             action: None,
@@ -179,6 +180,7 @@ fn every_details_shape_renders_its_fields() {
             request_id: Some("request".into()),
             files_changed: false,
             git_state_changed: false,
+            evidence: None,
         }),
         PreviewDetailsDto::Identity(IdentityPreviewDto {
             root: "root".into(),
@@ -212,10 +214,50 @@ fn every_details_shape_renders_its_fields() {
             primary_changed: false,
         }),
     ];
+    let mut retirement = match &cases[4] {
+        PreviewDetailsDto::OperationAbandon(details) => details.clone(),
+        _ => unreachable!(),
+    };
+    retirement.retirement = Some(manyhands::repository::RetirementAbandonMetadata {
+        request_id: Some("retained-request\n".into()),
+        phase: "branch_deleting".into(),
+        owner_epoch: 7,
+        index_owner_epoch: 3,
+        worktree_removal: manyhands::repository::RetirementRemoval::Observed,
+        branch_removal: manyhands::repository::RetirementRemoval::Possible,
+        worktree_retained: false,
+        branch_retained: true,
+        index_pending: true,
+    });
+    cases.push(PreviewDetailsDto::OperationAbandon(retirement));
+    // The abandon of a synchronization: the remote journal's evidence of
+    // the push it left, which the person decides the hand-over with. Every
+    // field of it is shown.
+    let mut synchronization = match &cases[4] {
+        PreviewDetailsDto::OperationAbandon(details) => details.clone(),
+        _ => unreachable!(),
+    };
+    synchronization.evidence = Some(manyhands::repository::OperationAbandonEvidenceDto {
+        remote_ref_present: Some(true),
+        local_oid: Some("local-oid".into()),
+        remote_oid: Some("remote-oid".into()),
+        push_oid: Some("push-oid".into()),
+        push_returned: true,
+    });
+    cases.push(PreviewDetailsDto::OperationAbandon(synchronization));
     fn leaves(v: &serde_json::Value, out: &str) {
         match v {
             serde_json::Value::Object(m) => {
                 for (key, value) in m {
+                    // E-10 adds nullable JSON metadata, not a new human line on
+                    // every pre-existing ordinary abandon preview: a retirement's,
+                    // and a synchronization's push evidence, which an operation of
+                    // the local journal has no part in. The abandon of a
+                    // synchronization, which has evidence, shows all of it.
+                    if matches!(key.as_str(), "retirement" | "evidence") && value.is_null() {
+                        assert!(!out.to_lowercase().contains(key.as_str()), "{out}");
+                        continue;
+                    }
                     assert!(
                         out.to_lowercase().contains(&key.replace('_', " ")),
                         "missing field {key}: {out}"

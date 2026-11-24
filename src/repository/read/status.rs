@@ -1,8 +1,10 @@
 //! Status reads: one registration's index, its polling policy, and the
 //! operations recorded for it.
 //!
-//! Each reports what is stored. None observes the repository, asks whether
-//! a process is running, or resumes anything.
+//! Each reports what is stored. None observes the repository or resumes
+//! anything. The operation reads ask the system only whether the process
+//! an operation names still exists, and only to say so in `live`; it
+//! changes nothing they report of the operation's state.
 
 use std::str::FromStr;
 
@@ -10,23 +12,32 @@ use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 
 use super::{
-    IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction, OperationDto,
-    OperationFamily, OperationListDto, OperationNextAction, OperationOwner, PollingOutcome,
-    PollingStatusDto, ReadError, ResolvedRepository,
-    items::{behind, effective_rows, invalid_stored_data, stored_index_state, stored_items},
+    IndexProblemDto, IndexState, IndexStatusDto, IndexStatusState, OperationAction,
+    OperationAttributionDto, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+    OperationOwner, PollingOutcome, PollingStatusDto, ReadError, ResolvedRepository,
+    items::{
+        behind, effective_rows, invalid_stored_data, presented_problems, stored_contexts,
+        stored_index_state, stored_items,
+    },
 };
 use crate::{
     canonical::ItemId,
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
-        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId, recovery,
+        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
+        liveness::{AttributionRow, Liveness, ProcessProbe, Worked, holder_liveness, this_host},
+        promotion::lifecycle::resumable,
+        recovery,
         remote::state::{self, StoredRemoteOperation},
     },
-    results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
+    results::{OperationFailureCode, ResultCode, timestamp_string},
 };
 
 /// The longest state or step name a local operation is taken to have.
 const LONGEST_STORED_NAME: usize = 64;
+
+/// How many times the read of a blocker is tried before it is given up.
+const BLOCKER_READS: usize = 3;
 
 /// The state a local operation has once nothing remains to be done.
 const LOCAL_COMPLETED: &str = "completed";
@@ -37,6 +48,165 @@ struct StoredOperation {
     listed: bool,
     dto: OperationDto,
 }
+
+/// The attribution columns of an operation row, as stored.
+#[derive(Default)]
+struct StoredAttribution {
+    request_id: Option<String>,
+    command: Option<String>,
+    author: Option<String>,
+    host: Option<String>,
+    pid: Option<i64>,
+    started_at: Option<i64>,
+    comment_id: Option<String>,
+}
+
+/// How a read judges whether an operation's holder still works: by the
+/// host this process runs on, the process table the service was given, the
+/// service's clock, which decides whether an indexing heartbeat is fresh,
+/// and, for a local row of another process, whether a call holds the
+/// repository's lease, looked at once per read and without waiting. One is
+/// made for each read, so every row of it is judged alike.
+struct Holders<'a> {
+    host: String,
+    probe: &'a dyn ProcessProbe,
+    /// The time before which an indexing heartbeat is too old to be a
+    /// call's; the rule every other reader of the heartbeat uses.
+    stale_before: i64,
+    data_directory: std::path::PathBuf,
+    lease_held: std::cell::OnceCell<bool>,
+}
+
+impl<'a> Holders<'a> {
+    fn of(service: &'a RepositoryService) -> Self {
+        Self {
+            host: this_host(),
+            probe: &*service.process_probe,
+            stale_before: service.clock.now().unix_timestamp()
+                - crate::repository::INDEX_OWNER_STALE_AFTER,
+            data_directory: service
+                .registry_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_owned(),
+            lease_held: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// `of`, judging every local row as if no call held the repository's
+    /// lease: a row reads live only by its own evidence, a fresh index
+    /// heartbeat, or, for a remote row, a held reservation.
+    fn without_lease(service: &'a RepositoryService) -> Self {
+        Self {
+            lease_held: std::cell::OnceCell::from(false),
+            ..Self::of(service)
+        }
+    }
+
+    /// The attribution a row names. `heartbeat` is whether the row shows a
+    /// call at work under it by the heartbeat; `local` is the root of a
+    /// local row, whose call works under that repository's lease, and
+    /// `None` for a remote row, whose call works only while it holds the
+    /// reservation, `holds_reservation`. A row that names neither a host
+    /// nor a process is not judged.
+    fn attribution(
+        &self,
+        stored: StoredAttribution,
+        heartbeat: bool,
+        local: Option<&std::path::Path>,
+        holds_reservation: bool,
+    ) -> Result<OperationAttributionDto, ReadError> {
+        let live = (stored.host.is_some() || stored.pid.is_some()).then(|| {
+            let row = AttributionRow {
+                host: stored.host.clone(),
+                pid: stored.pid,
+                index_heartbeat_fresh: heartbeat,
+            };
+            let worked = match local {
+                Some(root) => Worked::UnderLease {
+                    lease_held: *self.lease_held.get_or_init(|| {
+                        !crate::repository::coordination::leases_are_free(
+                            &self.data_directory,
+                            root,
+                        )
+                    }),
+                },
+                None => Worked::ByProcess { holds_reservation },
+            };
+            holder_liveness(&row, &self.host, std::process::id(), self.probe, worked)
+                == Liveness::Live
+        });
+        Ok(OperationAttributionDto {
+            request_id: stored.request_id,
+            command: stored.command,
+            author: stored.author,
+            host: stored.host,
+            pid: stored.pid,
+            started_at: stored.started_at.map(stored_time).transpose()?,
+            comment_id: stored.comment_id,
+            live,
+        })
+    }
+
+    /// The attribution of a remote row, which no heartbeat keeps alive, or
+    /// none for an operation that has no such row. A promotion's or a
+    /// closure's parent has none of its own: its reservation is the remote
+    /// row of the same ID, and it is the one that names the holder. A call
+    /// is at work under it only while it holds the reservation and, for a
+    /// parent, only while the parent is `open`, not ended.
+    fn remote(
+        &self,
+        connection: &Connection,
+        repo: &ResolvedRepository,
+        operation: &str,
+        open: bool,
+    ) -> Result<OperationAttributionDto, ReadError> {
+        let (stored, holds_reservation) = connection
+            .query_row(
+                &format!(
+                    "SELECT request_ulid, command, author, host, pid, started_at,
+                            phase IN {}
+                       FROM remote_operation_records
+                      WHERE repository_id = ?1 AND operation_ulid = ?2
+                      ORDER BY id DESC LIMIT 1",
+                    recovery::RESERVATION_PHASES
+                ),
+                params![repo.registration_id(), operation],
+                |row| {
+                    Ok((
+                        StoredAttribution {
+                            request_id: row.get(0)?,
+                            command: row.get(1)?,
+                            author: row.get(2)?,
+                            host: row.get(3)?,
+                            pid: row.get(4)?,
+                            started_at: row.get(5)?,
+                            comment_id: None,
+                        },
+                        row.get::<_, bool>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .unwrap_or_default();
+        self.attribution(stored, false, None, open && holds_reservation)
+    }
+}
+
+/// The states of a local row no call holding the repository's lease works
+/// under: a comment's, completed, that waits for its registration; one an
+/// index owner works under with no lease (`indexing`, judged by its
+/// heartbeat alone) or that a promotion fenced (`index_invalidated`); and
+/// one whose hand-off ended without the index (`failed`, `retry`). A call
+/// takes the lease up again only to take such a row over, which moves it
+/// out of these states first.
+const LEASELESS_STATES: [&str; 5] = [
+    "completed",
+    "indexing",
+    "index_invalidated",
+    "failed",
+    "retry",
+];
 
 /// A time a store recorded, in seconds. One that cannot be written as a
 /// timestamp was not written by any store.
@@ -77,6 +247,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "rebuild" => Some(OperationAction::Rebuild),
         "prepare_context" => Some(OperationAction::PrepareContext),
         "release_context" => Some(OperationAction::ReleaseContext),
+        "retire_context" => Some(OperationAction::RetireContext),
         "save_document" => Some(OperationAction::SaveDocument),
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),
@@ -87,7 +258,9 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
 }
 
 /// What the target of a refresh begins with when the refresh is the local
-/// half of a synchronization that had no remote to publish to.
+/// half of a synchronization that had no remote to publish to, as older
+/// builds bound it. This build binds such a synchronization under its index
+/// hand-off target (P-4), which is reported as a refresh.
 const LOCAL_SYNCHRONIZATION_TARGET: &str = "synchronization-local-v1/";
 
 /// Whether `text` is a full object ID as Git writes one.
@@ -128,13 +301,22 @@ fn local_synchronization(rest: &str) -> Result<(OperationAction, Option<String>)
 fn local_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
-    crate::repository::local_sync::record::audit(connection)
+    // The unfinished local synchronizations are what the list shows; one
+    // shown by its ID is used whatever its state, so it is audited too.
+    crate::repository::local_sync::record::audit_unfinished(connection)
+        .and_then(|()| {
+            id.map_or(Ok(()), |id| {
+                crate::repository::local_sync::record::audit_record(connection, id)
+            })
+        })
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,
-                observed_at, target
+                observed_at, target, id, request_ulid, command, author, host, pid,
+                started_at, comment_id
            FROM operation_records
           WHERE root_path = ?1
             AND ((?2 IS NULL
@@ -161,6 +343,29 @@ fn local_operations(
         {
             return Err(invalid_stored_data());
         }
+        let heartbeat = recovery::LocalRow {
+            id: row.get(8)?,
+            action: action.clone(),
+            target: target.clone(),
+            state: state.clone(),
+            step: completed_step.clone(),
+            observed_at: row.get(6)?,
+        }
+        .has_live_heartbeat(holders.stale_before);
+        let attribution = holders.attribution(
+            StoredAttribution {
+                request_id: row.get(9)?,
+                command: row.get(10)?,
+                author: row.get(11)?,
+                host: row.get(12)?,
+                pid: row.get(13)?,
+                started_at: row.get(14)?,
+                comment_id: row.get(15)?,
+            },
+            heartbeat,
+            Some(repo.root()),
+            false,
+        )?;
         let action = local_action(&action).ok_or_else(invalid_stored_data)?;
         let synchronized = target
             .as_deref()
@@ -192,13 +397,14 @@ fn local_operations(
                 worktree: row.get(3)?,
                 updated_at: Some(stored_time(row.get(6)?)?),
                 failure_code: None,
+                attribution,
             },
         });
     }
     Ok(operations)
 }
 
-fn remote_action(action: RemoteOperationAction) -> OperationAction {
+pub(crate) fn remote_action(action: RemoteOperationAction) -> OperationAction {
     match action {
         RemoteOperationAction::Poll => OperationAction::Poll,
         RemoteOperationAction::SynchronizeContext => OperationAction::SynchronizeContext,
@@ -210,7 +416,7 @@ fn remote_action(action: RemoteOperationAction) -> OperationAction {
 
 /// The contract name of a remote operation's phase, and whether an
 /// operation in that phase holds the registration's reservation.
-fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
+pub(crate) fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
     match phase {
         RemoteOperationPhase::Reserved => ("reserved", true),
         RemoteOperationPhase::Advertising => ("advertising", true),
@@ -230,7 +436,7 @@ fn remote_phase(phase: RemoteOperationPhase) -> (&'static str, bool) {
     }
 }
 
-fn remote_step(step: RemoteOperationSafePoint) -> &'static str {
+pub(crate) fn remote_step(step: RemoteOperationSafePoint) -> &'static str {
     match step {
         RemoteOperationSafePoint::BeforeTransport => "before_transport",
         RemoteOperationSafePoint::AfterAdvertisement => "after_advertisement",
@@ -295,9 +501,9 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
 ///   not say whether anything is still running it, so nothing is offered.
 /// - A synchronization that was interrupted or that failed is listed and
 ///   can be resumed: asked for again under its ID with a restart, it is
-///   given the reservation back. A cancelled one is never given it, and a
-///   promotion or closure has no boundary resume. Promotion's parent journal
-///   supplies its lifecycle step independently of its internal reservation.
+///   given the reservation back. A cancelled one is never given it. A
+///   promotion's or closure's reservation offers nothing: its parent's own
+///   row, listed beside it, offers the resume.
 /// - A synchronization that completed and whose index hand-off is still
 ///   pending is listed and can be resumed: asked for again, it does only
 ///   that hand-off.
@@ -335,6 +541,8 @@ fn remote_standing(
 
 fn remote_operation(
     connection: &Connection,
+    repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     record: &StoredRemoteOperation,
 ) -> Result<StoredOperation, ReadError> {
     let (state, _) = remote_phase(record.phase);
@@ -358,13 +566,25 @@ fn remote_operation(
             worktree: None,
             updated_at: Some(stored_time(record.updated_at)?),
             failure_code: record.outcome.and_then(remote_failure),
+            attribution: holders.remote(
+                connection,
+                repo,
+                &record.operation_id.to_string(),
+                true,
+            )?,
         },
     })
 }
 
+/// Document promotion parents: the stored step is both state and completed
+/// step. Resume is offered for every parent `operation resume` would take
+/// up, by the predicate it uses: one an accepted request holds too, whose
+/// resume names that request (D5 decision 10). A complete parent, or one
+/// that ended or a consent refusal ended, is offered nothing.
 fn promotion_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     if !recovery::has_table(connection, "document_promotions")? {
@@ -395,12 +615,18 @@ fn promotion_operations(
                     action: OperationAction::Promote,
                     state: r.step.name().to_owned(),
                     completed_step: Some(r.step.name().to_owned()),
-                    next_action: None,
+                    next_action: resumable(&r).then_some(OperationNextAction::Resume),
                     item_id: Some(r.item_id.to_string()),
                     key_id: None,
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
+                    attribution: holders.remote(
+                        connection,
+                        repo,
+                        &r.operation_id.to_string(),
+                        !r.step.terminal(),
+                    )?,
                 },
             })
         })
@@ -408,11 +634,12 @@ fn promotion_operations(
 }
 
 /// Ticket closure parents, as promotion parents: the stored step, including
-/// `closing`, is both state and completed step, and no boundary resume is
-/// offered.
+/// `closing`, is both state and completed step, and resume is offered for
+/// every parent left to continue, held or not.
 fn closure_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     if !recovery::has_table(connection, "ticket_closures")? {
@@ -443,12 +670,18 @@ fn closure_operations(
                     action: OperationAction::Close,
                     state: r.step.name().to_owned(),
                     completed_step: Some(r.step.name().to_owned()),
-                    next_action: None,
+                    next_action: resumable(&r).then_some(OperationNextAction::Resume),
                     item_id: Some(r.item_id.to_string()),
                     key_id: None,
                     worktree: None,
                     updated_at: Some(stored_time(r.updated_at)?),
                     failure_code: None,
+                    attribution: holders.remote(
+                        connection,
+                        repo,
+                        &r.operation_id.to_string(),
+                        !r.step.terminal(),
+                    )?,
                 },
             })
         })
@@ -472,6 +705,7 @@ fn remote_records(
 fn remote_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
+    holders: &Holders<'_>,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     let has_promotions = recovery::has_table(connection, "document_promotions")?;
@@ -496,7 +730,7 @@ fn remote_operations(
         )? {
             continue;
         }
-        let operation = remote_operation(connection, &record)?;
+        let operation = remote_operation(connection, repo, holders, &record)?;
         if id.is_some() || operation.listed {
             operations.push(operation);
         }
@@ -587,6 +821,7 @@ fn key_material_operations(
                 failure_code: failure
                     .as_deref()
                     .map(OperationFailureCode::from_stored_key_material),
+                attribution: OperationAttributionDto::default(),
             },
         });
     }
@@ -604,36 +839,62 @@ fn family_rank(family: OperationFamily) -> u8 {
     }
 }
 
-/// Every problem the index stores for the registration, with the working
-/// tree it was found in. The stored guidance is not read: it can hold a
+/// The unfinished operations of one repository: its local rows, then its
+/// remote synchronizations and polls, promotions and closures, in the order
+/// each store gives them. `registered` is whether the repository has a
+/// registration; without one only the local rows, which recovery matches by
+/// root, exist.
+fn repository_operations(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    holders: &Holders<'_>,
+    registered: bool,
+) -> Result<Vec<StoredOperation>, ReadError> {
+    let mut operations = local_operations(connection, repo, holders, None)?;
+    if registered {
+        operations.extend(remote_operations(connection, repo, holders, None)?);
+        operations.extend(promotion_operations(connection, repo, holders, None)?);
+        operations.extend(closure_operations(connection, repo, holders, None)?);
+    }
+    Ok(operations)
+}
+
+/// Orders operations as the operation list does: by operation ID, which is
+/// the order they were started in. The sort is stable, so operations with
+/// no ID keep the order they were stored in.
+fn sort_operations(items: &mut [OperationDto]) {
+    items.sort_by(|left, right| {
+        (
+            left.operation_id.is_none(),
+            &left.operation_id,
+            family_rank(left.family),
+        )
+            .cmp(&(
+                right.operation_id.is_none(),
+                &right.operation_id,
+                family_rank(right.family),
+            ))
+    });
+}
+
+/// Every problem the index stores for the registration that the reads
+/// present, with the working tree it is presented in (see
+/// `presented_problems`). The stored guidance is not read: it can hold a
 /// parser's or the operating system's own words.
-fn index_problems(
+pub(super) fn index_problems(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<IndexProblemDto>, ReadError> {
-    let mut statement = connection.prepare(
-        "SELECT problems.code, problems.path, contexts.worktree_path
-           FROM problems
-           LEFT JOIN contexts ON contexts.id = problems.context_id
-          WHERE problems.repository_id = ?1
-          ORDER BY contexts.worktree_path ASC, problems.path ASC, problems.code ASC,
-                   problems.id ASC",
-    )?;
-    let mut rows = statement.query([repo.registration_id()])?;
-    let mut problems = Vec::new();
-    while let Some(row) = rows.next()? {
-        let code: String = row.get(0)?;
-        problems.push(IndexProblemDto {
-            code: ProblemCode::from_stored(&code),
+    Ok(presented_problems(connection, repo)?
+        .into_iter()
+        .map(|problem| IndexProblemDto {
+            code: problem.code,
             // A problem about the working tree itself is stored with a path
             // that is empty once made relative to it.
-            path: row
-                .get::<_, Option<String>>(1)?
-                .filter(|path| !path.is_empty()),
-            worktree: row.get(2)?,
-        });
-    }
-    Ok(problems)
+            path: problem.path.filter(|path| !path.is_empty()),
+            worktree: problem.context.map(|context| context.worktree),
+        })
+        .collect())
 }
 
 /// Fails with `repository_not_registered` when the registration was removed
@@ -664,13 +925,12 @@ impl RepositoryService {
             let stored = stored_items(connection, repo)?;
             let (items, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let contexts: i64 = connection.query_row(
-                "SELECT COUNT(*) FROM contexts WHERE repository_id = ?1",
-                [repo.registration_id()],
-                |row| row.get(0),
-            )?;
+            // The contexts the reads present. An item worktree that is not
+            // a valid item context is counted as none, as it was when the
+            // index stored no row for it, and its problem is the primary's.
+            let contexts = stored_contexts(connection, repo)?.len();
             let problems = index_problems(connection, repo)?;
-            let pending_operations = local_operations(connection, repo, None)?
+            let pending_operations = local_operations(connection, repo, &Holders::of(self), None)?
                 .into_iter()
                 .map(|operation| operation.dto)
                 .collect();
@@ -681,7 +941,7 @@ impl RepositoryService {
                     IndexState::NeverRefreshed => IndexStatusState::NeverRefreshed,
                 },
                 refreshed_at: index.refreshed_at,
-                context_count: u64::try_from(contexts).ok(),
+                context_count: count(contexts),
                 item_count: count(items.len()),
                 problem_count: count(problems.len()),
                 problems,
@@ -762,34 +1022,210 @@ impl RepositoryService {
     ) -> Result<OperationListDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
-            let mut items: Vec<OperationDto> = local_operations(connection, repo, None)?
-                .into_iter()
-                .chain(remote_operations(connection, repo, None)?)
-                .chain(promotion_operations(connection, repo, None)?)
-                .chain(closure_operations(connection, repo, None)?)
-                .chain(key_material_operations(connection, None)?)
-                .map(|operation| operation.dto)
-                .collect();
-            // The sort is stable, so operations with no ID keep the order
-            // they were stored in.
-            items.sort_by(|left, right| {
-                (
-                    left.operation_id.is_none(),
-                    &left.operation_id,
-                    family_rank(left.family),
-                )
-                    .cmp(&(
-                        right.operation_id.is_none(),
-                        &right.operation_id,
-                        family_rank(right.family),
-                    ))
-            });
+            let holders = Holders::of(self);
+            let mut items: Vec<OperationDto> =
+                repository_operations(connection, repo, &holders, true)?
+                    .into_iter()
+                    .chain(key_material_operations(connection, None)?)
+                    .map(|operation| operation.dto)
+                    .collect();
+            sort_operations(&mut items);
             Ok(OperationListDto {
                 items,
                 complete: true,
             })
         })
         .map_err(|error| repo.failure(error))
+    }
+
+    /// The unfinished operations of the repository at `root`, for
+    /// `inspect_repository`: those `list_operations` lists for it, in its
+    /// order and with its attribution, judged as it judges them, less the
+    /// application's key-material operations, which are no repository's.
+    ///
+    /// `registration` is the root's registration, `None` for a root that
+    /// has none: it has local rows only, matched by root as recovery
+    /// matches them. It reads as any read does, on a read-only connection,
+    /// so it leaves no write-ahead file behind.
+    pub(super) fn inspected_operations(
+        &self,
+        root: &std::path::Path,
+        registration: Option<i64>,
+    ) -> Result<Vec<OperationDto>, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            let repo =
+                ResolvedRepository::registered(registration.unwrap_or_default(), root.to_owned());
+            let holders = Holders::of(self);
+            let mut items: Vec<OperationDto> =
+                repository_operations(connection, &repo, &holders, registration.is_some())?
+                    .into_iter()
+                    .map(|operation| operation.dto)
+                    .collect();
+            sort_operations(&mut items);
+            Ok(items)
+        })
+    }
+
+    /// The unfinished operation of the repository at `root` whose holder is
+    /// at work, for a writer that could not take a lease or the index's
+    /// lock in time: what such a refusal is for while one is at work.
+    ///
+    /// The writer was refused the lease, so it is nearly always held, and
+    /// by the rule `list_operations` judges with, every local row of
+    /// another process that exists then reads live, a row whose call has
+    /// ended among them. So a row live by its own evidence comes first: a
+    /// fresh index heartbeat, or a held reservation, the newest such.
+    /// Then, of the local rows live only because the lease is held, the
+    /// newest, the lease's holder being most likely the last to begin, and
+    /// only one in a state a call holds the lease in (not
+    /// `LEASELESS_STATES`). A lease whose holder has no row of its own, as
+    /// a snapshot's lease has none, so finds nothing at work.
+    ///
+    /// `Nothing` when no row is at work, `Unreadable` when the repository
+    /// cannot be read in `BLOCKER_READS` tries. The repository is the one
+    /// registered at `root`; a root with no registration has local rows
+    /// only.
+    pub(crate) fn live_holder(&self, root: &std::path::Path) -> crate::repository::LiveHolder {
+        use crate::repository::LiveHolder;
+        (0..BLOCKER_READS)
+            .find_map(|_| self.read_live_holder(root).ok())
+            .map_or(LiveHolder::Unreadable, |found| {
+                found.map_or(LiveHolder::Nothing, LiveHolder::Live)
+            })
+    }
+
+    /// One try of `live_holder`.
+    fn read_live_holder(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<Option<crate::repository::Blocker>, ReadError> {
+        let Some(root_text) = root.to_str() else {
+            return Ok(None);
+        };
+        self.writer_read_session(RepositoryOperation::Read, |connection| {
+            let registration: Option<i64> = connection
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root_text],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let repo =
+                ResolvedRepository::registered(registration.unwrap_or_default(), root.to_owned());
+            // The listed operations, judged by `holders`, newest first.
+            let listed = |holders: &Holders<'_>| -> Result<Vec<OperationDto>, ReadError> {
+                let mut items: Vec<OperationDto> =
+                    repository_operations(connection, &repo, holders, registration.is_some())?
+                        .into_iter()
+                        .filter(|operation| operation.listed)
+                        .map(|operation| operation.dto)
+                        .collect();
+                sort_operations(&mut items);
+                items.reverse();
+                Ok(items)
+            };
+            let named = |operation: OperationDto| {
+                let operation_id = OperationId::parse(operation.operation_id.as_deref()?).ok()?;
+                Some(crate::repository::Blocker {
+                    family: operation.family,
+                    operation_id,
+                    live: Some(true),
+                    seen: Some(Box::new(operation)),
+                })
+            };
+            let by_evidence = listed(&Holders::without_lease(self))?
+                .into_iter()
+                .filter(|operation| operation.attribution.live == Some(true))
+                .find_map(named);
+            if by_evidence.is_some() {
+                return Ok(by_evidence);
+            }
+            Ok(listed(&Holders::of(self))?
+                .into_iter()
+                .filter(|operation| {
+                    operation.family == OperationFamily::Local
+                        && operation.attribution.live == Some(true)
+                        && !LEASELESS_STATES.contains(&operation.state.as_str())
+                })
+                .find_map(named))
+        })
+    }
+
+    /// The operation `blocker` names, in its own journal, as `show_operation`
+    /// reads it, and whether the list includes it: whether it is still
+    /// unfinished. `Unreadable` when it cannot be read in `BLOCKER_READS`
+    /// tries: the read waits a moment at most for the index's guard, and the
+    /// writer the blocker names may hold it then. The repository is the one
+    /// registered at `root`, the root its rows name; a root with no
+    /// registration has local rows only.
+    pub(crate) fn blocking_operation(
+        &self,
+        root: &std::path::Path,
+        blocker: &crate::repository::Blocker,
+    ) -> crate::repository::BlockerRow {
+        use crate::repository::BlockerRow;
+        (0..BLOCKER_READS)
+            .find_map(|_| self.read_blocking_operation(root, blocker).ok())
+            .map_or(BlockerRow::Unreadable, |found| match found {
+                Some((operation, unfinished)) => BlockerRow::Found {
+                    operation: Box::new(operation),
+                    unfinished,
+                },
+                None => BlockerRow::Gone,
+            })
+    }
+
+    /// One try of `blocking_operation`.
+    fn read_blocking_operation(
+        &self,
+        root: &std::path::Path,
+        blocker: &crate::repository::Blocker,
+    ) -> Result<Option<(OperationDto, bool)>, ReadError> {
+        let Some(root_text) = root.to_str() else {
+            return Ok(None);
+        };
+        self.writer_read_session(RepositoryOperation::Read, |connection| {
+            let registration: Option<i64> = connection
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root_text],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let text = blocker.operation_id.to_string();
+            let holders = Holders::of(self);
+            let found = match (blocker.family, registration) {
+                (OperationFamily::Local, registration) => {
+                    let repo = ResolvedRepository::registered(
+                        registration.unwrap_or_default(),
+                        root.to_owned(),
+                    );
+                    local_operations(connection, &repo, &holders, Some(&text))?
+                }
+                (OperationFamily::Remote, Some(registration)) => {
+                    let repo = ResolvedRepository::registered(registration, root.to_owned());
+                    let mut found = remote_operations(connection, &repo, &holders, Some(&text))?;
+                    found.extend(promotion_operations(
+                        connection,
+                        &repo,
+                        &holders,
+                        Some(&text),
+                    )?);
+                    found.extend(closure_operations(
+                        connection,
+                        &repo,
+                        &holders,
+                        Some(&text),
+                    )?);
+                    found
+                }
+                (OperationFamily::Remote, None) | (OperationFamily::KeyMaterial, _) => Vec::new(),
+            };
+            Ok(found
+                .into_iter()
+                .next()
+                .map(|operation| (operation.dto, operation.listed)))
+        })
     }
 
     /// The operation with this ID, whether or not it has finished: one of
@@ -808,11 +1244,17 @@ impl RepositoryService {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let text = id.to_string();
-            local_operations(connection, repo, Some(&text))?
+            let holders = Holders::of(self);
+            local_operations(connection, repo, &holders, Some(&text))?
                 .into_iter()
-                .chain(remote_operations(connection, repo, Some(&text))?)
-                .chain(promotion_operations(connection, repo, Some(&text))?)
-                .chain(closure_operations(connection, repo, Some(&text))?)
+                .chain(remote_operations(connection, repo, &holders, Some(&text))?)
+                .chain(promotion_operations(
+                    connection,
+                    repo,
+                    &holders,
+                    Some(&text),
+                )?)
+                .chain(closure_operations(connection, repo, &holders, Some(&text))?)
                 .chain(key_material_operations(connection, Some(&text))?)
                 .min_by_key(|operation| (!operation.listed, family_rank(operation.dto.family)))
                 .map(|operation| operation.dto)

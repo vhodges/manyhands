@@ -25,7 +25,7 @@ pub(crate) const BEFORE: &str = "Before";
 pub(crate) const THEIRS: &str = "Theirs";
 pub(crate) const MINE: &str = "Mine";
 pub(crate) const TAKE_THEIRS: &str = "Take theirs";
-pub(crate) const KEEP_MINE: &str = "Keep mine";
+pub(crate) use crate::desktop::model::activity::copy::KEEP_MINE;
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
 pub(crate) const TAKING_THEIRS: &str = "Taking theirs";
 pub(crate) const KEEPING_MINE: &str = "Keeping mine";

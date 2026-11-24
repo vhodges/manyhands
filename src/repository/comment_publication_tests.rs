@@ -1270,37 +1270,76 @@ fn comment_publication_competing_plausible_checkpoints_require_recovery() {
 #[test]
 fn comment_publication_authoritative_child_allows_only_its_plain_refresh_and_reopen() {
     // Durable-authority shape is arranged here; actual SSH authority is Task 5.
-    let f = Fixture::new();
-    let (receipt, _, _) = saved(
-        f.service
-            .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
-            .unwrap(),
-    );
-    f.configure_remote();
-    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
-    let target = RemoteOperationTarget::for_context(
-        &plan,
-        RemoteOperationAction::SynchronizeContext,
-        receipt.kind,
-        receipt.item_id.clone(),
-    )
-    .unwrap();
-    f.service
-        .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+    // The child's hand-off is its synchronization's replay, which refreshes
+    // under a row of the comment's item at the authoritative commit (P-4);
+    // a plain refresh under its ID with no target, as an older build began
+    // the hand-off, is still allowed.
+    for by_replay in [true, false] {
+        let f = Fixture::new();
+        let (receipt, _, _) = saved(
+            f.service
+                .submit_comment(f.request(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        f.configure_remote();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            receipt.kind,
+            receipt.item_id.clone(),
+        )
         .unwrap();
-    f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
-        params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
-    assert!(matches!(
         f.service
-            .refresh_repository(RefreshRepositoryRequest {
-                root: f.root.path().into(),
-                operation_id: receipt.synchronization_id
-            })
-            .unwrap(),
-        RefreshOutcome::Refreshed { .. }
-    ));
-    RepositoryService::open_at(f.data.path()).unwrap();
-    assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=''", [receipt.synchronization_id.to_string()], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            .reserve_remote_operation(f.root.path(), receipt.synchronization_id, &target)
+            .unwrap();
+        f.db().execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2,authoritative_kind='already_current',authoritative_oid=?2,index_pending=1,outcome='completed' WHERE operation_ulid=?1",
+            params![receipt.synchronization_id.to_string(),receipt.checkpoint_oid.to_string()]).unwrap();
+        let hand_off = if by_replay {
+            let synchronized = SynchronizationTarget::Context {
+                kind: receipt.kind,
+                item_id: receipt.item_id.clone(),
+            };
+            assert_eq!(
+                f.service
+                    .synchronize_remote(
+                        SynchronizeRemoteRequest {
+                            root: f.root.path().into(),
+                            operation_id: receipt.synchronization_id,
+                            target: synchronized.clone(),
+                            approval: None,
+                            confirmed_identity: None,
+                            restart: false,
+                        },
+                        &mut SessionCredentials::new(NoPrompt),
+                    )
+                    .unwrap(),
+                SynchronizationResult::Complete(SynchronizationOutcome::AlreadyCurrent {
+                    target: synchronized,
+                    oid: receipt.checkpoint_oid,
+                })
+            );
+            format!(
+                "synchronization-index-v1/{}/{}/{}",
+                authoring_kind_segment(&receipt.kind),
+                receipt.item_id,
+                receipt.checkpoint_oid
+            )
+        } else {
+            assert!(matches!(
+                f.service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: f.root.path().into(),
+                        operation_id: receipt.synchronization_id
+                    })
+                    .unwrap(),
+                RefreshOutcome::Refreshed { .. }
+            ));
+            String::new()
+        };
+        RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(f.db().query_row("SELECT COUNT(*) FROM operation_records WHERE operation_ulid=?1 AND action='refresh' AND target=?2", params![receipt.synchronization_id.to_string(), hand_off], |r| r.get::<_, i64>(0)).unwrap(), 1, "by replay: {by_replay}");
+    }
 }
 
 #[test]
@@ -1414,7 +1453,10 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
         .db()
         .query_row("SELECT id FROM repositories", [], |r| r.get::<_, i64>(0))
         .unwrap();
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_err());
+    // Asked by a call of the comment's own item, which the waiting comment
+    // holds.
+    let own = recovery::CallScope::item(&f.item);
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_err());
     let (again, state, indexing) = saved(
         f.service
             .retry_comment_publication(
@@ -1443,7 +1485,7 @@ fn comment_publication_missing_registration_is_index_pending_and_repairs_before_
             .unwrap()
             .refresh_required
     );
-    assert!(recovery::require_no_pending_local(&f.db(), repository_id).is_ok());
+    assert!(recovery::require_no_pending_local(&f.db(), repository_id, &own).is_ok());
 }
 
 #[test]
@@ -1843,4 +1885,802 @@ fn comment_publication_recorded_receipt_refuses_reset_removed_or_replaced_commen
             0
         );
     }
+}
+
+/// The columns that say whose an operation's row is, as the migration
+/// `cycle_operation_attribution` adds them to each journal, in order.
+const LOCAL_ATTRIBUTION: [&str; 7] = [
+    "request_ulid",
+    "command",
+    "author",
+    "host",
+    "pid",
+    "started_at",
+    "comment_id",
+];
+const REMOTE_ATTRIBUTION: [&str; 6] = [
+    "request_ulid",
+    "command",
+    "author",
+    "host",
+    "pid",
+    "started_at",
+];
+
+fn column_names(connection: &rusqlite::Connection, table: &str) -> Vec<String> {
+    connection
+        .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+        .unwrap()
+        .query_map([table], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+}
+
+/// The registry as a build from before attribution left it: neither
+/// journal has the columns, no marker says they were added, and no local
+/// row names its item.
+fn as_before_attribution(connection: &rusqlite::Connection) {
+    for (table, columns) in [
+        ("operation_records", &LOCAL_ATTRIBUTION[..]),
+        ("remote_operation_records", &REMOTE_ATTRIBUTION[..]),
+    ] {
+        let present = column_names(connection, table);
+        for column in columns {
+            if present.iter().any(|name| name == column) {
+                connection
+                    .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                    .unwrap();
+            }
+        }
+    }
+    connection
+        .execute_batch(
+            "UPDATE operation_records SET item_id=NULL WHERE action IN ('save_ticket','submit_comment');
+             DELETE FROM registry_migrations WHERE name='cycle_operation_attribution';",
+        )
+        .unwrap();
+}
+
+/// A registry an older build left, with a comment's submission pending and
+/// an interrupted synchronization, gains the attribution columns when a
+/// build with them opens it. Nothing else changes: each row keeps every
+/// value it had, and says nothing of whose it is, which is unknown; no
+/// item is read back from a target. The rows still read, and the pending
+/// one is still taken up and finished by its own submission sent again.
+/// A second open finds the migration done and changes nothing.
+#[test]
+fn a_legacy_registry_migrates_attribution_columns_and_old_rows_keep_null() {
+    let f = Fixture::new();
+    f.configure_remote();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let synchronization = OperationId::new();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        canonical::ItemId::generate(),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root.path(), synchronization, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+            [synchronization.to_string()],
+        )
+        .unwrap();
+    let request = f.request();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::BeforeCheckpointCommit,
+    )
+    .unwrap();
+    assert!(
+        failing
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .is_err()
+    );
+    drop(failing);
+    let comment = request.comment.target.operation_id.to_string();
+    let pending_row: (i64, String) = f
+        .db()
+        .query_row(
+            "SELECT id, state FROM operation_records WHERE operation_ulid=?1",
+            [&comment],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(pending_row.1, "completed", "the submission is pending");
+    as_before_attribution(&f.db());
+    let legacy_columns = [
+        column_names(&f.db(), "operation_records"),
+        column_names(&f.db(), "remote_operation_records"),
+    ];
+    let legacy_rows = [
+        metadata_rows(&f.db(), "operation_records"),
+        metadata_rows(&f.db(), "remote_operation_records"),
+    ];
+
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    for open in 0..2 {
+        if open == 1 {
+            RepositoryService::open_at(f.data.path()).unwrap();
+        }
+        for (((table, added), legacy), rows) in [
+            ("operation_records", &LOCAL_ATTRIBUTION[..]),
+            ("remote_operation_records", &REMOTE_ATTRIBUTION[..]),
+        ]
+        .into_iter()
+        .zip(&legacy_columns)
+        .zip(&legacy_rows)
+        {
+            // The columns follow every column the older build had.
+            let mut expected = legacy.clone();
+            expected.extend(added.iter().map(|name| (*name).to_owned()));
+            assert_eq!(
+                column_names(&f.db(), table),
+                expected,
+                "{table}, open {open}"
+            );
+            let migrated = metadata_rows(&f.db(), table);
+            assert_eq!(migrated.len(), rows.len(), "{table}");
+            for (row, before) in migrated.iter().zip(rows) {
+                assert_eq!(
+                    &row[..before.len()],
+                    &before[..],
+                    "{table}: a value changed"
+                );
+                assert!(
+                    row[before.len()..]
+                        .iter()
+                        .all(|value| *value == rusqlite::types::Value::Null),
+                    "{table}: an older row says whose it is: {row:?}"
+                );
+            }
+        }
+        assert!(
+            f.db()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_operation_attribution')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+        );
+    }
+
+    // Both rows still read.
+    let repository = reopened.resolve_repository(f.root.path()).unwrap();
+    let remote = reopened
+        .show_operation(&repository, synchronization)
+        .unwrap();
+    assert_eq!(remote.state, "interrupted");
+    let local = reopened
+        .show_operation(&repository, request.comment.target.operation_id)
+        .unwrap();
+    assert_eq!(local.state, pending_row.1);
+    // And the pending one is taken up and finished, under its own row.
+    let (receipt, _, indexing) = saved(
+        reopened
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+    assert!(!indexing.local_pending);
+    let finished: (i64, String) = f
+        .db()
+        .query_row(
+            "SELECT id, state FROM operation_records WHERE operation_ulid=?1",
+            [&comment],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(finished, (pending_row.0, "completed".to_owned()));
+}
+
+/// A clock a test sets, in seconds.
+struct SetClock(std::sync::atomic::AtomicI64);
+impl mutation::Clock for SetClock {
+    fn now(&self) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(self.0.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap()
+    }
+}
+
+/// A ticket saved and a comment added through the mutation boundary each
+/// begin a row that says whose it is: the request and its command, the
+/// commit identity, this host and process, the time by the service's clock,
+/// the item, and for the comment the comment. The synchronization the
+/// comment's publication reserves says it is the comment's request's.
+#[test]
+fn a_new_authoring_row_records_request_host_pid_item_and_comment() {
+    const SAVED_AT: i64 = 1_700_000_000;
+    const COMMENTED_AT: i64 = 1_700_000_100;
+    let f = Fixture::new();
+    f.configure_remote();
+    let clock = Arc::new(SetClock(std::sync::atomic::AtomicI64::new(SAVED_AT)));
+    let service = RepositoryService::open_at(f.data.path())
+        .unwrap()
+        .with_clock_for_testing(clock.clone());
+    let run = |request_id: RequestId, mutation: Mutation| {
+        service.execute(
+            MutationCall {
+                request_id,
+                confirmation: None,
+                mutation,
+            },
+            &mut SessionCredentials::new(NoPrompt),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    };
+    let root: PathBuf = f.root.path().into();
+    let ticket = canonical::ItemId::generate();
+    let saving = RequestId::new();
+    let created = run(
+        saving,
+        Mutation::TicketCreate(TicketCreateInput {
+            root: root.clone(),
+            id: ticket.clone(),
+            draft: TicketDraft {
+                title: "Attributed".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: String::new(),
+            },
+            deps: Vec::new(),
+            parent: None,
+            initials: None,
+        }),
+    );
+    assert_eq!(created.code, crate::results::ResultCode::Ok, "{created:?}");
+    clock
+        .0
+        .store(COMMENTED_AT, std::sync::atomic::Ordering::SeqCst);
+    let commenting = RequestId::new();
+    let comment = canonical::ItemId::generate();
+    let added = run(
+        commenting,
+        Mutation::CommentAdd(CommentAddInput {
+            root,
+            kind: AuthoringKind::Ticket,
+            id: ticket.clone(),
+            comment_id: comment.clone(),
+            parent_id: None,
+            body: "An attributed comment.\n".into(),
+            created_by: None,
+        }),
+    );
+    let Some(MutationDataDto::Comment(data)) = added.data.as_ref() else {
+        panic!("a comment's data: {added:?}");
+    };
+    type Attribution = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let attribution = |table: &str, operation: &str| -> Attribution {
+        f.db()
+            .query_row(
+                &format!(
+                    "SELECT request_ulid, command, author, host, pid, started_at
+                       FROM {table} WHERE operation_ulid=?1"
+                ),
+                [operation],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap()
+    };
+    let items = |operation: &str| -> (Option<String>, Option<String>) {
+        f.db()
+            .query_row(
+                "SELECT item_id, comment_id FROM operation_records WHERE operation_ulid=?1",
+                [operation],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    let whose = |request: RequestId, command: &str, at: i64| -> Attribution {
+        (
+            Some(request.to_string()),
+            Some(command.to_owned()),
+            Some("Comment fixture <comment@example.invalid>".to_owned()),
+            Some(liveness::this_host()),
+            Some(i64::from(std::process::id())),
+            Some(at),
+        )
+    };
+    let saved_operation = created.operation_id.clone().expect("the save's operation");
+    let comment_operation = added.operation_id.clone().expect("the comment's operation");
+
+    assert_eq!(
+        attribution("operation_records", &saved_operation),
+        whose(saving, "ticket create", SAVED_AT)
+    );
+    assert_eq!(items(&saved_operation), (Some(ticket.to_string()), None));
+    assert_eq!(
+        attribution("operation_records", &comment_operation),
+        whose(commenting, "comment add", COMMENTED_AT)
+    );
+    assert_eq!(
+        items(&comment_operation),
+        (Some(ticket.to_string()), Some(comment.to_string()))
+    );
+    // The publication's synchronization was reserved, then stopped for a
+    // key, since none is selected.
+    assert_eq!(
+        attribution("remote_operation_records", &data.synchronization_id),
+        whose(commenting, "comment add", COMMENTED_AT)
+    );
+}
+
+/// A row a promotion or a closure begins records no author: the identity
+/// it commits with is whoever promoted or closed, which only the index
+/// keeps (Cycle 10). So for a row whose request is `document promote` or
+/// `ticket close`, and for the refresh a lifecycle hands its result to the
+/// index with, under an ID of its own and no request; any other row
+/// records the configured identity.
+#[test]
+fn a_promotion_s_or_a_closure_s_rows_record_no_author() {
+    const AUTHOR: &str = "Comment fixture <comment@example.invalid>";
+    let f = Fixture::new();
+    let origin = recovery::RowOrigin::here(f.root.path(), 1_700_000_000);
+    for (command, author) in [
+        (Some("document promote"), None),
+        (Some("ticket close"), None),
+        (Some("ticket save"), Some(AUTHOR)),
+        (Some("comment add"), Some(AUTHOR)),
+        (None, Some(AUTHOR)),
+    ] {
+        assert_eq!(origin.author_for(command), author, "{command:?}");
+    }
+    let author_of = |unauthored: bool| -> Option<String> {
+        let mut connection = f.db();
+        let operation = OperationId::new();
+        let begin = if unauthored {
+            recovery::begin_or_reconcile_unauthored_operation
+        } else {
+            recovery::begin_or_reconcile_operation
+        };
+        begin(
+            &mut connection,
+            f.root.path(),
+            RepositoryOperation::RefreshRepository,
+            operation,
+            "",
+            1_700_000_000,
+        )
+        .unwrap();
+        let author = connection
+            .query_row(
+                "SELECT author FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE operation_records SET state = 'completed' WHERE operation_ulid = ?1",
+                [operation.to_string()],
+            )
+            .unwrap();
+        author
+    };
+    assert_eq!(author_of(false).as_deref(), Some(AUTHOR));
+    assert_eq!(author_of(true), None);
+}
+
+/// What a row says of whose it is: the request that began it, its command,
+/// the author and the start, then the host and the process that hold it.
+type Whose = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+);
+
+fn whose(connection: &rusqlite::Connection, table: &str, operation: OperationId) -> Whose {
+    connection
+        .query_row(
+            &format!(
+                "SELECT request_ulid, command, author, started_at, host, pid
+                   FROM {table} WHERE operation_ulid=?1"
+            ),
+            [operation.to_string()],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+/// A call that takes a row over records this process as the row's holder,
+/// and changes nothing else of whose the row is: the request that began
+/// it, its command, the author and the start keep naming where it came
+/// from. A row from an older build, which says nothing, gains only its
+/// holder. A live index owner's row is not taken over, and keeps its own.
+#[test]
+fn a_takeover_records_this_process_as_holder_and_keeps_the_row_s_origin() {
+    const NOW: i64 = 1_700_000_000;
+    enum Row {
+        /// A comment's submission that stopped before its checkpoint, taken
+        /// up by the same submission sent again.
+        PendingComment,
+        /// A refresh's row an index owner claimed, with its last heartbeat
+        /// at `heartbeat`, taken up by a refresh under the same ID.
+        Indexing { heartbeat: i64 },
+        /// An interrupted synchronization, restarted.
+        InterruptedSynchronization,
+    }
+    let foreign: Whose = (
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FX9".to_owned()),
+        Some("comment add".to_owned()),
+        Some("Someone <someone@example.invalid>".to_owned()),
+        Some(111),
+        Some("elsewhere".to_owned()),
+        Some(i64::from(std::process::id()) + 1),
+    );
+    let legacy: Whose = (None, None, None, None, None, None);
+    for (case, row, before, taken_over) in [
+        (
+            "a resumed submission whose process died",
+            Row::PendingComment,
+            foreign.clone(),
+            true,
+        ),
+        (
+            "a resumed submission an older build began",
+            Row::PendingComment,
+            legacy,
+            true,
+        ),
+        (
+            "a stale index owner's row",
+            Row::Indexing { heartbeat: 0 },
+            foreign.clone(),
+            true,
+        ),
+        (
+            "a live index owner's row",
+            Row::Indexing { heartbeat: NOW },
+            foreign.clone(),
+            false,
+        ),
+        (
+            "a restarted synchronization",
+            Row::InterruptedSynchronization,
+            foreign.clone(),
+            true,
+        ),
+    ] {
+        let f = Fixture::new();
+        let service = RepositoryService::open_at(f.data.path())
+            .unwrap()
+            .with_clock_for_testing(Arc::new(SetClock(std::sync::atomic::AtomicI64::new(NOW))));
+        type Act = Box<dyn Fn(&RepositoryService)>;
+        let (table, operation, act): (&str, OperationId, Act) = match row {
+            Row::PendingComment => {
+                let request = f.request();
+                let failing = RepositoryService::open_at_with_failure_point_for_testing(
+                    f.data.path(),
+                    FailurePoint::BeforeCheckpointCommit,
+                )
+                .unwrap();
+                assert!(
+                    failing
+                        .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                        .is_err(),
+                    "{case}"
+                );
+                let operation = request.comment.target.operation_id;
+                let act: Act = Box::new(move |service| {
+                    saved(
+                        service
+                            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                            .unwrap(),
+                    );
+                });
+                ("operation_records", operation, act)
+            }
+            Row::Indexing { heartbeat } => {
+                let operation = OperationId::new();
+                f.db()
+                    .execute(
+                        "INSERT INTO operation_records
+                            (repository_id, root_path, operation_ulid, action, target, state,
+                             observed_at, index_owner_epoch)
+                         SELECT id, root_path, ?1, 'refresh', '', 'indexing', ?2, 1 FROM repositories",
+                        params![operation.to_string(), heartbeat],
+                    )
+                    .unwrap();
+                let root: PathBuf = f.root.path().into();
+                let act: Act = Box::new(move |service| {
+                    service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: root.clone(),
+                            operation_id: operation,
+                        })
+                        .unwrap();
+                });
+                ("operation_records", operation, act)
+            }
+            Row::InterruptedSynchronization => {
+                f.configure_remote();
+                let operation = OperationId::new();
+                let target = RemoteOperationTarget::for_context(
+                    &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
+                    RemoteOperationAction::SynchronizeContext,
+                    AuthoringKind::Document,
+                    f.item.clone(),
+                )
+                .unwrap();
+                assert!(matches!(
+                    f.service
+                        .reserve_remote_operation(f.root.path(), operation, &target)
+                        .unwrap(),
+                    RemoteReservationOutcome::Reserved(_)
+                ));
+                f.db()
+                    .execute(
+                        "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                        [operation.to_string()],
+                    )
+                    .unwrap();
+                let root: PathBuf = f.root.path().into();
+                let act: Act = Box::new(move |service| {
+                    assert!(matches!(
+                        service
+                            .restart_remote_synchronization(&root, operation, &target)
+                            .unwrap(),
+                        RemoteReservationOutcome::Reserved(_)
+                    ));
+                });
+                ("remote_operation_records", operation, act)
+            }
+        };
+        let (request, command, author, started_at, host, pid) = before.clone();
+        f.db()
+            .execute(
+                &format!(
+                    "UPDATE {table} SET request_ulid=?2, command=?3, author=?4, started_at=?5,
+                            host=?6, pid=?7
+                      WHERE operation_ulid=?1"
+                ),
+                params![
+                    operation.to_string(),
+                    request,
+                    command,
+                    author,
+                    started_at,
+                    host,
+                    pid
+                ],
+            )
+            .unwrap();
+
+        act(&service);
+
+        let expected = if taken_over {
+            (
+                before.0,
+                before.1,
+                before.2,
+                before.3,
+                Some(liveness::this_host()),
+                Some(i64::from(std::process::id())),
+            )
+        } else {
+            before
+        };
+        assert_eq!(whose(&f.db(), table, operation), expected, "{case}");
+    }
+}
+
+/// A comment's publication left pending by its synchronization keeps what
+/// that synchronization was refused for: the operation in its way, which
+/// the comment's own answer names. The error is told as the submission's,
+/// with nothing of its text kept, and of the same kind.
+#[test]
+fn a_pending_publication_keeps_the_operation_its_synchronization_was_refused_for() {
+    let blocker = crate::repository::Blocker {
+        family: crate::repository::OperationFamily::Remote,
+        operation_id: OperationId::new(),
+        live: None,
+        seen: None,
+    };
+    let publication = pending_synchronization(SynchronizationError::Repository(
+        remote::state::recovery_required().with_blocker(Some(blocker.clone())),
+    ));
+    let CommentPublicationState::Pending {
+        reason: CommentPublicationPendingReason::Synchronization(error),
+    } = publication
+    else {
+        panic!("a pending publication");
+    };
+    let SynchronizationError::Repository(error) = *error else {
+        panic!("the synchronization's error");
+    };
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(error.operation, RepositoryOperation::SubmitComment);
+    assert_eq!(error.blocker(), Some(&blocker));
+}
+
+/// A comment's first submission proves its receipt from Git once: the local
+/// checkpoint proves it and records it, and the publication that follows
+/// takes the recorded receipt, of the same commit, without proving it again.
+/// The receipt it answers with is the recorded one.
+#[test]
+fn a_comment_receipt_is_proved_once() {
+    let f = Fixture::new();
+    let request = f.request();
+    let before = comment_publication::receipt_proofs_for_testing();
+    let (receipt, publication, indexing) = saved(
+        f.service
+            .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+    );
+    assert_eq!(
+        comment_publication::receipt_proofs_for_testing() - before,
+        1,
+        "the receipt's proofs"
+    );
+    assert!(matches!(
+        publication,
+        CommentPublicationState::Pending {
+            reason: CommentPublicationPendingReason::NoPublicationRemote
+        }
+    ));
+    assert!(!indexing.local_pending && !indexing.remote_pending);
+    assert_eq!(receipt.operation_id, request.comment.target.operation_id);
+    assert_eq!(
+        Repository::open(&f.context.worktree)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(receipt.checkpoint_oid)
+    );
+    let (checkpoint, created_at): (Option<String>, Option<String>) = f
+        .db()
+        .query_row(
+            "SELECT checkpoint_oid, created_at FROM comment_publication_bindings
+              WHERE operation_ulid = ?1",
+            [receipt.operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(checkpoint, Some(receipt.checkpoint_oid.to_string()));
+    assert!(created_at.is_some());
+}
+
+/// A binding corrupted after registry open is audited where it is reused,
+/// as the migration that every such call ran used to audit it: by the
+/// submission that takes the binding up again, and by a refresh begun
+/// under the binding's synchronization ID. Each property the migration
+/// checks is a row: the root's digest, the submission's target, and the
+/// correlation of the synchronization's hand-off row.
+#[test]
+fn a_reused_comment_binding_corrupted_after_open_is_refused() {
+    let mut refusals = Vec::new();
+    for corruption in ["root digest", "target", "hand-off"] {
+        let f = Fixture::new();
+        let request = f.request();
+        saved(
+            f.service
+                .submit_comment(request.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+        );
+        let (row, root, synchronization): (i64, String, String) = f
+            .db()
+            .query_row(
+                "SELECT o.id,o.root_path,b.synchronization_ulid FROM comment_publication_bindings b
+                  JOIN operation_records o ON o.id=b.local_record_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let root = PathBuf::from(root);
+        let synchronization = OperationId::parse(&synchronization).unwrap();
+        let repository = Repository::open(&root).unwrap();
+        let record = recovery::RecoveryRecord {
+            id: row,
+            is_new: false,
+            is_pending: false,
+            completed_step: None,
+        };
+        let reuse = || {
+            f.service
+                .bind_comment_publication(&repository, &root, &request.comment, record)
+                .map(|_| ())
+        };
+        let hand_off = || {
+            recovery::require_refresh_can_begin(
+                &f.db(),
+                &root,
+                RepositoryOperation::RefreshRepository,
+                synchronization,
+            )
+        };
+        // Intact, the binding is taken up again, and no refresh is due
+        // under its synchronization, which holds no authoritative result.
+        reuse().unwrap();
+        assert_eq!(
+            hand_off().unwrap_err().kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        match corruption {
+            "root digest" => f
+                .db()
+                .execute(
+                    "UPDATE comment_publication_bindings SET root_digest=zeroblob(32)",
+                    [],
+                )
+                .unwrap(),
+            "target" => f
+                .db()
+                .execute(
+                    "UPDATE operation_records SET target=target||'-substituted' WHERE id=?1",
+                    [row],
+                )
+                .unwrap(),
+            _ => f
+                .db()
+                .execute(
+                    "INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at)
+                     VALUES(?1,?2,'refresh',?3,'created',1)",
+                    params![
+                        root.to_str(),
+                        synchronization.to_string(),
+                        format!(
+                            "synchronization-index-v1/document/{}/{}",
+                            canonical::ItemId::generate(),
+                            "0".repeat(40)
+                        )
+                    ],
+                )
+                .unwrap(),
+        };
+        refusals.push((
+            corruption,
+            reuse().err().map(|error| error.kind),
+            hand_off().err().map(|error| error.kind),
+        ));
+    }
+    let refused = Some(RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(
+        refusals,
+        [
+            ("root digest", refused, refused),
+            ("target", refused, refused),
+            ("hand-off", refused, refused),
+        ]
+    );
 }

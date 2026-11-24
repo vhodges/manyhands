@@ -256,7 +256,9 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         )
         .map_err(|_| failure())?;
     }
-    audit(db)
+    // Registry open: the schema and the unfinished records (decision 9).
+    audit_schema(db)?;
+    audit_unfinished(db)
 }
 fn execution_authority_marked(db: &Connection) -> Result<bool, RepositoryError> {
     db.query_row(
@@ -466,35 +468,129 @@ fn validate_child_authority(row: &rusqlite::Row<'_>) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
-    let cascaded: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
-            [CASCADE_MARKER],
-            |r| r.get(0),
-        )
-        .map_err(|_| failure())?;
-    if !cascaded {
+/// Which local synchronization records an audit reads, each with what
+/// belongs to it (its envelope, steps, resolution attempts, execution
+/// evidence, image proof and conflict evidence): every record, the
+/// unfinished ones, or the one of an operation ID.
+///
+/// A record is unfinished unless its state is `complete`, `cancelled` or
+/// `abandoned`, so a state that is none of the known ones is read too.
+#[derive(Clone, Copy)]
+pub(super) enum Rows<'a> {
+    All,
+    Unfinished,
+    One(&'a str),
+}
+
+impl<'a> Rows<'a> {
+    /// The condition that selects these records, on the record alias `p`.
+    /// It names `?1`, which `bound` binds.
+    pub(super) fn records(self) -> &'static str {
+        match self {
+            Self::All => "?1 IS NULL",
+            Self::Unfinished => {
+                "?1 IS NULL AND p.state NOT IN ('complete','cancelled','abandoned')"
+            }
+            Self::One(_) => "p.operation_ulid=?1",
+        }
+    }
+
+    /// The condition that selects the envelopes of these records, on the
+    /// envelope alias `o`, also where the record itself is missing: an
+    /// envelope is unfinished unless it is `completed`.
+    fn envelopes(self) -> &'static str {
+        match self {
+            Self::All => "?1 IS NULL",
+            Self::Unfinished => "?1 IS NULL AND o.state!='completed'",
+            Self::One(_) => "o.operation_ulid=?1",
+        }
+    }
+
+    /// The parameter the conditions name: the operation ID of `One`, and
+    /// NULL otherwise.
+    pub(super) fn bound(self) -> [Option<&'a str>; 1] {
+        [match self {
+            Self::One(id) => Some(id),
+            Self::All | Self::Unfinished => None,
+        }]
+    }
+}
+
+/// The markers, each table's schema, its foreign keys and its integrity,
+/// which re-evaluates its CHECK constraints over every stored row. A
+/// migration ends with it, so registry open audits the schema once for
+/// each registry file and schema it migrates (design decision 9), and a
+/// call after it does not.
+pub(in super::super) fn audit_schema(db: &Connection) -> Result<(), RepositoryError> {
+    if !marked(db, CASCADE_MARKER)? {
         return Err(failure());
     }
-    audit_with_schema(db, true)?;
+    records_schema(db, true)?;
     if !execution_authority_marked(db)? {
         return Err(failure());
     }
-    audit_execution(db, true)?;
-    super::image_proof::audit(db)?;
-    super::conflict_record::audit(db)?;
-    Ok(())
+    execution_table_schema(db)?;
+    super::image_proof::audit_schema(db)?;
+    super::conflict_record::audit_schema(db)
 }
 
+/// Audits every unfinished record, of every repository and item, with what
+/// belongs to it. Every guard calls it before it concludes from the records
+/// it scans: an unfinished record of another item can hold the guard's
+/// call too, and no malformed one may be taken for absence (R-5).
+pub(in super::super) fn audit_unfinished(db: &Connection) -> Result<(), RepositoryError> {
+    audit_rows(db, Rows::Unfinished)
+}
+
+/// Audits the record of operation `id`, finished or not, with what belongs
+/// to it: what a read that uses a completed record calls, since neither
+/// registry open nor a guard audits completed records. Nothing is refused
+/// for an `id` that no record or envelope holds.
+pub(in super::super) fn audit_record(db: &Connection, id: &str) -> Result<(), RepositoryError> {
+    audit_rows(db, Rows::One(id))
+}
+
+/// The schema and every record, finished or not: what the local
+/// synchronization journal's own transactions audit (its executor,
+/// takeover, cancellation, observation and record reads), whose check
+/// after a change covers the record that change just finished, and what a
+/// migration audits before it alters a table that holds the records. No
+/// guard calls it.
+pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
+    audit_schema(db)?;
+    audit_rows(db, Rows::All)
+}
+
+fn audit_rows(db: &Connection, rows: Rows<'_>) -> Result<(), RepositoryError> {
+    records_rows(db, rows)?;
+    execution_rows(db, rows, true)?;
+    super::image_proof::audit_rows(db, rows)?;
+    super::conflict_record::audit_rows(db, rows)
+}
+
+fn marked(db: &Connection, marker: &str) -> Result<bool, RepositoryError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+        [marker],
+        |r| r.get(0),
+    )
+    .map_err(|_| failure())
+}
+
+/// Whether the statement, which names `?1`, finds anything for `rows`.
+fn exists(db: &Connection, sql: &str, rows: Rows<'_>) -> Result<bool, RepositoryError> {
+    db.query_row(sql, rows.bound(), |r| r.get(0))
+        .map_err(|_| failure())
+}
+
+/// The execution table in a migration, before its evidence may be required:
+/// its schema and every row.
 fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryError> {
-    let marked: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
-            [EXECUTION_MARKER],
-            |r| r.get(0),
-        )
-        .map_err(|_| failure())?;
+    execution_table_schema(db)?;
+    execution_rows(db, Rows::All, required)
+}
+
+fn execution_table_schema(db: &Connection) -> Result<(), RepositoryError> {
     let sql: String = db
         .query_row(
             "SELECT sql FROM sqlite_master WHERE name='local_context_sync_execution'",
@@ -502,7 +598,9 @@ fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryErro
             |r| r.get(0),
         )
         .map_err(|_| failure())?;
-    if !marked || compact(&sql) != compact(&execution_schema(checkout_image_marked(db)?)) {
+    if !marked(db, EXECUTION_MARKER)?
+        || compact(&sql) != compact(&execution_schema(checkout_image_marked(db)?))
+    {
         return Err(failure());
     }
     let integrity: String = db
@@ -520,12 +618,29 @@ fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryErro
     {
         return Err(failure());
     }
-    let broken:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_execution e JOIN local_context_sync_records p ON p.operation_ulid=e.operation_ulid WHERE (e.commit_name IS NOT NULL)!=(e.disposition='merge' AND p.candidate_oid IS NOT NULL) OR (e.disposition='noop' AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR e.checkout_started!=0 OR e.ref_started!=0)) OR (e.disposition='fast_forward' AND p.candidate_oid IS NOT NULL AND p.candidate_oid!=p.primary_parent) OR (e.disposition='merge' AND p.candidate_oid IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=p.operation_ulid AND s.ordinal=0 AND s.kind='objects' AND s.expected_old_oid=p.context_parent AND s.expected_new_oid=p.candidate_oid)))",[],|r|r.get(0)).map_err(|_|failure())?;
+    Ok(())
+}
+
+fn execution_rows(db: &Connection, rows: Rows<'_>, required: bool) -> Result<(), RepositoryError> {
+    let records = rows.records();
+    let broken = exists(
+        db,
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM local_context_sync_execution e JOIN local_context_sync_records p ON p.operation_ulid=e.operation_ulid WHERE ({records}) AND ((e.commit_name IS NOT NULL)!=(e.disposition='merge' AND p.candidate_oid IS NOT NULL) OR (e.disposition='noop' AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR e.checkout_started!=0 OR e.ref_started!=0)) OR (e.disposition='fast_forward' AND p.candidate_oid IS NOT NULL AND p.candidate_oid!=p.primary_parent) OR (e.disposition='merge' AND p.candidate_oid IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=p.operation_ulid AND s.ordinal=0 AND s.kind='objects' AND s.expected_old_oid=p.context_parent AND s.expected_new_oid=p.candidate_oid))))"
+        ),
+        rows,
+    )?;
     if broken {
         return Err(failure());
     }
     if required {
-        let missing:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records p WHERE p.execution_required != EXISTS(SELECT 1 FROM local_context_sync_execution e WHERE e.operation_ulid=p.operation_ulid) OR (p.execution_required=0 AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR p.integration_proven=1 OR p.state IN ('applying','commit_prepared','integrated','index_pending','complete'))))",[],|r|r.get(0)).map_err(|_|failure())?;
+        let missing = exists(
+            db,
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM local_context_sync_records p WHERE ({records}) AND (p.execution_required != EXISTS(SELECT 1 FROM local_context_sync_execution e WHERE e.operation_ulid=p.operation_ulid) OR (p.execution_required=0 AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR p.integration_proven=1 OR p.state IN ('applying','commit_prepared','integrated','index_pending','complete')))))"
+            ),
+            rows,
+        )?;
         if missing {
             return Err(failure());
         }
@@ -533,15 +648,14 @@ fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryErro
     Ok(())
 }
 
+/// The three record tables in a migration: their schema and every row.
 fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryError> {
-    let marked: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
-            [MARKER],
-            |r| r.get(0),
-        )
-        .map_err(|_| failure())?;
-    if !marked {
+    records_schema(db, cascade)?;
+    records_rows(db, Rows::All)
+}
+
+fn records_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryError> {
+    if !marked(db, MARKER)? {
         return Err(failure());
     }
     for (name, sql) in schemas(cascade, execution_authority_marked(db)?) {
@@ -575,33 +689,57 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
             return Err(failure());
         }
     }
-    let broken:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o LEFT JOIN local_context_sync_records s ON s.local_record_id=o.id WHERE o.action='context_sync_local' AND s.operation_ulid IS NULL) OR EXISTS(SELECT 1 FROM local_context_sync_records s LEFT JOIN operation_records o ON o.id=s.local_record_id LEFT JOIN repositories r ON r.id=s.repository_id WHERE o.id IS NULL OR r.id IS NULL OR o.operation_ulid IS NOT s.operation_ulid OR o.repository_id IS NOT s.repository_id OR o.action!='context_sync_local' OR o.root_path IS NOT r.root_path OR o.item_id IS NOT s.item_id OR o.context_path IS NOT s.context_worktree OR o.target IS NOT s.observation OR (o.state='completed')!=(s.state IN ('complete','cancelled','abandoned')) OR (s.active_resolution IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_resolutions a WHERE a.attempt_ulid=s.active_resolution AND a.operation_ulid=s.operation_ulid AND a.generation=s.generation)))",[],|r|r.get(0)).map_err(|_|failure())?;
+    Ok(())
+}
+
+fn records_rows(db: &Connection, rows: Rows<'_>) -> Result<(), RepositoryError> {
+    let (records, envelopes) = (rows.records(), rows.envelopes());
+    // An envelope without its companion, and a companion that does not
+    // match its envelope, where either of the two is selected.
+    let broken = exists(
+        db,
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM operation_records o LEFT JOIN local_context_sync_records s ON s.local_record_id=o.id WHERE o.action='context_sync_local' AND s.operation_ulid IS NULL AND ({envelopes})) OR EXISTS(SELECT 1 FROM local_context_sync_records p LEFT JOIN operation_records o ON o.id=p.local_record_id LEFT JOIN repositories r ON r.id=p.repository_id WHERE (({records}) OR ({envelopes})) AND (o.id IS NULL OR r.id IS NULL OR o.operation_ulid IS NOT p.operation_ulid OR o.repository_id IS NOT p.repository_id OR o.action!='context_sync_local' OR o.root_path IS NOT r.root_path OR o.item_id IS NOT p.item_id OR o.context_path IS NOT p.context_worktree OR o.target IS NOT p.observation OR (o.state='completed')!=(p.state IN ('complete','cancelled','abandoned')) OR (p.active_resolution IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_resolutions a WHERE a.attempt_ulid=p.active_resolution AND a.operation_ulid=p.operation_ulid AND a.generation=p.generation))))"
+        ),
+        rows,
+    )?;
     if broken {
         return Err(failure());
     }
-    let rows = db
-        .prepare("SELECT * FROM local_context_sync_records")
-        .and_then(|mut s| s.query_map([], decode)?.collect::<Result<Vec<_>, _>>())
+    let decoded = db
+        .prepare(&format!(
+            "SELECT p.* FROM local_context_sync_records p WHERE {records}"
+        ))
+        .and_then(|mut s| {
+            s.query_map(rows.bound(), decode)?
+                .collect::<Result<Vec<_>, _>>()
+        })
         .map_err(|_| failure())?;
     // Parent and active-R candidate intent are written atomically. Their binding
     // is authority even after the objects step was observed, not a one-time
     // recovery check. Every reader/owner transaction (including S's error-path
     // object observer) must reject loss or substitution of either side.
-    let candidate_mismatch:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records p JOIN local_context_sync_resolutions a ON a.attempt_ulid=p.active_resolution WHERE a.candidate_oid IS NOT p.candidate_oid)",[],|r|r.get(0)).map_err(|_|failure())?;
+    let candidate_mismatch = exists(
+        db,
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM local_context_sync_records p JOIN local_context_sync_resolutions a ON a.attempt_ulid=p.active_resolution WHERE ({records}) AND a.candidate_oid IS NOT p.candidate_oid)"
+        ),
+        rows,
+    )?;
     if candidate_mismatch {
         return Err(failure());
     }
-    for row in rows {
+    for row in decoded {
         if foreign_id_collision(db,&row.operation_id.to_string(),Some(row.local_record_id))?
             || db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1)",[row.operation_id.to_string()],|r|r.get::<_,bool>(0)).map_err(|_|failure())? {
             return Err(failure());
         }
     }
     let mut steps = db
-        .prepare("SELECT s.kind,s.expected_old_oid,s.expected_new_oid,s.ordinal,s.generation,s.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_steps s JOIN local_context_sync_records p ON p.operation_ulid=s.operation_ulid")
+        .prepare(&format!("SELECT s.kind,s.expected_old_oid,s.expected_new_oid,s.ordinal,s.generation,s.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_steps s JOIN local_context_sync_records p ON p.operation_ulid=s.operation_ulid WHERE {records}"))
         .map_err(|_| failure())?;
-    let mut rows = steps.query([]).map_err(|_| failure())?;
-    while let Some(row) = rows.next().map_err(|_| failure())? {
+    let mut steps = steps.query(rows.bound()).map_err(|_| failure())?;
+    while let Some(row) = steps.next().map_err(|_| failure())? {
         validate_child_authority(row).map_err(|_| failure())?;
         if row.get::<_, i64>("ordinal").map_err(|_| failure())? < 0 {
             return Err(failure());
@@ -621,9 +759,9 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
             return Err(failure());
         }
     }
-    let mut attempts=db.prepare("SELECT a.attempt_ulid,a.operation_ulid,a.request_ulid,a.observation,a.candidate_oid,a.generation,a.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_resolutions a JOIN local_context_sync_records p ON p.operation_ulid=a.operation_ulid").map_err(|_|failure())?;
-    let mut rows = attempts.query([]).map_err(|_| failure())?;
-    while let Some(row) = rows.next().map_err(|_| failure())? {
+    let mut attempts=db.prepare(&format!("SELECT a.attempt_ulid,a.operation_ulid,a.request_ulid,a.observation,a.candidate_oid,a.generation,a.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_resolutions a JOIN local_context_sync_records p ON p.operation_ulid=a.operation_ulid WHERE {records}")).map_err(|_|failure())?;
+    let mut attempts = attempts.query(rows.bound()).map_err(|_| failure())?;
+    while let Some(row) = attempts.next().map_err(|_| failure())? {
         validate_child_authority(row).map_err(|_| failure())?;
         for column in 0..3 {
             OperationId::parse(&row.get::<_, String>(column).map_err(|_| failure())?)
@@ -677,11 +815,9 @@ pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, 
         if let Some(kind) = WRITE_FAULT.with(|f| f.take()) {
             return Err(journal_io(std::io::Error::from(kind)));
         }
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&service.registry_path)
-            .map(|_| ())
+        // Asked without opening the registry outside SQLite: on Unix, its
+        // close would drop this process's SQLite locks on it.
+        super::super::coordination::may_read_and_write(&service.registry_path)
     };
     access.map_err(journal_io)?;
     open_registry(&service.registry_path, &mut |_| {}).map_err(|error| match error.kind {
@@ -737,6 +873,7 @@ impl RepositoryService {
         if changed != 1 {
             return Err(ReadError::new(ResultCode::RecoveryRequired));
         }
+        hold_envelope(&tx, current.operation_id).map_err(sql_error)?;
         tx.commit().map_err(sql_error)?;
         Ok(current)
     }
@@ -842,6 +979,8 @@ impl RepositoryService {
             return Err(ReadError::new(ResultCode::ExternalChange));
         }
         let execution = prepare(&git, &current)?;
+        // Whose the row is, read before the registry's write lock is taken.
+        let origin = recovery::RowOrigin::here(repo.root(), self.clock.now().unix_timestamp());
         let _cache =
             cache_write_guard(&self.registry_path, repo.root(), RepositoryOperation::Read)?;
         // Open only after taking the cache guard: never keep a writable
@@ -864,6 +1003,7 @@ impl RepositoryService {
         let admitted = admit(&tx, facts.repository_id, kind, item, &git, &current)?;
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,context_path,state,completed_step,observed_at) VALUES(?1,?2,?3,'context_sync_local',?4,?5,?6,'created','local_sync_prepared',?7)",params![facts.repository_id,repo.root().to_str(),id,observation,item.to_string(),current.context_worktree,time::OffsetDateTime::now_utc().unix_timestamp()]).map_err(sql_error)?;
         let envelope = tx.last_insert_rowid();
+        recovery::attribute_local_row(&tx, envelope, &origin).map_err(sql_error)?;
         tx.execute("INSERT INTO local_context_sync_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,context_worktree,context_ref,primary_ref,observation,context_parent,primary_parent,state,owner_epoch,semantic_revision,generation,closure_operation,closure_checkpoint) VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,'prepared',1,1,1,?12,?13)",params![id,envelope,facts.repository_id,authoring_kind_segment(&kind),item.to_string(),current.context_worktree,current.context_ref,current.primary_ref,observation,current.context_head,current.primary_head,admitted.as_ref().map(|(op,_)|op.to_string()),admitted.as_ref().map(|(_,oid)|oid.to_string())]).map_err(sql_error)?;
         if let Some(execution) = execution {
             execution.insert(&tx, operation)?;
@@ -900,6 +1040,19 @@ fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
         || owned_identity(db, id).map_err(recovery_error)?)
 }
 
+/// Records that this process holds the envelope row of the local
+/// synchronization `operation`, as a call that takes over its ownership
+/// does: the row names the process at work on it. Nothing else changes.
+pub(super) fn hold_envelope(db: &Connection, operation: OperationId) -> rusqlite::Result<()> {
+    let holder = recovery::Holder::this_process();
+    db.execute(
+        "UPDATE operation_records SET host=?2, pid=?3
+          WHERE id=(SELECT local_record_id FROM local_context_sync_records WHERE operation_ulid=?1)",
+        params![operation.to_string(), holder.host, holder.pid],
+    )?;
+    Ok(())
+}
+
 // Only local-sync identities are excluded here. Old remote/local index handoffs
 // and lifecycle child bindings retain their existing cross-journal rules.
 const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
@@ -918,7 +1071,7 @@ const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
     ("remote_identity_confirmations", "confirmation_ulid"),
 ];
 
-fn foreign_id_collision(
+pub(in super::super) fn foreign_id_collision(
     db: &Connection,
     id: &str,
     own_envelope: Option<i64>,
@@ -975,6 +1128,7 @@ pub(in super::super) fn require_foreign_id_available(
     db: &Connection,
     id: OperationId,
 ) -> Result<(), RepositoryError> {
+    super::super::context_retirement::record::require_foreign_id_available(db, id)?;
     if owned_identity(db, &id.to_string())? {
         Err(RepositoryError::new(
             RepositoryOperation::Read,
@@ -995,8 +1149,12 @@ fn admit(
     git: &git2::Repository,
     observation: &LocalContextSyncObservationDto,
 ) -> Result<Option<(OperationId, git2::Oid)>, ReadError> {
-    // Admission is intentionally one transaction with envelope creation.
-    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND (state!='completed' OR completed_step='comment_registration_pending')) OR EXISTS(SELECT 1 FROM document_promotions WHERE repository_id=?1 AND step NOT IN ('complete','abandoned','superseded'))",[repository_id],|r|r.get(0))?;
+    // Admission is intentionally one transaction with envelope creation. A
+    // local synchronization of the item rewrites the index for the whole
+    // repository (decision 14), so it is held by a row of its item, by any
+    // row mid-write, and by the rows of the whole repository (`holds`).
+    let holds = recovery::holds_sql(&recovery::CallScope::item(item).and_the_repository(), "");
+    let pending:bool=db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND {holds}) OR EXISTS(SELECT 1 FROM document_promotions WHERE repository_id=?1 AND step NOT IN ('complete','abandoned','superseded'))"),[repository_id],|r|r.get(0))?;
     if pending {
         return Err(ReadError::new(ResultCode::RecoveryRequired));
     }
@@ -1075,7 +1233,7 @@ pub(in super::super) fn unfinished_context(
     id: i64,
     item: &ItemId,
 ) -> Result<bool, RepositoryError> {
-    audit(db)?;
+    audit_unfinished(db)?;
     db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records WHERE repository_id=?1 AND item_id=?2 AND state NOT IN ('complete','cancelled','abandoned'))",params![id,item.to_string()],|r|r.get(0)).map_err(|_|failure())
 }
 
@@ -1083,7 +1241,7 @@ pub(in super::super) fn require_no_pending(
     db: &Connection,
     id: i64,
 ) -> Result<(), RepositoryError> {
-    audit(db)?;
+    audit_unfinished(db)?;
     let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records WHERE repository_id=?1 AND state NOT IN ('complete','cancelled','abandoned'))",[id],|r|r.get(0)).map_err(|_|failure())?;
     if pending { Err(failure()) } else { Ok(()) }
 }
@@ -1094,8 +1252,10 @@ pub(in super::super) fn refresh_allowed(
     root: &std::path::Path,
 ) -> Result<bool, RepositoryError> {
     // Absence grants ordinary refresh permission only after proving there is
-    // no local-sync envelope whose companion authority was lost.
-    audit(db)?;
+    // no local-sync envelope whose companion authority was lost. The record
+    // of the operation is used whatever its state, so it is audited too.
+    audit_unfinished(db)?;
+    audit_record(db, operation)?;
     let row:Option<(bool,bool,String,bool)>=db.query_row("SELECT integration_proven,artifacts_released,state,execution_required FROM local_context_sync_records WHERE operation_ulid=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|failure())?;
     match row {
         None => Ok(!owned_identity(db, operation)?),

@@ -16,6 +16,10 @@
 //! - Where `show_request` failed and the record's state is unknown, a
 //!   post offers no Give up, no Edit text and no Share in place of a
 //!   retry, and adds Check again (P17). Check again classifies afresh.
+//! - An item's share whose shared copy was deleted offers Stop and
+//!   republish… while its record is accepted, and Republish… once it is
+//!   not (D5 Part C, E-6): the same request never gets past a deleted
+//!   branch. A share of main has no item to republish.
 
 use manyhands::{
     repository::{
@@ -302,6 +306,9 @@ pub(crate) enum SyncOutcome {
         next: ConflictNextDto,
     },
     BranchDeleted,
+    /// `recovery_required` with a `remote.history` action: the same request
+    /// would refuse again until the history is resolved outside the app.
+    HistoryUnresolved,
     NeedsUnlock,
     NeedsKey,
     /// The host the recovery names, when it names one (K-3).
@@ -349,6 +356,11 @@ pub(crate) enum SyncOffer {
     ShowHolder,
     /// The repository's Remotes page.
     SetUpSharing,
+    /// Republish… (D5 Part C): `item republish`, confirmed.
+    Republish,
+    /// Stop and republish… (D5 A3, P21): Give up, then, once the share is
+    /// stopped, Republish….
+    StopAndRepublish,
 }
 
 /// The outcome of a share's attempt.
@@ -381,6 +393,14 @@ fn classify_sync(envelope: &Envelope<MutationDataDto>, attempt: ShareAttempt) ->
     }
     match code {
         ResultCode::RemoteBranchDeleted => SyncOutcome::BranchDeleted,
+        ResultCode::RecoveryRequired
+            if envelope
+                .recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::RemoteHistory) =>
+        {
+            SyncOutcome::HistoryUnresolved
+        }
         ResultCode::UnlockRequired | ResultCode::UnlockFailed => SyncOutcome::NeedsUnlock,
         code if KEY_CODES.contains(&code) => SyncOutcome::NeedsKey,
         code if HOST_CODES.contains(&code) => SyncOutcome::NeedsHost {
@@ -417,10 +437,28 @@ impl SyncResult {
                 .collect()
         };
         let mut offers = match &self.outcome {
+            // R-30: Stop and republish… while the record is accepted,
+            // Republish… once it is finished. A record that could not be
+            // read (Unknown) is neither: it is in practice still accepted,
+            // so a republish answers `busy` while the share holds the
+            // reservation. Give up is offered alone, which asks the request
+            // to stop and sends it again with its token cancelled (the
+            // worker's Give up of an unreadable record), and Republish…
+            // follows once that answer's record reads as finished.
+            SyncOutcome::BranchDeleted if self.attempt.target == ShareTarget::Item => {
+                match self.attempt.record {
+                    RecordState::Accepted if !self.attempt.after_give_up => {
+                        vec![O::StopAndRepublish]
+                    }
+                    RecordState::Unknown if !self.attempt.after_give_up => vec![O::GiveUp],
+                    _ => vec![O::Republish],
+                }
+            }
             SyncOutcome::Published
             | SyncOutcome::Current
             | SyncOutcome::Conflict { .. }
             | SyncOutcome::BranchDeleted
+            | SyncOutcome::HistoryUnresolved
             | SyncOutcome::NothingToShare => Vec::new(),
             SyncOutcome::Stopped { .. } => vec![O::Share],
             SyncOutcome::NeedsUnlock => vec![resend(O::Unlock)],
@@ -440,14 +478,14 @@ impl SyncResult {
 }
 
 /// The codes of a key the share could not use.
-const KEY_CODES: [ResultCode; 3] = [
+pub(crate) const KEY_CODES: [ResultCode; 3] = [
     ResultCode::NoSelectedKey,
     ResultCode::KeyUnavailable,
     ResultCode::KeyRejected,
 ];
 
 /// The codes of a host that is not trusted.
-const HOST_CODES: [ResultCode; 2] = [
+pub(crate) const HOST_CODES: [ResultCode; 2] = [
     ResultCode::HostApprovalRequired,
     ResultCode::HostReplacementRequired,
 ];
@@ -470,7 +508,7 @@ fn comment_data(envelope: &Envelope<MutationDataDto>) -> Option<&CommentMutation
 }
 
 /// The host a share's host recovery names, if it names one it can read.
-fn host_authority(envelope: &Envelope<MutationDataDto>) -> Option<SshAuthority> {
+pub(crate) fn host_authority(envelope: &Envelope<MutationDataDto>) -> Option<SshAuthority> {
     envelope
         .recovery
         .iter()

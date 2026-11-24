@@ -14,8 +14,7 @@ use super::{
     FailurePoint, OperationId, RemoveRegistrationOutcome, RemoveRegistrationRequest,
     RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
     begin_or_reconcile_operation, bootstrap_lease, cache_read_guard, cache_write_guard,
-    canonical_repository_root, migrate_registry, open_registry, open_registry_read_only,
-    registry_root_key, repository_lease,
+    canonical_repository_root, open_registry_read_only, registry_root_key, repository_lease,
 };
 
 const OPERATION: RepositoryOperation = RepositoryOperation::RemoveRegistration;
@@ -144,7 +143,7 @@ fn require_registry_only_removal(
     root: &Path,
     operation_id: OperationId,
 ) -> Result<(), RepositoryError> {
-    super::local_sync::record::audit(db)?;
+    super::local_sync::record::audit_unfinished(db)?;
     let key = registry_root_key(root, OPERATION)?;
     let id = operation_id.to_string();
     // Let the existing begin path persist its yield request and return busy.
@@ -328,8 +327,7 @@ impl RepositoryService {
                 "repository changed while acquiring removal guards",
             ));
         }
-        let mut db = open_registry(&self.registry_path, &mut |_| {}).map_err(at_root)?;
-        migrate_registry(&mut db).map_err(at_root)?;
+        let mut db = self.open_migrated_registry(OPERATION).map_err(at_root)?;
         let check_registration = |db: &Connection| {
             if registration(db, &root)? != expected {
                 return Err(error(
@@ -344,8 +342,15 @@ impl RepositoryService {
         if repository.is_none() {
             require_registry_only_removal(&db, &root, operation_id).map_err(at_root)?;
         }
-        begin_or_reconcile_operation(&mut db, &root, OPERATION, operation_id, "")
-            .map_err(at_root)?;
+        begin_or_reconcile_operation(
+            &mut db,
+            &root,
+            OPERATION,
+            operation_id,
+            "",
+            self.clock.now().unix_timestamp(),
+        )
+        .map_err(at_root)?;
         self.check_failure(
             FailurePoint::BeforeRegistrationRemovalTransaction,
             OPERATION,
