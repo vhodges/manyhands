@@ -8,7 +8,7 @@ manyhands_kind: document
 
 ## Status and intent
 
-Status: draft for the owner's review, 2026-11-24. Ticket: vh-k12ka (`01M6KF58ENSF1QA7EYK89P0SMQ`), the design ticket for [Wave 06](../Waves/wave-06-pull-request-workflow.md). Decisions marked "owner" come from the design discussion of 2026-11-24 and the owner's notes on vh-k12ka of 2026-11-23. Decisions marked "proposed" are this RFC's own and need approval.
+Status: approved by the owner, 2026-11-24. Ticket: vh-k12ka (`01M6KF58ENSF1QA7EYK89P0SMQ`), the design ticket for [Wave 06](../Waves/wave-06-pull-request-workflow.md). Decisions marked "owner" come from the design discussion of 2026-11-24 and the owner's notes on vh-k12ka of 2026-11-23. Decisions marked "proposed" are this RFC's own, approved with it.
 
 This RFC lets Manyhands work in a repository whose primary branch changes only through pull requests. In pull-request mode, enabling a repository, closing a ticket and promoting a document each end in a published branch and a link to open a pull request for it. The forge does the merge, and Manyhands notices it on its next poll and cleans up. In this mode Manyhands never commits to the primary branch or pushes it. Today's direct mode stays as it is.
 
@@ -78,7 +78,7 @@ Owner decisions, 2026-11-24 unless noted:
 13. When the squash proof fails but the item is done on the primary, cleanup is a confirmed manual step.
 14. The time a closure or a document actually reached the primary is recorded in the database for display, not in the file. It is the commit time of the first primary commit that holds it, and recording it must be cheap.
 
-Proposed by this RFC, for approval:
+Proposed by this RFC, approved with it on 2026-11-24:
 
 15. The mode and the forge live in `.manyhands/config.toml`, shared by every clone.
 16. `closed_at` is when the closure was recorded, and `closed_by` is whoever recorded it (C5 decision 6 unchanged). Who merges the pull request is the forge's business.
@@ -273,7 +273,7 @@ The registered checkout normally stays on the primary, and agent work happens in
 | `poll once` | Activates a pending setup, reports items done on the primary and the dependents made ready, records `merged_at`, and warns when the checkout is not on the primary. |
 | Retirement | A confirmed deletion of a surviving remote branch, and a confirmed manual cleanup when the content proof fails for an item that is done. |
 
-New result codes and blockers: `setup_pending`, `remote_primary_missing`, `already_closing`, `primary_has_local_commits`, and a refusal for withdrawing a closure that the primary holds. New JSON: `closure.state` `closing`; `deps[].state` `closing`; `merged_at` on a ticket's closure and on a promoted document; a `pull_request` object (`source`, `target`, `forge`, `url`) on close, promote, enable and setting changes; and the setup state in `repo list` and `repo inspect`. Each needs the owner's approval through this RFC, and planning writes the exact contract rows.
+New result codes and blockers: `setup_pending`, `remote_primary_missing`, `already_closing`, `primary_has_local_commits`, and a refusal for withdrawing a closure that the primary holds. New JSON: `closure.state` `closing`; `deps[].state` `closing`; `merged_at` on a ticket's closure and on a promoted document; a `pull_request` object (`source`, `target`, `forge`, `url`) on close, promote, enable and setting changes; and the setup state in `repo list` and `repo inspect`. They are approved through this RFC, and planning writes the exact contract rows.
 
 Human output prints the link on its own line, as `pull request: <url>`, or as `open a pull request from <source> into <target>` when there is no URL.
 
