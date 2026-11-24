@@ -3,6 +3,8 @@
 //!
 //! - a conflict's `conflict:` line, and the `conflict show` command that
 //!   looks at it;
+//! - a pull-only refusal's `local commit:` line for each commit it lists, and
+//!   a note when the list is not all of them;
 //! - a comment's note on what publishing it publishes;
 //! - a local-context sync's state, reason and next action (R-37);
 //! - for `remote_branch_deleted`, three `next:` lines: cancel the request that
@@ -73,6 +75,8 @@ pub struct Seen {
 const RESERVATION_NOTE: &str = "the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.";
 /// What a published comment also publishes (design, Human Output).
 const PUBLICATION_NOTE: &str = "publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.";
+/// A pull-only refusal that lists the newest of the local commits only.
+const MORE_COMMITS_NOTE: &str = "more local commits are not listed";
 const SUPERSEDE_NOTE: &str =
     "a new conflict resolve may supersede its resolution while the paths it wrote are unchanged.";
 /// A `conflict resolve` refused with `original_request_required`: the
@@ -244,6 +248,22 @@ impl Lines {
                 lines.replaces_fields = true;
                 step(&mut lines, &data.conflict);
             }
+            Some(MutationDataDto::PrimaryLocalCommits(data)) => {
+                // Shown in place of the field list, which would not escape
+                // a summary as a field of its own line. Even with no commit
+                // to list the data is shown, and so left out of that list.
+                lines.replaces_fields = true;
+                lines.data.extend(data.local_commits.iter().map(|commit| {
+                    format!(
+                        "local commit: {} {}",
+                        field(commit.oid.get(..7).unwrap_or(&commit.oid)),
+                        field(&commit.summary)
+                    )
+                }));
+                if !data.complete {
+                    lines.notes.push(MORE_COMMITS_NOTE.into());
+                }
+            }
             Some(MutationDataDto::Comment(comment)) => {
                 // Only a checkpointed comment is published, so only a
                 // result that carries one has something to say about it.
@@ -351,7 +371,9 @@ impl Lines {
     }
 
     fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        // Data that replaces the field list is shown, whatever it holds.
+        !self.replaces_fields
+            && self.data.is_empty()
             && self.next.is_empty()
             && self.notes.is_empty()
             && self.lead.is_empty()

@@ -1003,6 +1003,9 @@ pub enum MutationDataDto {
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
     SynchronizationConflict(SynchronizationConflictMutationDto),
+    /// Of a pull-only `repo sync` refused for the commits the local primary
+    /// holds that the remote does not.
+    PrimaryLocalCommits(PrimaryLocalCommitsDto),
     Comment(CommentMutationDto),
     ConflictResolution(ConflictResolutionMutationDto),
     Identity(IdentityMutationDto),
@@ -1705,6 +1708,68 @@ impl SynchronizationConflictMutationDto {
     }
 }
 
+contract_enum!(
+    /// The tag of `PrimaryLocalCommitsDto`: one value, so that the data of
+    /// a pull-only refusal is told apart by it alone.
+    PrimaryLocalCommitsType {
+        PrimaryLocalCommits => "primary_local_commits",
+    }
+);
+
+/// One commit of the local primary branch that the remote does not have.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LocalCommitDto {
+    /// The commit, in full: 40 hexadecimal characters.
+    pub oid: String,
+    /// The first line of the commit's message. It is the author's text:
+    /// a consumer escapes it as a field.
+    pub summary: String,
+}
+
+impl LocalCommitDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let oid = stored.get("oid")?.as_str()?;
+        (oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(())?;
+        Some(Self {
+            oid: oid.to_owned(),
+            summary: stored.get("summary")?.as_str()?.to_owned(),
+        })
+    }
+}
+
+/// What a pull-only `repo sync` reports when it refused: the local primary
+/// has commits the remote does not, which a pull request repository's
+/// synchronization never merges or pushes. `local_commits` are the newest
+/// of them, newest first, and `complete` says whether that is all of them.
+/// The list is empty when the push endpoint is ahead of what was fetched.
+/// Nothing was published.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrimaryLocalCommitsDto {
+    pub r#type: PrimaryLocalCommitsType,
+    pub local_commits: Vec<LocalCommitDto>,
+    pub complete: bool,
+}
+
+impl PrimaryLocalCommitsDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let tag = stored.get("type")?.as_str()?;
+        Some(Self {
+            r#type: PrimaryLocalCommitsType::ALL
+                .into_iter()
+                .find(|known| known.as_str() == tag)?,
+            local_commits: stored
+                .get("local_commits")?
+                .as_array()?
+                .iter()
+                .map(LocalCommitDto::from_stored)
+                .collect::<Option<_>>()?,
+            complete: stored.get("complete")?.as_bool()?,
+        })
+    }
+}
+
 /// What `operation abandon` reports of the operation it closed: where
 /// the operation stood, and what it left on disk for its user to deal
 /// with in Git. Every effect of an abandon is `not_requested`: this,
@@ -2375,6 +2440,8 @@ impl MutationDataDto {
             Self::LocalContextSync(_) => None,
             Self::Synchronization(data) => Some(data.authority()),
             Self::SynchronizationConflict(_)
+            // A refusal for local commits never reaches the host's key.
+            | Self::PrimaryLocalCommits(_)
             // A comment's data names no host: its synchronization's is
             // not kept.
             | Self::Comment(_)
@@ -2478,6 +2545,14 @@ impl MutationDataDto {
             {
                 SynchronizationConflictMutationDto::from_stored(stored)
                     .map(Self::SynchronizationConflict)
+            }
+            // A pull-only refusal, or a resume that took its operation up
+            // and gave the same answer, is told apart by its tag too.
+            Command::RepoSync | Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PrimaryLocalCommitsType::PrimaryLocalCommits.as_str()) =>
+            {
+                PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
             }
             Command::ContextRetire => {
                 ContextRetirementMutationDto::from_stored(stored).map(Self::ContextRetirement)
@@ -2586,5 +2661,68 @@ mod poll_retirement_recognition_tests {
             assert_eq!(serde_json::to_value(decoded).unwrap(), stored);
             assert_eq!(stored.as_object().unwrap().len(), 5);
         }
+    }
+}
+
+#[cfg(test)]
+mod primary_local_commits_tests {
+    use super::*;
+
+    /// O5: the data a pull-only refusal stored is read back on a replay as
+    /// the same data, by `repo sync` and by an `operation resume` that took
+    /// the operation up, and only by those: the tag guards the arm before
+    /// the generic one.
+    #[test]
+    fn o5_local_commits_data_reads_back() {
+        let data = |commits: Vec<LocalCommitDto>, complete| {
+            MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: commits,
+                complete,
+            })
+        };
+        let commit = |oid: &str, summary: &str| LocalCommitDto {
+            oid: oid.to_owned(),
+            summary: summary.to_owned(),
+        };
+        for answer in [
+            data(
+                vec![
+                    commit("0123456789abcdef0123456789abcdef01234567", "Add a thing"),
+                    commit(
+                        "fedcba9876543210fedcba9876543210fedcba98",
+                        "Tab\there \u{1b}[31m",
+                    ),
+                ],
+                false,
+            ),
+            data(Vec::new(), true),
+        ] {
+            let stored = serde_json::to_value(&answer).unwrap();
+            assert_eq!(stored["type"], "primary_local_commits");
+            for command in [Command::RepoSync, Command::OperationResume] {
+                assert_eq!(
+                    MutationDataDto::from_stored(command, &stored),
+                    Some(answer.clone()),
+                    "{command:?}"
+                );
+            }
+            // The other synchronization has no such data, and does not
+            // answer it as another shape.
+            assert_eq!(
+                MutationDataDto::from_stored(Command::ItemSync, &stored),
+                None
+            );
+        }
+        // A tag with a malformed body is not read as the generic shape.
+        let malformed = serde_json::json!({
+            "type": "primary_local_commits",
+            "local_commits": [{"oid": "0123abc", "summary": "short oid"}],
+            "complete": true,
+        });
+        assert_eq!(
+            MutationDataDto::from_stored(Command::RepoSync, &malformed),
+            None
+        );
     }
 }

@@ -85,9 +85,9 @@ use super::{
         command::Command,
         context::context_names,
         dto::{
-            ConflictNextAction, ConflictNextDto, MutationDataDto,
-            SynchronizationConflictMutationDto, SynchronizationConflictType,
-            SynchronizationMutationDto,
+            ConflictNextAction, ConflictNextDto, LocalCommitDto, MutationDataDto,
+            PrimaryLocalCommitsDto, PrimaryLocalCommitsType, SynchronizationConflictMutationDto,
+            SynchronizationConflictType, SynchronizationMutationDto,
         },
         evidence::Position,
         identity::{IntentDigestBuilder, RequestId},
@@ -1121,16 +1121,19 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
-        // The domain ends an operation on unresolved history as it ends a
-        // cancelled one, but it is not the caller's cancellation: the
-        // answer is the error's, and names the repair.
+        // The domain ends an operation on unresolved history, or on the
+        // local commits of a pull-only primary, as it ends a cancelled one,
+        // but neither is the caller's cancellation: the answer is the
+        // error's. The first names the repair; the second offers none.
         let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
+        let own_end =
+            unresolved || matches!(error, SynchronizationError::PrimaryHasLocalCommits { .. });
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
-            }) => !unresolved,
+            }) => !own_end,
             Some(
                 JournalRow::Absent
                 | JournalRow::Pending(_)
@@ -1150,6 +1153,32 @@ impl SyncBinding {
             if let Some(owner) = watch.owner {
                 let _ = service.take_cancellation(owner);
             }
+        }
+        // A pull-only refusal changed nothing here and published nothing,
+        // and will not: every effect is `not_requested`, set explicitly
+        // (`effects_so_far(Unknown)` would say the publication is pending).
+        // It makes no merge, and the journal's row is what settles the
+        // record.
+        if let SynchronizationError::PrimaryHasLocalCommits { commits, complete } = error {
+            return Ran {
+                answer: Answer {
+                    data: Some(MutationDataDto::PrimaryLocalCommits(
+                        PrimaryLocalCommitsDto {
+                            r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                            local_commits: commits
+                                .iter()
+                                .map(|(oid, summary)| LocalCommitDto {
+                                    oid: oid.to_string(),
+                                    summary: summary.clone(),
+                                })
+                                .collect(),
+                            complete: *complete,
+                        },
+                    )),
+                    ..Answer::stopped(outcome::synchronization_error_code(error))
+                },
+                standing: Standing::Stopped { journal },
+            };
         }
         // A merge commit the request made stays whatever stopped it.
         let merge = merge_made(service, accepted);

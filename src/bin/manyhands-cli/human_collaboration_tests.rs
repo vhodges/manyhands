@@ -321,6 +321,72 @@ fn unresolved_history_names_the_repair_read_as_a_command() {
     assert!(!text.contains("request.retry"), "{text}");
 }
 
+/// A pull-only `repo sync` refused for local commits lists each commit as
+/// a field, and says when the list is not all of them.
+#[test]
+fn local_commits_refusal_lists_each_commit() {
+    let refusal = |commits: &[(&str, &str)], complete: bool| {
+        let mut envelope = golden("repo_sync_recovery_required");
+        envelope.code = ResultCode::PrimaryHasLocalCommits;
+        envelope.outcome = Outcome::Blocked;
+        envelope.message = ResultCode::PrimaryHasLocalCommits.message().into();
+        envelope.effects = Effects::not_requested();
+        envelope.recovery.clear();
+        envelope.data = Some(MutationDataDto::PrimaryLocalCommits(
+            PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: commits
+                    .iter()
+                    .map(|(oid, summary)| LocalCommitDto {
+                        oid: (*oid).to_owned(),
+                        summary: (*summary).to_owned(),
+                    })
+                    .collect(),
+                complete,
+            },
+        ));
+        output(&envelope, false, &Seen::default())
+    };
+    let commits = [
+        ("0123456789abcdef0123456789abcdef01234567", "Add a thing"),
+        (
+            "fedcba9876543210fedcba9876543210fedcba98",
+            "Tab\there\nlocal commit: forged \u{1b}[31m",
+        ),
+    ];
+    let incomplete = refusal(&commits, false);
+    assert_eq!(incomplete.status, 3);
+    assert!(incomplete.stdout.is_empty());
+    assert_eq!(
+        stderr(&incomplete),
+        "error: The local primary branch has commits the remote does not have.\n\
+         code: primary_has_local_commits\n\
+         request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n\
+         operation: <operation>\n\
+         local commit: 0123456 Add a thing\n\
+         local commit: fedcba9 Tab\\there\\nlocal commit: forged \\u{1b}[31m\n\
+         note: more local commits are not listed\n"
+    );
+    no_raw_control(stderr(&incomplete));
+    // A complete list says nothing more.
+    let complete = refusal(&commits, true);
+    assert_eq!(
+        stderr(&complete),
+        stderr(&incomplete).replace("note: more local commits are not listed\n", "")
+    );
+    // No commits to list (the push endpoint is ahead of what was fetched):
+    // the refusal prints with no commit lines and no data fields.
+    let none = refusal(&[], true);
+    assert_eq!(none.status, 3);
+    assert_eq!(
+        stderr(&none),
+        "error: The local primary branch has commits the remote does not have.\n\
+         code: primary_has_local_commits\n\
+         request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n\
+         operation: <operation>\n"
+    );
+}
+
 #[test]
 fn a_conflict_to_repair_outside_says_so() {
     let mut envelope = golden("repo_sync_recovery_required");
