@@ -239,3 +239,11 @@ Inference (not run): the byte layout of a serialized `[forge]` table (Task 1's t
 9. `state_tests.rs` is module `persistence_tests`, so the plan's "reservation tests near insert_operation_with_kind" has two possible homes (persistence_tests for the insert itself; reservation::tests for `reserve_remote_operation`); `--lib` filters differ (section B).
 10. `ForgeDto` must be added to the `pub use` list at src/repository/read/mod.rs:51 (not in the plan's Task 4 file list; `pub use read::*` at repository.rs:118 then exports it).
 11. `push_call` has a second caller (republish, sync.rs:8294) and `ended_if_unresolved` a signature pinned by sync_tests.rs:16754; widening either must keep the 4-argument call at 16823 compiling or edit it (mechanical).
+
+## Task 1
+
+- Commit `745fdf6b` feat(config): integration mode, forge setting and format version 2. Review approved; 4 Minor findings, none fixed (below).
+- Tests run, each by exact name, red first then green: `repository_config_mode_and_forge_rules` and `repository_config_written_bytes` (`--test canonical_foundation`), `publication_remote_selection_keeps_mode_and_forge` (`--test repository_enablement`), and the edited tests of E-1, E-2 and E-4.
+- Named edits applied: E-1 (2 tests in `src/repository/discovery.rs`), E-2, E-4 (2 cases). E-3 dropped (Task 0).
+- Ruling: the URL check's host rule is loose (`https://@` passes) and is kept — the design asks only for a non-empty host, and `web_url` only builds links — a malformed `web_url` yields a broken link, never a connection.
+- Minor findings left as they are: the version check inside `validate_mode_and_forge` is unreachable from its callers (defensive); the P3 test stages the configuration in the index without a comment; `as_str` values are checked only through parse and write.
