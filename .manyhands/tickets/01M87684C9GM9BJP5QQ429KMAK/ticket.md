@@ -4,7 +4,7 @@ deps:
 - 01M87683441PRAYQJQBQBG96YY
 id: 01M87684C9GM9BJP5QQ429KMAK
 title: 'Wave 06 Cycle 04: Document promote in pull-request mode'
-type: feature
+type: cycle
 status: open
 project: manyhands
 team: core
