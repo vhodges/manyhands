@@ -12,36 +12,38 @@ id: "01M878QWXT8RVAKS7FB68PH3D7"
 
 Cycle document: [Wave 06 Cycle 01](../Cycles/wave-06-cycle-01-pull-request-setting.md). Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md) and the Cycle document's Product-Owner Decisions.
 
-Status: **draft** (revision 1).
+Status: **draft** (revision 2).
 
 ## Intent And Approval Boundary
 
-Make the mode and the forge a validated part of the repository's configuration, show them, give later Cycles the functions that recognise a forge and build a pull request link, and make `repo sync` pull-only in a pull-request repository. Approving this design approves the Required Contract of the Cycle document and the rulings below. It does not authorize implementation, pushes other than the ticket branch, or merging.
+Make the mode and the forge a validated part of the repository's configuration, show them, give later Cycles the functions that recognise a forge and build a pull request link, and make `repo sync` pull-only in a pull-request repository. Approving this design approves the Cycle document's Required Contract and the rulings below. It does not authorize implementation, pushes other than the ticket branch, or merging.
 
 ## Conventions
 
-- Names are cited as `file` and `function`. Line numbers are approximate, at ticket head `adeae732`; Task 0 re-checks every one.
-- "The table" means `RepositoryConfig::unknown`, the `toml::Table` that holds every configuration key other than `format_version`, `primary_branch` and `publication_remote`.
+- Names are cited as `file` and `function`. Line numbers are approximate, at `21b811d5`; Task 0 re-checks every one.
+- "The table" means `RepositoryConfig::unknown`, the `toml::Table` holding every configuration key other than `format_version`, `primary_branch` and `publication_remote`.
 - "Pull-request repository" means a valid configuration with `integration = "pull_request"`.
 
 ## Baseline Facts
 
-Each fact was read in the source at `adeae732`.
+Each fact was read in the source at `21b811d5`, and checked by the round 1 source review.
 
-1. **The configuration type.** `src/canonical.rs` `RepositoryConfig { primary_branch, publication_remote, unknown: toml::Table }` derives `Clone, Debug, PartialEq`. `parse_repository_config` refuses any `format_version` other than integer 1 with `ValidationCode::InvalidField` and "unsupported format_version; expected 1", and moves every other key into the table. `serialize_repository_config` re-inserts `format_version = 1`, `primary_branch` and `publication_remote` into a copy of the table and writes it with `toml::to_string`. `toml` 0.8 is built without `preserve_order`, so the table is sorted and the written keys come out alphabetically.
+1. **The configuration type.** `src/canonical.rs` `RepositoryConfig { primary_branch, publication_remote, unknown: toml::Table }` derives `Clone, Debug, PartialEq`. `parse_repository_config` refuses any `format_version` other than integer 1 ("unsupported format_version; expected 1") and moves every other key into the table. `serialize_repository_config` re-inserts `format_version = 1`, `primary_branch` and `publication_remote` into a copy of the table. `toml` 0.8.23 is built without `preserve_order`, so keys are written sorted. The `v0.2.1` tag's parser holds the same refusal.
 2. **Construction sites.** `RepositoryConfig { … }` is built by struct literal in 16 places, including `tests/ticket_closure.rs`, `tests/document_promotion.rs`, `tests/document_promotion/advanced.rs` and `tests/comment_publication.rs`, which are SSH-harness targets.
-3. **Readers.** `src/repository.rs` `read_configuration_for` reads the root checkout's working-tree file. `src/repository/mutation/bind/ticket.rs` and `src/repository/promotion/run.rs` read the committed blob. The index's `configuration_observations` table (`src/repository/discovery.rs` `migrate_registry`) stores `state`, `primary_branch`, `publication_remote`, `invalid_code` and `guidance`; `persist_configuration` writes it, and `stored_configuration` rebuilds a configuration for the index snapshot by synthesizing `format_version = 1` source from those columns.
-4. **An invalid configuration.** Mutating verbs answer `invalid_configuration` (blocked, exit 3, recovery `repo.inspect`). `repo inspect`, `repo list` and `index status` still succeed and report the configuration as invalid.
-5. **The configuration object.** `src/repository/read/dto.rs` `ConfigurationDto { state, primary_branch, publication_remote, problems }` is built in 12 places, 6 of them in desktop tests. `schemas/v1/repository_configuration.schema.json` has `additionalProperties: false` and requires all four keys. The shapes are pinned by `tests/fixtures/read_v1/repo_inspect.json`, `repo_list.json` and `tests/fixtures/cli_v1/cli_repo_inspect.json`, `cli_repo_list.json`. Human `repo inspect` is `src/bin/manyhands-cli/human.rs` `repository_inspection`, with no golden.
-6. **Version 2 as an invalid example.** These tests use `format_version = 2` as an unsupported version: `src/repository/discovery.rs` (two tests, at about 4463 and 4693), `tests/canonical_foundation.rs` (about 332), `tests/read_repository.rs` (about 681) and `tests/repository_enablement.rs` (about 1088 and 3431). Two desktop tests use `format_version = 99`, which stays invalid.
-7. **The SSH URL parser.** `src/repository/transport/endpoint.rs` `parse_ssh_endpoint` accepts `ssh://[user@]host[:port]/path` and scp-like `[user@]host:path`, keeps the host and port as `SshAuthority`, and does not keep the path separately. The module is visible only inside `crate::repository`. A change under `src/repository/transport/` makes AGENTS.md select every SSH-harness target.
-8. **No non-SSH publication remote.** `publication_remote_eligible_for` requires `configured_remote_endpoint` to succeed for fetch and push, so `file://` and local paths cannot be selected. A test that really fetches or pushes needs the SSH harness.
-9. **`repo sync`.** `src/repository/mutation/bind/sync.rs` binds `repo sync` to `SynchronizationTarget::Primary` and calls `synchronize` with `MERGING`. `src/repository/remote/sync.rs` `SynchronizationSettings` has one field, `refuse_divergence`; when it is set, a divergence is refused with `SynchronizationError::MergeRequired` "before anything of a merge is recorded or prepared". After the fetch, `graph_plan` classifies the relation. A remote that is only ahead is fast-forwarded locally, and `push_call` pushes nothing when the remote already holds the candidate, so the answer is `SynchronizationOutcome::AlreadyCurrent`: code `already_applied`, `effects.publication` `current`. A local primary that is ahead is pushed.
-10. **Primary pushes.** Every push of the primary goes through `src/repository/remote/refs.rs` `RemoteRefPlan::primary_push_refspec` and `push_exact`. No guard is added there (decision 1).
-11. **The desktop's classification.** `src/desktop/model/publication.rs` `classify_sync` keys first on `effects.publication`: `Published` gives `SyncOutcome::Published` ("Shared …"), `Current` gives `SyncOutcome::Current` ("… is the same as the shared copy"), and `NotRequested` or `Pending` falls through to the code.
-12. **A new result code** is registered in: `src/results.rs` `result_codes!`; `src/results_tests.rs` (the design table and its count, 70 today); `src/repository/mutation/outcome.rs` `synchronization_error_code` and the exhaustive `recovery`; `schemas/v1/envelope.schema.json` and `schemas/v1/request.schema.json`, checked by `tests/read_contract.rs` `contract_enumerations`; `tests/mutation_contract.rs` `CODES_NO_MUTATION_GOLDEN_HAS` or a `tests/fixtures/mutation_v1` golden listed in `tests/support/mutation_golden.rs`; the recovery tables of `docs/RFC/cli-contract.md`, checked by `tests/cli/recovery_tables.rs`; and `docs/research/wave-03-api-audit.md`, which that test reads.
-13. **Registry migrations.** `src/repository/discovery.rs` `migrate_registry` runs every migration, idempotently and one way. Named markers are rows of `registry_migrations`; `src/repository/closure/record.rs` (`MARKER`, `migrate`) is the template. `tests/repository_enablement.rs` `registry_creates_repository_and_discovery_metadata_schema` pins the table list, and `tests/recovery_foundation_gate.rs` pins the markers written in the first migration transaction.
-14. **Percent-encoding.** `percent-encoding` 2.3.2 is in `Cargo.lock` through `url` (a `git2` dependency) but is not a direct dependency.
+3. **Readers and the index.** `src/repository.rs` `read_configuration_for` reads the root checkout's working-tree file. The index's `configuration_observations` table stores `state`, `primary_branch`, `publication_remote`, `invalid_code` and `guidance`. `persist_configuration` writes it, and runs only when the primary context is re-persisted; a refresh re-observes only changed or dirty contexts (`whole_refresh_tests.rs` `a_refresh_observes_only_changed_contexts`). `repo list` reads the rows through `src/repository/read/admin.rs` `stored_configuration`. The index snapshot's `SnapshotConfiguration::Valid` holds only the primary branch and the remote, and is not changed by this Cycle.
+4. **An invalid configuration.** Mutating verbs answer `invalid_configuration` (blocked, exit 3, recovery `repo.inspect`). `repo inspect`, `repo list` and `index status` still succeed and report it. Remote selection maps a serializer refusal to `RepositoryErrorKind::InvalidConfiguration`.
+5. **The configuration object.** `src/repository/read/dto.rs` `ConfigurationDto { state, primary_branch, publication_remote, problems }` is built by literal in 7 places: `src/repository/read/admin.rs`, `src/bin/manyhands-cli/human_tests.rs` and 5 desktop test files. `schemas/v1/repository_configuration.schema.json` has `additionalProperties: false` and requires all four keys. The shapes are in `tests/fixtures/read_v1/repo_inspect.json`, `repo_list.json` and `tests/fixtures/cli_v1/cli_repo_inspect.json`, `cli_repo_list.json`. `human_tests.rs` `repository_and_remote_metadata_escape_controls_at_field_boundaries` counts the lines of human `repo inspect`.
+6. **Version 2 as an invalid example.** `src/repository/discovery.rs` (two tests), `tests/canonical_foundation.rs`, `tests/read_repository.rs` and `tests/repository_enablement.rs` (two cases) write `format_version = 2` as an unsupported version. None asserts the message. Two desktop tests use `99`, which stays invalid.
+7. **The SSH URL parser.** `src/repository/transport/endpoint.rs` `parse_ssh_endpoint` keeps the host and port, not the path, and is visible only inside `crate::repository`. A change under `src/repository/transport/` makes AGENTS.md select every SSH-harness target.
+8. **No non-SSH publication remote.** `publication_remote_eligible_for` requires an SSH endpoint for fetch and push. A test that really fetches or pushes needs the SSH harness. This departs from the RFC's Testing line "CLI contract tests against a local remote", which cannot be met.
+9. **`repo sync`.** `src/repository/mutation/bind/sync.rs` binds it to `SynchronizationTarget::Primary`, and `domain_call` passes `MERGING` for every call, including `operation resume` and the `conflict resolve` continuation, which do not run `prepare`. `src/repository/remote/sync.rs` `SynchronizationSettings` has one field, `refuse_divergence`. After the fetch, `graph_plan` returns a `CleanIntegrationPlan { final_oid, local_update, push_needed }` or `MergeRequired`. A remote that is only ahead is fast-forwarded, `push_call` pushes nothing, and the answer is `AlreadyCurrent`: `already_applied`, publication `current` (pinned by `c4_merging_local_behind`). A local primary that is ahead is pushed.
+10. **The divergence refusal keeps its reservation.** With `refuse_divergence`, a divergence returns `MergeRequired` before anything of a merge is recorded, and the operation keeps its remote reservation until `request cancel` (`tests/mutation_remote.rs`, the refused-divergence case). `ended_if_unresolved` is the existing way a refusal cancels its operation and lets the reservation go, used for `HistoryUnresolved`.
+11. **The journal's outcomes.** The remote journal stores an `authoritative_kind` of `published` or `already_current` only (`src/repository/remote/state.rs`), and `authority_outcome` maps it back on a replay.
+12. **A new result code** is registered in: `src/results.rs` `result_codes!`; `src/results_tests.rs`, both the design table with its count (70) and `result_code_messages_are_fixed`; `src/repository/mutation/outcome.rs` `synchronization_error_code` and the exhaustive `recovery`; `schemas/v1/envelope.schema.json` and `schemas/v1/request.schema.json`, checked through `tests/read_contract.rs` `contract_enumerations`; `tests/mutation_contract.rs`, where every code has a mutation golden or a listed reason (`CODES_NO_MUTATION_GOLDEN_HAS`, `CODES_NO_FIXTURE_CAN_PRODUCE`); the recovery tables of `docs/RFC/cli-contract.md`, checked by `tests/cli/recovery_tables.rs`; and `docs/research/wave-03-api-audit.md`.
+13. **A new data schema** must be reachable from `DATA_ROOTS` (`tests/mutation_contract.rs`, 68 roots), and every data root must describe a golden's data. Mutation refusals can carry `MutationDataDto` data (an untagged enum): `repo sync` already carries host and conflict data. Each schema `enum` is counted by `tests/read_contract.rs` `published_enumerations_list_exactly_the_registered_values`.
+14. **Registry migrations.** `src/repository/discovery.rs` `migrate_registry` runs every migration, idempotently and one way, with named markers in `registry_migrations`. `tests/recovery_foundation_gate.rs` `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly` pins the markers committed before the recovery migration, so a new marker belongs after `context_retirement::record::migrate`. `migrate_item_read_schema` is the precedent for marking contexts dirty in a migration.
+15. **Percent-encoding.** `percent-encoding` 2.3.2 is in `Cargo.lock` through `url` (a `git2` dependency) but is not a direct dependency.
+16. **The desktop** reads `already_applied` with publication `current` from `repo sync` as `SyncOutcome::Current` ("… is the same as the shared copy"). A code it does not know becomes `Failed { code }`, showing the code's message.
 
 ## Part A: The Configuration
 
@@ -61,43 +63,46 @@ impl RepositoryConfig {
 }
 ```
 
-The types live in `src/canonical.rs` beside `RepositoryConfig`, each with `as_str`. The accessors are infallible: parse and serialize both validate the table, so a configuration that reached a caller holds valid values. A hand-built configuration with an invalid value reads as `Direct` or `None`, and fails at serialize.
+The types live in `src/canonical.rs`, each with `as_str`. The accessors are infallible: parse and serialize both validate the table. A hand-built configuration with an invalid value reads as `Direct` or `None`, and fails at serialize.
 
-**Validation**, in `parse_repository_config` and `serialize_repository_config`, both through one function:
+**Validation**, in one function called by both `parse_repository_config` and `serialize_repository_config`. Every refusal is `ValidationCode::InvalidField`:
 
 | Input | Result |
 | --- | --- |
-| `format_version` 1 or 2 | accepted; any other integer is "unsupported format_version; expected 1 or 2" |
+| `format_version` 1 or 2 | accepted; any other integer: "unsupported format_version; expected 1 or 2" |
 | `integration` absent | direct |
-| `integration` `"direct"` or `"pull_request"` | that mode |
-| `integration` any other value or type | `InvalidField`, "integration must be \"direct\" or \"pull_request\"" |
-| `pull_request` with `format_version = 1` | `InvalidField`, "integration = \"pull_request\" requires format_version = 2" |
-| `pull_request` with no `publication_remote` | `InvalidField`, "integration = \"pull_request\" requires publication_remote" |
-| `forge` not a table | `InvalidField`, "forge must be a table" |
-| `forge.kind` not one of the four | `InvalidField`, naming the four |
-| `forge.web_url`, `forge.pull_request_url` not an absolute `https://` or `http://` URL, or containing whitespace | `InvalidField` |
-| `forge.pull_request_url` without `{source}` | `InvalidField` |
+| `integration` `"direct"` or `"pull_request"`, exactly | that mode |
+| `integration` any other string, or not a string | "integration must be \"direct\" or \"pull_request\"" |
+| `pull_request` with `format_version = 1` | "integration = \"pull_request\" requires format_version = 2" |
+| `pull_request` without `publication_remote` | "integration = \"pull_request\" requires publication_remote" |
+| `forge` not a table | "forge must be a table" |
+| `[forge]` with neither `kind` nor `pull_request_url` | "forge needs a kind or a pull_request_url" |
+| `forge.kind` not a string, or not one of the four exactly | "forge.kind must be one of bitbucket-cloud, bitbucket-data-center, github, gitlab" |
+| `forge.web_url` or `forge.pull_request_url` not a string, not starting `https://` or `http://`, with an empty host, or containing whitespace or a control character | "forge.<key> must be an absolute http or https URL" |
+| `forge.pull_request_url` without `{source}` | "forge.pull_request_url must contain {source}" |
 | other keys in `[forge]` | kept |
 
-**Writing.** `serialize_repository_config` writes `format_version = 2` when `integration()` is `PullRequest`, and `1` otherwise (R-4). The table keeps its other keys, so a direct-mode file without `[forge]` is written byte for byte as today and the strings pinned in `src/repository.rs` tests and `tests/mutation_confirmation.rs` do not change.
+`{target}` in a template is optional.
 
-**Unchanged writers.** Enable and create write a direct-mode file as today. Remote selection rewrites the whole file through `serialize_repository_config`, so it keeps `integration`, `[forge]` and the version; this Cycle adds the test that pins it (nothing pins remote selection's preservation of the table today).
+**Writing.** `serialize_repository_config` writes `format_version = 2` when `integration()` is `PullRequest`, and `1` otherwise (decision 8). The table keeps its other keys, so a direct-mode file without `[forge]` is written byte for byte as today.
+
+**Unchanged writers.** Enable and create write a direct-mode file as today. Remote selection rewrites the whole file through `serialize_repository_config`, so it keeps `integration`, `[forge]` and the version; this Cycle adds the test that pins that. Clearing the remote of a pull-request repository fails the serializer's validation and answers `invalid_configuration` (Baseline Fact 4).
 
 ## Part B: The Index And The Reads
 
-**Migration (R-5).** One named, additive migration, marker `wave_06_configuration_mode_v1`, run by `migrate_registry` outside the first transaction:
+**Migration (R-5).** One named, additive migration, marker `wave_06_configuration_mode_v1`, run by `migrate_registry` after `context_retirement::record::migrate`:
 
 - `ALTER TABLE configuration_observations ADD COLUMN integration TEXT`, and `forge_kind`, `forge_web_url`, `forge_pull_request_url`, all `TEXT` and nullable;
-- `UPDATE repositories SET refresh_required = 1`, so the next refresh rewrites every configuration row.
+- mark every registration's primary context dirty, as `migrate_item_read_schema` marks contexts, so that the next refresh re-persists the configuration row.
 
-**Persist and rebuild.** `persist_configuration` writes the four columns for a valid configuration and leaves them null otherwise. `stored_configuration` synthesizes `integration` and `[forge]` from them, and `format_version = 2` for pull-request mode, so the snapshot's configuration parses to the same value as the file.
+**Persist and read.** `persist_configuration` writes the four columns for a valid configuration and leaves them null otherwise. `stored_configuration` in `read/admin.rs` reads them. A valid row whose `integration` is null (written before the migration and not yet refreshed) reads as `"direct"`, with `forge` null: no build before this one ever wrote these keys. The index snapshot is unchanged (Baseline Fact 3).
 
 **The configuration object.** `ConfigurationDto` gains:
 
 - `integration`: `"direct"` or `"pull_request"` when `state` is `valid`, otherwise null;
-- `forge`: `{ "kind", "web_url", "pull_request_url" }` (each a string or null) when the valid configuration has a `[forge]` table, otherwise null.
+- `forge`: `{ "kind", "web_url", "pull_request_url" }`, each a string or null, when the valid configuration has a `[forge]` table, otherwise null. It is the configured setting.
 
-`schemas/v1/repository_configuration.schema.json` requires both, with `forge`'s object inline and `additionalProperties: false`. `repo inspect` builds them from its live read; `repo list` from the index columns. Human `repo inspect` adds `Integration: <mode>` and, when set, `Forge: <kind or web_url>`.
+`schemas/v1/repository_configuration.schema.json` requires both. `integration`'s values and `forge.kind`'s values are schema `enum`s, registered in `contract_enumerations`. `repo inspect` builds the fields from its live read, and `repo list` from the index. Human `repo inspect` adds `Integration: <mode>` for a valid configuration and, when there is a forge, `Forge: <kind>`, or `Forge: <pull_request_url>` for a template-only setting. Human `repo list` is unchanged.
 
 ## Part C: The Forge Module
 
@@ -105,139 +110,162 @@ A new library module, `src/forge.rs`, declared in `src/lib.rs`, with no GPUI dep
 
 **Remote location (R-2).** `RemoteLocation::parse(url: &str) -> Option<RemoteLocation>`, with `host` (lowercased), `port` (`Option<u16>`) and `path` (no leading `/`, no trailing `/` or `.git`). It accepts `ssh://[user@]host[:port]/path` and scp-like `[user@]host:path`, and answers `None` for anything else. It is used only to build links: never to connect, and never for host trust.
 
-**Recognition.** `recognise(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Option<Forge>`, where `Forge` holds the kind (or none, for a template-only setting), the location, the web address and the template:
+**Recognition.** `recognise(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Option<Forge>`, where `Forge { kind: Option<ForgeKind>, location: Option<RemoteLocation>, web_url: Option<String>, template: Option<String> }`:
 
-- a `ForgeSetting` with a `kind` or a `pull_request_url` wins;
-- otherwise the location's host `bitbucket.org`, `github.com` or `gitlab.com` gives that kind;
+- a `ForgeSetting` gives a forge with its `kind` (possibly none), `web_url` and template, and the remote's location;
+- otherwise a remote location whose host is `bitbucket.org`, `github.com` or `gitlab.com` gives that kind;
 - otherwise `None`.
 
-**Default mode.** `default_integration(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Integration` is `PullRequest` when there is a remote URL and `recognise` gives a forge, and `Direct` otherwise (RFC decision 9).
+**Default mode.** `default_integration(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Integration` is `PullRequest` when there is a remote URL and `recognise` gives a forge, and `Direct` otherwise.
 
-**The link.** `pull_request_link(forge: Option<&Forge>, source: &str, target: &str) -> PullRequestLink`, with `PullRequestLink { source, target, forge: Option<ForgeKind>, url: Option<String> }`. Branch names are percent-encoded with every byte outside `A-Z a-z 0-9 - . _ ~ /` encoded (R-3). A trailing `/` on `web_url` is dropped.
+**The link.** `pull_request_link(forge: Option<&Forge>, source: &str, target: &str) -> PullRequestLink`, with `PullRequestLink { source, target, forge: Option<ForgeKind>, url: Option<String> }`. `forge` is the forge's kind, or none. Branch names are percent-encoded wherever they appear, templates included, with every byte outside `A-Z a-z 0-9 - . _ ~ /` encoded (R-3).
+
+The web base is `web_url` with any trailing `/` dropped when it is set, and otherwise the kind's cloud address (`https://bitbucket.org`, `https://github.com`, `https://gitlab.com`). The remote's own host is never used as a web address.
 
 | Forge | URL, or why none |
 | --- | --- |
-| template | the template with `{source}` and `{target}` replaced |
-| Bitbucket Cloud | `https://bitbucket.org/<workspace>/<repo>/pull-requests/new?source=<source>&dest=<target>`; the path must have two segments |
-| Bitbucket Data Center | `<web_url>/projects/<KEY>/repos/<repo>/pull-requests?create&sourceBranch=refs/heads/<source>&targetBranch=refs/heads/<target>`, with the key upper-cased; no URL without `web_url`, or for a path that is not two segments or whose first segment starts with `~` (a personal repository) (R-8) |
-| GitHub | `https://github.com/<owner>/<repo>/compare/<target>...<source>?expand=1`; two segments |
-| GitLab | `https://gitlab.com/<path>/-/merge_requests/new?merge_request[source_branch]=<source>&merge_request[target_branch]=<target>`; two or more segments |
+| a template | the template with `{source}` and `{target}` replaced; it wins over `kind` |
+| Bitbucket Cloud | `<base>/<workspace>/<repo>/pull-requests/new?source=<source>&dest=<target>`; the path must have two segments |
+| Bitbucket Data Center | `<web_url>/projects/<KEY>/repos/<repo>/pull-requests?create&sourceBranch=refs/heads/<source>&targetBranch=refs/heads/<target>`, with the key upper-cased; no URL without `web_url`, or for a path that is not two segments, or whose first segment starts with `~` (R-8) |
+| GitHub | `<base>/<owner>/<repo>/compare/<target>...<source>?expand=1`; two segments |
+| GitLab | `<base>/<path>/-/merge_requests/new?merge_request[source_branch]=<source>&merge_request[target_branch]=<target>`; two or more segments |
 | none, or an unusable path | no URL |
-
-With `web_url` set, a cloud kind uses it in place of the cloud host.
 
 **The human line.** `PullRequestLink::human_line(&self) -> String` gives `pull request: <url>`, or `open a pull request from <source> into <target>`.
 
 ## Part D: Pull-Only Repo Sync
 
-**Settings.** `SynchronizationSettings` gains `pull_only: bool`: "Never merge and never push. A local target with commits the remote lacks is `PrimaryHasLocalCommits`, before anything of a merge, a local update or a push is prepared." A pull-only setting also sets `refuse_divergence`, so a synchronization that already holds a merge of its own, begun without it, stays `RecoveryRequired` as the field's comment says.
+**Settings.** `SynchronizationSettings` gains `pull_only: bool`, documented as: "On the primary target only: never merge and never push. A local primary with commits the remote lacks is `PrimaryHasLocalCommits`, before anything of a merge, a local update or a push is prepared." It has no effect on a context target. `PULL_ONLY` also sets `refuse_divergence`, so a synchronization that already holds a merge of its own, begun without the setting, is `RecoveryRequired` (Baseline Fact 9's field comment).
 
-**The binding.** `SyncBinding` for `repo sync` reads the repository's configuration, which its `prepare` already needs for the remote, and calls `synchronize` with a new `PULL_ONLY` setting in a pull-request repository and `MERGING` otherwise. `item sync` always uses `MERGING`.
+**The binding (R-11).** `SyncBinding`'s `domain_call` chooses the setting for every call on the primary target, first calls and continuations alike (`operation resume`, the `conflict resolve` continuation, a rerun): `PULL_ONLY` when `read_configuration_for` gives a pull-request repository, and `MERGING` otherwise. `item sync` always uses `MERGING`.
 
-**The decision.** In `synchronize_remote_observed_inner`, after `graph_plan` and before the divergence check, a pull-only primary synchronization whose local primary holds commits that the fetched remote primary does not (local ahead, or diverged) stops with `SynchronizationError::PrimaryHasLocalCommits { commits, complete }`. `commits` lists up to 20 of those commits, newest first, each with its ID and first summary line (R-7). The reservation is released as for every refusal; only the fetch's tracking ref has moved.
+**The decision.** In `synchronize_remote_observed_inner`, right after `graph_plan` and before the divergence check, a pull-only primary synchronization whose plan has `push_needed`, or that is `MergeRequired`, stops with `SynchronizationError::PrimaryHasLocalCommits { commits, complete }`. A pure function computes the list:
+
+```rust
+fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: git2::Oid)
+    -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error>
+```
+
+It walks from `local`, hiding `remote`, in `git2::Sort::TOPOLOGICAL | git2::Sort::TIME` order (newest first), takes up to 20 commits with their summary lines, and gives `complete` false when a 21st exists (R-7).
+
+**Ending the operation (decision 5).** The refusal goes through `ended_if_unresolved`, widened to end the operation for `PrimaryHasLocalCommits` as it does for `HistoryUnresolved`: the operation is cancelled and the reservation let go. Only the fetch's tracking ref has moved. A replay of the request returns its stored refusal.
 
 **The outcomes.**
 
-| Relation after the fetch | Today (direct mode) | Pull-only |
+| Relation after the fetch | Direct mode (today) | Pull-only |
 | --- | --- | --- |
 | equal | `already_applied`, publication `current` | the same |
-| remote ahead | fast-forward; `already_applied`, publication `current` | fast-forward; `ok`, publication `not_requested`, `commit_oid` the new head (R-6) |
-| local ahead | push; `ok`, publication `published` | `primary_has_local_commits`, nothing moved |
-| diverged | merge and push | `primary_has_local_commits`, nothing moved |
+| remote ahead | fast-forward; `already_applied`, `current` | the same (decision 4) |
+| local ahead | push; `ok`, publication `published` | `primary_has_local_commits`, nothing moved, nothing held |
+| diverged | merge and push | `primary_has_local_commits`, nothing moved, nothing held |
+| root not on the primary, or not clean | today's refusal | the same |
 
-The pull-only fast-forward is a new `SynchronizationOutcome::FastForwarded { target, oid }`, made only by a pull-only synchronization whose local ref moved. The index step runs as for every synchronization that moves its target.
+**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", and no recovery action (R-10). Its data is a new `MutationDataDto` variant, `{ "local_commits": [{ "oid", "summary" }], "complete" }`, with the full 40-character `oid`, and the schema `schemas/v1/primary_local_commits.schema.json`, listed in `DATA_ROOTS` with the SSH case's golden. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <7-character oid> <summary>` line per commit through the human output's field escaping, and `note: more local commits are not listed` when `complete` is false.
 
-**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", recovery `repo.inspect` (R-10). Its data is a new `MutationDataDto` variant, `{ "local_commits": [{ "oid", "summary" }], "complete" }`, with `schemas/v1/primary_local_commits.schema.json`. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <short oid> <summary>` line per commit, and a `note:` line when the list is not complete.
+**Replay and resume.**
 
-**Replay and resume.** A retried request returns its stored answer. `operation resume` of a pull-only synchronization interrupted after its fast-forward finishes it like any synchronization. A pending primary merge begun in direct mode before the switch is `RecoveryRequired` under the pull-only setting (Baseline Fact 9).
+| Case | Answer |
+| --- | --- |
+| a retried request after the refusal | its stored refusal |
+| `operation resume` of a pull-only synchronization interrupted after its fast-forward | finished as today: `already_applied`, `current` |
+| a direct-mode primary merge still pending when the repository switched | `recovery_required`, as for any merge begun without `refuse_divergence` |
 
 ## Part E: The Desktop
 
-`classify_sync` maps a `repo sync` answer with code `ok` and publication `not_requested` to a new `SyncOutcome::Updated`, worded "Updated <primary>" in `src/desktop/model/activity/copy.rs` and `src/desktop/model/operations/outcomes.rs`. `already_applied` with publication `current` stays `SyncOutcome::Current`. `primary_has_local_commits` falls through to `Failed { code }`, which shows its message; its own wording is Cycle 06's. No label changes.
+No change (decision 4), beyond the named edits for the configuration object's literals. A pull-only fast-forward reads as current, as a direct one does today, and `primary_has_local_commits` shows its message through `Failed { code }`. Its wording is Cycle 06's.
 
 ## Required Outcomes
 
 | # | Outcome | Proof |
 | --- | --- | --- |
 | P1 | Every validation row of Part A | `tests/canonical_foundation.rs`, one table-driven test |
-| P2 | A direct-mode file is written byte for byte as today; a pull-request file is written as version 2 | the same test, and the existing pinned strings unchanged |
-| P3 | Remote selection keeps `integration`, `[forge]` and the version | a new case in `tests/repository_enablement.rs` |
-| P4 | `repo inspect` and `repo list` report `integration` and `forge`, from the file and from the index | `tests/read_repository.rs`, the read contract and the CLI goldens |
-| P5 | The migration adds the columns once and marks every registration for refresh | a migration test beside the template's |
+| P2 | A direct-mode file is written byte for byte as today; a pull-request file as version 2; a version 2 direct file as version 1 | the same target, one test |
+| P3 | Remote selection keeps `integration`, `[forge]`, the version and unknown keys of a pull-request configuration | `tests/repository_enablement.rs` |
+| P4 | `repo inspect` and `repo list` report `integration` and `forge`, from the file and from the index, with a pre-refresh row reading `"direct"` | `tests/read_repository.rs`, the read contract and the CLI goldens |
+| P5 | The migration adds the columns once, and the first refresh after it fills them | a migration test in `src/repository/discovery.rs` |
 | P6 | Recognition, default mode and every URL row of Part C | `src/forge.rs` unit tests, table-driven |
-| P7 | The pull-only decisions of Part D | `src/repository/remote/sync_tests.rs`, through the existing fetch and push stand-in |
-| P8 | The binding picks the setting by mode | `src/repository/mutation/bind/sync_tests.rs` |
-| P9 | End to end: a pull-only fast-forward leaves the server's primary unchanged, and a local commit is refused with nothing pushed | one SSH case in `mutation_remote` |
-| P10 | `primary_has_local_commits` is registered everywhere Baseline Fact 12 lists | the existing registration tests |
-| P11 | The desktop classifies a pull-only result as updated or current | `src/desktop/model/publication_tests.rs` |
+| P7 | `local_only_commits`, and the pull-only decision after `graph_plan` | `src/repository/remote/sync_tests.rs`, beside the `graph_plan` tests |
+| P8 | `domain_call` takes `PULL_ONLY` for every primary call in a pull-request repository, `MERGING` otherwise and for `item sync` | `src/repository/mutation/bind/sync_tests.rs` |
+| P9 | End to end: a pull-only fast-forward leaves the server's primary unchanged; a local commit is refused, the server's primary is unchanged, and a following `item sync` is not `busy`; the golden is written | one SSH case in `mutation_remote` |
+| P10 | `primary_has_local_commits` is registered everywhere Baseline Facts 12 and 13 list | the existing registration tests |
 
 ## Testing
 
-As AGENTS.md's Testing Strategy requires, each test sits at the cheapest layer that catches its regression. P9 is the only SSH case: no non-SSH publication remote can be selected (Baseline Fact 8), and the property it pins is that nothing reaches the server, which only a real fetch and push can show. Its edge cases are in P7. No real waits.
+Each test sits at the cheapest layer that catches its regression. P9 is the only SSH case: no non-SSH publication remote can be selected (Baseline Fact 8), and the property it pins (nothing reaches the server, and the repository is not held) needs a real fetch and push. Its edge cases are in P7 and P8. No real waits. A row that pins unchanged behaviour (the equal and remote-ahead rows, the unchanged byte output) cannot fail first, and is exempt from the plan's fail-first rule.
+
+At review-ready the SSH tier is AGENTS.md's `src/repository/remote/` row (`ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`) and `mutation_remote` for `src/repository/mutation/`, plus `ticket_closure`, `document_promotion` and `comment_publication` (R-12).
 
 ## Named Edits To Pre-Existing Tests
 
-- **E-1** (Task 1) `src/repository/discovery.rs`, the two tests that write `format_version = 2` as an invalid configuration: change it to `format_version = 3`.
-- **E-2** (Task 1) `tests/canonical_foundation.rs`, the unsupported-version case: `2` to `3`, and its expected message to "unsupported format_version; expected 1 or 2" if the case asserts it.
-- **E-3** (Task 1) `tests/read_repository.rs`, the invalid-configuration case that writes `format_version = 2`: `2` to `3`.
-- **E-4** (Task 1) `tests/repository_enablement.rs`, the two cases that write `format_version = 2`: `2` to `3`.
-- **E-5** (Task 3) the 12 `ConfigurationDto { … }` literals: add `integration` and `forge`.
-- **E-6** (Task 3) `tests/fixtures/read_v1/repo_inspect.json`, `repo_list.json`, `tests/fixtures/cli_v1/cli_repo_inspect.json`, `cli_repo_list.json`: add the two fields, regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read before committing.
-- **E-7** (Task 3) `tests/repository_enablement.rs` `registry_creates_repository_and_discovery_metadata_schema`, only if it pins columns: add the four columns.
-- **E-8** (Task 4) `src/results_tests.rs`: the design table gains `primary_has_local_commits` and the count becomes 71.
-- **E-9** (Task 4) `tests/mutation_contract.rs` `CODES_NO_MUTATION_GOLDEN_HAS`, if the code has no mutation golden: add it with its reason.
+- **E-1** (Task 1) `src/repository/discovery.rs`, the two tests that write `format_version = 2` as an invalid configuration: `2` to `3`.
+- **E-2** (Task 1) `tests/canonical_foundation.rs`, the unsupported-version case: `2` to `3`.
+- **E-3** (Task 1) `tests/read_repository.rs`, the invalid-configuration case: `2` to `3`.
+- **E-4** (Task 1) `tests/repository_enablement.rs`, the two invalid-version cases: `2` to `3`.
+- **E-5** (Task 4) the 7 `ConfigurationDto { … }` literals: add `integration` and `forge`.
+- **E-6** (Task 4) the four configuration goldens: add the two fields, regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read before committing.
+- **E-7** (Task 4) `src/bin/manyhands-cli/human_tests.rs` `repository_and_remote_metadata_escape_controls_at_field_boundaries`: the line count grows by the `Integration:` line.
+- **E-8** (Task 4) `tests/read_contract.rs` `contract_enumerations`: add the `integration` and `forge.kind` enums.
+- **E-9** (Task 3) `src/repository/read/tests.rs`, the calls of `admin::stored_configuration`: pass the new columns.
+- **E-10** (Task 5) `src/results_tests.rs`: the design table gains `primary_has_local_commits`, the count becomes 71, and `result_code_messages_are_fixed` gains its message.
+- **E-11** (Task 6) `tests/mutation_remote.rs`, the `REFUSING` settings constant: add `pull_only: false`.
+- **E-12** (Task 8) `tests/mutation_contract.rs` `DATA_ROOTS`: add `primary_local_commits.schema.json` (68 to 69).
 
-Task 0 greps for every other assertion on the behaviour this Cycle changes (the version message, the configuration object's keys, `MERGING` in `repo sync`, `SyncOutcome` matches) and adds what it finds here before Task 1. Any red test outside this list stops work for the owner.
+Task 0's sweep adds what else it finds, under decision 9: the version message; `format_version = 2` in tests; the configuration object's keys in JSON assertions; `stored_configuration` callers; `SynchronizationSettings {` literals; exhaustive matches on `SynchronizationError` and `MutationDataDto`; result-code counts; and tests that migrate an older registry and then assert that contexts are clean or the index current, which the new dirty marks change.
 
 ## Document Amendments
 
-- **D-1** `docs/RFC/cli-contract.md`: the `repo sync` row (pull-only in a pull-request repository), the configuration object's two fields, `primary_has_local_commits` in the recovery tables, and its data shape.
-- **D-2** `docs/RFC/canonical-content-and-comment-schema.md`: `format_version = 2`, `integration` and `[forge]`. That RFC requires "an explicit compatibility and migration decision" for a later version; the Pull-Request Mode RFC's decision 21 is that decision, cited here.
-- **D-3** `docs/RFC/repository-index-persistence-and-refresh.md`: the configuration rows' new columns.
+- **D-1** `docs/RFC/cli-contract.md`: the `repo sync` row (pull-only in a pull-request repository); the sentence that "a later `repo sync` publishes" (not in pull-request mode); the configuration object's two fields; `primary_has_local_commits` in the recovery tables, with its golden and next step `none`; its data shape.
+- **D-2** `docs/RFC/canonical-content-and-comment-schema.md`: `format_version = 2`, `integration` and `[forge]`, and the compatibility decision the RFC's Migration section asks for (decision 8 and the Pull-Request Mode RFC's decision 21). This departs from the Pull-Request Mode RFC's note that it amends the schema RFC "for closure immutability only": decision 21 cannot be delivered without it (R-13).
+- **D-3** `docs/RFC/repository-index-persistence-and-refresh.md`: the configuration rows' new columns and the migration's dirty marks.
 - **D-4** `docs/research/wave-03-api-audit.md`: `primary_has_local_commits` in `repo sync`'s codes.
-- **D-5** The shipped skills, in `skills/` and in `.agents/skills/` where the copies are the same file: `manyhands-repositories` (the two keys and version 2), `manyhands-sharing-and-sync` (pull-only `repo sync`) and `manyhands-recovery` (`primary_has_local_commits`).
+- **D-5** The shipped skills, in `skills/` and `.agents/skills/` (each copy edited where they differ): `manyhands-repositories` (the two keys, version 2, how a repository reaches pull-request mode: K-2), `manyhands-sharing-and-sync` (pull-only `repo sync`) and `manyhands-recovery` (`primary_has_local_commits`). Each says that pull-request mode is not usable end to end until close and promote support it (decision 10).
+- **D-6** `docs/RFC/git-workflow-and-conflict-recovery.md`, Deliberate Primary Synchronization: it pushes `P:P` in direct mode only; in a pull-request repository it fetches and fast-forwards.
+- **D-7** `docs/Waves/wave-06-pull-request-workflow.md`, Cycle 01's checklist: the link record and the guard move out (decisions 1 and 2). Applied at approval.
 
 ## Rulings
 
-Each: decision — why — cost if wrong.
+Each: decision — why — cost if wrong. Revision 1's R-4 and R-6 became the owner's decisions 8 and 4, and their numbers are not reused.
 
 - **R-1** `integration` and `forge` stay in the table behind typed accessors, not new struct fields — no struct literal changes, including in four SSH-harness test files, and validation is in one place — a later Cycle that wants fields refactors 16 sites.
-- **R-2** A separate remote-URL parser for links, not a change to `transport/endpoint.rs` — the transport parser drops the path and is crate-private, and a change there forces every SSH target (about 95 minutes) — two parsers can disagree on an odd URL, which costs a missing or wrong link, never a connection or trust decision.
+- **R-2** A separate remote-URL parser for links, not a change to `transport/endpoint.rs` — the transport parser drops the path and is crate-private, and a change there forces every SSH target — two parsers can disagree on an odd URL, which costs a missing or wrong link, never a connection or trust decision.
 - **R-3** `percent-encoding` 2.3 as a direct dependency, with `/` left unencoded — it is already compiled through `git2`, and forges accept slashes in branch names in these URLs — a forge that needs `%2F` gets a broken link until the set changes.
-- **R-4** A version 2 direct-mode file is accepted and written back as version 1 — the RFC keeps direct mode at version 1, and a hand edit to version 2 should not be fatal — a reader who expects the version to be sticky sees it change.
-- **R-5** The migration marks every registration `refresh_required` rather than back-filling the columns — no build ever wrote these keys, so a refresh is the cheapest way to make the rows true — one extra refresh per repository after the upgrade.
-- **R-6** A pull-only fast-forward answers `ok` with publication `not_requested`, not today's `already_applied` and `current` — the owner's decision 4 needs the answer to say the primary moved — a caller that treats only `already_applied` as "nothing to do" sees `ok`.
+- **R-5** The migration marks each primary context dirty, so the next refresh re-persists the configuration row — a refresh re-observes only dirty or changed contexts — one primary re-observation per repository after the upgrade.
 - **R-7** The refusal names at most 20 commits, newest first, with `complete` — enough to act on, and bounded — a person with more than 20 local commits sees a partial list.
-- **R-8** No Data Center URL for a personal repository or an unexpected path — their web paths differ (`/users/<name>/repos/…`) and are not in the RFC — such a repository gets the branch names without a link.
-- **R-9** The SSH case goes in `mutation_remote` — it already pins `repo sync`'s conformance, and AGENTS.md selects it for `src/repository/mutation/` anyway — none beyond its run time.
-- **R-10** `primary_has_local_commits` offers `repo.inspect` — the way out (moving the commits to a branch) is a person's Git work, not a Manyhands verb — an agent gets no automatic next step.
+- **R-8** No Data Center URL for a personal repository or an unexpected path — their web paths differ and are not in the RFC — such a repository gets the branch names without a link.
+- **R-9** The SSH case is registered in `tests/mutation_remote.rs`'s case table, beside `c4_conformance_repo_sync` — the target already pins `repo sync`, and AGENTS.md selects it for `src/repository/mutation/` — none beyond its run time.
+- **R-10** `primary_has_local_commits` has no recovery action — the way out (moving the commits to a branch) is Git work outside Manyhands, which the contract's recovery tables write as `none`, and the refusal holds nothing — an agent gets no automatic next step.
+- **R-11** The setting is chosen per call in `domain_call`, not once in `prepare` — resumes and continuations skip `prepare` (Baseline Fact 9) — a configuration changed between a call and its resume changes the setting, which is the safer direction.
+- **R-12** The SSH tier at review-ready adds `ticket_closure`, `document_promotion` and `comment_publication` — their test files build configurations the serializer now validates — about 15 more minutes.
+- **R-13** The canonical schema RFC is amended for the configuration, a departure from the Pull-Request Mode RFC's "closure immutability only" — decision 21's version 2 needs it — none.
 
 ## Known Limits
 
-The Cycle document's K-1 to K-4.
+The Cycle document's K-1 to K-5.
 
 ## Unverified
 
-- **U-1** The URL shapes are the forges' documented "create pull request" forms. The RFC asks for a check against each forge's own message after a push; with no forge available to this Cycle, the owner checks one Bitbucket link by hand at review-ready.
-- **U-2** The names of `graph_plan`'s relation cases and the place `refresh_required` is read are confirmed by Task 0.
+- **U-1** The Data Center, GitHub and GitLab URL shapes are the forges' documented forms, not checked against a live forge (decision 7 checks Bitbucket Cloud).
 
 ## Alternatives Rejected
 
 - New fields on `RepositoryConfig`: R-1.
 - Extending the transport's parser: R-2.
-- An interim guard: the owner's decision 1.
-- Reusing `merge_required` for a diverged primary: it names a merge as the way forward, which pull-request mode forbids, and it does not cover a local primary that is only ahead.
+- An interim guard: decision 1.
+- A new "updated" answer for a pull-only fast-forward: decision 4.
+- Keeping the reservation after the refusal, as the divergence path does: decision 5.
+- Reusing `merge_required`: it names a merge as the way forward, which pull-request mode forbids, and it does not cover a primary that is only ahead.
 
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| A hand-written version 2 file is not byte-canonical, and remote selection's staged-entry check (`canonical_configuration_blob`) refuses it | Remote selection in a pull-request repository is Cycle 02's; the Known Limit is recorded in Cycle 02's ticket at approval |
-| The index snapshot and the live read disagree on the new fields | P4 reads both from one fixture |
-| `mutation_remote`'s run time (about 49 minutes) | One case added, run singly between steps; the whole target once at review-ready |
+| A hand-written version 2 file is not byte-canonical, and remote selection refuses to rewrite it | K-5; noted on vh-c97se at approval |
+| The live read and the index disagree on the new fields | P4 reads both from one fixture |
+| `mutation_remote`'s run time (about 49 minutes) | One case, run singly between steps; the whole target once at review-ready |
 
 ## Review Record
 
 | Round | Reviewers | Blocking | Important | Minor | Resolution |
 | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | — | not yet reviewed |
+| 1 | source and feasibility | 3 | 8 | 7 | All resolved in revision 2: the pure decision function and its tests (B1); the refusal ends its operation (B2, decision 5); the golden, `DATA_ROOTS` and schema move with the SSH case (B3); dirty marks (I4); the migration's place (I5); the setting per call (I6, R-11); today's fast-forward answer kept (I7, decision 4); E-7 to E-12 (I8); test paths (I9); the switch reaches the remote first (I10, K-2); pre-refresh rows read `"direct"` (I11); the minors in place |
+| 1 | contract and consistency | 2 | 16 | 15 | All resolved in revision 2: the push evidence (B1, decision 6); the 0.2.1 check (B2, A2); test paths (I3); recovery `none` (I4, R-10); the golden (I5); D-1, D-6, R-13 (I6); notes to other tickets (I7); the conflict-resolution exclusion (I8); replay and resume (I9); recognition (I10); the link rules (I11); R-12 (I12); P3 and K-5 (I13); decision 9 and the wider sweep (I14); decision 7 and A7 (I15); the checkout row (I16); Baseline Fact 8's departure (I17); decision 10 (I18); the minors in place |

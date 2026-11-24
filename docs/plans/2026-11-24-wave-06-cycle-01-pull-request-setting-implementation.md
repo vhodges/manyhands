@@ -14,11 +14,13 @@ id: "01M878QXH8MFXHYK3RPMNMA4C8"
 
 **Goal:** Make the repository's mode and forge a validated, visible setting, add forge recognition and the pull request link builder, and make `repo sync` pull-only in a pull-request repository.
 
-**Architecture:** The two new keys stay in `RepositoryConfig`'s table behind typed accessors (`src/canonical.rs`); the index stores them in new columns of `configuration_observations`; a new library module `src/forge.rs` recognises forges and builds links; `repo sync` passes a pull-only `SynchronizationSettings` in a pull-request repository, and the synchronization refuses local commits before anything moves.
+**Architecture:** The two new keys stay in `RepositoryConfig`'s table behind typed accessors (`src/canonical.rs`); the index stores them in new columns of `configuration_observations`; a new library module `src/forge.rs` recognises forges and builds links; `repo sync` passes a pull-only `SynchronizationSettings` on every primary call in a pull-request repository, and the synchronization refuses local commits after `graph_plan`, ending its operation.
 
 **Tech Stack:** Rust, `toml` 0.8, `rusqlite`, `git2`, `percent-encoding` 2.3 (new direct dependency), the SSH test harness for one case.
 
-**Spec:** [Cycle 01 design](2026-11-24-wave-06-cycle-01-pull-request-setting-design.md), under the [Cycle document](../Cycles/wave-06-cycle-01-pull-request-setting.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
+**Spec:** [Cycle 01 design](2026-11-24-wave-06-cycle-01-pull-request-setting-design.md) (revision 2), under the [Cycle document](../Cycles/wave-06-cycle-01-pull-request-setting.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
+
+Status: **draft** (revision 2).
 
 ## Global Constraints
 
@@ -28,23 +30,29 @@ id: "01M878QXH8MFXHYK3RPMNMA4C8"
 
 **Where.** Every task runs in `.manyhands/worktrees/01M87683441PRAYQJQBQBG96YY` on `manyhands/ticket/01M87683441PRAYQJQBQBG96YY`. No lane branches, no extra worktrees, no copies of `target/`.
 
-**Cargo.** Every Rust command is `devenv shell -- cargo …` with `--locked`. One cargo command at a time on this machine (memory pressure has killed whole sessions). Desktop tests run with `--features desktop-test-support --bin manyhands`, on their own.
+**Cargo.** Every Rust command is `devenv shell -- cargo …` with `--locked`, except the one `devenv shell -- cargo add percent-encoding@2.3` in Task 2. One cargo command at a time on this machine. Desktop tests run with `--features desktop-test-support --bin manyhands`, on their own.
 
 **Registry.** The registry migration is one-way. Never run this branch's CLI or library against the owner's registry. Any run outside `cargo test` uses an isolated `HOME`, `MANYHANDS_DATA_DIR` and `GIT_CONFIG_GLOBAL` under a temporary root. Ticket operations run only from the up-to-date main checkout, as `devenv shell -- cargo run --locked --bin manyhands-cli -- …`.
 
-**Tests (AGENTS.md Testing Strategy).** Between steps, run only the tests the step wrote or changed, by exact name: `--lib <path>::<test> -- --exact`, or `--test <target> <name> -- --exact`. Never run a whole SSH-harness target between steps. Stop and narrow any single test command that runs past about 15 minutes. The fast tier, and the SSH tier AGENTS.md selects for the changed paths, run once, in Task 9. Each new test sits at the cheapest layer that catches its regression; the one new SSH case is design P9, with its reason in the design's Testing section. No real waits.
+**Tests (AGENTS.md Testing Strategy).**
 
-**Test edits.** Only the design's named edits E-1 to E-9, and any edit Task 0's sweep adds to that list. Any other red test stops work for the owner.
+- Between steps, run only the tests the step wrote or changed, by exact name: `--lib <module path>::<test> -- --exact`, `--bin manyhands-cli <module path>::<test> -- --exact`, or `--test <target> <name> -- --exact`. Module paths follow the `#[path]` modules: `results::tests`, `forge::tests`, `repository::remote::sync::tests`, `repository::mutation::bind::sync::tests`, `human_collaboration::tests`. Task 0 confirms each, and the paths of `src/repository/discovery.rs`'s and `src/bin/manyhands-cli/human_tests.rs`'s tests.
+- Every test command must report more than zero tests run. A run of zero is a failed step.
+- Never run a whole SSH-harness target between steps. Stop and narrow any single test command that runs past about 15 minutes.
+- The fast tier and the SSH tier of the design's Testing section run once, in Task 10.
+- No real waits.
 
-**Every new check fails first.** Each new test or assertion is run red once (before the code, or against a deliberate stub) and the red run is recorded in the ledger.
+**Every new check fails first.** Each new test or assertion is run red once, before its code or against a deliberate stub, and the red run is recorded in the ledger. A row that pins unchanged behaviour is exempt (design Testing).
 
-**Main.** Merge `origin/main` into the ticket branch in Task 0, before Task 5, before Task 9, and whenever main moves. Never rebase.
+**Test edits.** The design's named edits E-1 to E-12, and the mechanical edits Task 0's sweep finds, under decision 9: an edit that keeps every assertion's intent is applied and logged as E-13 onwards with its reason; an edit that removes or weakens an assertion stops for the owner.
+
+**Main.** Merge `origin/main` into the ticket branch in Task 0, before Task 6, before Task 10, and whenever main moves. Never rebase.
 
 **Publish.** After each task's commit, the orchestrator publishes the branch with `item sync` from the main checkout and checks that `HEAD` equals `origin/manyhands/ticket/01M87683441PRAYQJQBQBG96YY`.
 
 **Commits.** Each ends with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
-**Static gates** (Task 9, and before any commit that touches Rust):
+**Static gates** (Task 10, and before any commit that touches Rust):
 
 ```sh
 devenv shell -- cargo check --all-features --locked
@@ -52,13 +60,15 @@ devenv shell -- cargo fmt --check
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
+**Ticket checkpoints.** The orchestrator adds a comment to vh-c2dtj after Tasks 0, 2 (with the owner's link check), 6 and 8, and at review-ready, each naming the tests that ran. Comments are added from the main checkout with `manyhands-cli comment add --repo /home/vhodges/work/src/manyhands --id 01M87683441PRAYQJQBQBG96YY --input <file> --non-interactive --json --request-id <ULID>`.
+
 ## Review Focus
 
-- A mode or kind spelled in another case (`"Pull_Request"`, `"GitHub"`) is invalid, not silently direct. Task 1 and Task 2 tests pin it.
+- A mode or kind spelled in another case (`"Pull_Request"`, `"GitHub"`) is invalid, not silently direct. Task 1 pins it.
 - A cloud remote written with a user and port (`ssh://git@bitbucket.org:22/ws/repo.git`) is still recognised. Task 2 pins it.
-- Branch names with `&`, `#`, `?`, a space or non-ASCII characters are encoded so that they cannot break the query string. Task 2 pins it.
+- Branch names with `&`, `#`, `?`, a space or non-ASCII characters are encoded so that they cannot break a query string, in templates too. Task 2 pins it.
 - A `web_url` with a path prefix (`https://example.com/bitbucket/`) keeps the prefix and loses only the trailing slash. Task 2 pins it.
-- A registry migrated by an older build then opened by this one marks every registration for refresh, and a repeated open adds no column twice. Task 3 pins it.
+- After one `primary_has_local_commits`, the repository is not held: the next `item sync` is not `busy`. Task 8 pins it.
 
 ---
 
@@ -66,31 +76,33 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 | Task | Files | Depends on |
 | --- | --- | --- |
-| 0 | ledger `docs/plans/2026-11-24-wave-06-cycle-01-pull-request-setting-execution.md` | approval |
+| 0 | the ledger `docs/plans/2026-11-24-wave-06-cycle-01-pull-request-setting-execution.md` | approval |
 | 1 | `src/canonical.rs`, `tests/canonical_foundation.rs`, `tests/repository_enablement.rs`, E-1 to E-4 files | 0 |
 | 2 | `src/forge.rs` (new), `src/lib.rs`, `Cargo.toml`, `Cargo.lock` | 1 |
-| 3 | `src/repository/discovery.rs`, `src/repository.rs`, `src/repository/read/dto.rs`, `src/repository/read/admin.rs`, `schemas/v1/repository_configuration.schema.json`, `src/bin/manyhands-cli/human.rs`, goldens, E-5 to E-7 files | 1 |
-| 4 | `src/results.rs`, `src/results_tests.rs`, `src/repository/mutation/outcome.rs`, `src/repository/mutation/` data DTO, `schemas/v1/`, `tests/mutation_contract.rs` | 1 |
-| 5 | `src/repository/remote/sync.rs`, `src/repository/remote/sync_tests.rs` | 4 |
-| 6 | `src/repository/mutation/bind/sync.rs`, `src/repository/mutation/bind/sync_tests.rs`, `src/bin/manyhands-cli/` human output, `tests/mutation_remote/` | 5 |
-| 7 | `src/desktop/model/publication.rs`, `src/desktop/model/publication_tests.rs`, `src/desktop/model/activity/copy.rs`, `src/desktop/model/operations/outcomes.rs` | 6 |
-| 8 | `docs/RFC/cli-contract.md`, `docs/RFC/canonical-content-and-comment-schema.md`, `docs/RFC/repository-index-persistence-and-refresh.md`, `docs/research/wave-03-api-audit.md`, skills | 4, 6 |
-| 9 | none new | all |
+| 3 | `src/repository/discovery.rs` (`migrate_registry`), `src/repository.rs` (`persist_configuration`), `src/repository/read/admin.rs` (`stored_configuration`), E-9 | 1 |
+| 4 | `src/repository/read/dto.rs`, `src/repository/read/admin.rs`, `schemas/v1/repository_configuration.schema.json`, `src/bin/manyhands-cli/human.rs`, `tests/read_repository.rs`, E-5 to E-8 | 3 |
+| 5 | `src/results.rs`, `src/results_tests.rs`, `src/repository/mutation/outcome.rs`, `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`, E-10 | 0 |
+| 6 | `src/repository/remote/sync.rs`, `src/repository/remote/sync_tests.rs`, E-11 | 5 |
+| 7 | `src/repository/mutation/bind/sync.rs`, `src/repository/mutation/bind/sync_tests.rs`, the `MutationDataDto` definition, `src/bin/manyhands-cli/human_collaboration.rs` and its tests | 6 |
+| 8 | `tests/mutation_remote.rs`, `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs`, `tests/support/mutation_golden.rs`, the new golden, E-12 | 7 |
+| 9 | `docs/RFC/cli-contract.md`, the three RFCs of D-2, D-3 and D-6, `docs/research/wave-03-api-audit.md`, skills | 5, 8 |
+| 10 | none new | all |
 
 ## Task 0: Baseline, References, Ledger
 
 **Files:** create the ledger `docs/plans/2026-11-24-wave-06-cycle-01-pull-request-setting-execution.md`.
 
 - [ ] **Step 1:** In the worktree, `git fetch origin`, `git merge origin/main`, `git merge-base --is-ancestor origin/main HEAD`, `git status --short`. Record the base SHA and HEAD before and after in the ledger.
-- [ ] **Step 2:** Re-check every name and path the design cites (Baseline Facts 1 to 14, Parts A to E) with grep at the new HEAD. Mark each "existing" or "new" in a ledger table, with its current file and approximate line. Resolve U-2: the names of `graph_plan`'s relation cases, and where `refresh_required` is read.
-- [ ] **Step 3: Premise sweep.** Grep for assertions on what this Cycle changes, and add each hit to the named edits in the ledger (E-10 onwards), or stop for the owner if one cannot be kept by an edit: the text "unsupported format_version"; `format_version = 2` in tests; the keys of the configuration object (`"publication_remote"` beside `"primary_branch"` in JSON assertions and goldens); `ConfigurationDto {`; `MERGING` and `SynchronizationSettings {`; exhaustive matches on `SynchronizationOutcome`, `SyncOutcome` and `MutationDataDto`; `DESIGN_CODES`; and the table and column lists pinned by `tests/repository_enablement.rs` `registry_creates_repository_and_discovery_metadata_schema`.
-- [ ] **Step 4:** Confirm that no CI test list changes: this Cycle adds no test target.
-- [ ] **Step 5:** Commit the ledger. The orchestrator publishes the branch and adds the start checkpoint comment to vh-c2dtj (base SHA, ledger path, Task 0's findings).
+- [ ] **Step 2: A2.** Run `git show v0.2.1:src/canonical.rs | grep -n 'unsupported format_version'` and record the line ("unsupported format_version; expected 1") in the ledger.
+- [ ] **Step 3:** Re-check every name and path the design cites (Baseline Facts 1 to 16 and Parts A to D) at the new HEAD, and the test module paths of the Global Constraints. Mark each "existing" or "new" in a ledger table with its current file. Name the `recovery` arm that gives no actions, and the predicate that selects a registration's primary context.
+- [ ] **Step 4: Premise sweep.** Grep for every site of the design's sweep list (Named Edits, last paragraph) and add each hit to the ledger as a named edit E-13 onwards, under decision 9.
+- [ ] **Step 5:** Confirm that no CI test list changes: this Cycle adds no test target.
+- [ ] **Step 6:** Commit the ledger. The orchestrator publishes the branch and adds the start checkpoint comment.
 
 ## Task 1: The Configuration (Design Part A)
 
 **Files:**
-- Modify: `src/canonical.rs` (`RepositoryConfig` accessors, the new types, `parse_repository_config`, `serialize_repository_config`)
+- Modify: `src/canonical.rs` (the new types and accessors, `parse_repository_config`, `serialize_repository_config`)
 - Test: `tests/canonical_foundation.rs`, `tests/repository_enablement.rs`
 - Named edits: E-1 to E-4
 
@@ -100,196 +112,188 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `pub enum ForgeKind { BitbucketCloud, BitbucketDataCenter, Github, Gitlab }` with `as_str` (`"bitbucket-cloud"`, `"bitbucket-data-center"`, `"github"`, `"gitlab"`);
   - `pub struct ForgeSetting { pub kind: Option<ForgeKind>, pub web_url: Option<String>, pub pull_request_url: Option<String> }`;
   - `impl RepositoryConfig { pub fn integration(&self) -> Integration; pub fn forge(&self) -> Option<ForgeSetting> }`.
-- All four types derive `Clone, Copy` where possible, `Debug, PartialEq, Eq`.
+- The enums derive `Clone, Copy, Debug, PartialEq, Eq`; `ForgeSetting` derives `Clone, Debug, PartialEq, Eq`.
 
-- [ ] **Step 1: Write the failing table test** `repository_config_mode_and_forge_rules` in `tests/canonical_foundation.rs`. Each row is a source and an expected result; check the result with `parse_repository_config`, and for every accepted row check that `serialize_repository_config` of the parsed value parses back equal. Rows (exact values from the design):
-
-```rust
-// (source, expected)
-("format_version = 1\nprimary_branch = \"main\"\n", Ok(Integration::Direct, None)),
-("format_version = 2\nprimary_branch = \"main\"\n", Ok(Integration::Direct, None)),
-("format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n", Ok(Integration::PullRequest, None)),
-("format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n", Err("integration = \"pull_request\" requires format_version = 2")),
-("format_version = 2\nprimary_branch = \"main\"\nintegration = \"pull_request\"\n", Err("integration = \"pull_request\" requires publication_remote")),
-("format_version = 2\nprimary_branch = \"main\"\nintegration = \"Pull_Request\"\n", Err("integration must be \"direct\" or \"pull_request\"")),
-("format_version = 1\nprimary_branch = \"main\"\nintegration = 1\n", Err("integration must be \"direct\" or \"pull_request\"")),
-("format_version = 3\nprimary_branch = \"main\"\n", Err("unsupported format_version; expected 1 or 2")),
-("format_version = 1\nprimary_branch = \"main\"\nforge = \"github\"\n", Err("forge must be a table")),
-("format_version = 1\nprimary_branch = \"main\"\n[forge]\nkind = \"GitHub\"\n", Err(/* names the four kinds */)),
-("format_version = 1\nprimary_branch = \"main\"\n[forge]\nkind = \"bitbucket-data-center\"\nweb_url = \"bitbucket.example.com\"\n", Err(/* web_url */)),
-("format_version = 1\nprimary_branch = \"main\"\n[forge]\npull_request_url = \"https://x.example/new?to={target}\"\n", Err(/* {source} */)),
-("format_version = 1\nprimary_branch = \"main\"\n[forge]\nkind = \"bitbucket-data-center\"\nweb_url = \"https://bitbucket.example.com\"\nextra = true\n", Ok(Integration::Direct, Some(kind BitbucketDataCenter, web_url, None))),
-```
-
-Assert the `ValidationCode` is `InvalidField` for every `Err` row, and the message where the row gives it.
-
-- [ ] **Step 2: Write the failing byte test** `repository_config_written_bytes` in `tests/canonical_foundation.rs`: serializing the parse of `"format_version = 1\nprimary_branch = \"main\"\n"` gives exactly that string; the pull-request row of Step 1 serializes with `format_version = 2` as its first line; a version 2 direct-mode source serializes with `format_version = 1`; the `extra = true` key inside `[forge]` survives a round trip.
-- [ ] **Step 3: Run both, expect FAIL** (unknown types, then the version 2 rows): `devenv shell -- cargo test --all-features --locked --test canonical_foundation repository_config_ -- --nocapture`. Record the red run.
-- [ ] **Step 4: Implement** the types and accessors, and one validation function `fn validate_mode_and_forge(format_version: i64, publication_remote: Option<&str>, table: &toml::Table) -> Result<(), ValidationProblem>` called by both `parse_repository_config` (after the existing field checks) and `serialize_repository_config` (before writing). `parse_repository_config` accepts integer 1 or 2. `serialize_repository_config` writes `2` when `integration()` is `PullRequest`, else `1`. A URL is valid when it starts with `https://` or `http://`, has a non-empty host after the scheme, and contains no whitespace or control characters.
-- [ ] **Step 5: Apply E-1 to E-4** (`format_version = 2` to `3` in the six invalid-version tests; E-2's message if asserted).
-- [ ] **Step 6: Write the failing test** `publication_remote_selection_keeps_mode_and_forge` in `tests/repository_enablement.rs`: enable a repository, commit a version 2 configuration with `integration = "pull_request"`, `publication_remote = "origin"` and a `[forge]` table holding an unknown key, select a different eligible SSH remote with the existing remote-selection helper of that file, and assert that the committed `.manyhands/config.toml` still parses to `PullRequest`, the same `ForgeSetting`, version 2 and the unknown key. Run it red against a stub that drops the table, then green.
-- [ ] **Step 7: Run** the tests of Steps 1, 2 and 6 and the edited tests of E-1 to E-4 by exact name; then `devenv shell -- cargo test --all-features --locked --lib canonical` and `devenv shell -- cargo test --all-features --locked --test canonical_foundation`. Expected: PASS.
+- [ ] **Step 1: Write the failing table test** `repository_config_mode_and_forge_rules` in `tests/canonical_foundation.rs`. Each row is a source and an expected result; check it with `parse_repository_config`, and for every accepted row check that `serialize_repository_config` of the parsed value parses back equal. One row per line of the design's validation table, with the design's exact messages, including at least:
+  - accepted: version 1 direct; version 2 direct; version 2 with `publication_remote = "origin"` and `integration = "pull_request"`; a `[forge]` with `kind = "bitbucket-data-center"`, `web_url = "https://bitbucket.example.com"` and `extra = true`; a `[forge]` with only `pull_request_url = "https://forge.example/new?from={source}"`; a `web_url` starting `http://`;
+  - refused: version 1 with `pull_request`; version 2 `pull_request` with no remote; `integration = "Pull_Request"`; `integration = 1`; version 3; `forge = "github"`; an empty `[forge]`; `[forge]` with only `web_url`; `kind = "GitHub"`; `kind = 1`; `web_url = "bitbucket.example.com"`; `web_url = "https://bitbucket example.com"`; `pull_request_url = "/new?from={source}"`; `pull_request_url` without `{source}`.
+- [ ] **Step 2: Write the failing byte test** `repository_config_written_bytes`: the parse of `"format_version = 1\nprimary_branch = \"main\"\n"` serializes to exactly that string; the pull-request row serializes with `format_version = 2`; a version 2 direct source serializes with `format_version = 1`; `extra = true` inside `[forge]` survives a round trip.
+- [ ] **Step 3: Run both, expect FAIL:** `devenv shell -- cargo test --all-features --locked --test canonical_foundation repository_config_`. Record the red run.
+- [ ] **Step 4: Implement** the types, the accessors, and `fn validate_mode_and_forge(format_version: i64, publication_remote: Option<&str>, table: &toml::Table) -> Result<(), ValidationProblem>`, called by `parse_repository_config` after its existing field checks and by `serialize_repository_config` before writing. `parse_repository_config` accepts integer 1 or 2; `serialize_repository_config` writes `2` when `integration()` is `PullRequest`, else `1`.
+- [ ] **Step 5: Apply E-1 to E-4.**
+- [ ] **Step 6: Write the failing test** `publication_remote_selection_keeps_mode_and_forge` in `tests/repository_enablement.rs`. Enable a repository, then commit `serialize_repository_config`'s output for a version 2 pull-request configuration with `publication_remote = "origin"` and a `[forge]` holding `kind = "bitbucket-cloud"` and an unknown key (K-5: the blob must be canonical). Select a second eligible SSH remote with that file's remote-selection helper. Assert that the committed configuration parses to `PullRequest`, the same `ForgeSetting`, the unknown key, and version 2 in the bytes. Then select no remote, and assert `RepositoryErrorKind::InvalidConfiguration` with the configuration unchanged. Run it red against a stub serializer that writes version 1, then green.
+- [ ] **Step 7: Run** the three new tests and the edited tests of E-1 to E-4 by exact name. Expected: PASS.
 - [ ] **Step 8: Commit** "feat(config): integration mode, forge setting and format version 2".
 
 ## Task 2: The Forge Module (Design Part C)
 
 **Files:**
-- Create: `src/forge.rs` (with `#[cfg(test)] mod tests`)
-- Modify: `src/lib.rs` (`pub mod forge;`), `Cargo.toml` (`percent-encoding = "2.3"`), `Cargo.lock`
+- Create: `src/forge.rs`, with `#[cfg(test)] mod tests`
+- Modify: `src/lib.rs` (`pub mod forge;`), `Cargo.toml` and `Cargo.lock` through `devenv shell -- cargo add percent-encoding@2.3`
 
 **Interfaces:**
-- Consumes: `canonical::{Integration, ForgeKind, ForgeSetting}` from Task 1.
+- Consumes: `canonical::{Integration, ForgeKind, ForgeSetting}` (Task 1).
 - Produces, in `manyhands::forge`:
-  - `pub struct RemoteLocation { pub host: String, pub port: Option<u16>, pub path: String }` with `pub fn parse(url: &str) -> Option<RemoteLocation>`;
+  - `pub struct RemoteLocation { pub host: String, pub port: Option<u16>, pub path: String }`, `pub fn parse(url: &str) -> Option<RemoteLocation>`;
   - `pub struct Forge { pub kind: Option<ForgeKind>, pub location: Option<RemoteLocation>, pub web_url: Option<String>, pub template: Option<String> }`;
   - `pub fn recognise(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Option<Forge>`;
   - `pub fn default_integration(remote_url: Option<&str>, setting: Option<&ForgeSetting>) -> Integration`;
-  - `pub struct PullRequestLink { pub source: String, pub target: String, pub forge: Option<ForgeKind>, pub url: Option<String> }` with `pub fn human_line(&self) -> String`;
+  - `pub struct PullRequestLink { pub source: String, pub target: String, pub forge: Option<ForgeKind>, pub url: Option<String> }`, `pub fn human_line(&self) -> String`;
   - `pub fn pull_request_link(forge: Option<&Forge>, source: &str, target: &str) -> PullRequestLink`.
 
 - [ ] **Step 1: Write the failing table tests** in `src/forge.rs`:
   - `remote_locations`: `git@bitbucket.org:ws/repo.git` gives host `bitbucket.org`, path `ws/repo`; `ssh://git@bitbucket.org:22/ws/repo.git` gives port 22 and the same path; `ssh://git@Bitbucket.Example.com:7999/key/repo.git` gives host `bitbucket.example.com`, port 7999, path `key/repo`; `git@github.com:/owner/repo/` gives `owner/repo`; `https://github.com/o/r.git`, `/srv/repo.git` and `file:///srv/repo.git` give `None`.
-  - `recognition_and_default_mode`: the three cloud hosts in any case give their kinds and `PullRequest`; `git@example.com:a/b.git` gives `None` and `Direct`; the same remote with a `ForgeSetting` of kind `BitbucketDataCenter` gives that kind and `PullRequest`; a setting with only `pull_request_url` gives a forge with no kind and `PullRequest`; no remote URL gives `Direct` whatever the setting.
-  - `pull_request_urls`, source `manyhands/ticket/01M87683441PRAYQJQBQBG96YY`, target `main` unless stated:
+  - `recognition_and_default_mode`: the three cloud hosts in any case give their kinds and `PullRequest`; `git@example.com:a/b.git` gives `None` and `Direct`; the same remote with a `ForgeSetting` of kind `BitbucketDataCenter` gives that kind and `PullRequest`; a template-only setting gives a forge with no kind and `PullRequest`; no remote URL gives `Direct` whatever the setting.
+  - `pull_request_urls`, with source `manyhands/ticket/01M87683441PRAYQJQBQBG96YY` and target `main` unless stated:
     - Cloud `git@bitbucket.org:ws/repo.git`: `https://bitbucket.org/ws/repo/pull-requests/new?source=manyhands/ticket/01M87683441PRAYQJQBQBG96YY&dest=main`;
     - Data Center `ssh://git@bitbucket.example.com:7999/key/repo.git` with `web_url = "https://bitbucket.example.com/bitbucket/"`: `https://bitbucket.example.com/bitbucket/projects/KEY/repos/repo/pull-requests?create&sourceBranch=refs/heads/manyhands/ticket/01M87683441PRAYQJQBQBG96YY&targetBranch=refs/heads/main`;
     - Data Center with no `web_url`, and with path `~me/repo`: no URL;
     - GitHub `git@github.com:o/r.git`: `https://github.com/o/r/compare/main...manyhands/ticket/01M87683441PRAYQJQBQBG96YY?expand=1`;
+    - GitHub kind configured with `web_url = "https://ghe.example.com"` on remote `git@ghe.example.com:o/r.git`: `https://ghe.example.com/o/r/compare/main...manyhands/ticket/01M87683441PRAYQJQBQBG96YY?expand=1`; the same without `web_url`: `https://github.com/o/r/compare/…`;
     - GitLab `git@gitlab.com:group/sub/r.git`: `https://gitlab.com/group/sub/r/-/merge_requests/new?merge_request[source_branch]=manyhands/ticket/01M87683441PRAYQJQBQBG96YY&merge_request[target_branch]=main`;
-    - template `https://forge.example/new?from={source}&to={target}`: `https://forge.example/new?from=manyhands/ticket/01M87683441PRAYQJQBQBG96YY&to=main`;
+    - template `https://forge.example/new?from={source}&to={target}` with kind `github`: `https://forge.example/new?from=manyhands/ticket/01M87683441PRAYQJQBQBG96YY&to=main`, and the link's `forge` is `Github`;
     - GitHub with a three-segment path, and no forge at all: no URL, with source and target kept;
-    - encoding: source `a&b #c?d é` to Cloud gives `source=a%26b%20%23c%3Fd%20%C3%A9`.
+    - encoding: source `a&b #c?d é` to Cloud gives `source=a%26b%20%23c%3Fd%20%C3%A9`, and the same in a template.
   - `human_lines`: with a URL, `pull request: <url>`; without, `open a pull request from manyhands/ticket/01M87683441PRAYQJQBQBG96YY into main`.
 - [ ] **Step 2: Run, expect FAIL:** `devenv shell -- cargo test --all-features --locked --lib forge::tests`. Record the red run.
-- [ ] **Step 3: Implement** `src/forge.rs`. Encode with `percent_encoding::utf8_percent_encode` and an `AsciiSet` that encodes every byte except `A-Z a-z 0-9 - . _ ~ /` (design R-3). The parser is written here and does not call `src/repository/transport/` (design R-2); its doc comment says it is for links only.
-- [ ] **Step 4: Run** the same command. Expected: PASS. Then `devenv shell -- cargo check --all-features --locked` and `scripts/check-cli-no-gpui.sh`. Expected: clean.
-- [ ] **Step 5: Commit** "feat(forge): forge recognition, default mode and pull request links" with `Cargo.toml` and `Cargo.lock`.
+- [ ] **Step 3: Add the dependency** with `devenv shell -- cargo add percent-encoding@2.3`, then **implement** `src/forge.rs`: encode with `percent_encoding::utf8_percent_encode` and an `AsciiSet` that encodes every byte except `A-Z a-z 0-9 - . _ ~ /`. The parser is written here, does not call `src/repository/transport/`, and its doc comment says it is for links only.
+- [ ] **Step 4: Run** the same command. Expected: PASS, more than zero tests. Then `devenv shell -- scripts/check-cli-no-gpui.sh`. Expected: clean.
+- [ ] **Step 5: Commit** "feat(forge): forge recognition, default mode and pull request links", with `Cargo.toml` and `Cargo.lock`.
+- [ ] **Step 6: The owner's link check (decision 7, A7).** The orchestrator builds a Bitbucket Cloud link for one of the owner's work repositories (its SSH remote URL, a branch name and its primary, all from the owner) by calling `pull_request_link` in a scratch unit test that prints it and is not committed, and gives the link to the owner. If the page is not the create-pull-request page, fix the shape and its row before Task 3. Record the answer in the ledger and the checkpoint comment.
 
-## Task 3: The Index And The Reads (Design Part B)
-
-**Files:**
-- Modify: `src/repository/discovery.rs` (`migrate_registry`), `src/repository.rs` (`persist_configuration`, `stored_configuration`), `src/repository/read/dto.rs` (`ConfigurationDto`, new `ForgeDto`), `src/repository/read/admin.rs` (the inspect and list builders), `schemas/v1/repository_configuration.schema.json`, `src/bin/manyhands-cli/human.rs` (`repository_inspection`)
-- Test: the migration test beside `src/repository/closure/record_tests.rs`'s pattern, in `src/repository/discovery.rs` tests; `tests/read_repository.rs`; `tests/read_contract.rs`; `tests/cli/admin.rs`
-- Named edits: E-5 to E-7, and any added by Task 0
-
-**Interfaces:**
-- Consumes: Task 1's accessors.
-- Produces: `ConfigurationDto { …, pub integration: Option<String>, pub forge: Option<ForgeDto> }` and `pub struct ForgeDto { pub kind: Option<String>, pub web_url: Option<String>, pub pull_request_url: Option<String> }`.
-
-- [ ] **Step 1: Write the failing migration test** `configuration_mode_columns_migrate_once` in the `discovery.rs` tests: open a registry, assert the four columns exist and the marker `wave_06_configuration_mode_v1` is recorded once; build a registry without the columns or marker (the existing older-build helper, as `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` does), insert a registration with `refresh_required = 0`, migrate, and assert the columns exist and `refresh_required = 1`; migrate again and assert no error and still one marker.
-- [ ] **Step 2: Write the failing read test** `inspect_and_list_report_mode_and_forge` in `tests/read_repository.rs`: a repository with the Task 1 pull-request configuration and `[forge] kind = "bitbucket-cloud"`, refreshed; `repo inspect` and `repo list` both give `integration` `"pull_request"` and `forge` `{ "kind": "bitbucket-cloud", "web_url": null, "pull_request_url": null }`; a direct repository gives `"direct"` and null; an invalid configuration gives null and null.
-- [ ] **Step 3: Run both, expect FAIL.** Record the red runs.
-- [ ] **Step 4: Implement** the migration (after the first transaction; design R-5), `persist_configuration`'s four columns, `stored_configuration`'s synthesized `integration`, `[forge]` and version, the DTO fields and both builders, the schema (both keys required; `forge` an inline object with `additionalProperties: false` or null), and the human lines `Integration: <mode>` and, when there is a forge, `Forge: <kind, or the web_url, or the template>`.
-- [ ] **Step 5: Apply E-5 to E-7.** Regenerate the four goldens with `MANYHANDS_UPDATE_GOLDEN=1` for the exact tests that own them, read the diff, and confirm that only the two new keys changed.
-- [ ] **Step 6: Run** Steps 1 and 2 by exact name, the edited tests by exact name, `tests/read_contract.rs` `contract_enumerations` and the read-contract tests of `repo inspect` and `repo list`, and `devenv shell -- cargo test --all-features --locked --test cli admin::`. Expected: PASS. Desktop edits of E-5: `devenv shell -- cargo check --locked --features desktop-test-support --tests`.
-- [ ] **Step 7: Commit** "feat(read): report the repository's mode and forge".
-
-## Task 4: The Result Code (Design Part D, the answer)
+## Task 3: The Index Columns (Design Part B, Storage)
 
 **Files:**
-- Modify: `src/results.rs` (`result_codes!`), `src/results_tests.rs`, `src/repository/mutation/outcome.rs` (`recovery`), the `MutationDataDto` definition in `src/repository/mutation/`, `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`, new `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs`
-- Named edits: E-8, E-9
+- Modify: `src/repository/discovery.rs` (`migrate_registry` and a new migration function), `src/repository.rs` (`persist_configuration`), `src/repository/read/admin.rs` (`stored_configuration`)
+- Test: the `src/repository/discovery.rs` tests
+- Named edits: E-9
 
-**Interfaces:**
-- Produces: `ResultCode::PrimaryHasLocalCommits` (`"primary_has_local_commits"`, `FailureClass::Blocked`, message "The local primary branch has commits the remote does not have."); `MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto)` with `pub struct PrimaryLocalCommitsDto { pub local_commits: Vec<LocalCommitDto>, pub complete: bool }` and `pub struct LocalCommitDto { pub oid: String, pub summary: String }`.
+**Interfaces:** Consumes Task 1's accessors. Produces the four columns and `stored_configuration`'s extra values, which Task 4 reads.
 
-- [ ] **Step 1: Apply E-8** (the design table row and the count 71) so `src/results_tests.rs` fails. Run `devenv shell -- cargo test --all-features --locked --lib results_tests`. Expected: FAIL.
-- [ ] **Step 2: Implement** the code, its `recovery` arm (`repo.inspect`, design R-10), the data DTO and its schema, and the two enum lists. Apply E-9, unless Task 6 produces a mutation golden for the code, with the reason "produced only after a real fetch; pinned by the SSH case of Task 6".
-- [ ] **Step 3: Run** `src/results_tests.rs`, `tests/read_contract.rs` `contract_enumerations`, `tests/mutation_contract.rs`'s code-coverage test by exact name, and `devenv shell -- cargo test --all-features --locked --test cli recovery_tables`. Expected: PASS; if `recovery_tables` needs the contract row, add it now with Task 8's text.
+- [ ] **Step 1: Write the failing test** `configuration_mode_columns_migrate_once_and_refill`, beside `a_registry_from_an_older_build_migrates_and_its_contexts_read_dirty` and with its helpers: build a registry without the columns or the marker, holding one refreshed repository whose configuration is a pull-request one; migrate; assert the four columns exist, the marker `wave_06_configuration_mode_v1` is recorded once, and the primary context is dirty; refresh; assert the row's `integration` is `"pull_request"` and its forge columns hold the configured values; migrate again; assert no error and one marker.
+- [ ] **Step 2: Run, expect FAIL**, by exact name. Record the red run.
+- [ ] **Step 3: Implement** the migration (after `context_retirement::record::migrate`; design R-5), the four columns in `persist_configuration`, and `stored_configuration`'s reading of them, with a null `integration` on a valid row reading as direct. Apply E-9.
+- [ ] **Step 4: Run** the new test and E-9's tests by exact name. Expected: PASS.
+- [ ] **Step 5: Commit** "feat(index): store the repository's mode and forge".
+
+## Task 4: The Configuration Object (Design Part B, Reads)
+
+**Files:**
+- Modify: `src/repository/read/dto.rs` (`ConfigurationDto`, new `ForgeDto`), `src/repository/read/admin.rs` (the inspect and list builders), `schemas/v1/repository_configuration.schema.json`, `src/bin/manyhands-cli/human.rs` (`repository_inspection`)
+- Test: `tests/read_repository.rs`, `src/bin/manyhands-cli/human_tests.rs`
+- Named edits: E-5 to E-8
+
+**Interfaces:** Produces `ConfigurationDto { …, pub integration: Option<String>, pub forge: Option<ForgeDto> }` and `pub struct ForgeDto { pub kind: Option<String>, pub web_url: Option<String>, pub pull_request_url: Option<String> }`.
+
+- [ ] **Step 1: Write the failing read test** `inspect_and_list_report_mode_and_forge` in `tests/read_repository.rs`: a refreshed repository with a pull-request configuration and `[forge] kind = "bitbucket-cloud"`; `repo inspect` and `repo list` both give `integration` `"pull_request"` and `forge` `{ "kind": "bitbucket-cloud", "web_url": null, "pull_request_url": null }`; a direct repository gives `"direct"` and null; an invalid configuration gives null and null; a valid row with null columns (inserted as the file's existing row inserts do) lists as `"direct"`.
+- [ ] **Step 2: Write the failing human test** `repository_inspection_names_mode_and_forge` in `human_tests.rs`: a pull-request configuration with a Cloud forge prints `Integration: pull_request` and `Forge: bitbucket-cloud`; a direct one prints `Integration: direct` and no `Forge:` line; a template-only forge prints `Forge: <pull_request_url>`.
+- [ ] **Step 3: Run both, expect FAIL**, by exact name. Record the red runs.
+- [ ] **Step 4: Implement** the DTO fields, both builders, the schema (both keys required; `integration` an enum or null; `forge` an inline object with `additionalProperties: false` and a `kind` enum, or null) and the human lines. Apply E-5 to E-8. Regenerate the four goldens of E-6 with `MANYHANDS_UPDATE_GOLDEN=1` for the exact tests that own them, read the diff, and confirm that only the two new keys changed.
+- [ ] **Step 5: Run** both new tests and every edited test by exact name, including `tests/read_contract.rs` `published_enumerations_list_exactly_the_registered_values` and the tests that own the E-6 goldens. Then `devenv shell -- cargo check --locked --features desktop-test-support --tests` for E-5's desktop literals. Expected: PASS.
+- [ ] **Step 6: Commit** "feat(read): report the repository's mode and forge".
+
+## Task 5: The Result Code (Design Part D, The Code)
+
+**Files:** `src/results.rs` (`result_codes!`), `src/results_tests.rs`, `src/repository/mutation/outcome.rs` (`recovery`), `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`. Named edit: E-10.
+
+**Interfaces:** Produces `ResultCode::PrimaryHasLocalCommits`: `"primary_has_local_commits"`, `FailureClass::Blocked`, message "The local primary branch has commits the remote does not have.", and no recovery action.
+
+- [ ] **Step 1: Apply E-10**, so `results::tests` fails. Run `devenv shell -- cargo test --all-features --locked --lib results::tests`. Expected: FAIL.
+- [ ] **Step 2: Implement** the code, its `recovery` arm (the no-action arm Task 0 named; design R-10), and the two schema enum lists.
+- [ ] **Step 3: Run** `results::tests` again, the `tests/read_contract.rs` test that compares the enums with `ResultCode::ALL` by exact name, and `devenv shell -- cargo test --all-features --locked --test mutation_contract` filtered to its code-coverage test by exact name. Expected: PASS, except the mutation-golden coverage, which fails until Task 8 writes the golden: record that expected red in the ledger, and do not add the code to `CODES_NO_MUTATION_GOLDEN_HAS`.
 - [ ] **Step 4: Commit** "feat(results): primary_has_local_commits".
 
-## Task 5: Pull-Only Synchronization (Design Part D, the decision)
+## Task 6: The Pull-Only Decision (Design Part D, The Library)
 
-**Files:**
-- Modify: `src/repository/remote/sync.rs` (`SynchronizationSettings`, `SynchronizationError`, `SynchronizationOutcome`, `synchronize_remote_observed_inner`)
-- Test: `src/repository/remote/sync_tests.rs`
+**Files:** `src/repository/remote/sync.rs` (`SynchronizationSettings`, `SynchronizationError`, `local_only_commits`, `synchronize_remote_observed_inner`, `ended_if_unresolved`), `src/repository/remote/sync_tests.rs`, `src/repository/mutation/outcome.rs` (`synchronization_error_code`). Named edit: E-11.
 
 **Interfaces:**
-- Consumes: Task 4's code, through `synchronization_error_code`.
-- Produces: `SynchronizationSettings { refuse_divergence: bool, pull_only: bool }`; `SynchronizationError::PrimaryHasLocalCommits { commits: Vec<(git2::Oid, String)>, complete: bool }`; `SynchronizationOutcome::FastForwarded { target: SynchronizationTarget, oid: git2::Oid }`.
+- Consumes: Task 5's code.
+- Produces: `SynchronizationSettings { refuse_divergence: bool, pull_only: bool }`; `SynchronizationError::PrimaryHasLocalCommits { commits: Vec<(git2::Oid, String)>, complete: bool }`; `fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: git2::Oid) -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error>`.
 
-- [ ] **Step 1:** Merge `origin/main` if it moved (Global Constraints, Main).
-- [ ] **Step 2: Write the failing table test** `pull_only_primary_synchronization_decisions` in `sync_tests.rs`, through the existing fetch and push stand-in (`classified_synchronization_for_testing` and its helpers), with `SynchronizationSettings { refuse_divergence: true, pull_only: true }` on the primary target. Rows:
-  - equal: `AlreadyCurrent`, no push requested;
-  - remote ahead by one commit: `FastForwarded` with the remote's tip, the local primary ref at that tip, no push requested;
-  - local ahead by one commit: `PrimaryHasLocalCommits` with that commit and `complete: true`, local ref unchanged, no push requested, the reservation released;
-  - diverged (one local, one remote): `PrimaryHasLocalCommits` with the local commit only, nothing of a merge recorded;
-  - local ahead by 21 commits: 20 listed, newest first, `complete: false`.
-- [ ] **Step 3: Write the failing guard test** `pull_only_is_ignored_for_item_contexts`: the same setting on a context target behaves as `refuse_divergence` alone (the binding never passes it, but the domain must not refuse an item's own commits).
-- [ ] **Step 4: Run both, expect FAIL:** `devenv shell -- cargo test --all-features --locked --lib repository::remote::sync_tests::pull_only -- --nocapture`. Record the red runs.
-- [ ] **Step 5: Implement.** After `graph_plan` and before the divergence check, a primary target under `pull_only` whose local primary is ahead or diverged stops with `PrimaryHasLocalCommits`, listing commits reachable from the local primary and not from the fetched remote primary (a `git2` revwalk, newest first, limited to 21 to learn `complete`), each with its summary line. A pull-only fast-forward returns `FastForwarded` in place of `AlreadyCurrent`. Map the new error in `synchronization_error_code` to `PrimaryHasLocalCommits`. Handle `FastForwarded` wherever the compiler finds a `SynchronizationOutcome` match, with the same index and journal treatment as `AlreadyCurrent`.
-- [ ] **Step 6: Run** the same command, then `devenv shell -- cargo test --all-features --locked --lib repository::remote::sync_tests`. Expected: PASS. If that module run passes 15 minutes, stop and narrow it.
-- [ ] **Step 7: Commit** "feat(sync): pull-only primary synchronization". The orchestrator adds the library checkpoint comment to vh-c2dtj.
+- [ ] **Step 1:** Merge `origin/main` if it moved.
+- [ ] **Step 2: Write the failing tests** in `sync_tests.rs`, beside the `graph_plan` tests and with their repository helpers:
+  - `local_only_commits_lists_newest_first_and_caps_at_twenty`: equal gives an empty list and `complete`; one local commit gives it with its summary; a divergence gives only the local side; 21 local commits give the 20 newest, newest first, and `complete` false.
+  - `pull_only_refuses_a_primary_with_local_commits`: for each `graph_plan` result (equal, remote ahead, local ahead, diverged), the pull-only decision gives continue, continue, `PrimaryHasLocalCommits`, `PrimaryHasLocalCommits`. Test it through the function the decision is written as (Step 4), not through a full synchronization.
+  - `pull_only_is_ignored_for_item_contexts`: the decision continues for a context target whatever the relation.
+- [ ] **Step 3: Run, expect FAIL**, each by exact name under `repository::remote::sync::tests::`. Record the red runs.
+- [ ] **Step 4: Implement** `pull_only`, the error, `local_only_commits`, and the decision as a small function called right after `graph_plan` and before the divergence check. Widen `ended_if_unresolved` so that `PrimaryHasLocalCommits` also ends its operation (decision 5). Map the error in `synchronization_error_code`. Apply E-11.
+- [ ] **Step 5: Run** the three tests by exact name. Expected: PASS.
+- [ ] **Step 6: Commit** "feat(sync): pull-only primary synchronization". The orchestrator adds the library checkpoint comment.
 
-## Task 6: The Binding, The CLI And The SSH Case
+## Task 7: The Binding And The Human Output
 
-**Files:**
-- Modify: `src/repository/mutation/bind/sync.rs` (`PULL_ONLY`, the `repo sync` setting choice, the effects of `FastForwarded`, the refusal's data), `src/bin/manyhands-cli/` (the human `local commit:` lines, beside `human_lifecycle.rs`'s own-line pattern)
-- Test: `src/repository/mutation/bind/sync_tests.rs`, `src/bin/manyhands-cli/human_collaboration_tests.rs`, a new case in `tests/mutation_remote/`
+**Files:** `src/repository/mutation/bind/sync.rs` (`PULL_ONLY`, `domain_call`, the refusal's data), the `MutationDataDto` definition, `src/bin/manyhands-cli/human_collaboration.rs`. Tests: `src/repository/mutation/bind/sync_tests.rs`, `human_collaboration::tests`.
 
 **Interfaces:**
-- Consumes: Task 5's setting, error and outcome; Task 1's `integration()`; Task 4's DTO.
-- Produces: `pub(super) const PULL_ONLY: SynchronizationSettings = SynchronizationSettings { refuse_divergence: true, pull_only: true };`.
+- Consumes: Task 6's setting and error; Task 1's `integration()`.
+- Produces: `pub(super) const PULL_ONLY: SynchronizationSettings = SynchronizationSettings { refuse_divergence: true, pull_only: true };`; `MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto)`, with `pub struct PrimaryLocalCommitsDto { pub local_commits: Vec<LocalCommitDto>, pub complete: bool }` and `pub struct LocalCommitDto { pub oid: String, pub summary: String }`.
 
-- [ ] **Step 1: Write the failing binding test** `repo_sync_is_pull_only_in_a_pull_request_repository` in `bind/sync_tests.rs`: a pull-request repository's `repo sync` passes `PULL_ONLY`, a direct one `MERGING`, and an `item sync` in a pull-request repository `MERGING`. Then `fast_forwarded_answers_ok_without_publication`: `FastForwarded` gives code `ok`, `effects.publication` `not_requested`, `effects.commit_oid` the new head; and `local_commits_refusal_carries_its_commits`: the error gives `primary_has_local_commits`, exit class `Blocked`, and `data.local_commits` and `data.complete`.
-- [ ] **Step 2: Write the failing human test** in `human_collaboration_tests.rs`: the refusal prints `error:`, `code: primary_has_local_commits`, one `local commit: <7-character oid> <summary>` line per commit, and `note: more local commits are not listed` when `complete` is false.
+- [ ] **Step 1: Write the failing binding tests** in `bind/sync_tests.rs`:
+  - `primary_calls_are_pull_only_in_a_pull_request_repository`: in a pull-request repository, a first `repo sync` call and a resumed one (the binding's resume path) both pass `PULL_ONLY`; in a direct repository both pass `MERGING`; an `item sync` in a pull-request repository passes `MERGING`.
+  - `local_commits_refusal_carries_its_commits`: the error gives `primary_has_local_commits`, class `Blocked`, no recovery, and `data.local_commits` (full OIDs, summaries) and `data.complete`.
+- [ ] **Step 2: Write the failing human test** `local_commits_refusal_lists_each_commit` in `human_collaboration::tests`: `error:`, `code: primary_has_local_commits`, one `local commit: <7-character oid> <summary>` line per commit, a control character in a summary escaped as the output's field escaping does, and `note: more local commits are not listed` when `complete` is false.
 - [ ] **Step 3: Run, expect FAIL**, by exact name. Record the red runs.
-- [ ] **Step 4: Implement** the setting choice in the `repo sync` binding (it already reads the configuration for the remote in `prepare`), the effects and data mapping, and the human lines.
-- [ ] **Step 5: Write the SSH case** `a_pull_only_repo_sync_fast_forwards_and_pushes_nothing` in the `tests/mutation_remote/` module that holds the `repo sync` conformance cases. Reason, as a comment above it: no non-SSH publication remote can be selected, and the property is that nothing reaches the server. The case makes a pull-request repository against the harness server, advances the server's primary by one commit from a second clone, runs `repo sync`, and asserts code `ok`, publication `not_requested`, the local primary at the server's tip and the server's primary unchanged; then commits locally, runs `repo sync` again, and asserts `primary_has_local_commits` with that commit and the server's primary still unchanged.
-- [ ] **Step 6: Run** the unit tests by exact name, then the SSH case alone: `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_only_repo_sync_fast_forwards_and_pushes_nothing -- --exact`. Expected: PASS. Run it red once against a stub that keeps `MERGING`, and record it.
-- [ ] **Step 7: Commit** "feat(sync): repo sync is pull-only in a pull-request repository".
+- [ ] **Step 4: Implement** the setting choice in `domain_call` from `read_configuration_for` for every primary call (design R-11), the data DTO, and the human lines.
+- [ ] **Step 5: Run** the tests of Steps 1 and 2 by exact name. Expected: PASS.
+- [ ] **Step 6: Commit** "feat(sync): repo sync is pull-only in a pull-request repository".
 
-## Task 7: The Desktop's Classification (Design Part E)
+## Task 8: The SSH Case, The Schema And The Golden
 
-**Files:**
-- Modify: `src/desktop/model/publication.rs` (`classify_sync`, `SyncOutcome`), `src/desktop/model/activity/copy.rs`, `src/desktop/model/operations/outcomes.rs`
-- Test: `src/desktop/model/publication_tests.rs`, and the activity copy table if Task 0 finds it exhaustive over `SyncOutcome`
+**Files:** `tests/mutation_remote.rs` (the case and its row in the case table, beside `c4_conformance_repo_sync`), `schemas/v1/primary_local_commits.schema.json`, `tests/mutation_contract.rs` (`DATA_ROOTS`), `tests/support/mutation_golden.rs` (`CASES`), the golden `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`. Named edit: E-12.
 
-**Interfaces:** Consumes the answer shape of Task 6. Produces `SyncOutcome::Updated`.
+- [ ] **Step 1: Write the case** `a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits`, with this comment above it: no non-SSH publication remote can be selected, and the property is that nothing reaches the server and nothing is held. The case:
+  1. commits a pull-request configuration (the serializer's output) on `w.peer` and pushes it with the harness's peer push, then runs a direct-mode `repo sync` in the clone so that its primary holds the configuration (K-2);
+  2. advances the server's primary by one commit from the peer, runs `repo sync`, and asserts `already_applied`, publication `current`, the local primary at the server's tip, and the server's primary unchanged by the clone;
+  3. commits locally, runs `repo sync`, and asserts `primary_has_local_commits`, `data.local_commits` holding that commit, the server's primary unchanged, and no recovery;
+  4. runs `item sync` of an item, and asserts it is not `busy`;
+  5. writes the golden with the harness's golden writer, as `repo_sync_push_rejected` is written.
+- [ ] **Step 2: Run it red** against a stub that passes `MERGING` (step 3 then pushes): `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits -- --exact`. Record the red run.
+- [ ] **Step 3: Add the schema**, list it in `DATA_ROOTS` (E-12), register the golden in `CASES`, and generate it with `MANYHANDS_UPDATE_GOLDEN=1` on the same command. Read the golden.
+- [ ] **Step 4: Run** the case again without the update variable, the mutation-golden coverage test left red in Task 5, `every_schema_is_reachable_from_a_published_root` and `every_data_root_describes_the_data_of_a_golden…` by exact name. Expected: PASS.
+- [ ] **Step 5: Commit** "test(sync): pull-only repo sync end to end". The orchestrator adds the checkpoint comment.
 
-- [ ] **Step 1: Write the failing tests** `sync_fast_forwarded_is_updated` (code `ok`, publication `not_requested`, a `repo sync` attempt: `Updated`) and `sync_already_applied_stays_current` in `publication_tests.rs`.
-- [ ] **Step 2: Run, expect FAIL:** `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands model::publication_tests::sync_fast_forwarded_is_updated -- --exact`.
-- [ ] **Step 3: Implement** `SyncOutcome::Updated` and its words "Updated <primary>" in both copy sites. No label changes.
-- [ ] **Step 4: Run** both tests by exact name, then `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands model::publication_tests`. Expected: PASS.
-- [ ] **Step 5: Commit** "feat(desktop): a pull-only repo sync reads as updated".
+## Task 9: Documents And Skills (Design D-1 To D-6)
 
-## Task 8: Documents And Skills (Design D-1 to D-5)
-
-- [ ] **Step 1:** Apply D-1 to D-4, one line per paragraph in any Manyhands-managed text. Each amendment opens with "Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj):".
-- [ ] **Step 2:** Apply D-5 to `skills/` and `.agents/skills/`. Where the two copies of a skill differ today, edit each copy separately.
-- [ ] **Step 3: Run** `devenv shell -- cargo test --all-features --locked --test cli skills::` and `devenv shell -- cargo test --all-features --locked --test cli recovery_tables`. Expected: PASS.
+- [ ] **Step 1:** Apply D-1 to D-4 and D-6. Each amendment opens with "Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj):". In Manyhands-managed text, one line per paragraph.
+- [ ] **Step 2:** Apply D-5 to `skills/` and `.agents/skills/`, editing each copy where the two differ, with decision 10's sentence.
+- [ ] **Step 3: Run** `devenv shell -- cargo test --all-features --locked --test cli skills::` and `devenv shell -- cargo test --all-features --locked --test cli recovery_tables`. Expected: PASS, more than zero tests each.
 - [ ] **Step 4: Commit** "docs: amend the contracts and skills for pull-request mode's setting".
 
-## Task 9: Gates, Review-Ready, Closure
+## Task 10: Gates, Review-Ready, Closure
 
 - [ ] **Step 1:** Merge `origin/main` if it moved, then `git merge-tree --write-tree HEAD origin/main`. Expected: no conflicts.
 - [ ] **Step 2:** The static gates. Expected: clean.
 - [ ] **Step 3: The fast tier**, AGENTS.md's command as written. Expected: PASS. Record the time.
-- [ ] **Step 4: The SSH tier** for the changed paths: `src/repository/remote/` selects `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`; `src/repository/mutation/` selects `mutation_remote`. Each once, as `devenv shell -- cargo test --all-features --locked --test <target>`. Expected: PASS. Record the times. If Task 0 found a change under `src/repository/transport/` or `src/repository/keys/`, run every SSH-harness target instead.
-- [ ] **Step 5:** The owner opens one Bitbucket link built by the link builder for a real repository and confirms it opens the create-pull-request page (design U-1). Record the answer.
-- [ ] **Step 6:** Update the Cycle document's Acceptance statuses and the ledger. The orchestrator adds the review-ready comment to vh-c2dtj (gates, tiers and times, the SSH case, the named edits applied) and publishes the branch.
-- [ ] **Step 7: After review approval only:** save the ticket's status as done, run `ticket close --prepare` from the main checkout, show the owner what will merge, publish and be removed, and `--confirm` after the owner's go-ahead. The close performs the merge.
+- [ ] **Step 4: The SSH tier** of the design's Testing section, each target once as `devenv shell -- cargo test --all-features --locked --test <target>`. Expected: PASS. Record the times. If `git diff --stat origin/main...HEAD` shows a change under `src/repository/transport/`, `src/repository/keys/` or `tests/support/ssh_*`, run every SSH-harness target instead.
+- [ ] **Step 5:** Update the Cycle document's Acceptance statuses and the ledger. The orchestrator adds the review-ready comment (gates, tiers and times, the SSH case, the named edits applied, the owner's link check) and publishes the branch.
+- [ ] **Step 6: After review approval only:** commit any owned edit to the ticket's `ticket.md`, save the status as done with `ticket save`, publish with `item sync`, then run `ticket close --prepare` from the main checkout with the key loaded in ssh-agent, show the owner what will merge, publish and be removed, and `--confirm` after the owner's go-ahead. The close performs the merge. Native CI runs after the merge, on main, only when the owner dispatches it.
 
 ## Plan Self-Review
 
 | Acceptance or ruling | Task |
 | --- | --- |
 | A1 | 1 |
-| A2 | 0 (baseline fact at the base SHA) |
-| A3 | 3 |
-| A4 | 2 |
-| A5 | 5 |
-| A6 | 6 |
-| A7 | 4 |
-| A8 | 7 |
-| A9 | 9 |
-| A10 | 8 |
-| R-1, R-4 | 1 |
+| A2 | 0 |
+| A3 | 1 (Step 6) |
+| A4 | 4 |
+| A5 | 3 |
+| A6 | 2 |
+| A7 | 2 (Step 6) |
+| A8 | 6, 7 |
+| A9 | 8 |
+| A10 | 5, 8 |
+| A11 | 10 |
+| A12 | 9 |
+| R-1 | 1 |
 | R-2, R-3, R-8 | 2 |
 | R-5 | 3 |
-| R-6, R-7 | 5, 6 |
-| R-9 | 6 |
-| R-10 | 4 |
-| Review Focus lines | 1, 2, 3 |
+| R-7 | 6 |
+| R-9 | 8 |
+| R-10 | 5 |
+| R-11 | 7 |
+| R-12 | 10 |
+| R-13 | 9 |
+| Review Focus lines | 1, 2, 8 |
 
-Checked: every design Part has a task; the types named in Interfaces match across tasks (`Integration`, `ForgeKind`, `ForgeSetting`, `Forge`, `PullRequestLink`, `PULL_ONLY`, `PrimaryHasLocalCommits`, `FastForwarded`, `SyncOutcome::Updated`); no placeholder steps. The plan adds no test target, so no CI list changes.
+Checked: every design Part has a task (Part E has none, by decision 4); the types named in Interfaces match across tasks (`Integration`, `ForgeKind`, `ForgeSetting`, `Forge`, `PullRequestLink`, `PULL_ONLY`, `PrimaryHasLocalCommits`, `local_only_commits`, `PrimaryLocalCommitsDto`); no placeholder steps; the plan adds no test target, so no CI list changes.
