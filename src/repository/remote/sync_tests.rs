@@ -19199,16 +19199,22 @@ fn a_restarted_sync_s_local_update_marks_its_context() {
 /// with its plan configured as a refresh leaves it. A synchronization of it
 /// goes as far as its transport, which no key reaches.
 fn pull_request_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    origin_fixture(
+        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    )
+}
+
+/// `pull_request_fixture`, with `configuration` committed as the
+/// repository's configuration.
+fn origin_fixture(
+    configuration: &str,
+) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
     let (root, data, service) = fixture();
     let repository = git2::Repository::open(root.path()).unwrap();
     repository
         .remote("origin", "ssh://example.invalid/fixture.git")
         .unwrap();
-    fs::write(
-        root.path().join(".manyhands/config.toml"),
-        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
-    )
-    .unwrap();
+    fs::write(root.path().join(".manyhands/config.toml"), configuration).unwrap();
     commit_all(&repository);
     service.configure_origin_plan_for_testing(root.path());
     (root, data, service)
@@ -19228,7 +19234,8 @@ fn stored_pull_only(data: &Path, operation: OperationId) -> i64 {
 
 /// O11, O12, O13 (R-11, R-14): in a pull-request repository, the
 /// synchronization's own new operation on the primary stores `pull_only`
-/// 1 in its INSERT; an operation on a context, a poll, a lifecycle's
+/// 1 in its INSERT, and in a direct-mode repository 0; an operation on a
+/// context, a poll, a lifecycle's
 /// primary child and the public `reserve_remote_operation` store 0. The
 /// read helper answers what the row stored, whatever the configuration
 /// says now: a pull-only operation stays pull-only after the repository
@@ -19285,6 +19292,26 @@ fn o11_o12_o13_the_mode_is_inserted_once_and_read_back() {
         .is_err()
     );
     assert_eq!(stored_pull_only(data.path(), primary.operation_id), 1);
+
+    // The same operation in a direct-mode repository, with the mode left
+    // out or written, is direct.
+    for configuration in [
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        "format_version = 2\nintegration = \"direct\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    ] {
+        let (root, data, service) = origin_fixture(configuration);
+        let direct = request(root.path());
+        let result = service.synchronize_remote(direct.clone(), &mut session());
+        assert!(
+            matches!(result, Err(SynchronizationError::Transport(_))),
+            "{configuration}: {result:?}"
+        );
+        assert_eq!(
+            stored_pull_only(data.path(), direct.operation_id),
+            0,
+            "{configuration}"
+        );
+    }
 
     // A direct operation in a pull-request repository stays direct.
     let (root, data, service) = pull_request_fixture();
