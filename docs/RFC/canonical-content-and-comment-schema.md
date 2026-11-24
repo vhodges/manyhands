@@ -86,6 +86,20 @@ The optional keys `ticket_slug_prefix` and `ticket_slug_code_length` are
 defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
 Both may be absent.
 
+Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the configuration also holds the repository's mode and, optionally, its forge. `integration` is `"direct"` or `"pull_request"`, spelled exactly, and a missing key means direct. Any other value, or a value that is not a string, makes the configuration invalid. `[forge]` is an optional table: `kind` is one of `bitbucket-cloud`, `bitbucket-data-center`, `github` or `gitlab`, `web_url` and `pull_request_url` are absolute `https://` or `http://` URLs, and `pull_request_url` contains `{source}` and may contain `{target}`. A `[forge]` table holds a `kind` or a `pull_request_url`, and its unknown keys are retained as everywhere else. Version 2 configuration has this shape:
+
+```toml
+format_version = 2
+primary_branch = "main"
+publication_remote = "origin"
+integration = "pull_request"
+
+[forge]
+kind = "bitbucket-cloud"
+```
+
+`integration = "pull_request"` requires `format_version = 2` and a `publication_remote`: a version 1 file that asks for pull requests is invalid, so a build that predates the mode never acts on one in direct mode. The mode and the forge are validated when the file is read and again when it is written. The [Pull-Request Mode RFC](pull-request-mode.md) defines what the mode means.
+
 An absent, malformed, unsupported-version, or invalid configuration is a
 visible repository problem. It MUST NOT cause Markdown content to be omitted or
 rewritten.
@@ -251,7 +265,9 @@ them.
 
 ## Migration and Compatibility
 
-`format_version = 1` is the only version supported by this RFC. Later schema
+Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): this is the compatibility decision for `format_version = 2` that the next paragraph asks for (Wave 06 Cycle 01's decision 8, and decision 21 of the Pull-Request Mode RFC). Versions 1 and 2 are supported, and any other version is invalid ("unsupported format_version; expected 1 or 2"). Only pull-request mode is written as version 2, so that a build without the mode, whose parser refuses every version but 1, refuses the repository instead of acting on it in direct mode. A version 2 file in direct mode, one without `integration` or with `integration = "direct"`, is accepted and rewritten as version 1. A direct-mode file without `[forge]` is written byte for byte as before. No canonical content is migrated: the change is to the configuration file alone, and no existing file is rewritten until something rewrites the configuration. This departs from the Pull-Request Mode RFC's note that it amends this RFC ("closure immutability only"): decision 21 cannot be delivered without this amendment (Wave 06 Cycle 01's design, R-13).
+
+`format_version = 1` is the only version supported by this RFC's original text. Later schema
 versions MUST provide an explicit compatibility and migration decision before
 rewriting existing canonical content. A newer configuration or unknown required
 content version is a visible problem and preserves all files unchanged.

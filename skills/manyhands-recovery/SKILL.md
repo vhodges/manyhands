@@ -16,6 +16,7 @@ Every verb here takes `--repo <repo-root>`, the repository's main checkout root,
 | `recovery_required`, exit 3, `outcome` `blocked` | Refused before anything was written. Something unfinished or unsafe is in the way. On a build with the concurrent-writers change, `data.blocker` names the unfinished operation (`operation_id`, `action`, `item_id`, `request_id`, `author`, `host`, `pid`, `started_at`, `live`) and its holder is gone: `live` is not true (`false`, or `null` for a legacy row with no host or pid). A ticket close or document promotion keeps its own `data.blockers` list instead. Otherwise `data` is null and it is an unfinished operation (step 2). |
 | exit 4, `outcome` `partial` | Part of the work was done. Do not start over. `effects` says what is done and what is `pending`. Follow `recovery`. |
 | `busy`, exit 5 | On a build with the change, a peer's operation is in the way and it is live: the CLI waited for it (up to 5 s per attempt, and retried a few times, up to about 25 s in a run for a `comment add`, which waits once to start and again at its publication; a ticket save or create that sets `deps` or `parent` does not wait and answers `busy` at once) and `data.blocker` names it, with `live` true. It is someone's work in progress: send the same request again (same `--request-id`) after a pause, and never resume or abandon it. `request show` answers `request_not_found` for an exit-5 `busy` that left no record, because that request was never accepted; a comment's `partial` / `busy` (exit 4) is another case: its request stays `accepted`, so send the same request again. A `busy` with no `data.blocker` is the repository's file lease, which has no holder identity: send it again. An older build says only that the repository is busy: send the same request again after a pause, and if it stays busy look for an unfinished operation (step 2). On a build with the fast-writes change (ticket vh-f3wts) `ticket close` and `document promote` wait the same way behind a sync's index step, and the save that sets `deps` or `parent` answers `busy` only behind a peer that has not committed: [CLI conventions](../manyhands-overview/references/cli-conventions.md), "Other writers in the repository". Behind a sync of main, a close or promotion that has already merged answers exit 4 `partial` instead of exit 5: `busy` with `data.publication_pending` `busy` when the sync is still live at its publication, and `recovery_required` with `data.cleanup_pending` `recovery_required` when a sync of main begun after the close's own syncs is still in the way of its cleanup (the work merged and published, the remote branch not yet deleted). Send the same request again once that sync is done, and it finishes (from the library tests; not run here). |
+| `primary_has_local_commits` (3), `outcome` `blocked`, no `recovery` | A pull-request repository's `repo sync` found commits on the local main branch that the remote lacks, and refused. Nothing was pushed, merged or held. See "Local commits on the primary of a pull-request repository" below. |
 | `index_unavailable` (3) | The index is damaged. [Polling and the index](../manyhands-polling-and-index/SKILL.md): `index rebuild`, and tell the person what it loses. |
 | `repository_not_registered` (3) | This data directory does not know the repository. See "Not registered" below. Do not start with `index rebuild`, whatever `recovery` suggests. |
 
@@ -144,6 +145,23 @@ Retrying the same command with the same `--request-id` and input is safe: you ge
 ```sh
 manyhands-cli --json request cancel --request-id <REQUEST_ID>
 ```
+
+## Local commits on the primary of a pull-request repository
+
+`primary_has_local_commits` (exit 3, `blocked`, no `recovery` action, every effect `not_requested`) is a pull-only `repo sync` refusing a local main branch that has commits the remote does not (it is ahead, or has diverged). It exists on a build with the pull-request setting (Wave 06 Cycle 01), and only in a repository whose configuration says `integration = "pull_request"` ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"). A pull-request repository must never push its main branch, so Manyhands names the commits and stops: `data.local_commits` is up to 20 of them, newest first, each with its full `oid` and `summary`, and `data.complete` is false when more exist (human output prints `local commit: <7-character oid> <summary>` lines and `note: more local commits are not listed`). The local main branch is unchanged, nothing was pushed, and the refusal ended its operation and holds nothing: `operation list` shows no new entry, the next `item sync` is not `busy`, and sending the same request again answers the same. A later `repo sync` checks again.
+
+Do not retry it, and do not move the commits yourself: this is Git work outside Manyhands, and the commits are the person's. Tell the person what the commits are (read them from `data.local_commits`), and give them the way out, which is to move the commits to a branch and open a pull request for it, then put the local main branch back on the remote's. With the checkout clean and on the main branch, the commands are these, with the person's own branch name:
+
+```sh
+git branch <branch-name>
+git push <remote> <branch-name>
+git fetch <remote>
+git reset --hard <remote>/<primary-branch>
+```
+
+The branch keeps the commits, and the reset leaves the main branch where the remote has it. Then they open the pull request from the branch (no Manyhands command gives the link yet; later Cycles of Wave 06 add it), and run `repo sync` again. A common cause is the commit that switched the repository to pull-request mode, made locally: the configuration must be on the remote's primary first ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"). A push endpoint that is behind the remote the sync fetched (a separate push URL, or one that moved after the fetch) gives the same answer after the fast-forward, with the same way out (from the design and the library tests; not run here, nor the commands above).
+
+Pull-request mode is not usable end to end until close and promote support it: until then `ticket close` and `document promote` still merge into the primary and push it, so a close in a pull-request repository still commits to and pushes the primary.
 
 ## Not registered
 

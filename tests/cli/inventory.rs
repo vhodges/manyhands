@@ -196,6 +196,7 @@ const DATA: &[(&str, &[&str])] = &[
             "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
+            "primary_local_commits",
         ],
     ),
     // A republish's result is its effects; only its preview has data.
