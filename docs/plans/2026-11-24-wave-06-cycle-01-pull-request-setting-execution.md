@@ -290,3 +290,9 @@ Inference (not run): the byte layout of a serialized `[forge]` table (Task 1's t
 - Not reached by any test, checked by reading (review ⚠️): the refusal at the push site after `LocalFastForwarded`, and the resume after `PushVerified`; no library test reaches `push_call`, and the SSH case covers O3.
 - Minor findings left as they are: duplicate trigger assertions (plan-mandated); the `keep` line is defensive and untested; one more registry transaction per synchronization; the `ConflictPending` mapping repeated three times.
 - Document amendments owed at Task 9: design O9 and Contract 9 for the two push-endpoint rulings, and K-9.
+
+## Task 7
+
+- Commit `2efccc08` feat(sync): answer and show primary_has_local_commits. Review approved (0 Critical, 0 Important); the reviewer traced the settle, retry and recovery paths and confirmed a real answer offers no action. Minor 1 carried to Task 8: an outcome test's retry loop includes the new code in a state the binding never produces. Left as they are: the binding test checks the binding's suggestion, not the envelope's actions (Task 8's golden pins those); two redundant assertions; "as a escaped" in the commit message; no explanation line when the list is empty (K-9).
+- Tests run by exact name, red then green: `local_commits_refusal_is_answered_as_itself` (red: `Cancelled`), `o5_local_commits_data_reads_back` (red against a stub guard), `local_commits_refusal_lists_each_commit` (red: the raw field list); green: `unresolved_history_is_answered_with_the_repair_and_no_retry` and the three edited outcome tests. `cargo check --all-features --locked --tests` clean after E-17.
+- Named edits applied: E-17 (6 arms in `tests/support/mutation.rs`, 1 in `tests/support/repair.rs`); the new code in the two "no action" lists of `outcome_tests.rs`; an `Ended` fixture shared by two sync binding tests, with the existing assertions unchanged.
