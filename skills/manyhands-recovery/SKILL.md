@@ -150,16 +150,27 @@ manyhands-cli --json request cancel --request-id <REQUEST_ID>
 
 `primary_has_local_commits` (exit 3, `blocked`, no `recovery` action, every effect `not_requested`) is a pull-only `repo sync` refusing a local main branch that has commits the remote does not (it is ahead, or has diverged). It exists on a build with the pull-request setting (Wave 06 Cycle 01), and only in a repository whose configuration says `integration = "pull_request"` ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"). A pull-request repository must never push its main branch, so Manyhands names the commits and stops: `data.local_commits` is up to 20 of them, newest first, each with its full `oid` and `summary`, and `data.complete` is false when more exist (human output prints `local commit: <7-character oid> <summary>` lines and `note: more local commits are not listed`). The local main branch is unchanged, nothing was pushed, and the refusal ended its operation and holds nothing: `operation list` shows no new entry, the next `item sync` is not `busy`, and sending the same request again answers the same. A later `repo sync` checks again.
 
-Do not retry it, and do not move the commits yourself: this is Git work outside Manyhands, and the commits are the person's. Tell the person what the commits are (read them from `data.local_commits`), and give them the way out, which is to move the commits to a branch and open a pull request for it, then put the local main branch back on the remote's. With the checkout clean and on the main branch, the commands are these, with the person's own branch name:
+Do not retry it, and never run any Git command below yourself: this is Git work outside Manyhands, the commits are the person's, and one step is destructive. Tell the person what the commits are (read them from `data.local_commits`), and give them the way out, which is to move the commits to a branch and open a pull request for it. They run the commands one at a time, at their own terminal, with the checkout clean and on the main branch and their own branch name, and check each before the next. First the branch, which is the safety net:
 
 ```sh
 git branch <branch-name>
+git log <remote>/<primary-branch>..<branch-name>
+```
+
+The log must list the person's commits, the same ones `data.local_commits` named; if `git branch` failed (the name exists, a typo) or the log does not show them, stop and go no further. Then, if the person wants the commits on the remote for the pull request, the push, which publishes the commits to the remote under that branch name:
+
+```sh
 git push <remote> <branch-name>
+```
+
+Putting the local main branch back on the remote's is a separate step, optional, and the person's choice. It is the only destructive step: `reset --hard` moves the main branch and discards what the branch alone does not hold, and the commits then survive only on `<branch-name>` (and in Git's reflog). The person runs it only after they have seen that the log above shows their commits on the branch:
+
+```sh
 git fetch <remote>
 git reset --hard <remote>/<primary-branch>
 ```
 
-The branch keeps the commits, and the reset leaves the main branch where the remote has it. Then they open the pull request from the branch (no Manyhands command gives the link yet; later Cycles of Wave 06 add it), and run `repo sync` again. A common cause is the commit that switched the repository to pull-request mode, made locally: the configuration must be on the remote's primary first ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"). A push endpoint that is behind the remote the sync fetched (a separate push URL, or one that moved after the fetch) gives the same answer after the fast-forward, with the same way out (from the design and the library tests; not run here, nor the commands above).
+After the reset the main branch is where the remote has it. Then they open the pull request from the branch (no Manyhands command gives the link yet; later Cycles of Wave 06 add it), and run `repo sync` again. A common cause is the commit that switched the repository to pull-request mode, made locally: the configuration must be on the remote's primary first ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"). A push endpoint that is behind the remote the sync fetched (a separate push URL, or one that moved after the fetch) gives the same answer after the fast-forward, with the same way out (from the design and the library tests; not run here, nor the Git commands above).
 
 Pull-request mode is not usable end to end until close and promote support it: until then `ticket close` and `document promote` still merge into the primary and push it, so a close in a pull-request repository still commits to and pushes the primary.
 
