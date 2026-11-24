@@ -5,7 +5,7 @@ deps:
 - 01M87684C9GM9BJP5QQ429KMAK
 id: 01M876851FT3NPSH9KDXKXR1AJ
 title: 'Wave 06 Cycle 05: After the merge: detection, merged_at, cleanup and surviving branches'
-type: feature
+type: cycle
 status: open
 project: manyhands
 team: core
