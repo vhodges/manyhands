@@ -399,6 +399,16 @@ pub enum SynchronizationError {
     MergeRequired {
         target: SynchronizationTarget,
     },
+    /// A pull-only synchronization of the primary (a pull-request
+    /// repository's own, design Part D) found commits on the local primary
+    /// that the remote does not have, which it never merges or pushes.
+    /// `commits` are the newest of them, at most 20, newest first, each
+    /// with its summary line, and `complete` says whether that is all of
+    /// them. Terminal: the operation is ended and the reservation let go.
+    PrimaryHasLocalCommits {
+        commits: Vec<(git2::Oid, String)>,
+        complete: bool,
+    },
     PushRejected,
     ExternalChange,
     RecoveryRequired,
@@ -433,6 +443,7 @@ impl fmt::Display for SynchronizationError {
             Self::IdentityRequired { .. } => "commit identity required",
             Self::ExternalResolutionRequired { .. } => "external conflict resolution required",
             Self::MergeRequired { .. } => "merge required",
+            Self::PrimaryHasLocalCommits { .. } => "primary has local commits",
             Self::PushRejected => "push rejected",
             Self::ExternalChange => "external change",
             Self::RecoveryRequired => "synchronization recovery required",
@@ -3961,6 +3972,7 @@ fn promotion_test_drive_local_inner(
             &target,
             execution,
             true,
+            false,
         )?
     };
     let RemoteReservationOutcome::Reserved(owner) = reservation else {
@@ -4077,6 +4089,114 @@ fn graph_plan(
         refs::CleanIntegrationError::Ancestry(_) => SynchronizationError::RecoveryRequired,
     })
 }
+/// How many of a pull-only refusal's commits are listed (R-7).
+const LISTED_LOCAL_COMMITS: usize = 20;
+/// The commits of `local` that `remote` does not have, newest first
+/// (`git2::Sort::TOPOLOGICAL | git2::Sort::TIME`), at most 20, each with
+/// its summary line, and whether that is all of them (R-7).
+fn local_only_commits(
+    repository: &git2::Repository,
+    local: git2::Oid,
+    remote: git2::Oid,
+) -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error> {
+    commits_missing_from(repository, local, Some(remote))
+}
+/// `local_only_commits`, against `remote` when there is one; with none,
+/// every commit of `local` is missing from it.
+fn commits_missing_from(
+    repository: &git2::Repository,
+    local: git2::Oid,
+    remote: Option<git2::Oid>,
+) -> Result<(Vec<(git2::Oid, String)>, bool), git2::Error> {
+    let mut walk = repository.revwalk()?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+    walk.push(local)?;
+    if let Some(remote) = remote {
+        walk.hide(remote)?;
+    }
+    let mut commits = Vec::new();
+    for oid in walk {
+        let oid = oid?;
+        if commits.len() == LISTED_LOCAL_COMMITS {
+            return Ok((commits, false));
+        }
+        let commit = repository.find_commit(oid)?;
+        let summary = String::from_utf8_lossy(commit.summary_bytes().unwrap_or_default());
+        commits.push((oid, summary.into_owned()));
+    }
+    Ok((commits, true))
+}
+/// The refusal of a pull-only operation with the commits `listed` of its
+/// local primary, or `RecoveryRequired` when they could not be read.
+fn primary_has_local_commits(
+    listed: Result<(Vec<(git2::Oid, String)>, bool), git2::Error>,
+) -> SynchronizationError {
+    match listed {
+        Ok((commits, complete)) => {
+            SynchronizationError::PrimaryHasLocalCommits { commits, complete }
+        }
+        Err(_) => SynchronizationError::RecoveryRequired,
+    }
+}
+/// The pull-only decision after a plan (design Part D, O3, O4, O8): a
+/// pull-only operation on the primary never pushes and never merges, so a
+/// plan that would push (`push_needed`) or merge (`MergeRequired`) stops it
+/// with the local primary's own commits, listed against the fetched remote
+/// primary, before any merge window or local update. Anything else goes
+/// on (`Ok`), and any other plan error is the caller's to answer as it is
+/// today. A direct operation, and a context target, always go on.
+fn pull_only_plan_refusal(
+    repository: &git2::Repository,
+    pull_only: bool,
+    target: &SynchronizationTarget,
+    local: git2::Oid,
+    primary: Option<git2::Oid>,
+    planned: &Result<refs::CleanIntegrationPlan, SynchronizationError>,
+) -> Result<(), SynchronizationError> {
+    if !pull_only || !matches!(target, SynchronizationTarget::Primary) {
+        return Ok(());
+    }
+    match planned {
+        Ok(plan) if !plan.push_needed => Ok(()),
+        Ok(_) | Err(SynchronizationError::MergeRequired { .. }) => {
+            let primary = primary.ok_or(SynchronizationError::RecoveryRequired)?;
+            Err(primary_has_local_commits(local_only_commits(
+                repository, local, primary,
+            )))
+        }
+        Err(_) => Ok(()),
+    }
+}
+/// What a pull-only operation's push call decides (R-15): never a push.
+/// A push endpoint that advertises the candidate holds it: the operation
+/// is `AlreadyCurrent`. Any other is refused with the candidate's commits
+/// it lacks, listed against its advertised tip, or every commit of the
+/// candidate when it advertises no primary. Known limit: a push endpoint
+/// strictly ahead of the candidate lacks none of them, and is refused
+/// with an empty list, since the operation cannot settle on a tip that is
+/// not its candidate.
+fn pull_only_push_decision(
+    repository: &git2::Repository,
+    candidate: git2::Oid,
+    advertised: Option<git2::Oid>,
+) -> Result<Authority, SynchronizationError> {
+    if advertised == Some(candidate) {
+        return Ok(Authority::AlreadyCurrent(candidate));
+    }
+    Err(primary_has_local_commits(commits_missing_from(
+        repository, candidate, advertised,
+    )))
+}
+/// How an operation settles: a pull-only one always `AlreadyCurrent`, on
+/// its first call and on a resume after `PushVerified` alike, for it never
+/// pushes (decision 4); a direct one as `authority` says.
+fn pull_only_authority(pull_only: bool, authority: Authority) -> Authority {
+    if pull_only {
+        Authority::AlreadyCurrent(authority.oid())
+    } else {
+        authority
+    }
+}
 #[cfg(test)]
 pub(in super::super) fn promotion_test_publication_plan(
     service: &RepositoryService,
@@ -4121,15 +4241,17 @@ pub(in super::super) fn promotion_test_publication_plan(
     .map(|_| ())
 }
 impl RepositoryService {
-    /// `error`, after ending the operation when it is `HistoryUnresolved`:
-    /// the owner's repair, not a call of the same request, settles that, so
-    /// the operation is cancelled and the reservation let go (as for a
-    /// refused push). With a push intended an earlier call may have
-    /// published, and a lifecycle child belongs to its parent, which blocks
-    /// on unresolved history before it runs one: both are left as they are
-    /// (`keep`). Should the ending fail, the operation is still pending and
-    /// still holds the reservation, which `HistoryUnresolved` would deny, so
-    /// the answer is `RecoveryRequired` and the row says it is pending.
+    /// `error`, after ending the operation when it is `HistoryUnresolved`
+    /// or `PrimaryHasLocalCommits`: the owner's repair, or Git work outside
+    /// Manyhands, not a call of the same request, settles those, so the
+    /// operation is cancelled and the reservation let go (as for a refused
+    /// push). With a push intended an earlier call may have published, and
+    /// a lifecycle child belongs to its parent, which blocks on unresolved
+    /// history before it runs one: both are left as they are (`keep`). A
+    /// pull-only operation is never kept: it pushes nothing (decision 5).
+    /// Should the ending fail, the operation is still pending and still
+    /// holds the reservation, which either answer would deny, so the answer
+    /// is `RecoveryRequired` and the row says it is pending.
     fn ended_if_unresolved(
         &self,
         root: &Path,
@@ -4137,8 +4259,11 @@ impl RepositoryService {
         keep: bool,
         error: SynchronizationError,
     ) -> SynchronizationError {
-        if matches!(error, SynchronizationError::HistoryUnresolved)
-            && !keep
+        if matches!(
+            error,
+            SynchronizationError::HistoryUnresolved
+                | SynchronizationError::PrimaryHasLocalCommits { .. }
+        ) && !keep
             && self
                 .request_synchronization_cancellation(root, owner)
                 .and_then(|()| self.check_synchronization_requests(root, owner))
@@ -4154,6 +4279,8 @@ impl RepositoryService {
     /// would leave half done, and waits for a live holder in its way
     /// (`reserving`; a child's wait is decision 34's). One that takes up its
     /// own row, which holds what an earlier call did, is answered at once.
+    /// A new synchronization's row stores `pull_only` in its INSERT (R-11);
+    /// a child's never does, and a row taken up keeps what it stored.
     fn synchronization_reserve_owned(
         &self,
         root: &Path,
@@ -4161,13 +4288,33 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         execution: Option<&ChildExecution>,
         new: bool,
+        pull_only: bool,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         match execution {
             Some(execution) => self.reserve_promotion_child(root, op, target, execution, new),
-            None if new => {
-                self.reserving(root, op, || self.reserve_remote_operation(root, op, target))
+            None => {
+                // `reserve_remote_operation`'s reservation of a
+                // synchronization, with its mode.
+                let reserve = || match self.reserve_remote_operation_kind(
+                    root,
+                    op,
+                    target,
+                    RemoteOperationPriority::Manual,
+                    None,
+                    None,
+                    pull_only,
+                )? {
+                    reservation::RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
+                    reservation::RemotePollReservationOutcome::ConflictPending => {
+                        Err(state::recovery_required())
+                    }
+                };
+                if new {
+                    self.reserving(root, op, reserve)
+                } else {
+                    reserve()
+                }
             }
-            None => self.reserve_remote_operation(root, op, target),
         }
     }
     fn synchronization_restart_owned(
@@ -6123,6 +6270,10 @@ impl RepositoryService {
                     }
                     _ => return Err(SynchronizationError::RecoveryRequired),
                 };
+                // Cannot arise: a pull-only operation never begins a merge.
+                if self.synchronization_pull_only(&root, &owner)? {
+                    return Err(SynchronizationError::RecoveryRequired);
+                }
                 let primary = record
                     .target
                     .primary_ref()
@@ -6167,6 +6318,15 @@ impl RepositoryService {
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         let target = request.target.operation_target(&plan);
+        // A new operation's mode, decided here from the configuration this
+        // call has just read and checked (R-14): its own new synchronization
+        // of the primary in a pull-request repository is pull-only. A
+        // context's, a lifecycle child's and a row taken up are not decided
+        // here. Its row's INSERT stores it (R-11).
+        let pull_only_if_new = existing.is_none()
+            && execution.is_none()
+            && matches!(request.target, SynchronizationTarget::Primary)
+            && config.integration() == crate::canonical::Integration::PullRequest;
         // Inspect same-ID rows before reconfiguring or preflighting mutable Git.
         // The reservation controller validates root, target and local ID coexistence.
         let preflight = if existing.is_none() {
@@ -6207,6 +6367,7 @@ impl RepositoryService {
                 &target,
                 execution,
                 existing.is_none(),
+                pull_only_if_new,
             )?
         };
         let reservation = match reservation {
@@ -6247,6 +6408,10 @@ impl RepositoryService {
                 return Err(SynchronizationError::RecoveryRequired);
             }
         };
+        // The operation's mode, as its row's INSERT stored it (R-11): every
+        // pull-only check of this call is of this answer, never of the
+        // configuration as it is now.
+        let pull_only = self.synchronization_pull_only(&root, &owner)?;
         if !self.synchronization_configuration_matches(&root, &plan, &configuration)? {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -6289,6 +6454,10 @@ impl RepositoryService {
                         .is_none_or(|step| step.phase != state::IntegrationStepPhase::Applied);
                 Ok((window, unfinished))
             })?;
+            // Cannot arise: a pull-only operation never begins a merge.
+            if unfinished && pull_only {
+                return Err(SynchronizationError::RecoveryRequired);
+            }
             if unfinished {
                 // Complete only the original frozen pass before any new Fetch.
                 // In particular, an applied context never gets replayed when
@@ -6446,6 +6615,10 @@ impl RepositoryService {
         // to clear that intent; publication reconciliation decides instead,
         // from fresh Push-direction evidence.
         let push_intent = prior.is_some() && evidence.push_oid.is_some();
+        // What a refusal that ends the operation leaves as it is. A
+        // pull-only operation's is always ended: the `push_oid` its call
+        // records with nothing pushed is no push intent (decision 5).
+        let keep = !pull_only && (push_intent || execution.is_some());
         let mut continuation = false;
         if let Some(candidate) = pending_candidate {
             if push_intent {
@@ -6626,13 +6799,15 @@ impl RepositoryService {
                 {
                     return Err(SynchronizationError::RecoveryRequired);
                 }
+                // A pull-only operation verified only that the push
+                // endpoint holds its candidate: it published nothing.
                 return self.finish_synchronization_publication(
                     &request,
                     &owner,
                     &plan,
                     &configuration,
                     &target,
-                    Authority::Published(actual),
+                    pull_only_authority(pull_only, Authority::Published(actual)),
                     observer,
                     &updated,
                 );
@@ -6657,7 +6832,7 @@ impl RepositoryService {
                         &plan,
                         &configuration,
                         &target,
-                        authority,
+                        pull_only_authority(pull_only, authority),
                         observer,
                         &updated,
                     );
@@ -6672,23 +6847,30 @@ impl RepositoryService {
         let divergence = {
             let local =
                 self.inspect_synchronization_local(&root, &config.primary_branch, &request.target)?;
-            match graph_plan(
+            let planned = graph_plan(
                 &repository,
                 &request.target,
                 local,
                 primary,
                 context,
                 publication,
-            ) {
+            );
+            // A pull-only operation never pushes or merges the primary: it
+            // is refused here, before anything of a merge is recorded.
+            pull_only_plan_refusal(
+                &repository,
+                pull_only,
+                &request.target,
+                local,
+                primary,
+                &planned,
+            )
+            .map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
+            match planned {
                 Ok(_) => false,
                 Err(SynchronizationError::MergeRequired { .. }) => true,
                 Err(error) => {
-                    return Err(self.ended_if_unresolved(
-                        &root,
-                        &owner,
-                        push_intent || execution.is_some(),
-                        error,
-                    ));
+                    return Err(self.ended_if_unresolved(&root, &owner, keep, error));
                 }
             }
         };
@@ -6825,15 +7007,20 @@ impl RepositoryService {
                     primary,
                     context,
                     publication,
+                );
+                // As after the divergence block's plan: before the local
+                // update, a pull-only operation that would push is refused.
+                pull_only_plan_refusal(
+                    &repository,
+                    pull_only,
+                    &request.target,
+                    local,
+                    primary,
+                    &integration,
                 )
-                .map_err(|error| {
-                    self.ended_if_unresolved(
-                        &root,
-                        &owner,
-                        push_intent || execution.is_some(),
-                        error,
-                    )
-                })?;
+                .map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
+                let integration = integration
+                    .map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
                 if resumed.is_some_and(|c| {
                     matches!(
                         c,
@@ -6919,6 +7106,18 @@ impl RepositoryService {
                 {
                     return Err(boundary.error());
                 }
+                // R-15: a pull-only operation never pushes. The push
+                // endpoint holds the candidate, which is recorded as the
+                // ordinary call that pushes nothing records it, or the
+                // operation is refused with what that endpoint lacks.
+                if pull_only {
+                    pull_only_push_decision(&repository, candidate, push)?;
+                    if !publication_open {
+                        evidence.push_oid = Some(candidate);
+                        evidence.push_advertised_oid = push;
+                    }
+                    return Ok(None);
+                }
                 if publication_open {
                     if push == Some(candidate) {
                         return Ok(None);
@@ -6960,7 +7159,9 @@ impl RepositoryService {
                 }
                 Ok(Some(PushIntent::Checkpoint { resumed }))
             },
-        )?;
+        );
+        let pushed =
+            pushed.map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
         let authority = match (publication_open, pushed) {
             (true, false) => {
                 decision(self.prepare_synchronization_publication(
@@ -7008,7 +7209,7 @@ impl RepositoryService {
             &plan,
             &configuration,
             &target,
-            authority,
+            pull_only_authority(pull_only, authority),
             observer,
             &updated,
         )
@@ -8146,6 +8347,7 @@ impl RepositoryService {
                 &target,
                 None,
                 true,
+                false,
             )?,
             Some(record) => {
                 if record.target != target {
@@ -8449,6 +8651,7 @@ impl RepositoryService {
                 &record.target,
                 execution,
                 false,
+                false,
             )?
             else {
                 return Err(SynchronizationError::RecoveryRequired);
@@ -8475,6 +8678,7 @@ impl RepositoryService {
                 &record.target,
                 execution,
                 false,
+                false,
             )?;
             return Err(SynchronizationError::Interrupted);
         }
@@ -8486,6 +8690,7 @@ impl RepositoryService {
                 request.operation_id,
                 &record.target,
                 execution,
+                false,
                 false,
             )?;
             return Err(SynchronizationError::RecoveryRequired);

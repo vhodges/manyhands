@@ -212,6 +212,11 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
         // Only a caller set to refuse divergence is told this. The
         // bindings merge, and none of their requests is answered with it.
         SynchronizationError::MergeRequired { target: _ } => ResultCode::MergeRequired,
+        // Only a pull-request repository's `repo sync` is told this.
+        SynchronizationError::PrimaryHasLocalCommits {
+            commits: _,
+            complete: _,
+        } => ResultCode::PrimaryHasLocalCommits,
         SynchronizationError::PushRejected => ResultCode::PushRejected,
         SynchronizationError::ExternalChange => ResultCode::ExternalChange,
         // A merge left to resolve or to repair outside, or a

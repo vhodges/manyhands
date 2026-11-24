@@ -7,7 +7,9 @@
 //! is merged as `synchronize_remote` merges it: one merge commit of the
 //! local and the incoming history, in that order, which is then
 //! published. Nothing is rebased. `merge_required` is a code no request
-//! of theirs is answered with.
+//! of theirs is answered with. In a pull-request repository the
+//! synchronization refuses `repo sync` before it would merge or push the
+//! primary, which it only fast-forwards there.
 //!
 //! A merge that conflicts is left in the target worktree, with the
 //! branch where the merge began and the reservation released. The

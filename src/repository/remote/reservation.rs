@@ -1359,6 +1359,7 @@ impl RepositoryService {
             priority,
             Some(state::PollKind::Update),
             None,
+            false,
         )
     }
 
@@ -1408,6 +1409,7 @@ impl RepositoryService {
             priority,
             kind,
             None,
+            false,
         )? {
             RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
             RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
@@ -1439,6 +1441,7 @@ impl RepositoryService {
             RemoteOperationPriority::Manual,
             None,
             Some(execution),
+            false,
         )? {
             RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
             RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
@@ -1450,7 +1453,12 @@ impl RepositoryService {
         }
     }
 
-    fn reserve_remote_operation_kind(
+    /// A new row stores `pull_only` in its INSERT, and nothing changes it
+    /// after (R-11): only a synchronization of the primary of its own, not
+    /// a poll and not a lifecycle's child, can be pull-only. A row already
+    /// there keeps what it stored, whatever `pull_only` says now.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reserve_remote_operation_kind(
         &self,
         root: &Path,
         operation_id: OperationId,
@@ -1458,9 +1466,17 @@ impl RepositoryService {
         priority: RemoteOperationPriority,
         poll_kind: Option<state::PollKind>,
         execution: Option<&crate::repository::promotion::record::ChildExecution>,
+        pull_only: bool,
     ) -> Result<RemotePollReservationOutcome, RepositoryError> {
         if priority == RemoteOperationPriority::Poll
             && target.action() != RemoteOperationAction::Poll
+        {
+            return Err(mismatch());
+        }
+        if pull_only
+            && (target.action() != RemoteOperationAction::SynchronizePrimary
+                || poll_kind.is_some()
+                || execution.is_some())
         {
             return Err(mismatch());
         }
@@ -1631,7 +1647,7 @@ impl RepositoryService {
                     RemoteReservationOutcome::Busy,
                 ));
             }
-            let inserted = if poll_kind == Some(state::PollKind::Update) {
+            let inserted = if poll_kind == Some(state::PollKind::Update) || pull_only {
                 state::insert_operation_with_kind(
                     tx,
                     repository_id,
@@ -1639,6 +1655,7 @@ impl RepositoryService {
                     target,
                     priority,
                     poll_kind,
+                    pull_only,
                     now(),
                 )?
             } else {
@@ -3334,6 +3351,19 @@ impl RepositoryService {
                 state::consume_retirement_on_publication(tx, &record)?;
             }
             Ok(RemoteSafePointOutcome::Continue)
+        })
+    }
+
+    /// Whether the operation `owner` holds is pull-only: what its row's
+    /// INSERT stored (R-11), never the configuration as it is now.
+    pub(crate) fn synchronization_pull_only(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<bool, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            state::read_pull_only(tx, record.id)
         })
     }
 
