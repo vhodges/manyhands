@@ -990,15 +990,18 @@ fn recovery(
         | ResultCode::HostMismatch
         // What stops a synchronization once it holds the reservation:
         // history to merge, a branch deleted or a push refused at the
-        // remote, a key that is missing, refused or locked, a host that
-        // is not trusted. None is answered by an action of the code's
-        // own here. The same request is offered, by the rule for a
+        // remote, local commits on the primary branch that the remote
+        // lacks (the way out is Git work outside Manyhands, R-10), a
+        // key that is missing, refused or locked, a host that is not
+        // trusted. None is answered by an action of the code's own
+        // here. The same request is offered, by the rule for a
         // synchronization below, or its cancellation where the same
         // request cannot go on, and `with_host_action` adds the
         // approval of a host the result names.
         | ResultCode::MergeRequired
         | ResultCode::RemoteBranchDeleted
         | ResultCode::PushRejected
+        | ResultCode::PrimaryHasLocalCommits
         | ResultCode::NoSelectedKey
         | ResultCode::KeyRejected
         | ResultCode::UnlockRequired

@@ -1786,7 +1786,7 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 4] = [
     (
         ResultCode::CommandUnavailable,
         "a CLI code for a planned verb, and no verb is planned once poll once is bound \
@@ -1803,6 +1803,10 @@ const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
         "item sync and repo sync merge divergent history (Wave 03 C4, R-16), so no command \
          of execute or prepare returns it; it stays a code of the domain for a caller set to \
          refuse divergence, which no binding is",
+    ),
+    (
+        ResultCode::PrimaryHasLocalCommits,
+        "golden written in Task 8",
     ),
 ];
 
@@ -1838,7 +1842,7 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 8] = [
     (
         ResultCode::UsageError,
         "a CLI parse result; no command of execute or prepare returns it",
@@ -1855,6 +1859,10 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
         ResultCode::MergeRequired,
         "no command of execute or prepare returns it since item sync and repo sync merge \
          divergent history; see CODES_NO_FIXTURE_CAN_PRODUCE",
+    ),
+    (
+        ResultCode::PrimaryHasLocalCommits,
+        "golden written in Task 8",
     ),
     (
         ResultCode::InvalidId,
