@@ -66,6 +66,41 @@ fn configuration_dto(
     }
 }
 
+/// The mode and `[forge]` columns of a stored configuration row:
+/// `persist_configuration` sets them for a valid configuration and leaves
+/// them null for any other row.
+#[derive(Default)]
+pub(super) struct StoredMode {
+    pub(super) integration: Option<String>,
+    pub(super) forge_kind: Option<String>,
+    pub(super) forge_web_url: Option<String>,
+    pub(super) forge_pull_request_url: Option<String>,
+}
+
+/// A stored forge: its kind, web URL and pull request URL template.
+pub(super) type StoredForge = (Option<String>, Option<String>, Option<String>);
+
+impl StoredMode {
+    /// What a valid row's columns read as: its mode, and its forge when it
+    /// has one. A valid row whose mode is null was stored before the columns
+    /// existed and not refreshed since. No build before them wrote either
+    /// key, so it reads as direct with no forge.
+    pub(super) fn read(self) -> (String, Option<StoredForge>) {
+        let Some(integration) = self.integration else {
+            return (canonical::Integration::Direct.as_str().to_owned(), None);
+        };
+        let forge = (self.forge_kind.is_some()
+            || self.forge_web_url.is_some()
+            || self.forge_pull_request_url.is_some())
+        .then_some((
+            self.forge_kind,
+            self.forge_web_url,
+            self.forge_pull_request_url,
+        ));
+        (integration, forge)
+    }
+}
+
 /// The configuration the index stored for a registration. A registration
 /// with no observation is `missing`, as the snapshot reads it; a row this
 /// build cannot read is `invalid` with an unknown problem.
@@ -74,17 +109,23 @@ pub(super) fn stored_configuration(
     primary_branch: Option<String>,
     publication_remote: Option<String>,
     invalid_code: Option<&str>,
+    mode: StoredMode,
 ) -> ConfigurationDto {
     match (state, primary_branch) {
         (None | Some("missing"), _) => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        (Some("valid"), Some(primary_branch)) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(primary_branch),
-            publication_remote,
-            None,
-        ),
+        (Some("valid"), Some(primary_branch)) => {
+            // The configuration object reports them once it has the fields
+            // for them (Task 4).
+            let (_integration, _forge) = mode.read();
+            configuration_dto(
+                ConfigurationState::Valid,
+                Some(primary_branch),
+                publication_remote,
+                None,
+            )
+        }
         (Some("invalid"), _) => configuration_dto(
             ConfigurationState::Invalid,
             None,
@@ -224,7 +265,11 @@ impl RepositoryService {
                         configuration.primary_branch,
                         configuration.publication_remote,
                         configuration.invalid_code,
-                        repositories.id
+                        repositories.id,
+                        configuration.integration,
+                        configuration.forge_kind,
+                        configuration.forge_web_url,
+                        configuration.forge_pull_request_url
                    FROM repositories
                    LEFT JOIN configuration_observations AS configuration
                      ON configuration.repository_id = repositories.id
@@ -255,6 +300,12 @@ impl RepositoryService {
                                 row.get(7)?,
                                 row.get(8)?,
                                 invalid_code.as_deref(),
+                                StoredMode {
+                                    integration: row.get(11)?,
+                                    forge_kind: row.get(12)?,
+                                    forge_web_url: row.get(13)?,
+                                    forge_pull_request_url: row.get(14)?,
+                                },
                             ),
                             index: index_state(
                                 refresh_required,
