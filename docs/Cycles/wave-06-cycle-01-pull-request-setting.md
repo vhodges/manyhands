@@ -12,12 +12,13 @@ id: "01M878QWAET79VP1S0EXVCEMAC"
 
 Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`), branch `manyhands/ticket/01M87683441PRAYQJQBQBG96YY`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 01 design](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-design.md). Plan: [Cycle 01 implementation plan](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-implementation.md).
 
-Status: **draft** (revision 2).
+Status: **draft** (revision 3).
 
 Revision history:
 
 - Revision 1 (`21b811d5`): first draft.
-- Revision 2: two independent reviews of revision 1 (source and feasibility: 3 Blocking, 8 Important, 7 Minor; contract and consistency: 2 Blocking, 16 Important, 15 Minor) and the owner's decisions 4 to 10.
+- Revision 2 (`754a42a1`): two independent reviews of revision 1 (source and feasibility: 3 Blocking, 8 Important, 7 Minor; contract and consistency: 2 Blocking, 16 Important, 15 Minor) and the owner's decisions 4 to 10.
+- Revision 3: a scoped re-review of revision 2 with an adversarial round (3 Blocking, 4 Important, 6 Minor, all in pull-only `repo sync`) and the owner's decision 11. The design's Part D is restated as required outcomes, built test-first with a design checkpoint.
 
 ## Purpose And Authority
 
@@ -50,7 +51,7 @@ Authorities, in order:
 
 ## Explicit Exclusions And Downstream Obligations
 
-- **No interim guard (decision 1).** Close, promote and remote selection keep their direct behaviour in a pull-request repository until their own Cycles. The RFC's evidence that no command commits to or pushes the primary in pull-request mode is delivered command by command: `repo sync` here, remote selection and enabling in Cycle 02, close in Cycle 03, promote in Cycle 04. A primary conflict cannot arise in pull-request mode, because pull-only `repo sync` never merges; one left from direct mode is `recovery_required` (design Part D).
+- **No interim guard (decision 1).** Close, promote and remote selection keep their direct behaviour in a pull-request repository until their own Cycles. The RFC's evidence that no command commits to or pushes the primary in pull-request mode is delivered command by command: `repo sync` here, remote selection and enabling in Cycle 02, close in Cycle 03, promote in Cycle 04. A primary conflict cannot arise in a pull-only operation, because it never merges; a direct-mode operation left pending when the repository switched finishes in direct mode (decision 11).
 - **Link storage and the JSON `pull_request` object (decision 2)** arrive with the first command that gives a link. Cycle 03 (vh-gy8gz) owns the per-item record of given links, its registry migration and the JSON schema of the `pull_request` object; Cycle 04 reuses them.
 - Enabling in pull-request mode and every setting change through a setup branch: Cycle 02 (vh-c97se). Nothing in this Cycle writes `integration` or `[forge]`.
 - The after-merge work, `merged_at` and the checkout warning: Cycle 05 (vh-ssepw).
@@ -79,7 +80,8 @@ Authorities, in order:
 9. **(owner's eye)** In a pull-request repository, `repo sync`:
    - fast-forwards a local primary the remote is ahead of, pushes nothing, and answers as direct mode answers a fast-forward-only sync today: `already_applied`, `effects.publication` `current` (decision 4);
    - answers `already_applied`, `current`, when the two are equal, as today;
-   - refuses a local primary with commits the remote lacks (ahead or diverged) with `primary_has_local_commits` (blocked, exit 3, no recovery action), before any merge, local update or push. `data.local_commits` names up to 20 of them and `data.complete` says whether that is all. The operation ends with the refusal and holds nothing (decision 5);
+   - refuses a local primary with commits the remote lacks (ahead or diverged) with `primary_has_local_commits` (blocked, exit 3, no recovery action, every effect `not_requested`), before any merge, local update or push. `data` is tagged `"type": "primary_local_commits"`; `data.local_commits` names up to 20 of them and `data.complete` says whether that is all. The operation ends with the refusal and holds nothing (decision 5), and the same request retried answers the same;
+   - never merges or pushes the primary in an operation that began in pull-request mode, on any call of it; an operation that began in direct mode finishes in direct mode (decision 11);
    - keeps today's refusals when the root is not on the primary or not clean.
 10. Direct mode is unchanged. Every existing answer, golden and test keeps its result, except the configuration object's two new fields and the named edits.
 
@@ -94,8 +96,8 @@ Authorities, in order:
 | A5 | 5 | The migration adds the columns once, and the first refresh after it fills them | planned |
 | A6 | 6-8 | A table-driven test from remote URLs and forge settings to forge, default mode and link URL; a human-line test | planned |
 | A7 | 8 | The owner opens a Bitbucket Cloud link built for a real work repository and it reaches the create-pull-request page (decision 7) | planned |
-| A8 | 9 | Library tests of the pull-only decision and the local-commit listing; a binding test that every primary call, including a resumed one, takes the pull-only setting | planned |
-| A9 | 9 | One SSH case: a pull-only `repo sync` fast-forwards with the server unchanged, then refuses a local commit with the server's primary still unchanged and nothing held; it writes the code's mutation golden. This meets the RFC's push evidence by showing no push is made (decision 6) | planned |
+| A8 | 9 | The design's required outcomes O1 to O12 of Part D, each with its proof: library tests of the local-commit listing, the decision after each `graph_plan`, `push_call`'s refusal, the stored setting, `stopped` and the replay of the refusal's data | planned |
+| A9 | 9 | One SSH case: a pull-only `repo sync` fast-forwards with the server unchanged, then refuses a local commit with the server's primary still unchanged and nothing held, and the same request retried answers the same; it writes the code's mutation golden. This meets the RFC's push evidence by showing no push is made (decision 6) | planned |
 | A10 | 9 | `primary_has_local_commits` registered everywhere a result code is registered | planned |
 | A11 | 10 | The fast tier and the SSH tier of design Testing, once at review-ready | planned |
 | A12 | Scope 5 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs` and `tests/cli/skills.rs` pass | planned |
@@ -112,6 +114,7 @@ Authorities, in order:
 8. **A version 2 direct-mode file is accepted** and written back as version 1.
 9. **Mechanical test edits found by Task 0's sweep are pre-authorized**: an edit that keeps every assertion's intent is applied and logged as E-n with its reason. An edit that removes or weakens an assertion stops for the owner.
 10. **No release until Cycle 04 lands.** The skills describe the new keys and pull-only `repo sync`, and say that pull-request mode is not usable end to end until close and promote support it.
+11. **An operation finishes in the mode it began.** Each remote operation records whether it is pull-only when it starts, and every later call of it (resume, conflict continuation, cancellation, rerun) keeps that mode. A direct-mode `repo sync` interrupted and resumed after the repository switched finishes as direct, and may push the primary once more, as it intended.
 
 At approval: to be recorded.
 
@@ -122,6 +125,9 @@ At approval: to be recorded.
 - K-3: The forge module parses remote URLs for links only. It is not the SSH transport's parser, and is never used to connect or for host trust.
 - K-4: Only the Bitbucket Cloud URL shape is checked against a live forge (decision 7). The others follow the forges' documented forms.
 - K-5: Remote selection accepts only a byte-canonical configuration blob (`canonical_configuration_blob`). A hand-written version 2 file must be the serializer's output for remote selection to rewrite it.
+- K-6: An operation begun in direct mode finishes in direct mode after a switch (decision 11), so it can push the primary once more.
+- K-7: A crash after a `primary_has_local_commits` refusal has ended its operation, and before its request record is final, leaves a retry of that request answering `cancelled`. Nothing changed; a new `repo sync` refuses again (design R-16).
+- K-8: A build without this Cycle that refreshes a migrated registry writes the configuration row without the new columns and clears the dirty mark, so `repo list` shows the mode as direct and no forge until the primary next changes. `repo inspect` reads the file and is not affected.
 
 ## Open Questions
 
@@ -145,3 +151,5 @@ None.
 | Review round 1 | Version 2 in direct mode needs an explicit compatibility decision | decision | Accepted, written back as 1 (decision 8) | Canonical schema RFC, Migration |
 | Review round 1 | Unplanned premise edits | decision | Mechanical edits pre-authorized (decision 9) | Fast-writes ledger: 11 planned edits, 85 made |
 | Review round 1 | Half-delivered pull-request mode in a release | decision | No release until Cycle 04 (decision 10) | — |
+| Review round 2, scoped re-review with adversarial round | 3 Blocking, 4 Important, 6 Minor | — | All resolved in revision 3; see the design's Review Record | This revision |
+| Review round 2 | A setting read afresh per call strands an operation begun in the other mode | decision | The mode belongs to the operation (decision 11) | `sync.rs` merge-child and push-prepared refusals under `refuse_divergence` |

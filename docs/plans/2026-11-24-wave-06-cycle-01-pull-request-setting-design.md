@@ -12,7 +12,7 @@ id: "01M878QWXT8RVAKS7FB68PH3D7"
 
 Cycle document: [Wave 06 Cycle 01](../Cycles/wave-06-cycle-01-pull-request-setting.md). Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md) and the Cycle document's Product-Owner Decisions.
 
-Status: **draft** (revision 2).
+Status: **draft** (revision 3).
 
 ## Intent And Approval Boundary
 
@@ -26,7 +26,7 @@ Make the mode and the forge a validated part of the repository's configuration, 
 
 ## Baseline Facts
 
-Each fact was read in the source at `21b811d5`, and checked by the round 1 source review.
+Each fact was read in the source at `754a42a1`, and checked by the round 1 and round 2 reviews.
 
 1. **The configuration type.** `src/canonical.rs` `RepositoryConfig { primary_branch, publication_remote, unknown: toml::Table }` derives `Clone, Debug, PartialEq`. `parse_repository_config` refuses any `format_version` other than integer 1 ("unsupported format_version; expected 1") and moves every other key into the table. `serialize_repository_config` re-inserts `format_version = 1`, `primary_branch` and `publication_remote` into a copy of the table. `toml` 0.8.23 is built without `preserve_order`, so keys are written sorted. The `v0.2.1` tag's parser holds the same refusal.
 2. **Construction sites.** `RepositoryConfig { … }` is built by struct literal in 16 places, including `tests/ticket_closure.rs`, `tests/document_promotion.rs`, `tests/document_promotion/advanced.rs` and `tests/comment_publication.rs`, which are SSH-harness targets.
@@ -44,6 +44,8 @@ Each fact was read in the source at `21b811d5`, and checked by the round 1 sourc
 14. **Registry migrations.** `src/repository/discovery.rs` `migrate_registry` runs every migration, idempotently and one way, with named markers in `registry_migrations`. `tests/recovery_foundation_gate.rs` `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly` pins the markers committed before the recovery migration, so a new marker belongs after `context_retirement::record::migrate`. `migrate_item_read_schema` is the precedent for marking contexts dirty in a migration.
 15. **Percent-encoding.** `percent-encoding` 2.3.2 is in `Cargo.lock` through `url` (a `git2` dependency) but is not a direct dependency.
 16. **The desktop** reads `already_applied` with publication `current` from `repo sync` as `SyncOutcome::Current` ("… is the same as the shared copy"). A code it does not know becomes `Failed { code }`, showing the code's message.
+17. **The operation row.** A remote operation is a row of `remote_operation_records`, whose target columns are immutable by trigger. It records no starting commit at reservation: `local_oid` is first written at the local fast-forward. Columns have been added to it with `ALTER TABLE … ADD COLUMN`, for example `poll_kind` in `remote::state::migrate`.
+18. **The synchronization's seams.** `synchronize_remote_observed_inner` calls `graph_plan` three times: in the resume of a pending merge, in the divergence block, and under the repository lease before the local update. `push_call` decides whether to push. The binding's `stopped` (`bind/sync.rs`) answers a journal row ended as cancelled as the caller's own cancellation, except for `HistoryUnresolved`. A replay rebuilds stored data through `MutationDataDto::from_stored`, which for `repo sync` knows only the synchronization conflict's tagged shape and the host data, and answers `internal_error` for any other.
 
 ## Part A: The Configuration
 
@@ -90,10 +92,11 @@ The types live in `src/canonical.rs`, each with `as_str`. The accessors are infa
 
 ## Part B: The Index And The Reads
 
-**Migration (R-5).** One named, additive migration, marker `wave_06_configuration_mode_v1`, run by `migrate_registry` after `context_retirement::record::migrate`:
+**Migration (R-5).** One named, additive migration, marker `wave_06_pull_request_mode_v1`, run by `migrate_registry` after `context_retirement::record::migrate`, in an immediate transaction that re-checks the marker and the columns first, as `migrate_item_read_schema` does, so that two processes opening at once do not both add a column:
 
 - `ALTER TABLE configuration_observations ADD COLUMN integration TEXT`, and `forge_kind`, `forge_web_url`, `forge_pull_request_url`, all `TEXT` and nullable;
-- mark every registration's primary context dirty, as `migrate_item_read_schema` marks contexts, so that the next refresh re-persists the configuration row.
+- `ALTER TABLE remote_operation_records ADD COLUMN pull_only INTEGER NOT NULL DEFAULT 0 CHECK(pull_only IN (0,1))` (Part D);
+- mark every registration's primary context (`contexts.item_id IS NULL`) dirty, as `migrate_item_read_schema` marks contexts, so that the next refresh re-persists the configuration row.
 
 **Persist and read.** `persist_configuration` writes the four columns for a valid configuration and leaves them null otherwise. `stored_configuration` in `read/admin.rs` reads them. A valid row whose `integration` is null (written before the migration and not yet refreshed) reads as `"direct"`, with `forge` null: no build before this one ever wrote these keys. The index snapshot is unchanged (Baseline Fact 3).
 
@@ -135,11 +138,20 @@ The web base is `web_url` with any trailing `/` dropped when it is set, and othe
 
 ## Part D: Pull-Only Repo Sync
 
-**Settings.** `SynchronizationSettings` gains `pull_only: bool`, documented as: "On the primary target only: never merge and never push. A local primary with commits the remote lacks is `PrimaryHasLocalCommits`, before anything of a merge, a local update or a push is prepared." It has no effect on a context target. `PULL_ONLY` also sets `refuse_divergence`, so a synchronization that already holds a merge of its own, begun without the setting, is `RecoveryRequired` (Baseline Fact 9's field comment).
+Two review rounds found faults in this mechanism, so it is stated as required outcomes (below) and built test-first with a design checkpoint (plan Task 6).
 
-**The binding (R-11).** `SyncBinding`'s `domain_call` chooses the setting for every call on the primary target, first calls and continuations alike (`operation resume`, the `conflict resolve` continuation, a rerun): `PULL_ONLY` when `read_configuration_for` gives a pull-request repository, and `MERGING` otherwise. `item sync` always uses `MERGING`.
+**The mode belongs to the operation (decision 11, R-11).** `remote_operation_records` gains `pull_only INTEGER NOT NULL DEFAULT 0 CHECK(pull_only IN (0,1))`, added by `ALTER TABLE … ADD COLUMN` as `poll_kind` was (Baseline Fact 17), in the same migration as Part B's columns. A new primary operation writes it when it is reserved, from the settings its call passes; it is never changed. Every later call of the same operation (`operation resume`, the `conflict resolve` continuation, the call `request cancel` makes, a rerun) uses the stored value and ignores the setting it is passed. Rows from before the migration are 0, direct. An operation begun in direct mode therefore finishes in direct mode, even if the configuration it fetched turns on pull-request mode, and a pull-only operation stays pull-only.
 
-**The decision.** In `synchronize_remote_observed_inner`, right after `graph_plan` and before the divergence check, a pull-only primary synchronization whose plan has `push_needed`, or that is `MergeRequired`, stops with `SynchronizationError::PrimaryHasLocalCommits { commits, complete }`. A pure function computes the list:
+**Settings.** `SynchronizationSettings` gains `pull_only: bool`. `PULL_ONLY` is `SynchronizationSettings { refuse_divergence: false, pull_only: true }` (R-14): pull-only refuses before the divergence check is reached, so `merge_required` stays unreachable from every binding, as `bind/sync.rs`'s module documentation and `CODES_NO_FIXTURE_CAN_PRODUCE` say today. `pull_only` has no effect on a context target.
+
+**The binding.** `SyncBinding`'s `domain_call` passes `PULL_ONLY` for a primary call when `read_configuration_for` gives a valid pull-request configuration, and `MERGING` otherwise; `item sync` always passes `MERGING`. For a new operation, that read is the one the synchronization's preflight already checks against HEAD and a clean root, so an unreadable or invalid configuration is refused as today (`invalid_configuration`) before anything is reserved. For an existing operation the passed setting is ignored.
+
+**The decision.** A pull-only operation never merges and never pushes:
+
+- right after each `graph_plan` call of `synchronize_remote_observed_inner` (Baseline Fact 18 names the three), a plan with `push_needed`, or `MergeRequired`, stops the operation with `SynchronizationError::PrimaryHasLocalCommits { commits, complete }`;
+- `push_call`, in a pull-only operation, refuses any push it would make with the same error, so a local commit made between two reads of the local head is never pushed (R-15).
+
+The list comes from a pure function:
 
 ```rust
 fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: git2::Oid)
@@ -148,27 +160,26 @@ fn local_only_commits(repository: &git2::Repository, local: git2::Oid, remote: g
 
 It walks from `local`, hiding `remote`, in `git2::Sort::TOPOLOGICAL | git2::Sort::TIME` order (newest first), takes up to 20 commits with their summary lines, and gives `complete` false when a 21st exists (R-7).
 
-**Ending the operation (decision 5).** The refusal goes through `ended_if_unresolved`, widened to end the operation for `PrimaryHasLocalCommits` as it does for `HistoryUnresolved`: the operation is cancelled and the reservation let go. Only the fetch's tracking ref has moved. A replay of the request returns its stored refusal.
+**Ending the operation (decision 5).** A pull-only operation never records a merge window or a push intent, so the refusal reaches `ended_if_unresolved` with `keep` false. `ended_if_unresolved` is widened to end the operation for `PrimaryHasLocalCommits` as it does for `HistoryUnresolved`: the operation is cancelled and the reservation let go. The binding's `stopped`, which treats a journal row ended as cancelled as the caller's own cancellation except for `HistoryUnresolved` (Baseline Fact 18), is widened the same way, without `HistoryUnresolved`'s repair action.
 
-**The outcomes.**
+**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", and no recovery action (R-10). Its effects are `not_requested` throughout, `publication` included: nothing was or will be pushed. Its data is a new `MutationDataDto` variant tagged `"type": "primary_local_commits"`, `{ "type", "local_commits": [{ "oid", "summary" }], "complete" }`, with the full 40-character `oid`, read back on a replay by a `PrimaryLocalCommitsDto::from_stored` arm beside the synchronization conflict's (Baseline Fact 18). Its schema `schemas/v1/primary_local_commits.schema.json` is listed in `DATA_ROOTS` with the SSH case's golden. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <7-character oid> <summary>` line per commit through the human output's field escaping, and `note: more local commits are not listed` when `complete` is false.
 
-| Relation after the fetch | Direct mode (today) | Pull-only |
-| --- | --- | --- |
-| equal | `already_applied`, publication `current` | the same |
-| remote ahead | fast-forward; `already_applied`, `current` | the same (decision 4) |
-| local ahead | push; `ok`, publication `published` | `primary_has_local_commits`, nothing moved, nothing held |
-| diverged | merge and push | `primary_has_local_commits`, nothing moved, nothing held |
-| root not on the primary, or not clean | today's refusal | the same |
+### Required Outcomes Of Part D
 
-**The answer.** `primary_has_local_commits` is a new result code: class `Blocked` (exit 3), message "The local primary branch has commits the remote does not have.", and no recovery action (R-10). Its data is a new `MutationDataDto` variant, `{ "local_commits": [{ "oid", "summary" }], "complete" }`, with the full 40-character `oid`, and the schema `schemas/v1/primary_local_commits.schema.json`, listed in `DATA_ROOTS` with the SSH case's golden. Human output prints `error:` and `code:` as for every refusal, then one `local commit: <7-character oid> <summary>` line per commit through the human output's field escaping, and `note: more local commits are not listed` when `complete` is false.
-
-**Replay and resume.**
-
-| Case | Answer |
-| --- | --- |
-| a retried request after the refusal | its stored refusal |
-| `operation resume` of a pull-only synchronization interrupted after its fast-forward | finished as today: `already_applied`, `current` |
-| a direct-mode primary merge still pending when the repository switched | `recovery_required`, as for any merge begun without `refuse_divergence` |
+| # | Situation | Required outcome | Proof |
+| --- | --- | --- | --- |
+| O1 | New operation, pull-request repository, local equal to remote | `already_applied`, publication `current`; nothing held | SSH case (step 2 precondition) |
+| O2 | New operation, remote ahead | the local primary fast-forwarded; `already_applied`, `current`; nothing pushed | SSH case |
+| O3 | New operation, local ahead | `primary_has_local_commits`, effects `not_requested`, no recovery, the commits in `data`; nothing pushed; local primary unchanged; operation ended and nothing held | SSH case; `local_only_commits` and the decision function |
+| O4 | New operation, diverged | as O3, with only the local side listed and no merge window recorded | decision function |
+| O5 | The same request retried after O3 | the identical envelope, read back through `from_stored` | SSH case; a `from_stored` round-trip unit test |
+| O6 | A crash after O3's ending and before its request record is final; then a retry | `cancelled`; a new `repo sync` answers O3 again | Known Limit K-7; not tested |
+| O7 | A pull-only operation resumed after a local commit was made | `primary_has_local_commits`; nothing pushed | the decision function on the re-plan; `push_call`'s refusal unit test |
+| O8 | A pull-only operation resumed in a repository switched back to direct mode | stays pull-only | the stored-setting unit test |
+| O9 | A direct-mode operation (merge pending or push prepared) resumed after the repository switched to pull-request mode | finishes in direct mode, as today | the stored-setting unit test |
+| O10 | `item sync` in a pull-request repository | unchanged | the binding unit test |
+| O11 | Root not on the primary, or not clean | today's refusal, nothing reserved | existing tests, unchanged |
+| O12 | `request cancel` of a pull-only operation | as for any synchronization | existing cancellation path; the stored setting is read on the cancel's call |
 
 ## Part E: The Desktop
 
@@ -184,9 +195,9 @@ No change (decision 4), beyond the named edits for the configuration object's li
 | P4 | `repo inspect` and `repo list` report `integration` and `forge`, from the file and from the index, with a pre-refresh row reading `"direct"` | `tests/read_repository.rs`, the read contract and the CLI goldens |
 | P5 | The migration adds the columns once, and the first refresh after it fills them | a migration test in `src/repository/discovery.rs` |
 | P6 | Recognition, default mode and every URL row of Part C | `src/forge.rs` unit tests, table-driven |
-| P7 | `local_only_commits`, and the pull-only decision after `graph_plan` | `src/repository/remote/sync_tests.rs`, beside the `graph_plan` tests |
-| P8 | `domain_call` takes `PULL_ONLY` for every primary call in a pull-request repository, `MERGING` otherwise and for `item sync` | `src/repository/mutation/bind/sync_tests.rs` |
-| P9 | End to end: a pull-only fast-forward leaves the server's primary unchanged; a local commit is refused, the server's primary is unchanged, and a following `item sync` is not `busy`; the golden is written | one SSH case in `mutation_remote` |
+| P7 | `local_only_commits`, the pull-only decision after each `graph_plan`, and `push_call`'s refusal (O3, O4, O7) | `src/repository/remote/sync_tests.rs`, beside the `graph_plan` test |
+| P8 | `domain_call` passes `PULL_ONLY` for a primary call in a pull-request repository and `MERGING` otherwise and for `item sync` (O10); a new operation stores its setting and a taken-up one uses the stored value (O8, O9); `stopped` answers the refusal as itself, not as `cancelled`; `from_stored` reads the refusal's data back (O5) | `src/repository/mutation/bind/sync_tests.rs`, the reservation tests in `src/repository/remote/`, and `src/repository/mutation/` replay tests |
+| P9 | End to end (O1 to O3, O5): a pull-only fast-forward leaves the server's primary unchanged; a local commit is refused, the server's primary is unchanged, the same request retried gives the same envelope, and a following `item sync` is not `busy`; the golden is written | one SSH case in `mutation_remote` |
 | P10 | `primary_has_local_commits` is registered everywhere Baseline Facts 12 and 13 list | the existing registration tests |
 
 ## Testing
@@ -209,8 +220,10 @@ At review-ready the SSH tier is AGENTS.md's `src/repository/remote/` row (`ssh_t
 - **E-10** (Task 5) `src/results_tests.rs`: the design table gains `primary_has_local_commits`, the count becomes 71, and `result_code_messages_are_fixed` gains its message.
 - **E-11** (Task 6) `tests/mutation_remote.rs`, the `REFUSING` settings constant: add `pull_only: false`.
 - **E-12** (Task 8) `tests/mutation_contract.rs` `DATA_ROOTS`: add `primary_local_commits.schema.json` (68 to 69).
+- **E-13** (Task 5) `tests/mutation_contract.rs` `CODES_NO_MUTATION_GOLDEN_HAS` (7 to 8) and `CODES_NO_FIXTURE_CAN_PRODUCE` (3 to 4): add `primary_has_local_commits` with the reason "golden written in Task 8", so that no commit is left red.
+- **E-14** (Task 8) the same two tables: remove the entries E-13 added (back to 7 and 3).
 
-Task 0's sweep adds what else it finds, under decision 9: the version message; `format_version = 2` in tests; the configuration object's keys in JSON assertions; `stored_configuration` callers; `SynchronizationSettings {` literals; exhaustive matches on `SynchronizationError` and `MutationDataDto`; result-code counts; and tests that migrate an older registry and then assert that contexts are clean or the index current, which the new dirty marks change.
+Task 0's sweep adds what else it finds, under decision 9: the version message; `format_version = 2` in tests; the configuration object's keys in JSON assertions; `stored_configuration` callers; `SynchronizationSettings {` literals; exhaustive matches on `SynchronizationError` and `MutationDataDto`; result-code counts; tests that migrate an older registry and then assert that contexts are clean or the index current, which the new dirty marks change; and tests that pin the columns or schema text of `remote_operation_records`.
 
 ## Document Amendments
 
@@ -234,13 +247,16 @@ Each: decision — why — cost if wrong. Revision 1's R-4 and R-6 became the ow
 - **R-8** No Data Center URL for a personal repository or an unexpected path — their web paths differ and are not in the RFC — such a repository gets the branch names without a link.
 - **R-9** The SSH case is registered in `tests/mutation_remote.rs`'s case table, beside `c4_conformance_repo_sync` — the target already pins `repo sync`, and AGENTS.md selects it for `src/repository/mutation/` — none beyond its run time.
 - **R-10** `primary_has_local_commits` has no recovery action — the way out (moving the commits to a branch) is Git work outside Manyhands, which the contract's recovery tables write as `none`, and the refusal holds nothing — an agent gets no automatic next step.
-- **R-11** The setting is chosen per call in `domain_call`, not once in `prepare` — resumes and continuations skip `prepare` (Baseline Fact 9) — a configuration changed between a call and its resume changes the setting, which is the safer direction.
+- **R-11** The setting is stored on the operation when it is reserved, and every later call uses the stored value (decision 11) — resumes and continuations skip `prepare`, and a setting read afresh per call could strand an operation begun in the other mode (round 2, B2 and B3) — a column on `remote_operation_records` and one more migration step.
 - **R-12** The SSH tier at review-ready adds `ticket_closure`, `document_promotion` and `comment_publication` — their test files build configurations the serializer now validates — about 15 more minutes.
+- **R-14** `PULL_ONLY` does not set `refuse_divergence` — the pull-only check comes first, so `merge_required` stays unreachable from every binding, as its documentation says — none.
+- **R-15** `push_call` refuses any push in a pull-only operation, besides the check after each `graph_plan` — the local head is read more than once, and a commit made in between must not be pushed (round 2, I3) — one more refusal site to test.
+- **R-16** A crash between ending the operation and finishing its request record leaves a retry answering `cancelled` (K-7) — recording the cause on the row adds a column and a state for a window in which nothing changed, and a new `repo sync` answers the refusal again — a caller that retries once sees `cancelled` instead of the refusal.
 - **R-13** The canonical schema RFC is amended for the configuration, a departure from the Pull-Request Mode RFC's "closure immutability only" — decision 21's version 2 needs it — none.
 
 ## Known Limits
 
-The Cycle document's K-1 to K-5.
+The Cycle document's K-1 to K-8.
 
 ## Unverified
 
@@ -269,3 +285,4 @@ The Cycle document's K-1 to K-5.
 | --- | --- | --- | --- | --- | --- |
 | 1 | source and feasibility | 3 | 8 | 7 | All resolved in revision 2: the pure decision function and its tests (B1); the refusal ends its operation (B2, decision 5); the golden, `DATA_ROOTS` and schema move with the SSH case (B3); dirty marks (I4); the migration's place (I5); the setting per call (I6, R-11); today's fast-forward answer kept (I7, decision 4); E-7 to E-12 (I8); test paths (I9); the switch reaches the remote first (I10, K-2); pre-refresh rows read `"direct"` (I11); the minors in place |
 | 1 | contract and consistency | 2 | 16 | 15 | All resolved in revision 2: the push evidence (B1, decision 6); the 0.2.1 check (B2, A2); test paths (I3); recovery `none` (I4, R-10); the golden (I5); D-1, D-6, R-13 (I6); notes to other tickets (I7); the conflict-resolution exclusion (I8); replay and resume (I9); recognition (I10); the link rules (I11); R-12 (I12); P3 and K-5 (I13); decision 9 and the wider sweep (I14); decision 7 and A7 (I15); the checkout row (I16); Baseline Fact 8's departure (I17); decision 10 (I18); the minors in place |
+| 2 | scoped re-review with adversarial round | 3 | 4 | 6 | Resolved in revision 3: the refusal's data is tagged and read back (B1, O5); the mode is stored per operation (B2, B3, decision 11, R-11); `PULL_ONLY` without `refuse_divergence` (B3, R-14); `stopped` widened (I1); the crash window documented (I2, R-16, K-7); `push_call` refuses (I3, R-15); effects `not_requested` (I4); E-13 and E-14 keep every commit green (M1); file lists (M2); the migration's transaction (M3); K-8 (M4); the invalid-configuration path (M5); wording (M6). Part D restated as required outcomes, built test-first with a design checkpoint |
