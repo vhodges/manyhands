@@ -31,7 +31,7 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 /// order, then the mutation codes of the design's Result Mapping table,
 /// class by class in its order.
 /// The two CLI codes follow `invalid_input`.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
+const DESIGN_CODES: [(&str, Option<FailureClass>); 72] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -103,6 +103,7 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
     ("transport_unavailable", Some(FailureClass::Transient)),
     ("cancelled", Some(FailureClass::Cancelled)),
     ("already_applied", None),
+    ("already_closing", None),
 ];
 
 /// The codes a read returns, in its envelope or in its data.
@@ -225,6 +226,7 @@ fn result_code_messages_are_fixed() {
         "The transport is not available; try again.",
         "The request was cancelled.",
         "The request was already applied; nothing changed.",
+        "The ticket's branch already holds a closure.",
     ];
     let actual: Vec<_> = ResultCode::ALL.iter().map(|code| code.message()).collect();
     assert_eq!(actual, expected);

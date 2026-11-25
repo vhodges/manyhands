@@ -528,8 +528,9 @@ macro_rules! result_codes {
                 }
             }
 
-            /// The code's own class: `None` only for `ok` and for
-            /// `already_applied`, a no-op. For the class of a result, which
+            /// The code's own class: `None` only for `ok`, for
+            /// `already_applied`, a no-op, and for `already_closing`, a
+            /// success. For the class of a result, which
             /// also depends on its outcome, see `Envelope::failure_class`.
             pub const fn failure_class(self) -> Option<FailureClass> {
                 match self {
@@ -683,6 +684,8 @@ result_codes! {
         "The request was cancelled.";
     AlreadyApplied => "already_applied", None,
         "The request was already applied; nothing changed.";
+    AlreadyClosing => "already_closing", None,
+        "The ticket's branch already holds a closure.";
 }
 
 impl ResultCode {

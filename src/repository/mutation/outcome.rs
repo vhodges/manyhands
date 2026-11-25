@@ -927,6 +927,7 @@ fn recovery(
         // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
+        | ResultCode::AlreadyClosing
         // A command line the CLI could not run: no action corrects it.
         | ResultCode::UsageError
         | ResultCode::CommandUnavailable

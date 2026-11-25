@@ -289,19 +289,20 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<LifecycleWayOut> {
 }
 
 /// A blocked prepare's way out: the poll that reads primary's tracking ref,
-/// left behind or missing, or a published context whose remote state is
-/// unknown (C5 decision 35), with `repo sync` when primary is ahead; the save
+/// left behind or missing, a published context whose remote state is
+/// unknown (C5 decision 35), or a remote context branch no tracking ref
+/// holds yet, with `repo sync` when primary is ahead; the save
 /// that makes a missing context; or the local repair of a refused merge.
 fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWayOut> {
     use LifecycleBlocker::{
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
         HistoryUnresolved, IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote,
-        PrimaryMissing,
+        PrimaryMissing, RemoteContextUnmaterialized,
     };
     let tracking = |blocker: &LifecycleBlocker| {
         matches!(
             blocker,
-            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
+            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown | RemoteContextUnmaterialized
         )
     };
     if blockers.contains(&HistoryUnresolved)

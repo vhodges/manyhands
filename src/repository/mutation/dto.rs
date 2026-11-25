@@ -126,8 +126,10 @@ contract_enum!(
     ///
     /// `context_created`, `id_adopted`, `source_written` and
     /// `checkpoint_committed` are a repair's. `context_created` is the
-    /// editing context of the repaired item made from the primary branch:
-    /// its branch and its worktree, listed when the item has none.
+    /// editing context of the repaired item made from a primary branch,
+    /// the local one or the remote's when only the remote holds it: its
+    /// branch and its worktree, listed when the item has none. A
+    /// pull-request closure lists it too, when it makes its context.
     /// `id_adopted` is an ID assigned to a file that holds no valid one:
     /// the ID the corrected source carries, which the preview's details
     /// name. `source_written` is the corrected source written over the
@@ -157,6 +159,14 @@ contract_enum!(
     /// committed there; `primary_integrated` the branch merged into primary;
     /// `primary_published` primary pushed; `remote_branch_deleted`,
     /// `worktree_removed` and `branch_deleted` the context retired.
+    ///
+    /// `context_published`, `pull_request_link` and `closure_withdrawn` are
+    /// a pull-request closure's, and a withdrawal's. `context_published` is
+    /// the editing branch pushed to the remote, with what the context holds
+    /// that the remote does not; `pull_request_link` the link of the
+    /// ticket's pull request recorded or refreshed; `closure_withdrawn` the
+    /// closure fields taken off the editing branch, on a commit of their
+    /// own.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -195,6 +205,9 @@ contract_enum!(
         RemoteBranchDeleted => "remote_branch_deleted",
         WorktreeRemoved => "worktree_removed",
         BranchDeleted => "branch_deleted",
+        ContextPublished => "context_published",
+        PullRequestLink => "pull_request_link",
+        ClosureWithdrawn => "closure_withdrawn",
     }
 );
 
@@ -374,6 +387,7 @@ contract_enum!(
         DocumentInvalidAfterIntegration => "document_invalid_after_integration",
         TicketInvalidAfterClosure => "ticket_invalid_after_closure",
         IdentityRequired => "identity_required",
+        RemoteContextUnmaterialized => "remote_context_unmaterialized",
     }
 );
 

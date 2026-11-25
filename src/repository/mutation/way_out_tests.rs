@@ -399,6 +399,7 @@ fn poll_once_reads_a_missing_primary_tracking_ref() {
             LifecycleBlocker::ContextMissing,
             LifecycleBlocker::PrimaryMissing,
         ],
+        vec![LifecycleBlocker::RemoteContextUnmaterialized],
     ] {
         assert_eq!(ticket_prepare(blockers), [PollOnce, Inspect]);
     }

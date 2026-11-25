@@ -201,6 +201,9 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
         PreviewEffect::WorktreeRemoved => "remove the editing worktree",
         PreviewEffect::BranchDeleted => "delete the local editing branch",
+        PreviewEffect::ContextPublished => "publish the editing branch",
+        PreviewEffect::PullRequestLink => "record the pull request link",
+        PreviewEffect::ClosureWithdrawn => "withdraw the closure from the editing branch",
     }
 }
 fn effects(effects: &Effects) -> String {

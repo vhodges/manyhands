@@ -107,7 +107,8 @@
         "remote_unavailable",
         "transport_unavailable",
         "cancelled",
-        "already_applied"
+        "already_applied",
+        "already_closing"
       ]
     },
     "message": {
