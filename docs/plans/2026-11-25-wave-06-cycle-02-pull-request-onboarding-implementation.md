@@ -16,7 +16,7 @@ manyhands_kind: document
 
 **Spec:** [Cycle 02 design](2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md) (revision 4), under the [Cycle document](../Cycles/wave-06-cycle-02-pull-request-onboarding.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft**, 2026-11-25, revision 4. Author: Claude.
+Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, Cycle decisions 17 and 18). Author: Claude.
 
 ## Global Constraints
 
