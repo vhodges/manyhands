@@ -48,6 +48,16 @@ pub(crate) enum SetupState {
     Published,
 }
 
+impl SetupState {
+    /// The name the contract publishes.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded => "recorded",
+            Self::Published => "published",
+        }
+    }
+}
+
 /// One repository's pending setup. The branch is
 /// `manyhands/setup/<setup_id>`.
 #[derive(Clone, PartialEq, Eq)]

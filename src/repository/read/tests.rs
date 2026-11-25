@@ -552,3 +552,154 @@ fn a_stored_mode_or_forge_kind_this_build_does_not_know_reads_as_null() {
         })
     );
 }
+
+use crate::{
+    canonical::ItemId,
+    repository::{
+        CommitIdentity, EnableRepositoryRequest, OperationId, REGISTRY_FILE,
+        mutation::RequestId,
+        open_registry,
+        setup::record::{self, SetupKind, SetupRecord, SetupState},
+    },
+};
+use git2::Oid;
+
+const SETUP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const REQUEST: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+const FETCH: &str = "git@github.com:acme/widgets.git";
+const CONFIGURATION: &str = "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n\n[forge]\nkind = \"github\"\n";
+
+struct SetupFixture {
+    service: RepositoryService,
+    data: tempfile::TempDir,
+    root: std::path::PathBuf,
+    _directory: tempfile::TempDir,
+}
+
+impl SetupFixture {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let git = git2::Repository::init_opts(&root, &options).unwrap();
+        git.remote("origin", FETCH).unwrap();
+        drop(git);
+        service
+            .enable(EnableRepositoryRequest {
+                root: root.clone(),
+                primary_branch: "main".into(),
+                identity: Some(CommitIdentity {
+                    name: "Setup Test".into(),
+                    email: "setup@example.invalid".into(),
+                }),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        Self {
+            service,
+            data,
+            root,
+            _directory: directory,
+        }
+    }
+
+    fn db(&self) -> Connection {
+        open_registry(&self.data.path().join(REGISTRY_FILE), &mut |_| {}).unwrap()
+    }
+
+    fn registration(&self) -> i64 {
+        self.db()
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn set(&self, kind: SetupKind, published: bool) {
+        let oid = |digit: char| Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+        let id = self.registration();
+        let mut db = self.db();
+        let tx = db.transaction().unwrap();
+        record::delete(&tx, id).unwrap();
+        record::insert(
+            &tx,
+            id,
+            &SetupRecord {
+                setup_id: SETUP.parse::<ItemId>().unwrap(),
+                kind,
+                remote_name: "origin".into(),
+                primary_branch: "main".into(),
+                endpoint_digest: [7; 32],
+                configuration: CONFIGURATION.as_bytes().to_vec(),
+                base_configuration_oid: (kind == SetupKind::Change).then(|| oid('a')),
+                base_oid: published.then(|| oid('b')),
+                commit_oid: published.then(|| oid('c')),
+                published_oid: published.then(|| oid('c')),
+                request_id: RequestId::parse(REQUEST).unwrap(),
+                created_at: 1_700_000_000,
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    fn setups(&self) -> (Option<RepositorySetupDto>, Option<RepositorySetupDto>) {
+        let listed = self.service.list_repositories().unwrap();
+        assert_eq!(listed.items.len(), 1);
+        let inspected = self.service.inspect_repository(&self.root).unwrap();
+        (listed.items[0].setup.clone(), inspected.setup)
+    }
+}
+
+#[test]
+fn inspect_and_list_report_a_pending_setup() {
+    let f = SetupFixture::new();
+    assert_eq!(f.setups(), (None, None));
+    assert_eq!(
+        [SetupKind::Enable, SetupKind::Change].map(SetupKind::as_str),
+        ["enable", "change"]
+    );
+
+    let branch = format!("manyhands/setup/{SETUP}");
+    let expected = |kind: &str, state: &str, url: Option<String>| RepositorySetupDto {
+        id: SETUP.into(),
+        kind: kind.into(),
+        state: state.into(),
+        request_id: REQUEST.into(),
+        branch: branch.clone(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: branch.clone(),
+            target: "main".into(),
+            forge: Some("github".into()),
+            url,
+        },
+    };
+    let link = format!("https://github.com/acme/widgets/compare/main...{branch}?expand=1");
+
+    // `repo list` reads the index and the record only: the forge is
+    // named by the configuration, but its address needs the remote's
+    // URL, so the link has none. `repo inspect` has the full link.
+    f.set(SetupKind::Enable, false);
+    assert_eq!(
+        f.setups(),
+        (
+            Some(expected("enable", "recorded", None)),
+            Some(expected("enable", "recorded", Some(link.clone()))),
+        )
+    );
+    f.set(SetupKind::Change, true);
+    assert_eq!(
+        f.setups(),
+        (
+            Some(expected("change", "published", None)),
+            Some(expected("change", "published", Some(link))),
+        )
+    );
+    assert_eq!(
+        [SetupState::Recorded, SetupState::Published].map(SetupState::as_str),
+        ["recorded", "published"]
+    );
+}

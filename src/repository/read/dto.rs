@@ -121,8 +121,49 @@ pub struct RepositorySummaryDto {
     pub enabled_at: Option<String>,
     pub accessibility: Accessibility,
     pub configuration: ConfigurationDto,
+    /// The repository's pending setup, or null when it has none.
+    pub setup: Option<RepositorySetupDto>,
     pub index: IndexStateDto,
     pub problem_count: u64,
+}
+
+/// A setup put on a branch for a pull request, until it is merged: what it
+/// is, how far it has come and where to open its pull request.
+///
+/// `state` is `recorded` until the remote holds the setup's branch, then
+/// `published`. `integration` is the mode the setup's configuration sets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RepositorySetupDto {
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub request_id: String,
+    pub branch: String,
+    pub remote: String,
+    pub integration: String,
+    pub pull_request: PullRequestDto,
+}
+
+/// Where a pull request from `source` into `target` is opened. `forge` is
+/// the kind of forge, null when none is known; `url` is the address that
+/// opens it, null when the forge's address cannot be built.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestDto {
+    pub source: String,
+    pub target: String,
+    pub forge: Option<String>,
+    pub url: Option<String>,
+}
+
+impl From<&crate::forge::PullRequestLink> for PullRequestDto {
+    fn from(link: &crate::forge::PullRequestLink) -> Self {
+        Self {
+            source: link.source.clone(),
+            target: link.target.clone(),
+            forge: link.forge.map(|kind| kind.as_str().to_owned()),
+            url: link.url.clone(),
+        }
+    }
 }
 
 /// `primary_branch`, `publication_remote` and `integration` are set only
@@ -181,6 +222,8 @@ pub struct RepositoryInspectionDto {
     pub head_branch: Option<String>,
     pub local_branches: Vec<String>,
     pub configuration: ConfigurationDto,
+    /// The repository's pending setup, or null when it has none.
+    pub setup: Option<RepositorySetupDto>,
     pub identity_state: IdentityAvailability,
     pub remotes: Vec<RemoteDto>,
     pub operations: Vec<OperationDto>,

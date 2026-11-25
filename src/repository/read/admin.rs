@@ -11,6 +11,7 @@ use super::{
     IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
+    pending_setup::read_pending_setup,
     resolve::{at_root, open_exactly, selected_repository},
     status::index_problems,
 };
@@ -362,6 +363,7 @@ impl RepositoryService {
                                     forge_pull_request_url: row.get(14)?,
                                 },
                             ),
+                            setup: None,
                             index: index_state(
                                 refresh_required,
                                 row.get(4)?,
@@ -376,6 +378,9 @@ impl RepositoryService {
                 .collect::<Result<Vec<_>, _>>()?;
             let mut items = Vec::new();
             for (mut item, repo) in rows {
+                // The index and the record only: no remote is read, so a
+                // link that needs the remote's URL has none.
+                item.setup = read_pending_setup(connection, repo.registration_id(), |_| None)?;
                 item.problem_count =
                     u64::try_from(index_problems(connection, &repo)?.len()).unwrap_or_default();
                 items.push(item);
@@ -445,6 +450,20 @@ impl RepositoryService {
             }
             Err(error) => return Err(error),
         };
+        // A repository that is not registered has no setup. The link is
+        // built with the setup remote's fetch URL as Git has it.
+        let setup = match registration {
+            Some(registration) => self.read_session(RepositoryOperation::Read, |connection| {
+                read_pending_setup(connection, registration, |name| {
+                    inspection
+                        .remotes
+                        .iter()
+                        .find(|remote| remote.name == name)
+                        .map(|remote| remote.fetch_url.clone())
+                })
+            })?,
+            None => None,
+        };
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -461,6 +480,7 @@ impl RepositoryService {
                 configuration.publication_remote.as_deref(),
             ),
             configuration,
+            setup,
             operations,
         })
     }

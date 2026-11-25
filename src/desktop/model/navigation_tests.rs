@@ -14,6 +14,7 @@ use crate::desktop::{
 
 fn summary(root: &str, accessibility: Accessibility) -> RepositorySummaryDto {
     RepositorySummaryDto {
+        setup: None,
         root: root.to_owned(),
         enabled_at: None,
         accessibility,
