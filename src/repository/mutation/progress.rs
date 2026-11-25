@@ -37,6 +37,10 @@ use super::{
         promotion::{lifecycle::CancellationProbe, run::RunObserver},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
+        setup::{
+            channel::ServiceChannel,
+            publish::{Published, SetupError, continue_setup},
+        },
         transport::{
             SetupScope, SshTransportError, SshTransportVerified, VerifySshTransportRequest,
         },
@@ -325,6 +329,19 @@ pub(crate) trait Session {
         request: VerifySshTransportRequest,
         scope: &SetupScope,
     ) -> Option<Result<SshTransportVerified, SshTransportError>>;
+
+    /// Publishes the pending setup of the repository at `root` for the
+    /// request `request_id` that recorded it, with the session's
+    /// credentials; see `setup::publish::continue_setup`. `None` when the
+    /// session has no credentials, or they are in use: nothing was called.
+    // The bindings of Tasks 7 and 9 are the callers.
+    #[allow(dead_code)]
+    fn publish_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -491,6 +508,17 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.verify_setup_transport(request, scope, &mut credentials))
     }
+
+    fn publish_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let mut channel = ServiceChannel::new(service, root.to_owned(), &mut credentials);
+        Some(continue_setup(service, root, request_id, &mut channel))
+    }
     fn poll_once_retiring(
         &self,
         service: &RepositoryService,
@@ -603,6 +631,16 @@ impl Session for NoSession {
     ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }
+
+    fn publish_setup(
+        &self,
+        _service: &RepositoryService,
+        _root: &std::path::Path,
+        _request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>> {
+        None
+    }
+
     fn poll_once_retiring(
         &self,
         _service: &RepositoryService,

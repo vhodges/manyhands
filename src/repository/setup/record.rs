@@ -276,6 +276,32 @@ pub(crate) fn record_commit(
         .ok_or_else(state::recovery_required)
 }
 
+/// Records `new_commit` in place of `old_commit`, a setup commit whose
+/// object was lost and made again on the same base. Only while nothing is
+/// published; repeating it is a no-op, and any other state fails.
+pub(crate) fn replace_commit(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    old_commit: Oid,
+    new_commit: Oid,
+) -> Result<(), RepositoryError> {
+    let changed = tx
+        .execute(
+            "UPDATE repository_setups SET commit_oid = ?3
+              WHERE repository_id = ?1 AND published_oid IS NULL
+                AND (commit_oid = ?2 OR commit_oid = ?3)",
+            params![
+                repository_id,
+                old_commit.to_string(),
+                new_commit.to_string()
+            ],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    (changed == 1)
+        .then_some(())
+        .ok_or_else(state::recovery_required)
+}
+
 /// Records that the remote holds the setup commit. The commit must be the
 /// recorded one; repeating it is a no-op.
 pub(crate) fn record_published(

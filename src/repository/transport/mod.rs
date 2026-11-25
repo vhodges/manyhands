@@ -15,7 +15,6 @@ pub(crate) mod operation_tests;
 mod remote;
 pub(super) use remote::AuthenticatedSshRemote;
 pub(crate) use remote::{DeleteAttempt, DeleteObservation};
-#[allow(unused_imports)]
 pub(crate) use remote::{SetupAdvertisement, SetupPush};
 #[cfg(test)]
 pub(crate) mod tests;

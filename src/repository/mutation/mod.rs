@@ -213,6 +213,26 @@ pub(in super::super) fn finish_recorded_retirement(
     Ok(())
 }
 pub(super) use records::migrate as migrate_request_tables;
+/// Finishes the accepted request of a setup that a domain call ends, in the
+/// caller's registry transaction, with `code` and nothing else: no data, no
+/// effect (design K4; the setup data of a stored answer is the bindings').
+/// The setup layer never sees an `Answer`: this builds it, as
+/// `finish_recorded_retirement` does for a retirement.
+pub(in super::super) fn finish_setup_request(
+    tx: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+    request_id: RequestId,
+    code: ResultCode,
+    now: i64,
+) -> Result<bool, super::ReadError> {
+    records::finish_accepted(
+        tx,
+        repository_id,
+        request_id,
+        &bind::Answer::stopped(code),
+        now,
+    )
+}
 pub(super) use records::{
     operation_holder, operation_owner, release_operation_holder, release_operation_owner,
 };

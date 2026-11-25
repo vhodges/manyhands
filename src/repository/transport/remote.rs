@@ -56,8 +56,6 @@ impl TransferAction {
 
 /// What a setup connection's advertisement holds of the two refs the setup
 /// channel reads: the remote's primary, and the setup's branch.
-// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SetupAdvertisement {
     pub(crate) primary: Option<git2::Oid>,
@@ -66,8 +64,6 @@ pub(crate) struct SetupAdvertisement {
 
 /// What one call's push of the setup's branch did. Neither is proof of the
 /// result: only `observe_setup_branch`, on a call of its own, is.
-// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SetupPush {
     /// The call's advertisement had the branch at the commit already, and
@@ -488,8 +484,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// The scope of a setup connection in `direction`. A connection whose
     /// source is not a setup's, or runs in another direction, is refused
     /// before anything is read or sent.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     fn setup_scope(&self, direction: SshDirection) -> Result<&'a SetupScope, SshTransportError> {
         match &self.prepared.remote_source {
             RemoteSource::Setup(scope) if self.context.direction == direction => Ok(scope),
@@ -500,8 +494,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     }
 
     /// The one mapping of the setup channel in the connection's direction.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     fn setup_mapping(&self, direction: SshDirection) -> Result<String, SshTransportError> {
         let mut mappings = setup_mappings(&self.prepared.remote_source, direction);
         match (mappings.pop(), mappings.is_empty()) {
@@ -518,8 +510,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// `write_tracking_tip`'s compare-and-swap. Gives back the connection's
     /// advertisement of the primary and of the setup's branch; with no
     /// primary advertised nothing is fetched.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     pub(crate) fn fetch_setup_base(&mut self) -> Result<SetupAdvertisement, SshTransportError> {
         let scope = self.setup_scope(SshDirection::Fetch)?;
         let mapping = self.setup_mapping(SshDirection::Fetch)?;
@@ -548,8 +538,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// A `PushRejected`, `TransportUnavailable` or `RemoteUnavailable` may
     /// follow a refused guard or a command that reached the server, so the
     /// outcome is read by `observe_setup_branch` on a call of its own.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     pub(crate) fn push_setup_branch(
         &mut self,
         commit: git2::Oid,
@@ -605,8 +593,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// On a fetch connection of a setup, of its own: the setup's branch as
     /// this call's fresh advertisement has it, which is the only evidence of
     /// what a push or a delete left.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     pub(crate) fn observe_setup_branch(&mut self) -> Result<Option<git2::Oid>, SshTransportError> {
         let scope = self.setup_scope(SshDirection::Fetch)?;
         Ok(advertised_oid(
@@ -1098,8 +1084,6 @@ fn setup_primary_ref(scope: &SetupScope) -> Option<String> {
 }
 
 /// The OID `name` has in an advertisement, if it is in it.
-// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-#[allow(dead_code)]
 fn advertised_oid(advertised: &[(String, git2::Oid)], name: &str) -> Option<git2::Oid> {
     advertised
         .iter()

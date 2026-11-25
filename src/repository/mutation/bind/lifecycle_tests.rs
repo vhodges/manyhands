@@ -539,6 +539,20 @@ impl Session for Recorder {
     > {
         None
     }
+
+    fn publish_setup(
+        &self,
+        _: &RepositoryService,
+        _: &std::path::Path,
+        _: crate::repository::RequestId,
+    ) -> Option<
+        Result<
+            crate::repository::setup::publish::Published,
+            crate::repository::setup::publish::SetupError,
+        >,
+    > {
+        None
+    }
 }
 
 /// D5 decision 11, L3, R-15: each step a run tells of is a stage. The

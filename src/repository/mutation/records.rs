@@ -18,6 +18,8 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{
+    bind::Answer,
+    command::Command,
     dto::RequestState,
     identity::{ConfirmationId, IntentDigest, RequestId, ScopeKey, stored_digest},
 };
@@ -25,6 +27,7 @@ use crate::{
     repository::{
         ExpectedPathObservation, FailurePoint, OperationFamily, OperationId, ReadError,
         RepositoryError, RepositoryOperation, RepositoryService, cache_write_guard,
+        recovery::LocalStep,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect, Outcome,
@@ -732,6 +735,57 @@ pub(super) fn finish_request(
     Ok(finished == 1)
 }
 
+/// Finishes the request `request_id` of a pending setup, in the caller's
+/// transaction, with `answer` (design K4): the one writer a domain call that
+/// removes a setup record uses, so that no crash leaves the request accepted
+/// with its setup gone.
+///
+/// It finishes only a request that is `accepted`, whose command is `repo
+/// enable` or `remote select`, whose scope is the root of the repository
+/// `repository_id`, and whose own local operation row completed at
+/// `setup_recorded`; it finishes it at its current attempt, since the setup
+/// ending is final whichever call of the request reads it. Any other request
+/// is left as it is: `false`. What is stored is `stored_result(answer)`.
+pub(in super::super) fn finish_accepted(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    request_id: RequestId,
+    answer: &Answer,
+    now: i64,
+) -> Result<bool, ReadError> {
+    let Some(result) = super::settle::stored_result(answer) else {
+        return Ok(false);
+    };
+    let attempt: Option<i64> = transaction
+        .query_row(
+            "SELECT r.attempt FROM request_records r
+              WHERE r.request_ulid = ?1 AND r.state = 'accepted'
+                AND r.command IN (?2, ?3)
+                AND r.scope_key = (SELECT root_path FROM repositories WHERE id = ?4)
+                AND EXISTS (
+                    SELECT 1 FROM request_operations o
+                      JOIN operation_records p
+                        ON p.operation_ulid = o.operation_ulid AND p.root_path = r.scope_key
+                     WHERE o.request_ulid = r.request_ulid AND o.family = ?5
+                       AND p.state = 'completed' AND p.completed_step = ?6)",
+            params![
+                request_id.to_string(),
+                Command::RepoEnable.name(),
+                Command::RemoteSelect.name(),
+                repository_id,
+                OperationFamily::Local.as_str(),
+                LocalStep::SetupRecorded.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(attempt) = attempt else {
+        return Ok(false);
+    };
+    let attempt = u64::try_from(attempt).map_err(|_| invalid_stored_data())?;
+    finish_request(transaction, request_id, attempt, &result, now)
+}
+
 fn delete_request(
     transaction: &Transaction<'_>,
     request_id: RequestId,
@@ -1187,3 +1241,7 @@ impl RepositoryService {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod tests;
