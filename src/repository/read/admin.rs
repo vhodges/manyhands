@@ -11,7 +11,7 @@ use super::{
     IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
-    pending_setup::read_setup_or_problem,
+    pending_setup::{index_shows_complete, read_setup_or_problem},
     resolve::{at_root, open_exactly, selected_repository},
     status::index_problems,
 };
@@ -382,8 +382,15 @@ impl RepositoryService {
                 // link that needs the remote's URL has none. A setup this
                 // build cannot read reads as none, with a problem, and the
                 // list goes on.
-                let (setup, problem) =
-                    read_setup_or_problem(connection, repo.registration_id(), |_| false, |_| None)?;
+                // One the registration's blob already shows complete reads as
+                // none: the index only, so it lags until the next refresh.
+                let registration = repo.registration_id();
+                let (setup, problem) = read_setup_or_problem(
+                    connection,
+                    registration,
+                    |record| index_shows_complete(connection, registration, record),
+                    |_| None,
+                )?;
                 item.setup = setup;
                 item.configuration.problems.extend(problem);
                 item.problem_count =

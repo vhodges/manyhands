@@ -569,6 +569,10 @@ const REQUEST: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
 const FETCH: &str = "git@github.com:acme/widgets.git";
 const CONFIGURATION: &str = "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n\n[forge]\nkind = \"github\"\n";
 
+fn oid_of(digit: char) -> Oid {
+    Oid::from_str(&digit.to_string().repeat(40)).unwrap()
+}
+
 struct SetupFixture {
     service: RepositoryService,
     data: tempfile::TempDir,
@@ -680,6 +684,17 @@ impl SetupFixture {
             .unwrap();
     }
 
+    /// The configuration blob the index holds for the registration, as the
+    /// primary's observation (an index refresh) leaves it.
+    fn index_shows(&self, blob: Option<Oid>) {
+        self.db()
+            .execute(
+                "UPDATE repositories SET config_blob_oid = ?1",
+                [blob.map(|oid| oid.to_string())],
+            )
+            .unwrap();
+    }
+
     fn setups(&self) -> (Option<RepositorySetupDto>, Option<RepositorySetupDto>) {
         let listed = self.service.list_repositories().unwrap();
         assert_eq!(listed.items.len(), 1);
@@ -692,6 +707,9 @@ impl SetupFixture {
 fn inspect_and_list_report_a_pending_setup() {
     let f = SetupFixture::new();
     f.unmerge();
+    // The index still shows what it showed before the setup: no
+    // configuration for a first-time setup.
+    f.index_shows(None);
     assert_eq!(f.setups(), (None, None));
     assert_eq!(
         [SetupKind::Enable, SetupKind::Change].map(SetupKind::as_str),
@@ -727,6 +745,8 @@ fn inspect_and_list_report_a_pending_setup() {
             Some(expected("enable", "recorded", Some(link.clone()))),
         )
     );
+    // A change begins from the blob the index shows.
+    f.index_shows(Some(oid_of('a')));
     f.set(SetupKind::Change, true);
     assert_eq!(
         f.setups(),
@@ -742,27 +762,44 @@ fn inspect_and_list_report_a_pending_setup() {
 }
 
 // A setup the local primary already holds is complete: `repo inspect`, which
-// reads the primary, reports none. `repo list` reads the index only and shows
-// it until the next refresh (design K-16).
+// reads the primary, reports none. `repo list` reads the index only: it reads
+// a setup as none once the registration's `config_blob_oid` shows it, which
+// the primary's observation (an index refresh) writes, and shows it until
+// then (design K-16).
 #[test]
 fn inspect_reads_a_complete_setup_as_none() {
     let f = SetupFixture::new();
+    let blob = f.primary_blob();
 
     // The fixture's primary holds a valid configuration naming `main`.
     f.set(SetupKind::Enable, false);
+    f.index_shows(None);
     let (listed, inspected) = f.setups();
     assert_eq!(inspected, None);
     assert!(listed.is_some(), "the list lags until the next refresh");
+    // The refresh shows the configuration: the first-time setup is complete.
+    f.index_shows(Some(blob));
+    let (listed, inspected) = f.setups();
+    assert_eq!((listed, inspected), (None, None));
 
     // A change is complete once the primary's blob is not the base.
     f.set(SetupKind::Change, false);
-    assert_eq!(f.setups().1, None);
+    f.index_shows(Some(oid_of('a')));
+    let (listed, inspected) = f.setups();
+    assert_eq!(inspected, None);
+    assert!(listed.is_some(), "the index still shows the base blob");
+    f.index_shows(Some(blob));
+    assert_eq!(f.setups(), (None, None));
+    // An index with no blob shows no configuration at all.
+    f.index_shows(None);
+    assert!(f.setups().0.is_some());
 
     // A change whose base is still the primary's blob is pending, and so is
     // any setup of a primary that holds no configuration.
-    let base = f.primary_blob();
-    f.set_change_base(base);
-    assert!(f.setups().1.is_some());
+    f.set_change_base(blob);
+    f.index_shows(Some(blob));
+    let (listed, inspected) = f.setups();
+    assert!(listed.is_some() && inspected.is_some());
     f.unmerge();
     f.set(SetupKind::Enable, false);
     assert!(f.setups().1.is_some());

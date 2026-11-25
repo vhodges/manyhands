@@ -1,6 +1,6 @@
 //! A repository's pending setup, as `repo list` and `repo inspect` report it.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::{ProblemDto, PullRequestDto, ReadError, RepositorySetupDto};
 use crate::{
@@ -89,4 +89,31 @@ fn setup_dto(
         integration: configuration.integration().as_str().to_owned(),
         pull_request: PullRequestDto::from(&link),
     })
+}
+
+/// Whether the registration's stored configuration blob already shows the
+/// setup `record` complete, for `repo list`, which reads the index only
+/// (design K-16): a first-time setup once the registration has a blob, a
+/// change once it has one that is not the blob the change began from. The
+/// column is written by the primary's observation, so this lags until the
+/// next index refresh; a blob that cannot be read shows nothing.
+pub(super) fn index_shows_complete(
+    connection: &Connection,
+    repository_id: i64,
+    record: &SetupRecord,
+) -> bool {
+    let stored: Option<String> = connection
+        .query_row(
+            "SELECT config_blob_oid FROM repositories WHERE id = ?1",
+            [repository_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    let Some(blob) = stored.and_then(|text| git2::Oid::from_str(&text).ok()) else {
+        return false;
+    };
+    record.base_configuration_oid != Some(blob)
 }
