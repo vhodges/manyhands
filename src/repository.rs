@@ -76,6 +76,7 @@ mod read;
 mod recovery;
 mod registration_removal;
 mod remote;
+mod setup;
 mod ticket_guard;
 pub mod transport;
 #[cfg(test)]
@@ -4325,7 +4326,11 @@ impl RepositoryService {
             | LocalStep::Completed
             | LocalStep::Rejected
             | LocalStep::Abandoned
-            | LocalStep::LocalSyncPrepared => false,
+            | LocalStep::LocalSyncPrepared
+            // A setup's steps are recorded in the transaction that holds
+            // the record, with no owned write before them.
+            | LocalStep::SetupRecorded
+            | LocalStep::SetupCancelRecorded => false,
         };
         if follows_an_owned_write
             && self.should_inject(
@@ -13497,6 +13502,51 @@ fn reconcile_registration(
     transaction.commit().map_err(|error| {
         RepositoryError::sqlite(error).for_operation(RepositoryOperation::Enable, root)
     })
+}
+
+/// Registers the repository at `root` for a setup that has no configuration
+/// in `HEAD` yet, in the caller's registry transaction, and returns its
+/// registration ID. `reconcile_registration` cannot: it needs the file in
+/// `HEAD`.
+///
+/// A new row holds a null `config_blob_oid` and is marked for a refresh. A
+/// row that exists keeps its blob; it is marked accessible and for a refresh,
+/// as `reconcile_registration` marks it. Nothing else is written.
+#[cfg_attr(not(test), allow(dead_code))] // Used by the setup operations of the later tasks.
+fn register_setup_pending(
+    transaction: &rusqlite::Transaction<'_>,
+    root: &Path,
+) -> Result<i64, RepositoryError> {
+    let operation = RepositoryOperation::Enable;
+    let enabled_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::Io,
+                error,
+            )
+        })?
+        .as_secs() as i64;
+    let root_path = registry_root_key(root, operation)?;
+    transaction
+        .execute(
+            "INSERT INTO repositories (
+                root_path, enabled_at, accessibility, config_blob_oid, refresh_required
+            ) VALUES (?1, ?2, 'accessible', NULL, 1)
+            ON CONFLICT(root_path) DO UPDATE
+            SET accessibility = 'accessible', refresh_required = 1",
+            (root_path, enabled_at),
+        )
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
 }
 
 fn committed_configuration_blob_oid(

@@ -638,6 +638,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
+            "repository_setups",
             "request_operations",
             "request_records",
             "retired_contexts",

@@ -21,6 +21,7 @@ use super::{
     RegistryConnectionPhase, RepositoryError,
     activity::{PrimaryActivityMap, item_commit_activity},
     basis::{Basis, BasisCheck, Checkout, Entry, Listing, Recording, check, settles},
+    setup::record as setup_record,
 };
 
 #[derive(Debug)]
@@ -2754,7 +2755,8 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     // Retirement authority joins remote, local and request journals. None of
     // those companion tables may be queried before all three have migrated.
     super::context_retirement::record::migrate(connection)?;
-    migrate_pull_request_mode(connection)
+    migrate_pull_request_mode(connection)?;
+    migrate_repository_setup(connection)
 }
 
 /// The marker of the pull-request mode migration's one-time marks.
@@ -2832,6 +2834,52 @@ fn migrate_pull_request_mode(connection: &mut Connection) -> Result<(), Reposito
         }
     }
     transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// Adds the table that holds a repository's pending setup, and marks the
+/// registry once.
+///
+/// What is added is decided by the schema, not by the marker: a registry
+/// that holds the marker and lost the table gets it back, and one that has
+/// the table is checked against the schema this build creates. A registry
+/// that has the table and the marker is only read, so opening it takes no
+/// write lock. One that lacks either is migrated in a transaction that takes
+/// the write lock before it looks again. The table is created and the marker
+/// written together or not at all.
+fn migrate_repository_setup(connection: &mut Connection) -> Result<(), RepositoryError> {
+    let complete = |connection: &Connection| -> Result<bool, RepositoryError> {
+        Ok(setup_record::exists(connection)? && setup_migration_marked(connection)?)
+    };
+    if complete(connection)? {
+        return setup_record::validate_schema(connection);
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    if !setup_record::exists(&transaction)? {
+        transaction
+            .execute_batch(setup_record::SCHEMA)
+            .map_err(RepositoryError::sqlite)?;
+    }
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO registry_migrations (name) VALUES (?1)",
+            [setup_record::MARKER],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    setup_record::validate_schema(&transaction)?;
+    transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// Whether the registry carries the repository setup marker.
+fn setup_migration_marked(connection: &Connection) -> Result<bool, RepositoryError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name = ?1)",
+            [setup_record::MARKER],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)
 }
 
 /// What the pull-request mode migration has left to do.
@@ -3603,6 +3651,124 @@ pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
                 |row| row.get(0),
             )
             .unwrap()
+    }
+
+    /// How many times the repository setup marker is stored.
+    fn repository_setup_markers(connection: &Connection) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations
+                  WHERE name = 'wave_06_repository_setup_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    // A registry from before the setup record gains its table and marker,
+    // once and together. A registry that has them is left as it is, rows
+    // included; what the schema lacks is made again whatever the marker
+    // says; a table that is not the one this build creates stops the
+    // migration and leaves no marker behind.
+    #[test]
+    fn repository_setup_migration_adds_the_table_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert!(setup_record::exists(&connection).unwrap());
+        assert_eq!(repository_setup_markers(&connection), 1);
+        let mut names = connection
+            .prepare("SELECT name FROM sqlite_master WHERE tbl_name = 'repository_setups'")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        names.sort();
+        assert!(names.contains(&"repository_setups".to_owned()), "{names:?}");
+        assert!(
+            names.iter().all(|name| !name.contains("request")),
+            "{names:?}"
+        );
+
+        connection
+            .execute(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/fixture', 1, 'accessible', 0)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO repository_setups VALUES (1, '01ARZ3NDEKTSV4RRFFQ69G5FAV', 'enable',
+                    'origin', 'main', zeroblob(32), x'00', NULL, NULL, NULL, NULL,
+                    '01ARZ3NDEKTSV4RRFFQ69G5FAV', 1)",
+                [],
+            )
+            .unwrap();
+        let rows = |connection: &Connection| -> i64 {
+            connection
+                .query_row("SELECT COUNT(*) FROM repository_setups", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+
+        // Run again: nothing is added and the row stays.
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(
+            (repository_setup_markers(&connection), rows(&connection)),
+            (1, 1)
+        );
+
+        // Only the marker is missing: it is written, the row stays.
+        connection
+            .execute(
+                "DELETE FROM registry_migrations WHERE name = 'wave_06_repository_setup_v1'",
+                [],
+            )
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(
+            (repository_setup_markers(&connection), rows(&connection)),
+            (1, 1)
+        );
+
+        // The build before: no table, no marker. The table is made, empty.
+        connection
+            .execute_batch(
+                "DROP TABLE repository_setups;
+                 DELETE FROM registry_migrations WHERE name = 'wave_06_repository_setup_v1';",
+            )
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        setup_record::validate_schema(&connection).unwrap();
+        assert_eq!(
+            (repository_setup_markers(&connection), rows(&connection)),
+            (1, 0)
+        );
+
+        // The marker without the table: the schema decides.
+        connection
+            .execute_batch("DROP TABLE repository_setups")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        setup_record::validate_schema(&connection).unwrap();
+        assert_eq!(
+            (repository_setup_markers(&connection), rows(&connection)),
+            (1, 0)
+        );
+
+        // A table that is not this build's stops the migration, and the
+        // marker it would have written is not left behind.
+        connection
+            .execute_batch(
+                "DROP TABLE repository_setups;
+                 DELETE FROM registry_migrations WHERE name = 'wave_06_repository_setup_v1';
+                 CREATE TABLE repository_setups (repository_id INTEGER PRIMARY KEY);",
+            )
+            .unwrap();
+        assert!(migrate_registry(&mut connection).is_err());
+        assert_eq!(repository_setup_markers(&connection), 0);
     }
 
     /// The mark of every stored context, by its registration and item ID.

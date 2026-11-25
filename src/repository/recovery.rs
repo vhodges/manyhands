@@ -1913,6 +1913,13 @@ local_steps! {
     Abandoned => "abandoned";
     /// Frozen local context inputs, before any Git effect.
     LocalSyncPrepared => "local_sync_prepared";
+    /// A pull-request setup was recorded, and its repository registered
+    /// with no configuration, in one registry transaction. The setup
+    /// request re-enters through the record, not through this step.
+    SetupRecorded => "setup_recorded";
+    /// A setup cancellation was recorded on its own row. The cancellation
+    /// re-enters through the record, not through this step.
+    SetupCancelRecorded => "setup_cancel_recorded";
 }
 
 impl LocalStep {
@@ -1933,7 +1940,11 @@ impl LocalStep {
             // never says more than that. With the registration pending
             // it does exist.
             | Self::CommentCheckpointIntent
-            | Self::CommentRegistrationPending => true,
+            | Self::CommentRegistrationPending
+            // A recorded setup is the point a re-entered setup request
+            // takes up as recorded.
+            | Self::SetupRecorded
+            | Self::SetupCancelRecorded => true,
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -2010,7 +2021,10 @@ impl LocalStep {
             | Self::Error
             | Self::Completed
             | Self::Rejected
-            | Self::Abandoned => None,
+            | Self::Abandoned
+            // The setup bindings re-enter through the record.
+            | Self::SetupRecorded
+            | Self::SetupCancelRecorded => None,
         }
     }
 }
@@ -4142,6 +4156,8 @@ mod abandoned_row_tests {
                 "rejected",
                 "abandoned",
                 "local_sync_prepared",
+                "setup_recorded",
+                "setup_cancel_recorded",
             ]
         );
         for step in LocalStep::ALL {
