@@ -833,6 +833,7 @@ fn read_error(error: SynchronizationError) -> ReadError {
         | SynchronizationError::HistoryUnresolved
         | SynchronizationError::IdentityRequired { .. }
         | SynchronizationError::MergeRequired { .. }
+        | SynchronizationError::PrimaryHasLocalCommits { .. }
         | SynchronizationError::PushRejected => ReadError::new(ResultCode::InternalError),
     }
 }

@@ -143,6 +143,8 @@ impl Scene {
                         primary_branch: Some("main".to_owned()),
                         publication_remote: Some("origin".to_owned()),
                         problems: Vec::new(),
+                        integration: Some("direct".to_owned()),
+                        forge: None,
                     },
                     index: IndexStateDto {
                         state: IndexState::Current,

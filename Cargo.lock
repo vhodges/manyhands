@@ -4686,6 +4686,7 @@ dependencies = [
  "libc",
  "libgit2-sys",
  "libssh2-sys",
+ "percent-encoding",
  "rusqlite",
  "russh",
  "serde",

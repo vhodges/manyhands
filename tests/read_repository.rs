@@ -1397,6 +1397,80 @@ fn a_configuration_larger_than_the_bound_is_invalid_for_the_reads() {
     assert!(!remotes.items[0].selected_for_publication);
 }
 
+/// What `integration` and `forge` hold in a configuration object, as JSON.
+fn mode_and_forge(configuration: &manyhands::repository::ConfigurationDto) -> Value {
+    let value = serde_json::to_value(configuration).unwrap();
+    json!({"integration": value["integration"], "forge": value["forge"]})
+}
+
+#[test]
+fn inspect_and_list_report_mode_and_forge() {
+    let forge_cases = [
+        (
+            "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"publish\"\nintegration = \"pull_request\"\n[forge]\nkind = \"bitbucket-cloud\"\n",
+            json!({
+                "integration": "pull_request",
+                "forge": {"kind": "bitbucket-cloud", "web_url": null, "pull_request_url": null},
+            }),
+        ),
+        // Three distinct values: a transposed column shows.
+        (
+            "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"publish\"\n[forge]\nkind = \"bitbucket-data-center\"\nweb_url = \"https://git.example.com/bitbucket\"\npull_request_url = \"https://git.example.com/compare?source={source}\"\n",
+            json!({
+                "integration": "direct",
+                "forge": {
+                    "kind": "bitbucket-data-center",
+                    "web_url": "https://git.example.com/bitbucket",
+                    "pull_request_url": "https://git.example.com/compare?source={source}",
+                },
+            }),
+        ),
+        (
+            SELECTING_CONFIGURATION,
+            json!({"integration": "direct", "forge": null}),
+        ),
+    ];
+    for (text, expected) in forge_cases {
+        let (inspected, _, listed) = configuration_reads(|config| fs::write(config, text).unwrap());
+        assert_eq!(inspected.state, ConfigurationState::Valid, "{text}");
+        assert_eq!(mode_and_forge(&inspected), expected, "inspect: {text}");
+        assert_eq!(mode_and_forge(&listed), expected, "list: {text}");
+    }
+
+    // A configuration that is not valid reports neither.
+    let (inspected, _, listed) =
+        configuration_reads(|config| fs::write(config, "not = [valid").unwrap());
+    let none = json!({"integration": null, "forge": null});
+    assert_eq!(mode_and_forge(&inspected), none);
+    assert_eq!(mode_and_forge(&listed), none);
+
+    // A valid row stored before the columns existed reads as direct.
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let index = rusqlite::Connection::open(enabled.data_directory.path().join("manyhands.sqlite3"))
+        .unwrap();
+    index
+        .execute_batch(
+            "DELETE FROM configuration_observations;
+             INSERT INTO configuration_observations
+                 (repository_id, state, primary_branch, publication_remote)
+             SELECT id, 'valid', 'trunk', 'publish' FROM repositories",
+        )
+        .unwrap();
+    let listed = enabled
+        .service
+        .list_repositories()
+        .unwrap()
+        .items
+        .remove(0)
+        .configuration;
+    assert_eq!(
+        mode_and_forge(&listed),
+        json!({"integration": "direct", "forge": null})
+    );
+    assert_git_transport_uninitialized();
+}
+
 #[test]
 fn a_missing_configuration_is_missing_for_the_reads() {
     let (inspected, remotes, listed) = configuration_reads(|_| {});

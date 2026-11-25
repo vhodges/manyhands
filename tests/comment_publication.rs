@@ -986,6 +986,7 @@ fn other_context_busy() -> Result<(), FixtureError> {
             SynchronizationError::ExternalChange => 116,
             SynchronizationError::ConflictPending { .. } => 117,
             SynchronizationError::IdentityRequired { .. } => 118,
+            SynchronizationError::PrimaryHasLocalCommits { .. } => 120,
         }]);
     }
     assert!(!index.local_pending);

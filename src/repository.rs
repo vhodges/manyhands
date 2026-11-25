@@ -8092,7 +8092,9 @@ fn complete_index_step(
 }
 
 /// Replaces the configuration the primary's observation read: its state,
-/// and the blob of a valid configuration that the head holds as it is.
+/// and the blob of a valid configuration that the head holds as it is. A
+/// valid configuration's row also holds its mode and `[forge]` keys; any
+/// other row leaves them null.
 fn persist_configuration(
     transaction: &rusqlite::Transaction<'_>,
     repository_id: i64,
@@ -8117,9 +8119,19 @@ fn persist_configuration(
         .map_err(RepositoryError::sqlite)?;
     match &observed.configuration {
         RootConfiguration::Valid(configuration) => {
+            let forge = configuration.forge();
+            let forge = forge.as_ref();
             transaction.execute(
-                "INSERT INTO configuration_observations (repository_id, state, primary_branch, publication_remote) VALUES (?1, 'valid', ?2, ?3)",
-                params![repository_id, configuration.primary_branch, configuration.publication_remote],
+                "INSERT INTO configuration_observations (repository_id, state, primary_branch, publication_remote, integration, forge_kind, forge_web_url, forge_pull_request_url) VALUES (?1, 'valid', ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    repository_id,
+                    configuration.primary_branch,
+                    configuration.publication_remote,
+                    configuration.integration().as_str(),
+                    forge.and_then(|forge| forge.kind).map(canonical::ForgeKind::as_str),
+                    forge.and_then(|forge| forge.web_url.as_deref()),
+                    forge.and_then(|forge| forge.pull_request_url.as_deref()),
+                ],
             )
         }
         RootConfiguration::Missing => transaction.execute(

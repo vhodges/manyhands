@@ -78,6 +78,17 @@ pub fn repository_inspection(data: &RepositoryInspectionDto) -> Human {
         optional(data.configuration.publication_remote.as_deref()),
         data.identity_state.as_str()
     ));
+    if let Some(integration) = &data.configuration.integration {
+        output
+            .stdout
+            .push_str(&format!("Integration: {}\n", field(integration)));
+    }
+    if let Some(forge) = &data.configuration.forge {
+        // A template-only setting names no kind: its template says which.
+        if let Some(name) = forge.kind.as_ref().or(forge.pull_request_url.as_ref()) {
+            output.stdout.push_str(&format!("Forge: {}\n", field(name)));
+        }
+    }
     for problem in &data.configuration.problems {
         output.stdout.push_str(&format!(
             "Problem: {} {}\n",
