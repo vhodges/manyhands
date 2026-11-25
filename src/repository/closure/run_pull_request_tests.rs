@@ -364,6 +364,19 @@ impl PullRequest {
             [("ticket".to_owned(), ID.to_owned())]
         );
     }
+    /// How the ticket reads in a listing: the context holds the closure, and
+    /// the primary does not.
+    fn listed_state(&self) -> Option<ClosureState> {
+        let repository = self.f.service.resolve_repository(self.f.root()).unwrap();
+        self.f
+            .service
+            .list_tickets(&repository, &TicketFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item.id.as_deref() == Some(ID))
+            .and_then(|item| item.closure.as_ref().map(|closure| closure.state))
+    }
     fn held(&self) -> bool {
         let db = self.f.db();
         let repository: i64 = db
@@ -402,9 +415,8 @@ impl PullRequestIo {
     fn children(&self) -> usize {
         self.inner.calls.borrow().children.len()
     }
-    /// The children that ran in `role`, by their targets.
-    fn tracking_context(&self, service: &RepositoryService, root: &Path, oid: Oid) {
-        let _ = service;
+    /// The tracking context ref, as a publication leaves it.
+    fn tracking_context(&self, root: &Path, oid: Oid) {
         git2::Repository::open(root)
             .unwrap()
             .reference(&tracking_context_ref(), oid, true, "fixture publication")
@@ -486,7 +498,7 @@ impl PromotionIo for PullRequestIo {
                 merged,
                 "published",
             );
-            self.tracking_context(service, &root, merged);
+            self.tracking_context(&root, merged);
             return Ok(SynchronizationResult::Complete(
                 SynchronizationOutcome::Published {
                     target: req.target,
@@ -502,7 +514,7 @@ impl PromotionIo for PullRequestIo {
             | SynchronizationOutcome::AlreadyCurrent { oid, .. },
         ) = &result
         {
-            self.tracking_context(service, &root, *oid);
+            self.tracking_context(&root, *oid);
         }
         Ok(result)
     }
@@ -787,6 +799,7 @@ fn d5_a_stopped_context_child_keeps_the_record_confirmed_and_the_same_request_co
         .unwrap();
     let outcome = PullRequest::branch(p.run(req, &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Published);
+    p.assert_primary_untouched(&io);
 }
 
 /// The context child's conflict, retained: `incoming` changes the body line
@@ -916,6 +929,7 @@ fn d8_a_stopped_publication_child_is_held_and_the_same_request_continues() {
         assert_eq!(r.answer_code, None, "{case}");
         assert!(r.closure_oid.is_some(), "{case}");
         assert!(p.held(), "{case}");
+        assert_eq!(p.listed_state(), Some(ClosureState::Closing), "{case}");
         assert_eq!(p.f.commits_in_odb(&close_subject()), 1, "{case}");
         let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
         assert_eq!(outcome.answer(), BranchAnswer::Published, "{case}");
@@ -1139,12 +1153,10 @@ fn d13_a_crash_after_the_ref_moved_never_runs_the_hook_again() {
         &mut io,
         &mut told,
     ));
-    assert!(matches!(
-        outcome.answer(),
-        BranchAnswer::Published | BranchAnswer::KeptPublished
-    ));
+    assert_eq!(outcome.answer(), BranchAnswer::KeptPublished);
     assert!(!told.0.contains(&run::RunEvent::Recording));
     assert_eq!(p.f.commits_in_odb(&close_subject()), commits);
+    p.assert_primary_untouched(&io.inner);
 }
 
 /// D14: while a record is unfinished, a new request is held: the prepare
@@ -1200,6 +1212,8 @@ fn d14_a_new_request_while_unfinished_is_held_and_busy() {
             "{case}"
         );
         assert_eq!(other_io.children(), 0, "{case}");
+        p.assert_primary_untouched(&io);
+        p.assert_primary_untouched(&other_io);
         let records: i64 =
             p.f.db()
                 .query_row("SELECT count(*) FROM ticket_closures", [], |r| r.get(0))
@@ -1369,6 +1383,7 @@ fn a_branch_record_s_own_publication_child_passes_the_fence() {
     ));
     // The reserved child is the record's own to the audit.
     state::with_transaction(&p.f.service, p.f.root(), |tx, _| record::audit(tx)).unwrap();
+    p.assert_primary_untouched(&io);
 }
 
 /// D20: the operations a branch record has are listed as a direct close's
@@ -1389,8 +1404,37 @@ fn d20_operations_list_a_branch_record_as_a_close_and_its_child_as_its_own_row()
         )]),
         ..PullRequestIo::default()
     };
+    // The record's request is the one the registry holds for its operation.
+    p.f.db()
+        .execute_batch(&format!(
+            "INSERT INTO request_records
+                 (request_ulid, attempt, scope_key, command, target, intent_digest, state, accepted_at)
+             VALUES ('01ARZ3NDEKTSV4RRFFQ69G5FAX', 1, 'scope', 'ticket close', 'ticket', '{}', 'accepted', 1);
+             INSERT INTO request_operations VALUES ('01ARZ3NDEKTSV4RRFFQ69G5FAX', 0, 'remote', '{}')",
+            "0".repeat(64),
+            req.operation_id
+        ))
+        .unwrap();
     assert!(p.run(req.clone(), &mut io).is_err());
+    p.assert_primary_untouched(&io);
     let child = p.stored(&req).primary_sync_id.unwrap();
+    // The child's row is attributed to that request, whose command it is.
+    let attributed: (Option<String>, Option<String>) = p
+        .f
+        .db()
+        .query_row(
+            "SELECT request_ulid, command FROM remote_operation_records WHERE operation_ulid=?1",
+            [child.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        attributed,
+        (
+            Some("01ARZ3NDEKTSV4RRFFQ69G5FAX".to_owned()),
+            Some("ticket close".to_owned())
+        )
+    );
     let repository = p.f.service.resolve_repository(p.f.root()).unwrap();
     let list = p.f.service.list_operations(&repository).unwrap();
     let of = |operation: OperationId| {
@@ -1477,6 +1521,7 @@ fn a_context_branch_gone_after_its_child_abandons_as_reconfirmation_required() {
     assert_eq!(p.f.commits_in_odb(&close_subject()), 0);
     assert!(!p.held());
     assert_eq!(PullRequest::branch(p.run(req, &mut io)), outcome);
+    p.assert_primary_untouched(&io.inner);
 }
 
 /// Until the stops of a publication that cannot be classified have their
@@ -1508,5 +1553,73 @@ fn a_publication_under_a_configuration_that_moved_is_recovery_required_and_leave
         );
         assert_eq!(format!("{:?}", p.stored(&req)), before, "{case}");
         assert_eq!(io.children(), children, "{case}");
+        p.assert_primary_untouched(&io);
     }
+}
+
+/// A publication child that answers with nothing published (no head to read
+/// an answer from): `finish_branch` owns that case, and the record stays at
+/// `publication_pending` with its category, for the same request.
+struct PublishesNothing {
+    inner: PullRequestIo,
+    once: bool,
+}
+impl PromotionIo for PublishesNothing {
+    fn synchronize(
+        &mut self,
+        service: &RepositoryService,
+        request: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        if execution.role() == ChildRole::Publication && std::mem::take(&mut self.once) {
+            return Ok(SynchronizationResult::Complete(
+                SynchronizationOutcome::PublishPending {
+                    target: request.target,
+                    local_oid: Oid::zero(),
+                    reason: sync::PublishPendingReason::NoPublicationRemote,
+                },
+            ));
+        }
+        self.inner
+            .synchronize(service, request, observer, execution)
+    }
+    fn delete(
+        &mut self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        configuration: &ObservationConfiguration,
+        expected: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner
+            .delete(service, request, plan, owner, configuration, expected, item)
+    }
+}
+
+#[test]
+fn a_publication_that_published_nothing_is_recovery_required_and_the_same_request_continues() {
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PublishesNothing {
+        inner: PullRequestIo::default(),
+        once: true,
+    };
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::RecoveryRequired)),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(
+        r.publication,
+        Some(crate::repository::promotion::record::PublicationCategory::RecoveryRequired)
+    );
+    assert_eq!(r.answer_code, None);
+    let outcome = PullRequest::branch(p.run(req, &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    p.assert_primary_untouched(&io.inner);
 }

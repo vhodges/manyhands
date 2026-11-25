@@ -613,8 +613,14 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
 
     /// The answer of a pull-request close that finished, whatever way: its
     /// code is the answer's, and it names what the record wrote and what its
-    /// publication did. Nothing reached primary.
-    fn branch_reached(&self, outcome: &BranchClosureOutcome, index_pending: bool) -> Ran {
+    /// publication did. Nothing reached primary. A close whose index step is
+    /// yet to run is owed, and the request that gave the answer continues it.
+    fn branch_reached(
+        &self,
+        accepted: &Accepted,
+        outcome: &BranchClosureOutcome,
+        index_pending: bool,
+    ) -> Ran {
         let code = branch_code(outcome.answer());
         // The index step is yet to run: only a close that answered `ok` says so.
         let pending = index_pending && code == ResultCode::Ok;
@@ -641,6 +647,11 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         Ran {
             answer: Answer {
                 effects,
+                recovery: if pending {
+                    vec![outcome::same_request(accepted.request_id)]
+                } else {
+                    Vec::new()
+                },
                 ..Answer::stopped(if pending {
                     ResultCode::DiscoveryPending
                 } else {
@@ -850,7 +861,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             Some(Ok(Called::Branch {
                 outcome,
                 index_pending,
-            })) => self.branch_reached(&outcome, index_pending),
+            })) => self.branch_reached(accepted, &outcome, index_pending),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)

@@ -303,6 +303,47 @@ fn accepted() -> Accepted {
     }
 }
 
+/// A branch answer whose index step is yet to run is owed, and offers the
+/// request that gave it, as a direct close's does; one that answered
+/// otherwise is final, whatever the index owes.
+#[test]
+fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
+    use crate::repository::{BranchAnswer, BranchClosureOutcome};
+    let data = tempfile::tempdir().unwrap();
+    let _service = RepositoryService::open_at(data.path()).unwrap();
+    let binding = LifecycleBinding::<Fixed> {
+        root: PathBuf::from("/nowhere"),
+        id: ITEM.parse().unwrap(),
+        expected: None,
+        closure_exists: false,
+        verb: PhantomData,
+    };
+    let accepted = accepted();
+    let published = PromotionPublication::Published {
+        oid: git2::Oid::zero(),
+    };
+    let outcome = |answer| BranchClosureOutcome::for_testing(answer, None, Some(published));
+    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::Published), true);
+    assert_eq!(ran.answer.code, ResultCode::DiscoveryPending);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(
+        ran.answer.recovery,
+        vec![crate::repository::mutation::outcome::same_request(
+            accepted.request_id
+        )]
+    );
+    // The same answer with its index done is final, and offers nothing.
+    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::Published), false);
+    assert_eq!(ran.answer.code, ResultCode::Ok);
+    assert!(matches!(ran.standing, Standing::Final));
+    assert!(ran.answer.recovery.is_empty());
+    // Another answer keeps its code, and is final: its record is finished.
+    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::TicketClosed), true);
+    assert_eq!(ran.answer.code, ResultCode::TicketClosed);
+    assert!(matches!(ran.standing, Standing::Final));
+    assert!(ran.answer.recovery.is_empty());
+}
+
 /// A branch record's answer gives the code of the design's table, and the
 /// stored name of each reads back as the same answer.
 #[test]

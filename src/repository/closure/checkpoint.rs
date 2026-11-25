@@ -1148,12 +1148,11 @@ pub(in super::super) fn publication_answer(
     child: &Result<SynchronizationOutcome, SynchronizationError>,
 ) -> Result<Option<BranchAnswer>, RepositoryError> {
     let head = match child {
-        Err(_) => return Ok(None),
         Ok(SynchronizationOutcome::Published { oid, .. })
         | Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => *oid,
-        Ok(SynchronizationOutcome::PublishPending { .. }) => {
-            return Err(state::recovery_required());
-        }
+        // A stop stands, and a result with no head to read is the runner's
+        // to store: neither answers the record.
+        Err(_) | Ok(SynchronizationOutcome::PublishPending { .. }) => return Ok(None),
     };
     if r.closure_kind == Some(ClosureKind::Existing) {
         return Ok(Some(BranchAnswer::Existing));

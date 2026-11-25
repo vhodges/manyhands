@@ -393,6 +393,21 @@ impl BranchClosureOutcome {
     pub fn answer(&self) -> BranchAnswer {
         self.answer
     }
+    /// An outcome of the answer given, for the binding's tests.
+    #[cfg(test)]
+    pub(in super::super) fn for_testing(
+        answer: BranchAnswer,
+        checkpoint_oid: Option<Oid>,
+        publication: Option<PromotionPublication>,
+    ) -> Self {
+        Self {
+            operation_id: OperationId::new(),
+            action: ClosureAction::Close,
+            answer,
+            checkpoint_oid,
+            publication,
+        }
+    }
     /// The commit the record wrote on the context, for a record that
     /// completed having written one: none for an abandoned record, which
     /// leaves no commit behind, or for one that found its closure made.
