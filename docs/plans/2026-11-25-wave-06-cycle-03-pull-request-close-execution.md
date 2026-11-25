@@ -60,6 +60,32 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 - Note for vh-p7st2 (not this Cycle's, R-22): `desktop/.../lifecycle_lock.rs:109` leaves `confirmed` unlocked, but a new-branch record holds the ticket from step 1 while at `confirmed`, so the desktop would not show it locked.
 
 
+## Task 1: The Closing State
+
+- Commit `940b42be` (base `e21ba7d5`). New tests: `closure_state_follows_both_copies`, `closure_filter_closing_and_open` (`read_items`); `a_closing_dependency_blocks_until_the_primary_holds_it` (`read_relationships`); `a_closing_ticket_is_open_to_its_dependents_and_left_out_of_the_queries`, `critical_path_gives_closing_tickets_no_length` (`--lib repository::read::graph::tests`). Each was run red, then green by exact name, with the edited tests of E-2, E-3, E-16, E-17, E-24 (`ticket_closure` case `contained_closed_collaborator_cleanup_only`), E-25 (`cli_remote` case `retirement_cli_authenticated_live_pass`), `presentation_across_contexts` and `published_enumerations_list_exactly_the_registered_values`; the three help goldens regenerated. Static gates and `cargo check --features desktop-test-support --tests` clean.
+- E-16's second test also rewrites A's primary file after the SQL closure, so the refresh observes the primary again.
+- Review: spec compliant, approved, no Critical or Important. Five Minor findings deferred to the final review (documentation of `ReadinessReasonDto`, `ReadinessState`, `ReadinessDto` and `ticket_critical_path`; a stale test name; first row wins for two primary-copy rows of one ID).
+
+## Task 2: The Guard And The Save Check
+
+- Commit `925b5dd8` (base `ba899c17`). New tests: `the_guard_reads_the_primary_only_in_pull_request_mode`, `a_save_cannot_change_the_closure` (`--lib repository::ticket_guard::tests`); `context::a_closing_ticket_takes_comments_and_saves` (`mutation_bridges`); E-14's `guard_reads_branch_tips_only` edited. Red first, then green by exact name; static gates clean.
+- In direct mode a head that holds a closure is refused as `ticket_closed` before the save check, so the save check's "changed" and "removed" rows are pull-request rows only (documented in the test).
+- Review: approved, no Critical or Important. Three Minor deferred (the guard table's 48 fixtures, about 11 s; an unexplained `ne TicketClosed`; the head is parsed again on every save).
+
+## Task 3: Immutability In A Ticket Context
+
+- Commits `5c6e4538` and `1d581a9c` (base `925b5dd8`). New tests: `provisional_closures_may_change_primary_ones_may_not` (`--lib repository::integration::tests`, 33 rows over both validators); in `--lib repository::remote::sync::tests`, `ticket_context_closure_rule::a_pinned_ticket_context_window_gives_the_fetched_primary_to_both_validators`, `…::a_primary_target_gives_no_primary_side_and_keeps_every_side_closure`, `…::a_primary_target_pinned_window_gives_no_primary_side` and `ticket_context_resolution_call_site::resolve_synchronization_keeps_the_closure_the_pinned_primary_holds`. Unchanged and green: `all_recorded_ticket_sides_constrain_retained_closure_before_writes`, `retained_candidate_cannot_bypass_all_side_closure_validation`; E-14 and E-33 applied.
+- Review round 1 found the primary-target row could not fail (no pinned window) and no test drove a call site; fix round 1 added a pinned window 1 (red with the target-kind guard removed) and the `resolve_synchronization` row (red with the preflight passing none). Re-review: both addressed. `reconcile_pending_candidate` (two sites), `reconcile_resolution_candidate` and `conflict_read::repair_accepted` are compile-checked only; the SSH tier's `remote/` targets run at review-ready.
+- Five Minor deferred (an absent pinned window row reads as no primary side; `conflict_read` reads the window on every lookup; the three-side rule applies to every changed ticket path; two table rows want a comment; a stray `closed_by` without `closed_at`).
+
+## Task 4: The Link Record And The Item's Fields
+
+- Commit `7cf3f9c2` (base `1d581a9c`). New tests: `pull_request_links_migration_creates_its_table_once` (`--lib repository::discovery::tests`), `retire_context_deletes_the_link` (`--lib repository::cleanup::tests`), `a_finalized_retirement_deletes_the_link` (`--lib repository::context_retirement::tests`), `ticket_show_gives_the_link_and_the_publication` (`read_items`), `show_names_the_publication_and_the_pull_request_link_when_it_has_them` (`--bin manyhands-cli`). Red first, then green by exact name, with the read_contract and cli golden tests; 25 goldens regenerated, adding only 44 `"publication": null` and 53 `"pull_request": null` lines.
+- `schemas/v1/pull_request.schema.json` and `PullRequestDto` added in Cycle 02's shape (Cycle 02 is not on main).
+- Ruling 10: `pull_request.schema.json`'s type is `["object", "null"]` — the item's field must be null in lists, for documents and without a link (R-15), the schema checker accepts only a bare `$ref`, and the repository already uses nullable referenced files (Cycle 02's `repository_setup` among them) — if Cycle 02 keeps an always-object file, the second Cycle to land adds a nullable variant for the item. Cycle 02 was told (comment `01M89ZZQPRRTY40V192ABXY76A` on vh-c97se, saved on its branch; its publication is pending while that session's worktree has uncommitted work).
+- **E-42** (Task 4, mechanical) `tests/mutation_replay.rs` about 442: `the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`'s `name.contains("request")` matched the new table; it excludes `pull_request_links` by name, intent unchanged.
+- Review: approved, no Critical or Important. Five Minor deferred (the preserving retirement branch has no test of its own; `tracked_closure` reads any failure as `pending`; `ForgeKind::parse` repeats a match in `canonical.rs`; `item_show` rebuilds a link from the DTO; E-42's predicate).
+
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
 ### Task 0 reference check, design sections Conventions, Baseline Facts 1-23, Parts A-C
