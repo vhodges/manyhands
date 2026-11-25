@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 03 Implementation Plan: Ticket Close In Pull-Request Mode, The Closing State And Withdraw"
 date: 2026-11-25
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -20,7 +20,7 @@ id: "01M899G2Y5Q4H3SQSSJVFTCR3N"
 
 **Spec:** [Cycle 03 design](2026-11-25-wave-06-cycle-03-pull-request-close-design.md) (revision 5), under the [Cycle document](../Cycles/wave-06-cycle-03-pull-request-close.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft** (revision 5).
+Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
 
 ## Global Constraints
 

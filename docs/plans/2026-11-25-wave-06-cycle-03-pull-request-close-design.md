@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 03 Design: Ticket Close In Pull-Request Mode, The Closing State And Withdraw"
 date: 2026-11-25
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M899G2HA7WTVW4EYZFTNBWW2"
 
 Cycle document: [Wave 06 Cycle 03](../Cycles/wave-06-cycle-03-pull-request-close.md). Ticket: vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md) and the Cycle document's Product-Owner Decisions.
 
-Status: **draft** (revision 5).
+Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14).
 
 ## Intent And Approval Boundary
 

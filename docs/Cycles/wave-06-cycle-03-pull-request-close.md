@@ -1,7 +1,7 @@
 ---
 title: "Wave 06 Cycle 03: Ticket Close In Pull-Request Mode, The Closing State And Withdraw"
 date: 2026-11-25
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M899G24CQRPHD33AY4J0RGNB"
 
 Ticket: vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`), branch `manyhands/ticket/01M87683QK8E34EYY8KS4VQG9Y`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 03 design](../plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md). Plan: [Cycle 03 implementation plan](../plans/2026-11-25-wave-06-cycle-03-pull-request-close-implementation.md).
 
-Status: **draft** (revision 5), for the owner's approval.
+Status: **approved** by the owner on 2026-11-25, at revision 5 (decision 14).
 
 Revision history:
 
@@ -21,6 +21,7 @@ Revision history:
 - Revision 3: a scoped re-review (2 Blocking, 15 Important, 26 Minor) and an adversarial round (6 Blocking, 10 Important, 6 Minor) of revision 2. The runner follows the direct close's lifecycle rules (child attempts, holds), and a clean merge keeps the primary's closure.
 - Revision 4 (`953384fb`): a third round on revision 3 (`d88896b8`; scoped re-review 1 Blocking, 6 Important, 13 Minor; adversarial 5 Blocking, 7 Important, 7 Minor), whose blockers were again in the separate runner. With the owner's decision 13 the pull-request close, withdraw and new branch become branch records of the existing ticket-closure lifecycle.
 - Revision 5: a fourth round on revision 4 (source and feasibility 1 Blocking, 11 Important, 15 Minor; adversarial 3 Blocking, 9 Important, 7 Minor), whose findings were rules within the lifecycle's mode and the adaptations it needs; the rules are in the design's Parts D to F and the adaptations in its Design Checkpoint Obligations. Revision 5 has not been independently reviewed.
+- Approved on 2026-11-25 at revision 5, without a fifth review round (decision 14).
 
 ## Purpose And Authority
 
@@ -127,6 +128,7 @@ Nothing has been run. Every status above is planned.
 11. **Departures accepted** (after review round 1): withdrawing a ticket with no closure answers `already_applied` (the RFC says it refuses); one SSH case proves the RFC's Required Evidence 1 and 2 by showing the server's primary never pushed (the RFC's Testing says no new SSH case), as Cycle 01 decision 6 did; the closing state is derived in both modes, as the RFC words it, and the two relationship tests that pin the opposite are rewritten (design E-16).
 12. **`item sync` gives the link** (after review round 1; the owner left "link only through close and show" unselected, so the RFC holds): when `item sync` publishes, or finds current, a closing ticket's branch in a pull-request repository, its answer carries the link and records it. Every other `item sync` answer is unchanged.
 13. **The pull-request close is a mode of the direct ticket-closure lifecycle** (after review round 3, whose blockers were again rules the direct close already has and the separate runner lacked): the close, withdraw and new branch are rows of `ticket_closures`, run by the existing lifecycle with its child attempts, fences, cancellation, abandon, attribution, conflict lookups and listing; only its middle changes (record on the branch, publish the branch, no cleanup). The new-branch recovery stays in this Cycle.
+14. **Approval and execution** (2026-11-25): the three documents are approved at revision 5, without a fifth review round; the mechanism's open details are settled test-first at the design checkpoints of Tasks 7 and 9. The named test edits E-2 to E-23 and the mechanical edits Task 0's sweep finds are approved; an edit that removes, weakens or reverses an assertion's intent still stops for the owner. `ticket withdraw-closure` takes the delivery label `C5` and `ticket close`'s autonomy column (design R-28). Implementation is authorized, subagent-driven, with Sonnet 5.5 at high effort as the implementer. Cycle 02 (vh-c97se) is in flight at the same time: whichever lands second merges the other (decision 5).
 
 ## Known Limits
 
@@ -144,7 +146,7 @@ Nothing has been run. Every status above is planned.
 
 ## Open Questions
 
-For the approval message: the named test edits E-2 to E-23 (E-16 approved in decision 11) and what Task 0's sweep finds; the new verb's delivery label `C5` and autonomy column (design R-28); whether revision 5 needs a fifth review round; and the execution method.
+None at approval: the test edits, the verb's label and autonomy column, the fifth review round and the execution method are settled by decision 14.
 
 ## Review Record
 
@@ -178,3 +180,4 @@ For the approval message: the named test edits E-2 to E-23 (E-16 approved in dec
 | Review round 3 | Three rounds found the direct close's rules missing from the separate runner | decision | A mode of the lifecycle (decision 13) | Owner, 2026-11-25 |
 | Review round 4, source and feasibility | 1 Blocking, 11 Important, 15 Minor | — | Resolved in revision 5, not independently reviewed; see the design's Review Record | This revision |
 | Review round 4, adversarial | 3 Blocking, 9 Important, 7 Minor | — | Resolved in revision 5, not independently reviewed | This revision |
+| Owner approval | The documents, the test edits, the verb's placement and the execution method | decision | Approved at revision 5 without a fifth round; subagent-driven (decision 14) | Owner, 2026-11-25 |
