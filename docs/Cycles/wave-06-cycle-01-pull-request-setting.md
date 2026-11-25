@@ -12,7 +12,7 @@ id: "01M878QWAET79VP1S0EXVCEMAC"
 
 Ticket: vh-c2dtj (`01M87683441PRAYQJQBQBG96YY`), branch `manyhands/ticket/01M87683441PRAYQJQBQBG96YY`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 01 design](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-design.md). Plan: [Cycle 01 implementation plan](../plans/2026-11-24-wave-06-cycle-01-pull-request-setting-implementation.md).
 
-Status: **approved 2026-11-24** (revision 4).
+Status: **approved 2026-11-24** (revision 4). Implemented and review-ready; see the execution ledger, docs/plans/2026-11-24-wave-06-cycle-01-pull-request-setting-execution.md.
 
 Revision history:
 
@@ -90,18 +90,18 @@ Authorities, in order:
 
 | # | Contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | 1-4 | A table-driven library test of parse and serialize over every rule, including byte-for-byte direct-mode output and unknown keys inside `[forge]` | planned |
-| A2 | 2 | `git show v0.2.1:src/canonical.rs` holds "unsupported format_version; expected 1", recorded in the ledger at Task 0 | planned |
-| A3 | 3 | Remote selection rewrites a pull-request configuration with its mode, forge, version and unknown keys | planned |
-| A4 | 5 | Read tests and the read-contract and CLI goldens for `repo inspect` and `repo list` with the new fields; a test of human `repo inspect` | planned |
-| A5 | 5 | The migration adds the columns once, and the first refresh after it fills them | planned |
-| A6 | 6-8 | A table-driven test from remote URLs and forge settings to forge, default mode and link URL; a human-line test | planned |
-| A7 | 8 | The owner opens a Bitbucket Cloud link built for a real work repository and it reaches the create-pull-request page (decision 7). Amended during execution, 2026-11-24: the owner confirmed by eye the Bitbucket Cloud link built for a placeholder repository (the owner's choice); not opened against a live forge | planned |
-| A8 | 9 | The design's required outcomes O1 to O15 of Part D, each with its proof: library tests of the local-commit listing, the decision after each `graph_plan`, `push_call`'s refusal, the stored setting, `stopped` and the replay of the refusal's data | planned |
-| A9 | 9 | One SSH case: a pull-only `repo sync` fast-forwards with the server unchanged, then refuses a local commit with the server's primary still unchanged and nothing held, and the same request retried answers the same; it writes the code's mutation golden. This meets the RFC's push evidence by showing no push is made (decision 6) | planned |
-| A10 | 9 | `primary_has_local_commits` registered everywhere a result code is registered | planned |
-| A11 | 10 | The fast tier and the SSH tier of design Testing, once at review-ready | planned |
-| A12 | Scope 5 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs` and `tests/cli/skills.rs` pass | planned |
+| A1 | 1-4 | A table-driven library test of parse and serialize over every rule, including byte-for-byte direct-mode output and unknown keys inside `[forge]` | passed (Task 1) |
+| A2 | 2 | `git show v0.2.1:src/canonical.rs` holds "unsupported format_version; expected 1", recorded in the ledger at Task 0 | recorded (Task 0: v0.2.1 line 1304) |
+| A3 | 3 | Remote selection rewrites a pull-request configuration with its mode, forge, version and unknown keys | passed (Task 1) |
+| A4 | 5 | Read tests and the read-contract and CLI goldens for `repo inspect` and `repo list` with the new fields; a test of human `repo inspect` | passed (Task 4) |
+| A5 | 5 | The migration adds the columns once, and the first refresh after it fills them | passed (Task 3) |
+| A6 | 6-8 | A table-driven test from remote URLs and forge settings to forge, default mode and link URL; a human-line test | passed (Task 2) |
+| A7 | 8 | The owner opens a Bitbucket Cloud link built for a real work repository and it reaches the create-pull-request page (decision 7). Amended during execution, 2026-11-24: the owner confirmed by eye the Bitbucket Cloud link built for a placeholder repository (the owner's choice); not opened against a live forge | done by eye on a placeholder (Task 2) |
+| A8 | 9 | The design's required outcomes O1 to O15 of Part D, each with its proof: library tests of the local-commit listing, the decision after each `graph_plan`, `push_call`'s refusal, the stored setting, `stopped` and the replay of the refusal's data | passed (Tasks 6 and 7); O6 untested by design; the push-step refusal and the resume after PushVerified checked by reading |
+| A9 | 9 | One SSH case: a pull-only `repo sync` fast-forwards with the server unchanged, then refuses a local commit with the server's primary still unchanged and nothing held, and the same request retried answers the same; it writes the code's mutation golden. This meets the RFC's push evidence by showing no push is made (decision 6) | passed (Task 8; in the SSH tier) |
+| A10 | 9 | `primary_has_local_commits` registered everywhere a result code is registered | passed (Tasks 5 and 8) |
+| A11 | 10 | The fast tier and the SSH tier of design Testing, once at review-ready | passed at 7c0b8252: fast tier (one desktop timing flake, green on three reruns alone) and the ten SSH-tier targets |
+| A12 | Scope 5 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs` and `tests/cli/skills.rs` pass | passed (Task 9) |
 
 ## Product-Owner Decisions (2026-11-24)
 
