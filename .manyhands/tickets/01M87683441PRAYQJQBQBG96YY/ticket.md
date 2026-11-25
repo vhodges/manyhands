@@ -6,6 +6,8 @@ type: cycle
 status: done
 project: manyhands
 team: core
+closed_at: 2026-11-25T10:53:38Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
