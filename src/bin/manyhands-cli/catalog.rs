@@ -172,7 +172,7 @@ const TICKET_LIST: &[OptionSpec] = &[
     PROJECT,
     option(
         "--closure",
-        Some("open|closed|all"),
+        Some("open|closed|closing|all"),
         false,
         "Filter by closure state (default: all).",
     ),

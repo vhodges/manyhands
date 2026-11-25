@@ -5289,7 +5289,7 @@ fn the_folder_list_of_a_registration_that_is_gone_or_degraded_fails_as_every_lis
 // ---------------------------------------------------------------------
 
 use manyhands::repository::{DependencyDirection, ProposedRelationships, UnplannableReasonCode};
-use support::items::SHARED_SLUG;
+use support::items::{RELATED_A, SHARED_SLUG};
 use support::presentation::{
     self, BROKEN_ON_PRIMARY, DEPENDENT, EDITED, EDITED_DOCUMENT, NEW_DOCUMENT, NEW_DOCUMENT_PATH,
     NEW_SLUG, NEW_TICKET, NEW_TICKET_TITLE, Needs, OLD_SLUG, PRIMARY_COMMENT, PRIMARY_ONLY,
@@ -5776,5 +5776,359 @@ fn presentation_across_contexts() {
             check: a_comment_only_a_hidden_copy_holds_is_no_relationship_target,
         },
     ]);
+    assert_git_transport_uninitialized();
+}
+
+// ---------------------------------------------------------------------
+// The closing state: a ticket's closure is only the closure of the
+// primary's copy; one only its own worktree holds is `closing`.
+// ---------------------------------------------------------------------
+
+use manyhands::repository::ContextProvisionOutcome;
+
+/// What the primary's copy of the ticket holds.
+#[derive(Clone, Copy)]
+enum Primary {
+    Open,
+    Closed,
+    /// The ticket was created in its own worktree and is on no primary.
+    Absent,
+}
+
+/// What the ticket's own worktree holds.
+#[derive(Clone, Copy)]
+enum Own {
+    None,
+    Open,
+    Closed,
+}
+
+/// The primary's closure, and the one only the worktree holds.
+const PRIMARY_CLOSURE: &str = CLOSURE;
+const OWN_CLOSURE: &str =
+    "closed_at: 2026-10-01T08:00:00Z\nclosed_by: Grace Hopper <grace@example.invalid>\n";
+
+/// `(state, closed_at, closed_by)` of a closure as a read presents it.
+type Shown<'a> = (ClosureState, Option<&'a str>, Option<&'a str>);
+
+const OPEN_SHOWN: Shown = (ClosureState::Open, None, None);
+const PRIMARY_SHOWN: Shown = (
+    ClosureState::Closed,
+    Some("2026-09-30T12:34:56Z"),
+    Some("Ada Lovelace <ada@example.invalid>"),
+);
+const OWN_SHOWN: Shown = (
+    ClosureState::Closing,
+    Some("2026-10-01T08:00:00Z"),
+    Some("Grace Hopper <grace@example.invalid>"),
+);
+
+fn shown(item: &ItemDto) -> Shown<'_> {
+    let closure = item.closure.as_ref().expect("a ticket has a closure");
+    (
+        closure.state,
+        closure.closed_at.as_deref(),
+        closure.closed_by.as_deref(),
+    )
+}
+
+/// Makes the configuration look unchanged to Git, which enabling leaves
+/// looking changed and which a context is not prepared over.
+fn clean_configuration_index(root: &Path) {
+    let repository = git2::Repository::open(root).unwrap();
+    let mut git_index = repository.index().unwrap();
+    git_index.read(true).unwrap();
+    git_index
+        .add_path(Path::new(".manyhands/config.toml"))
+        .unwrap();
+    git_index.write().unwrap();
+}
+
+/// Creates the item worktree of a ticket that is committed on the primary
+/// branch, to edit it.
+fn edit_ticket_context(service: &RepositoryService, root: &Path, id: &str) -> PathBuf {
+    clean_configuration_index(root);
+    let outcome = service
+        .prepare_context(AuthoringTarget {
+            root: root.to_owned(),
+            kind: AuthoringKind::Ticket,
+            item_id: item_id(id),
+            intent: ContextIntent::Edit,
+            operation_id: support::new_operation_id(),
+        })
+        .unwrap();
+    assert!(matches!(outcome, ContextProvisionOutcome::Created(_)));
+    context_worktree(root, id).join(ticket_path(id))
+}
+
+/// A ticket, `TICKET_A`, as the primary and its own worktree hold it, and a
+/// second, `TICKET_B`, committed on the primary with the first as its
+/// parent and its only dependency. Refreshed.
+fn closure_world(
+    primary: Primary,
+    own: Own,
+) -> (support::TestRepository, support::EnabledRepository) {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let service = &enabled.service;
+    write(
+        root,
+        &ticket_path(TICKET_B),
+        &ticket_source(
+            TICKET_B,
+            "Dependent",
+            &format!("parent: {TICKET_A}\ndeps: [{TICKET_A}]\n"),
+        ),
+    );
+    let a = ticket_path(TICKET_A);
+    let open = ticket_source(TICKET_A, "Subject", "");
+    let closed_on_primary = ticket_source(TICKET_A, "Subject", PRIMARY_CLOSURE);
+    let closed_in_own = ticket_source(TICKET_A, "Subject", OWN_CLOSURE);
+    match primary {
+        Primary::Absent => {
+            commit(&fixture, &[&ticket_path(TICKET_B)], 1_000);
+            let file = create_ticket_context(service, root, TICKET_A);
+            match own {
+                Own::Closed => fs::write(&file, &closed_in_own).unwrap(),
+                Own::Open => {}
+                Own::None => panic!("a ticket on no primary has a worktree"),
+            }
+        }
+        Primary::Open | Primary::Closed => {
+            let closed_with_no_worktree = matches!((primary, own), (Primary::Closed, Own::None));
+            write(
+                root,
+                &a,
+                if closed_with_no_worktree {
+                    &closed_on_primary
+                } else {
+                    &open
+                },
+            );
+            commit(&fixture, &[&a, &ticket_path(TICKET_B)], 1_000);
+            if !matches!(own, Own::None) {
+                let file = edit_ticket_context(service, root, TICKET_A);
+                if matches!(own, Own::Closed) {
+                    fs::write(&file, &closed_in_own).unwrap();
+                }
+                // A context cannot be made over a closed ticket, so the
+                // primary's closure is written once it exists.
+                if matches!(primary, Primary::Closed) {
+                    write(root, &a, &closed_on_primary);
+                }
+            }
+        }
+    }
+    refresh_completely(service, root);
+    (fixture, enabled)
+}
+
+#[test]
+fn closure_state_follows_both_copies() {
+    // Each row of Part A's table: what the primary's copy and the ticket's
+    // own worktree hold, what a read of the copy the reads present and of
+    // each copy by path shows, and what the ticket that depends on it, and
+    // has it as its parent, reads it as.
+    struct Row {
+        what: &'static str,
+        primary: Primary,
+        own: Own,
+        /// A list and `show`: the effective copy.
+        presented: Shown<'static>,
+        /// `show --path` of the own worktree's copy, when it has one.
+        own_path: Option<Shown<'static>>,
+        /// `show --path` of the primary's copy, when it has one.
+        primary_path: Option<Shown<'static>>,
+        dependency: DependencyState,
+    }
+    let rows = [
+        Row {
+            what: "no closure in the copy read, the primary's copy closed",
+            primary: Primary::Closed,
+            own: Own::Open,
+            presented: PRIMARY_SHOWN,
+            own_path: Some(PRIMARY_SHOWN),
+            primary_path: Some(PRIMARY_SHOWN),
+            dependency: DependencyState::Closed,
+        },
+        Row {
+            what: "no closure in the copy read, the primary's copy open",
+            primary: Primary::Open,
+            own: Own::Open,
+            presented: OPEN_SHOWN,
+            own_path: Some(OPEN_SHOWN),
+            primary_path: Some(OPEN_SHOWN),
+            dependency: DependencyState::Open,
+        },
+        Row {
+            what: "no closure in the copy read, and only the primary's copy",
+            primary: Primary::Open,
+            own: Own::None,
+            presented: OPEN_SHOWN,
+            own_path: None,
+            primary_path: Some(OPEN_SHOWN),
+            dependency: DependencyState::Open,
+        },
+        Row {
+            what: "no closure in the copy read, and no primary's copy",
+            primary: Primary::Absent,
+            own: Own::Open,
+            presented: OPEN_SHOWN,
+            own_path: Some(OPEN_SHOWN),
+            primary_path: None,
+            dependency: DependencyState::Open,
+        },
+        Row {
+            what: "a closure in the primary's copy, which is the one read",
+            primary: Primary::Closed,
+            own: Own::None,
+            presented: PRIMARY_SHOWN,
+            own_path: None,
+            primary_path: Some(PRIMARY_SHOWN),
+            dependency: DependencyState::Closed,
+        },
+        Row {
+            what: "a closure in a worktree's copy, and in the primary's: the primary's is shown",
+            primary: Primary::Closed,
+            own: Own::Closed,
+            presented: PRIMARY_SHOWN,
+            own_path: Some(PRIMARY_SHOWN),
+            primary_path: Some(PRIMARY_SHOWN),
+            dependency: DependencyState::Closed,
+        },
+        Row {
+            what: "a closure in a worktree's copy, the primary's copy open",
+            primary: Primary::Open,
+            own: Own::Closed,
+            presented: OWN_SHOWN,
+            own_path: Some(OWN_SHOWN),
+            primary_path: Some(OPEN_SHOWN),
+            dependency: DependencyState::Closing,
+        },
+        Row {
+            what: "a closure in a worktree's copy, and no primary's copy",
+            primary: Primary::Absent,
+            own: Own::Closed,
+            presented: OWN_SHOWN,
+            own_path: Some(OWN_SHOWN),
+            primary_path: None,
+            dependency: DependencyState::Closing,
+        },
+    ];
+    for row in rows {
+        let (fixture, enabled) = closure_world(row.primary, row.own);
+        let (service, root) = (&enabled.service, &fixture.root);
+        let repo = service.resolve_repository(root).unwrap();
+        let what = row.what;
+
+        let listed = all_tickets(service, &repo);
+        assert_eq!(
+            shown(ticket(&listed, TICKET_A)),
+            row.presented,
+            "list: {what}"
+        );
+        let item = service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+        assert_eq!(shown(&item), row.presented, "show: {what}");
+        // The states and the fields: set exactly when closed or closing.
+        let closure = item.closure.as_ref().unwrap();
+        assert_eq!(
+            closure.closed_at.is_some(),
+            closure.state != ClosureState::Open,
+            "{what}"
+        );
+
+        let ticket_file = ticket_path(TICKET_A);
+        let path = Path::new(&ticket_file);
+        if let Some(expected) = row.own_path {
+            let own = context_worktree(root, TICKET_A);
+            let read = service.show_path(&repo, Some(&own), path).unwrap();
+            assert_eq!(shown(&read), expected, "show --path, own worktree: {what}");
+        }
+        if let Some(expected) = row.primary_path {
+            let read = service.show_path(&repo, None, path).unwrap();
+            assert_eq!(shown(&read), expected, "show --path, primary: {what}");
+        }
+
+        // The ticket that depends on it and has it as its parent.
+        let wanted = [dependency(TICKET_A, row.dependency)];
+        let dependent = ticket(&listed, TICKET_B);
+        assert_eq!(dependent.deps, wanted, "list deps: {what}");
+        assert_eq!(
+            dependent.parent,
+            Some(wanted[0].clone()),
+            "list parent: {what}"
+        );
+        let dependent = service.show_item(&repo, &item_id(TICKET_B)).unwrap();
+        assert_eq!(dependent.deps, wanted, "show deps: {what}");
+        assert_eq!(
+            dependent.parent,
+            Some(wanted[0].clone()),
+            "show parent: {what}"
+        );
+    }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn closure_filter_closing_and_open() {
+    let (fixture, enabled) = enabled();
+    let (service, root) = (&enabled.service, &fixture.root);
+    // A is open, B closed on the primary, C closing, and D closed in its
+    // own worktree and on the primary too.
+    let paths: Vec<String> = [TICKET_A, TICKET_B, TICKET_C, RELATED_A]
+        .into_iter()
+        .map(ticket_path)
+        .collect();
+    write(root, &paths[0], &ticket_source(TICKET_A, "A", ""));
+    write(root, &paths[1], &ticket_source(TICKET_B, "B", CLOSURE));
+    write(root, &paths[2], &ticket_source(TICKET_C, "C", ""));
+    write(root, &paths[3], &ticket_source(RELATED_A, "D", ""));
+    commit(
+        &fixture,
+        &paths.iter().map(String::as_str).collect::<Vec<_>>(),
+        1_000,
+    );
+    let c = edit_ticket_context(service, root, TICKET_C);
+    fs::write(&c, ticket_source(TICKET_C, "C", OWN_CLOSURE)).unwrap();
+    let d = edit_ticket_context(service, root, RELATED_A);
+    fs::write(&d, ticket_source(RELATED_A, "D", OWN_CLOSURE)).unwrap();
+    write(root, &paths[3], &ticket_source(RELATED_A, "D", CLOSURE));
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+
+    let sorted = |closure| {
+        let list = service
+            .list_tickets(
+                &repo,
+                &TicketFilter {
+                    closure,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut ids: Vec<String> = list
+            .items
+            .iter()
+            .filter_map(|item| item.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    // Open matches a closing ticket, which is not closed yet.
+    assert_eq!(
+        sorted(ClosureFilter::Open),
+        [TICKET_A, TICKET_C].map(str::to_owned)
+    );
+    assert_eq!(
+        sorted(ClosureFilter::Closing),
+        [TICKET_C].map(str::to_owned)
+    );
+    assert_eq!(
+        sorted(ClosureFilter::Closed),
+        [TICKET_B, RELATED_A].map(str::to_owned)
+    );
+    let mut all = [TICKET_A, TICKET_B, TICKET_C, RELATED_A].map(str::to_owned);
+    all.sort();
+    assert_eq!(sorted(ClosureFilter::All), all);
     assert_git_transport_uninitialized();
 }

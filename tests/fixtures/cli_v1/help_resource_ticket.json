@@ -36,7 +36,7 @@
             "name": "--closure",
             "required": false,
             "summary": "Filter by closure state (default: all).",
-            "value": "open|closed|all"
+            "value": "open|closed|closing|all"
           },
           {
             "name": "--slug",

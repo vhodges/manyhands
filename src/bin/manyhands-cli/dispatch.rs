@@ -58,6 +58,7 @@ fn ticket_filter(args: &ArgMatches) -> TicketFilter {
         closure: match text("closure").as_deref() {
             Some("open") => ClosureFilter::Open,
             Some("closed") => ClosureFilter::Closed,
+            Some("closing") => ClosureFilter::Closing,
             _ => ClosureFilter::All,
         },
         readiness: if flag("ready") {

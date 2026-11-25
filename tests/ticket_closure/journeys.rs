@@ -356,7 +356,9 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
     assert!(p.b.worktree().exists());
     // The collaborator's kept context is still open while its primary is
     // closed. C5 refuses a new write there (the primary-tip arm) and nothing
-    // changes; the listing reads the kept context's open copy (R-T6-6).
+    // changes; the listing reads the kept context's open copy, which the
+    // primary's closure decides: it reads closed, with the primary's fields
+    // (Part A of the pull-request close design).
     let image_before = image(&p.b.root)?;
     let context = oid(&p.b, CONTEXT)?;
     let bytes = fixed(std::fs::read(p.b.worktree().join(TICKET_PATH)))?;
@@ -390,16 +392,21 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
             None => 0,
             Some(ClosureState::Open) => 1,
             Some(ClosureState::Closed) => 2,
+            Some(ClosureState::Closing) => panic!("a closing ticket is not expected here"),
         },
     ]);
     assert_eq!(copies[0].context.kind, ItemContextKind::Active);
     assert_eq!(copies[0].status.as_deref(), Some("open"));
+    let closed_at = closed_on(&p.b, primary, &p.a.closed_by())?
+        .closed_at
+        .and_then(results::timestamp_string);
+    assert!(closed_at.is_some());
     assert_eq!(
         copies[0].closure,
         Some(ClosureDto {
-            state: ClosureState::Open,
-            closed_at: None,
-            closed_by: None,
+            state: ClosureState::Closed,
+            closed_at,
+            closed_by: Some(p.a.closed_by()),
         })
     );
     assert_eq!(oid(&p.b, MAIN)?, primary);

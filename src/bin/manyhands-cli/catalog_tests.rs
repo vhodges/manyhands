@@ -227,7 +227,7 @@ fn catalog_publishes_only_the_available_verbs_options_and_requirements() {
         }
         if (resource, verb) == ("ticket", "list") {
             expected.extend([
-                ("--closure", Some("open|closed|all"), false),
+                ("--closure", Some("open|closed|closing|all"), false),
                 ("--slug", Some("code"), false),
                 ("--ready", None, false),
                 ("--blocked", None, false),

@@ -39,12 +39,16 @@ use crate::{
     },
 };
 
-/// Which tickets a list returns, by lifecycle closure metadata: a ticket is
-/// closed when it carries `closed_at`, whatever its `status` text says.
+/// Which tickets a list returns, by lifecycle closure metadata, whatever a
+/// ticket's `status` text says: a ticket is closed when the primary's copy
+/// of it carries `closed_at`, and closing when only another copy does (see
+/// `ClosureState`). `Open` returns the open tickets and the closing ones,
+/// which are not closed yet; `Closing` only the closing ones.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ClosureFilter {
     Open,
     Closed,
+    Closing,
     #[default]
     All,
 }
@@ -60,7 +64,8 @@ pub enum ReadinessFilter {
 /// filter matches every ticket. `slug` matches a ticket's whole short code
 /// without regard to ASCII case, and never a ticket that has none.
 /// `readiness` keeps the open tickets that are ready, or the ones that are
-/// blocked, and never a closed ticket. The default matches all of them.
+/// blocked, and never a closed or a closing ticket. The default matches all
+/// of them.
 ///
 /// A filter chooses which tickets are returned and never what a ticket
 /// depends on: readiness is decided against every ticket the index holds.
@@ -77,8 +82,15 @@ pub struct TicketFilter {
 }
 
 impl TicketFilter {
-    /// `graph` is of every ticket, whatever the filter leaves out.
-    pub(super) fn matches(&self, item: &StoredItem, graph: &TicketGraph) -> bool {
+    /// `state` is the ticket's closure state as a read presents it (see
+    /// `Targets::closure_state`), and `graph` is of every ticket, whatever
+    /// the filter leaves out.
+    pub(super) fn matches(
+        &self,
+        item: &StoredItem,
+        state: ClosureState,
+        graph: &TicketGraph,
+    ) -> bool {
         let equals = |wanted: &Option<String>, stored: &Option<String>| {
             wanted
                 .as_ref()
@@ -88,8 +100,9 @@ impl TicketFilter {
             && equals(&self.ticket_type, &item.ticket_type)
             && equals(&self.project, &item.project)
             && match self.closure {
-                ClosureFilter::Open => item.closed_at.is_none(),
-                ClosureFilter::Closed => item.closed_at.is_some(),
+                ClosureFilter::Open => matches!(state, ClosureState::Open | ClosureState::Closing),
+                ClosureFilter::Closed => state == ClosureState::Closed,
+                ClosureFilter::Closing => state == ClosureState::Closing,
                 ClosureFilter::All => true,
             }
             && self.slug.as_ref().is_none_or(|wanted| {
@@ -99,11 +112,14 @@ impl TicketFilter {
                     .is_some_and(|slug| slug.eq_ignore_ascii_case(wanted))
             })
             && self.readiness.is_none_or(|wanted| {
-                graph.readiness_state(&item.id)
-                    == Some(match wanted {
-                        ReadinessFilter::Ready => ReadinessState::Ready,
-                        ReadinessFilter::Blocked => ReadinessState::Blocked,
-                    })
+                // A closing ticket reads as an open one does, and no
+                // readiness query returns it.
+                !graph.is_closing(&item.id)
+                    && graph.readiness_state(&item.id)
+                        == Some(match wanted {
+                            ReadinessFilter::Ready => ReadinessState::Ready,
+                            ReadinessFilter::Blocked => ReadinessState::Blocked,
+                        })
             })
     }
 }
@@ -244,6 +260,16 @@ impl From<&canonical::TicketRelationships> for Relationships {
 }
 
 impl StoredItem {
+    /// The ticket's state as a read presents it, this row being the copy
+    /// read. `primary` is the closure of the ticket's primary copy.
+    fn closure_state(&self, primary: &PrimaryClosures) -> ClosureState {
+        derived_closure_state(
+            self.closed_at.is_some(),
+            is_primary_copy(&self.context),
+            primary.get(&self.id),
+        )
+    }
+
     /// The row a store of the context `observation` writes for its `item`,
     /// as `stored_items` reads it back, under the key `row_id`. Each value
     /// goes by the name the index stores it under, so the row is the one a
@@ -286,41 +312,137 @@ enum Target {
     Document,
     Comment,
     OpenTicket,
+    ClosingTicket,
     ClosedTicket,
+}
+
+/// The closure the primary's copy of a ticket holds, as the index stored it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PrimaryClosure {
+    closed_at: i64,
+    closed_by: Option<String>,
+}
+
+/// For each ticket whose primary's copy holds a closure, that closure. A
+/// read takes it from every stored row it holds, after the substitution of
+/// a moved context's rows, and not from the effective rows alone: the
+/// primary's copy of a ticket that has a worktree of its own is a row
+/// the effective rows leave out. An ID not here has a primary's copy that
+/// holds none, or none at all.
+///
+/// The primary's copy is the first stored row at rank `PRIMARY_COPY`: one
+/// outside any item worktree, the root's working tree in the normal case.
+/// An uncommitted closure there counts.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct PrimaryClosures(BTreeMap<String, PrimaryClosure>);
+
+impl PrimaryClosures {
+    /// Of the stored rows of every item in every context.
+    pub(super) fn of(stored: &[StoredItem]) -> Self {
+        let mut decided = BTreeSet::new();
+        let mut closures = BTreeMap::new();
+        for row in stored {
+            if row.kind != ItemDtoKind::Ticket
+                || !is_primary_copy(&row.context)
+                || !decided.insert(row.id.as_str())
+            {
+                continue;
+            }
+            if let Some(closed_at) = row.closed_at {
+                closures.insert(
+                    row.id.clone(),
+                    PrimaryClosure {
+                        closed_at,
+                        closed_by: row.closed_by.clone(),
+                    },
+                );
+            }
+        }
+        Self(closures)
+    }
+
+    fn get(&self, id: &str) -> Option<&PrimaryClosure> {
+        self.0.get(id)
+    }
+}
+
+/// Whether a copy is the primary's: read in a context outside every item
+/// worktree, the root or one the index cannot verify, and not an item's.
+fn is_primary_copy(context: &StoredContext) -> bool {
+    context.kind != ItemContextKind::Active
+}
+
+/// A ticket's closure state as a read presents it, from the copy read
+/// (whether it holds a closure, and whether it is the primary's copy) and
+/// the closure the primary's copy holds (`PrimaryClosures`). A closure only
+/// the primary's copy holds closes the ticket, whichever copy is read; a
+/// closure only another copy holds is a closing one.
+fn derived_closure_state(
+    holds: bool,
+    primary_copy: bool,
+    primary: Option<&PrimaryClosure>,
+) -> ClosureState {
+    match (holds, primary_copy, primary) {
+        (false, _, None) => ClosureState::Open,
+        (false, _, Some(_)) | (true, true, _) | (true, false, Some(_)) => ClosureState::Closed,
+        (true, false, None) => ClosureState::Closing,
+    }
 }
 
 /// Everything the index holds that has an ID, by that ID, as the target of
 /// a relationship. An ID that is not here is in no context the index has
 /// seen, and a later fetch or merge may still bring a ticket for it.
-pub(super) struct Targets<'a>(BTreeMap<&'a str, Target>);
+pub(super) struct Targets<'a> {
+    kinds: BTreeMap<&'a str, Target>,
+    primary: PrimaryClosures,
+}
 
 impl<'a> Targets<'a> {
-    /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment a relationship read here
-    /// can name.
-    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
-        let mut targets: BTreeMap<&str, Target> = comments
+    /// `rows` holds one row for each item, its effective copy, `primary`
+    /// the closure of the primary's copy of each ticket, from every stored
+    /// row, and `comments` the ID of every stored comment a relationship
+    /// read here can name.
+    pub(super) fn of(
+        rows: &[&'a StoredItem],
+        primary: PrimaryClosures,
+        comments: &'a [String],
+    ) -> Self {
+        let mut kinds: BTreeMap<&str, Target> = comments
             .iter()
             .map(|comment| (comment.as_str(), Target::Comment))
             .collect();
         // An item's row decides what its ID names.
-        targets.extend(rows.iter().map(|row| {
-            let target = match (row.kind, row.closed_at) {
-                (ItemDtoKind::Document, _) => Target::Document,
-                (ItemDtoKind::Ticket, None) => Target::OpenTicket,
-                (ItemDtoKind::Ticket, Some(_)) => Target::ClosedTicket,
+        kinds.extend(rows.iter().map(|row| {
+            let target = match row.kind {
+                ItemDtoKind::Document => Target::Document,
+                ItemDtoKind::Ticket => match row.closure_state(&primary) {
+                    ClosureState::Open => Target::OpenTicket,
+                    ClosureState::Closing => Target::ClosingTicket,
+                    ClosureState::Closed => Target::ClosedTicket,
+                },
             };
             (row.id.as_str(), target)
         }));
-        Self(targets)
+        Self { kinds, primary }
+    }
+
+    /// The closure the primary's copy of every ticket holds.
+    pub(super) fn primary(&self) -> &PrimaryClosures {
+        &self.primary
+    }
+
+    /// The state of the ticket in `row`.
+    pub(super) fn closure_state(&self, row: &StoredItem) -> ClosureState {
+        row.closure_state(&self.primary)
     }
 
     /// What a `deps` entry or a `parent` names: a ticket in some state, or
     /// `None` for something that is not a ticket.
     fn state(&self, id: &str) -> Option<DependencyState> {
-        match self.0.get(id) {
+        match self.kinds.get(id) {
             Some(Target::Document | Target::Comment) => None,
             Some(Target::OpenTicket) => Some(DependencyState::Open),
+            Some(Target::ClosingTicket) => Some(DependencyState::Closing),
             Some(Target::ClosedTicket) => Some(DependencyState::Closed),
             None => Some(DependencyState::Unresolved),
         }
@@ -328,11 +450,12 @@ impl<'a> Targets<'a> {
 
     /// A ticket as the graph takes it: without a `parent` or a `deps` entry
     /// that names a document or a comment, which names no ticket.
-    fn node(&self, id: &str, closed: bool, relationships: &Relationships) -> TicketNode {
+    fn node(&self, id: &str, state: ClosureState, relationships: &Relationships) -> TicketNode {
         let names_a_ticket = |id: &&String| self.state(id).is_some();
         TicketNode {
             id: id.to_owned(),
-            closed,
+            closed: state == ClosureState::Closed,
+            closing: state == ClosureState::Closing,
             parent: relationships
                 .parent
                 .as_ref()
@@ -349,7 +472,7 @@ impl<'a> Targets<'a> {
 
     /// The ticket in `row` as the graph takes it.
     fn stored_node(&self, row: &StoredItem) -> TicketNode {
-        self.node(&row.id, row.closed_at.is_some(), &row.relationships)
+        self.node(&row.id, self.closure_state(row), &row.relationships)
     }
 }
 
@@ -364,11 +487,16 @@ pub(super) struct Related<'a> {
 }
 
 impl<'a> Related<'a> {
-    /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment a relationship read here
-    /// can name.
-    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
-        let targets = Targets::of(rows, comments);
+    /// `rows` holds one row for each item, its effective copy, `primary`
+    /// the closure of the primary's copy of each ticket, from every stored
+    /// row (`PrimaryClosures::of`), and `comments` the ID of every stored
+    /// comment a relationship read here can name.
+    pub(super) fn of(
+        rows: &[&'a StoredItem],
+        primary: PrimaryClosures,
+        comments: &'a [String],
+    ) -> Self {
+        let targets = Targets::of(rows, primary, comments);
         let tickets: Vec<&StoredItem> = rows
             .iter()
             .copied()
@@ -386,10 +514,16 @@ impl<'a> Related<'a> {
     /// and a graph of nothing, which no document is looked up in.
     fn for_documents(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
         Self {
-            targets: Targets::of(rows, comments),
+            targets: Targets::of(rows, PrimaryClosures::default(), comments),
             tickets: Vec::new(),
             graph: TicketGraph::new(Vec::new()),
         }
+    }
+
+    /// Whether `filter` matches the ticket in `row`, whose copy this read
+    /// presents.
+    pub(super) fn matches(&self, filter: &TicketFilter, row: &StoredItem) -> bool {
+        filter.matches(row, self.targets.closure_state(row), &self.graph)
     }
 
     /// The graph with one ticket as its file has it now, in place of what
@@ -422,9 +556,9 @@ impl<'a> Related<'a> {
         // The ticket's own ID names the ticket, whether or not the index
         // holds it yet.
         for target in named.into_iter().filter(|target| *target != id) {
-            match self.targets.0.get(target.as_str()) {
+            match self.targets.kinds.get(target.as_str()) {
                 Some(Target::Document | Target::Comment) => not_tickets.push(target.clone()),
-                Some(Target::OpenTicket | Target::ClosedTicket) => {}
+                Some(Target::OpenTicket | Target::ClosingTicket | Target::ClosedTicket) => {}
                 None => unresolved.push(target.clone()),
             }
         }
@@ -443,16 +577,17 @@ impl<'a> Related<'a> {
                 ids: vec![id.to_owned()],
             })
         } else {
-            let closed = self
+            let state = self
                 .tickets
                 .iter()
-                .any(|row| row.id == id && row.closed_at.is_some());
+                .find(|row| row.id == id)
+                .map_or(ClosureState::Open, |row| self.targets.closure_state(row));
             let proposed = Relationships {
                 parent: parent.clone(),
                 deps: deps.iter().cloned().collect(),
                 ..Default::default()
             };
-            let graph = self.graph_with(self.targets.node(id, closed, &proposed));
+            let graph = self.graph_with(self.targets.node(id, state, &proposed));
             graph
                 .dependency_cycle_ids(id)
                 .or_else(|| graph.parent_cycle_ids(id))
@@ -1351,14 +1486,34 @@ fn bare_item(
     }
 }
 
-fn closure(closed_at: Option<String>, closed_by: Option<String>) -> ClosureDto {
-    ClosureDto {
-        state: match closed_at {
-            Some(_) => ClosureState::Closed,
-            None => ClosureState::Open,
+/// The closure a read presents for a ticket: the state follows both copies
+/// (`derived_closure_state`), and the fields are set exactly when it is
+/// `closed` or `closing`. They are the primary's copy's when a closure it
+/// holds closes the ticket and the copy read is not that one, and the copy
+/// read's own otherwise.
+///
+/// `closed_at` and `closed_by` are what the copy read holds, `primary_copy`
+/// is whether it is the primary's, and `primary` is what the primary's copy
+/// holds.
+fn closure(
+    closed_at: Option<String>,
+    closed_by: Option<String>,
+    primary_copy: bool,
+    primary: Option<&PrimaryClosure>,
+) -> ClosureDto {
+    let holds = closed_at.is_some();
+    let state = derived_closure_state(holds, primary_copy, primary);
+    match primary {
+        Some(primary) if state == ClosureState::Closed && !(holds && primary_copy) => ClosureDto {
+            state,
+            closed_at: timestamp(primary.closed_at),
+            closed_by: primary.closed_by.clone(),
         },
-        closed_at,
-        closed_by,
+        _ => ClosureDto {
+            state,
+            closed_at,
+            closed_by,
+        },
     }
 }
 
@@ -1445,8 +1600,14 @@ pub(super) fn stored_item_dto(
         status: item.status.clone(),
         project: item.project.clone(),
         team: item.team.clone(),
-        closure: is_ticket
-            .then(|| closure(item.closed_at.and_then(timestamp), item.closed_by.clone())),
+        closure: is_ticket.then(|| {
+            closure(
+                item.closed_at.and_then(timestamp),
+                item.closed_by.clone(),
+                is_primary_copy(&item.context),
+                related.targets.primary().get(&item.id),
+            )
+        }),
         unknown_metadata: item.unknown.values.clone(),
         changed_at: timestamp(item.activity_at),
         change_source: Some(item.change_source),
@@ -1504,16 +1665,14 @@ fn parsed_item_dto(
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
         let targets = &related.targets;
-        let graph = related.graph_with(targets.node(
-            &ticket.id.to_string(),
-            ticket.closed_at.is_some(),
-            relationships,
-        ));
+        let id = ticket.id.to_string();
+        let primary_copy = is_primary_copy(context);
+        let primary = targets.primary().get(&id);
+        let closed_at = ticket.closed_at.and_then(timestamp_string);
+        let closure = closure(closed_at, ticket.closed_by, primary_copy, primary);
+        let graph = related.graph_with(targets.node(&id, closure.state, relationships));
         relate(&mut dto, relationships, targets, &graph);
-        dto.closure = Some(closure(
-            ticket.closed_at.and_then(timestamp_string),
-            ticket.closed_by,
-        ));
+        dto.closure = Some(closure);
         dto.ticket_type = Some(ticket.ticket_type);
         dto.status = Some(ticket.status);
         dto.project = ticket.project;
@@ -2181,13 +2340,13 @@ impl RepositoryService {
             let comments = stored_comment_targets(connection, repo, &rows)?;
             let related = match kind {
                 ItemDtoKind::Document => Related::for_documents(&rows, &comments),
-                ItemDtoKind::Ticket => Related::of(&rows, &comments),
+                ItemDtoKind::Ticket => Related::of(&rows, PrimaryClosures::of(&stored), &comments),
             };
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
                 .filter(|item| item.kind == kind)
-                .filter(|item| filter.is_none_or(|filter| filter.matches(item, &related.graph)))
+                .filter(|item| filter.is_none_or(|filter| related.matches(filter, item)))
                 .collect();
             let mut nonconforming = nonconforming_entries(kind, &stored, &problems, &index);
             let items = match kind {
@@ -2263,7 +2422,7 @@ impl RepositoryService {
             let read = ReadSource::of(file.bytes, &row.path);
             let rows = effective_rows(repo, &stored).0;
             let comments = comment_targets(connection, repo, &rows, &read)?;
-            let related = Related::of(&rows, &comments);
+            let related = Related::of(&rows, PrimaryClosures::of(&stored), &comments);
             let listed = stored_item_dto(row, &related, &index);
             let mut item = match parse_file(read, &row.path, &row.context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
@@ -2397,7 +2556,7 @@ impl RepositoryService {
             let read = ReadSource::of(file.bytes, path);
             let rows = effective_rows(repo, &stored).0;
             let comments = comment_targets(connection, repo, &rows, &read)?;
-            let related = Related::of(&rows, &comments);
+            let related = Related::of(&rows, PrimaryClosures::of(&stored), &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);

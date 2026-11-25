@@ -89,7 +89,8 @@ pub(crate) fn readiness_name(readiness: Option<ReadinessFilter>) -> &'static str
 /// The segment's count among the counts, when there are any.
 fn segment_count(counts: Option<SegmentCounts>, filter: ClosureFilter) -> Option<usize> {
     counts.map(|counts| match filter {
-        ClosureFilter::Open => counts.open,
+        // A closing ticket is shown as open, and no segment selects it.
+        ClosureFilter::Open | ClosureFilter::Closing => counts.open,
         ClosureFilter::Closed => counts.closed,
         ClosureFilter::All => counts.all,
     })

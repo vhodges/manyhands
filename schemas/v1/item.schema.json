@@ -61,7 +61,7 @@
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["open", "closed"]
+          "enum": ["open", "closed", "closing"]
         },
         "closed_at": {
           "type": ["string", "null"]
@@ -85,7 +85,7 @@
         },
         "state": {
           "type": "string",
-          "enum": ["open", "closed", "unresolved"]
+          "enum": ["open", "closed", "unresolved", "closing"]
         }
       }
     },
@@ -96,7 +96,7 @@
       }
     },
     "readiness": {
-      "description": "closed for a ticket with closure metadata. An open ticket is ready when every dependency is a closed ticket, and blocked otherwise: a closed dependency never blocks, whatever it depends on. reasons is empty unless it is blocked.",
+      "description": "closed for a ticket whose primary copy has closure metadata. An open ticket is ready when every dependency is a closed ticket, and blocked otherwise: a closed dependency never blocks, whatever it depends on, and a closing one does. A closing ticket is decided as an open one is. reasons is empty unless it is blocked.",
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["state", "reasons"],
