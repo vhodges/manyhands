@@ -19,6 +19,8 @@
 //! - `replay` answers from a record without running anything;
 //! - `reenter` takes up an accepted record again;
 //! - `settle` finishes, deletes or leaves the record afterwards;
+//! - `setup_gate` refuses, with `setup_pending`, the commands that must wait
+//!   for a repository's pending setup;
 //! - `reply` identifies the request and builds its envelopes;
 //! - `progress` is the sink, the token and the credentials a call is
 //!   given and how they reach a binding, and `cancel_request`;
@@ -59,6 +61,7 @@ mod reenter;
 mod replay;
 mod reply;
 mod settle;
+mod setup_gate;
 mod way_out;
 
 /// The synchronization a comment's operation publishes it by, for the

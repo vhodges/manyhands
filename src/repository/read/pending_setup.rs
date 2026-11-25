@@ -17,9 +17,10 @@ use crate::{
 pub(super) fn read_setup_or_problem(
     connection: &Connection,
     repository_id: i64,
+    is_complete: impl FnOnce(&SetupRecord) -> bool,
     fetch_url: impl FnOnce(&str) -> Option<String>,
 ) -> Result<(Option<RepositorySetupDto>, Option<ProblemDto>), ReadError> {
-    match read_pending_setup(connection, repository_id, fetch_url) {
+    match read_pending_setup(connection, repository_id, is_complete, fetch_url) {
         Ok(setup) => Ok((setup, None)),
         Err(error)
             if matches!(
@@ -42,19 +43,25 @@ pub(super) fn read_setup_or_problem(
 
 /// The setup of the registration `repository_id`, if it has one.
 ///
-/// Every record reads as pending here. `fetch_url` is the setup remote's
-/// fetch URL when the caller has it: `repo list` reads the index only and has
-/// none, so the link of a forge whose address needs the URL has a null `url`.
+/// A record the caller finds `is_complete` reads as none: the local primary
+/// already holds it. `repo list` reads the index only and cannot tell, so it
+/// reports every record (design K-16). `fetch_url` is the setup remote's
+/// fetch URL when the caller has it: `repo list` has none, so the link of a
+/// forge whose address needs the URL has a null `url`.
 pub(super) fn read_pending_setup(
     connection: &Connection,
     repository_id: i64,
+    is_complete: impl FnOnce(&SetupRecord) -> bool,
     fetch_url: impl FnOnce(&str) -> Option<String>,
 ) -> Result<Option<RepositorySetupDto>, ReadError> {
     let Some(record) = record::read(connection, repository_id)? else {
         return Ok(None);
     };
     let url = fetch_url(&record.remote_name);
-    setup_dto(&record, url.as_deref()).map(Some)
+    // Built first: a record whose configuration cannot be read is reported
+    // as unreadable whether or not the primary holds it.
+    let setup = setup_dto(&record, url.as_deref())?;
+    Ok((!is_complete(&record)).then_some(setup))
 }
 
 /// The setup's object. The link is built here, when read, from the record's

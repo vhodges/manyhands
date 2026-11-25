@@ -21,7 +21,7 @@ use crate::{
         ConfigurationInspection, DirtyContexts, IdentityConfigProvider, IdentityInspection,
         RemoteInfo, RepositoryError, RepositoryIdentityConfig, RepositoryOperation,
         RepositoryService, SuppliedIdentityConfig, bridges::identity::local_initials,
-        read_configuration_guarded, remote_info_for, resolve_identity,
+        read_configuration_guarded, remote_info_for, resolve_identity, setup::complete,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -383,7 +383,7 @@ impl RepositoryService {
                 // build cannot read reads as none, with a problem, and the
                 // list goes on.
                 let (setup, problem) =
-                    read_setup_or_problem(connection, repo.registration_id(), |_| None)?;
+                    read_setup_or_problem(connection, repo.registration_id(), |_| false, |_| None)?;
                 item.setup = setup;
                 item.configuration.problems.extend(problem);
                 item.problem_count =
@@ -461,13 +461,19 @@ impl RepositoryService {
         // unreadable operations do.
         let setup = match registration {
             Some(registration) => self.read_session(RepositoryOperation::Read, |connection| {
-                read_setup_or_problem(connection, registration, |name| {
-                    inspection
-                        .remotes
-                        .iter()
-                        .find(|remote| remote.name == name)
-                        .map(|remote| remote.fetch_url.clone())
-                })
+                read_setup_or_problem(
+                    connection,
+                    registration,
+                    // A setup the local primary already holds reads as none.
+                    |record| complete::is_complete(&repository, record).unwrap_or(false),
+                    |name| {
+                        inspection
+                            .remotes
+                            .iter()
+                            .find(|remote| remote.name == name)
+                            .map(|remote| remote.fetch_url.clone())
+                    },
+                )
             })?,
             None => (None, None),
         };

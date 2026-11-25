@@ -3,4 +3,5 @@
 // The record is consumed by the setup operations of the later tasks.
 #![cfg_attr(not(test), allow(dead_code))]
 
+pub(crate) mod complete;
 pub(crate) mod record;

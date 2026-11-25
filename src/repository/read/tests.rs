@@ -644,6 +644,42 @@ impl SetupFixture {
         tx.commit().unwrap();
     }
 
+    /// The local primary's configuration blob.
+    fn primary_blob(&self) -> Oid {
+        let git = git2::Repository::open(&self.root).unwrap();
+        let tree = git.revparse_single("refs/heads/main^{tree}").unwrap();
+        tree.as_tree()
+            .unwrap()
+            .get_path(std::path::Path::new(crate::canonical::CONFIG_PATH))
+            .unwrap()
+            .id()
+    }
+
+    /// Moves the local primary to a commit that holds no configuration,
+    /// as it is while a setup waits to merge.
+    fn unmerge(&self) {
+        let git = git2::Repository::open(&self.root).unwrap();
+        let empty = git.treebuilder(None).unwrap().write().unwrap();
+        let empty = git.find_tree(empty).unwrap();
+        let signature = git2::Signature::now("Setup Test", "setup@example.invalid").unwrap();
+        let commit = git
+            .commit(None, &signature, &signature, "unmerged", &empty, &[])
+            .unwrap();
+        git.reference("refs/heads/main", commit, true, "unmerge")
+            .unwrap();
+    }
+
+    /// A change record whose base is `base`.
+    fn set_change_base(&self, base: Oid) {
+        self.set(SetupKind::Change, false);
+        self.db()
+            .execute(
+                "UPDATE repository_setups SET base_configuration_oid = ?1",
+                [base.to_string()],
+            )
+            .unwrap();
+    }
+
     fn setups(&self) -> (Option<RepositorySetupDto>, Option<RepositorySetupDto>) {
         let listed = self.service.list_repositories().unwrap();
         assert_eq!(listed.items.len(), 1);
@@ -655,6 +691,7 @@ impl SetupFixture {
 #[test]
 fn inspect_and_list_report_a_pending_setup() {
     let f = SetupFixture::new();
+    f.unmerge();
     assert_eq!(f.setups(), (None, None));
     assert_eq!(
         [SetupKind::Enable, SetupKind::Change].map(SetupKind::as_str),
@@ -702,6 +739,33 @@ fn inspect_and_list_report_a_pending_setup() {
         [SetupState::Recorded, SetupState::Published].map(SetupState::as_str),
         ["recorded", "published"]
     );
+}
+
+// A setup the local primary already holds is complete: `repo inspect`, which
+// reads the primary, reports none. `repo list` reads the index only and shows
+// it until the next refresh (design K-16).
+#[test]
+fn inspect_reads_a_complete_setup_as_none() {
+    let f = SetupFixture::new();
+
+    // The fixture's primary holds a valid configuration naming `main`.
+    f.set(SetupKind::Enable, false);
+    let (listed, inspected) = f.setups();
+    assert_eq!(inspected, None);
+    assert!(listed.is_some(), "the list lags until the next refresh");
+
+    // A change is complete once the primary's blob is not the base.
+    f.set(SetupKind::Change, false);
+    assert_eq!(f.setups().1, None);
+
+    // A change whose base is still the primary's blob is pending, and so is
+    // any setup of a primary that holds no configuration.
+    let base = f.primary_blob();
+    f.set_change_base(base);
+    assert!(f.setups().1.is_some());
+    f.unmerge();
+    f.set(SetupKind::Enable, false);
+    assert!(f.setups().1.is_some());
 }
 
 // A setup the registry holds but this build cannot read does not refuse the
