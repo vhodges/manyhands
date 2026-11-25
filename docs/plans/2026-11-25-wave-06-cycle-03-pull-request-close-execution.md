@@ -102,6 +102,19 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 ## Task 7: Branch Records, The Pull-Request Close
 
 - Ruling 13: the design checkpoint (Step 4) is written before the tests (Step 2), by an Opus designer, and splits the task into commit-sized slices that Sonnet implementers then build test-first in order — the checkpoint precedes implementation either way, a changed approach would otherwise waste the D-row tests, and one implementer cannot hold the task's twenty-odd files — one hand-off per slice.
+- Design checkpoint (Step 4): written by an Opus designer, checked three times by an independent Opus checker against the design and the source (revision 1: sound with fixes; revision 2: six new problems; revision 3: two one-line corrections, applied by the controller), and approved on 2026-11-25. The approved checkpoint is Appendix D. It splits the task into slices A (the record's path: rebuild, types, child roles, fence range), B (the branch observation and consent), C (the branch runner and the publication child), D (the stop rows and the ends) and E (the hold and the binding views), each compiling on its own with the direct tests green. Rulings 3, 4 and 5 are met without E-28, E-29 and E-32: `TicketClosureOutcome`, the direct `begin_record` and `PromotionIo` are unchanged.
+- Ruling 14 (designer's Q1): a nullable `consented_context_oid` column, so a retry can prove the consented closure against the head the digest bound — the digest keeps the head, as approved — one more internal column.
+- Ruling 15 (Q2): prepare reports `remote_context_unmaterialized` through a preflight-only `ClosureBlocker` value left out of `CLOSURE_BLOCKERS`, so the stored mask is unchanged (Obligation 10 read as "no new stored blocker") — one enum value.
+- Ruling 16 (Q3): the step table is read through R-3: `closing` → `publication_pending` (the publication child minted) → `published` or `complete`; attempt numbering is internal — none.
+- Ruling 17 (Q4): `answer_code` has a CHECK on its shape only, its values listed in Rust, so Tasks 8 and 9 add values without another rebuild — a value error is caught in Rust, not SQL.
+- Ruling 18 (Q5): `new_branch` may be abandoned from `branch_deleted`, for Part F's re-check (F8) — one transition.
+- Ruling 19 (Q6, flagged to the owner, who may overturn it before slice E): `item resolve-history` passes a branch record's hold, so a publication child stopped by unresolved history can be cleared and the same request continue; otherwise the record would hold the ticket for good — D16's resolve-history row changes for branch records.
+- Ruling 20 (Q7): answer row 5 ("the publication remote changed or is gone") is the runner's configuration check plus the transport kinds `PublicationRemoteMissing`, `EndpointChanged` and `ConfigurationInvalid` — R-35's scope.
+- Ruling 21 (D20): `operation list` lists a branch record's live child on its own row, as it lists a direct close's today (`read/status.rs` about 520-540, 705-737); D20's "children not listed on their own" and Baseline Fact 12 were wrong, a design correction for Task 15's D-1 — none for behaviour.
+- Ruling 22: the poll's retirement check covers every record the fence holds, direct included, as R-17 says; ruling 26 supersedes ruling 24 and gives the direct case its reachable setup (a direct record at `published` with cleanup `cancelled` after `CancelAfterPrimary`, holding no reservation) — a direct poll can no longer retire a context under an unfinished direct close.
+- Ruling 23: prepare answers `busy` for an unfinished synchronization of the ticket's context (a read of its unfinished remote rows, pull-request mode only), leaving out the unfinished record's own children so decision 33's `recovery_required` still names the holder — none.
+- Ruling 25: a new request observes in the live mode; only a same-request continuation uses its record's mode; a supersedable direct record met by a pull-request prepare answers `ticket_closed` (the primary holds the closure), the old record untouched — none.
+- A confirm's or step 3's `busy` stays `Repository(RepositoryBusy)` in the domain (mapping it would change the direct close's errors and drop the blocker) and is `busy` in the binding.
 
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
@@ -762,3 +775,926 @@ The plan adds no new test target. It names these targets only: `read_items`, `re
 9. **E-12.** The new conformance row raises `ROWS: [Row; 8]` in tests/mutation_confirmation/conformance.rs:29 to 9; the design names only `HOMES` 46 to 47.
 10. **E-38.** The made-ready read does not reverse any existing assertion because the binding reads after the domain's index refresh (c5_made_ready.rs:497-499); it would only differ if the primary row were stale, which the code answers as `index_pending`.
 11. **CI.** No new test target; nothing to add to build.yml.
+
+## Appendix D: Task 7 design checkpoint, approved (verbatim)
+
+# Task 7 Design Checkpoint: Branch Records, The Pull-Request Close
+
+## Controller approval and final corrections (binding; they override the text below where they differ)
+
+Approved by the controller on 2026-11-25 after three independent checks (verdict on revision 3: sound with two fixes, applied here).
+
+1. **Slice B's run tests.** D17 and D18 (and any other slice B run test) use `lifecycle_request(req)` and `FakeIo::default()` directly, and assert directly that no child ran and the primary is unchanged. `PullRequest::run` with `clock`, `PullRequestIo`, `assert_primary_untouched(&io)` and `complete_child_row` are introduced in slice C, where `clock`, `ChildExecution::role()` and `complete_child_row` land.
+2. **R26's direct poll-retirement row (slice E).** Keep `CancelAfterPrimary` and assert what it produces: the direct record at step `published` with cleanup `cancelled` (as `completed_child_authority_is_consumed_before_the_cancellation`, closure/run_tests.rs about 1473-1491, pins), no reservation held, the context remotely deleted and the local primary holding the closure, so the poll's retirement meets a `Closed` candidate and must leave the context alone while the fence holds; then the same request completes. This row is in slice E's tests (§11.3's poll row and §12E's "branch only, R24" and open question 2's "not in the slices" are superseded).
+3. **R25's supersedable-direct test.** Make the cleanup stop with a clean context worktree (for example a moved head), or restore it before the prepare, so the blockers are exactly `[AlreadyClosed]` and the answer is `ticket_closed`.
+4. **A confirm or step-3 `busy`** is `Repository(RepositoryBusy)` in the domain and `busy` in the binding (not mapped, revision 3 point 3); the binding not naming the blocker on a confirm or step-3 stop is Task 10's stop data.
+
+
+Designer's checkpoint for Task 7, written before any Task 7 test or code. Anchors are `file:line` in today's source. HEAD is `c1ddae12`, a ledger-only commit on `b13a53c0`, so every `src/` and `tests/` anchor is the same at `b13a53c0`. "The design" is `docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`. Paths without a prefix are under `src/repository/`. This is revision 3.
+
+## Revision 3 changes
+
+The checker re-checked revision 2 and found six new problems; the controller ruled on them. Each is fixed here.
+
+1. **E0392.** In slice C, `BranchEnd` has no lifetime: `pub(in super::super) enum BranchEnd { ContextGone }`, and the trait takes `end: BranchEnd`. Slice D adds `<'a>` together with `ContextChild(&'a SynchronizationError)` (section 4.5).
+2. **Decision 33 before `busy`.** The prepare's read of a live `synchronize_context` row leaves out the unfinished record's own `context_sync_id` and `primary_sync_id`. So the binding's `held` answers for the holder's own stopped child, and a foreign synchronization alone answers `busy` (section 8.2). d14 gains the row the controller asked for: a stopped record's own kept child, then a new prepare through `f.service.prepare`, which answers `recovery_required` naming the holder.
+3. **What each layer answers for a foreign live synchronization** (section 8.2). Not mapped, and the citation is corrected:
+   - **The domain.** A new request's confirm runs `L::prepare(…)?` at run.rs:499-506, and `prepare_observation_at` propagates `observe_git`'s error (observe.rs:347-358). The `?` makes it `TicketClosureError::Repository(e)` with `e.kind == RepositoryBusy` (closure/mod.rs:344-348), never `mapped` (531). The hook's step-1 prepare answers the same.
+   - **The binding** answers `busy`, through `stop_answer` (bind/lifecycle.rs:1302) and `repository_error_code` (read/mod.rs:299).
+   - **Why not map.** The `?` at run.rs:506 is the direct path's, so mapping it would change a direct close's variant for every `RepositoryBusy` from its prepare. `Busy` also carries no blocker, so Task 10 would lose the row.
+   - **The tests.** d5 and d14 assert `Err(Busy)` for the holder's own kept child: with fix 2, `begin_record` answers that through `mapped` at 571. A new d5 row asserts `Repository(RepositoryBusy)`, with the blocker naming the row, for a foreign synchronization at step 3.
+4. **R24, the direct poll row.** The `BeforeRemoteDeletion` row is dropped: the close holds its parent reservation there, which refuses the poll (run.rs:1368-1371, 1428-1449). The check covers direct records by construction: it is the same `written_closure_unfinished` range. I dispute "a direct record cannot produce a `Closed` candidate while the fence holds it". Open question 2 gives the evidence and a reachable row at `publication_pending` after a cancelled primary child. That row is not in the slices until the controller rules.
+5. **The interim R-35 path.** In slice C it answers `Err(L::Error::recovery_required())`, not `recovery::<L>` (section 4.1).
+6. **R25, the observation's mode.**
+   - A new request always observes in the live mode.
+   - A same-request continuation observes in its record's mode. `Lifecycle::preview_request` gains `record: Option<&Self::Record>`, and closure's `PreviewRequest` carries that record's mode (sections 0.1 and 8.1).
+   - A non-supersedable unfinished record answers decision 33's `recovery_required`.
+   - A supersedable direct record (a cleanup stop) that a pull-request prepare meets: the prepare answers `ticket_closed`, blocker `already_closed`, under situation 1. The old record is untouched (section 8.1, with the evidence).
+   - §2.4's "since no record exists at insertion" is corrected.
+
+The checker's minors:
+- d3 no longer asserts `ended_answer`; that stays in `a_branch_parent_view_is_never_integrated`.
+- d11's fourth row has the full `local_prepared` evidence (remote/state.rs:3544-3580).
+- d13's in-process row uses a wrapper of its own that does not complete its row.
+- `pending_work`'s new read runs only in pull-request mode, so a direct prepare reads nothing new. This is listed in §0.1 with its guard.
+- §6's refusal comes from `remote_identity_of` (`OperationMismatch`).
+- The `stopped` anchor is bind/lifecycle.rs:679-697.
+- `revalidate_under_lease` keeps the prepared mode.
+- `written_commit()` is slice A's.
+
+## Revision 2 changes
+
+The checker's findings are in `task-7-checkpoint-findings.md`. Every one is fixed below, and the controller's rulings are applied.
+
+- **Rulings on the open questions** (section "Rulings applied"):
+  - Q1: option B, the `consented_context_oid` column.
+  - Q2: a preflight-only `ClosureBlocker::RemoteContextUnmaterialized` (Task 9).
+  - Q3: steps `Closing → PublicationPending → Published | Complete`; attempt numbering is internal.
+  - Q4: `answer_code` has a CHECK on its shape only.
+  - Q5: `BranchDeleted → Abandoned` is permitted for `new_branch`.
+  - Q6: `item resolve-history` passes a branch record's hold. This is kept isolated in slice E.
+  - Q7: row 5's error set.
+- **`reconcile_completion` is now path-aware.** `ClosureRecord::remote_deletion_required()` is `false` for a branch record (sections 2.3 and 4.4). The revision 1 claim that it "stays generic" is withdrawn.
+- **"Byte for byte" is gone.** Section 0.1 lists the behaviour-preserving refactors, each with the direct tests that guard it.
+- **The binding's `ended_answer` and `stopped` are in this task.** `ParentView` gains `path` and `answered`. An answered branch parent is re-answered by the domain from `answer_code` (D19). This moved to slice C.
+- **D20 is a design correction.** Today `operation list` lists a direct close's live child on its own (`read/status.rs` 705-737 skips only a parent's own row; 520-540 lists any row that holds the reservation). Branch records do the same, and d20 asserts that. The design's "its children not listed on their own" rests on a wrong Baseline Fact 12.
+- **The poll's retirement check applies to every record the fence holds**, a direct one included. This is a direct behaviour change, with a direct test row of its own (sections 7 and 11).
+- **Prepare's "unfinished synchronization of the ticket's context (busy, naming it)" has a mechanism.** The direct prepare has none to reuse; only the hook catches it at confirm (checkpoint.rs:648, 680-697). `pending_work` now reads the context's unfinished remote row, the branch observation answers `busy` with that row as its blocker, and the binding names it (section 8.2).
+- **D5 and D7 order.** A context child's error is classified first, and the child is let go only on a D6 end (section 4.2).
+- **The observation is chosen by the record's path.** A ticket's unfinished record decides the observation's mode, so a record continues in its own mode, direct ones included (R-2). A refusal stored with `observed: None` takes the mode the revalidation observed in (sections 8.1 and 2.4).
+- **`checkpoint_oid`** is `None` for an abandoned record (section 1, Obligation 4).
+- **Slice C compiles.** `BranchEnd::ContextGone` and a minimal `end_branch` are in C; `BranchEnd::ContextChild`, the D6 classification and `let_go` are in D. In C, `finish_branch` takes no `remote_current` parameter.
+- **Mechanical edits added:** `closure/observe_tests.rs:1380-1382` `closure_digest_golden_vector` (slice B), and `mutation/bind/lifecycle_tests.rs:174-199` `impl LifecycleVerb for Fixed` (slice C).
+- **Slice A has no dead code.** `ChildExecution::role()` and `BranchAnswer::name()` move to slice C, where they are read.
+- **Visibility, to avoid error E0446.** `ClosureOutcome`, `BranchFinish`, `BranchStep` and `BranchEnd` are `pub(in super::super)`. The associated type is renamed `BranchFinish`, so it no longer shares a name with the `BranchAnswer` enum.
+- **Test I/O fixes** (section 11.2):
+  - each fetch is scoped to its role and applied before any stop;
+  - `drive` serves either role, runs once, and completes its row;
+  - stops can leave a reserved, kept child;
+  - an acknowledgement path is added;
+  - D3 and D21 use a real local update;
+  - D16's poll row gets a real `Closed` candidate;
+  - the sync-local row and the reservation unit test assert the right shapes;
+  - D2 asserts the link;
+  - `d6_` is in the table.
+- **Smaller fixes:** anchor drift; the hook gets the root; `branch_link`'s configuration on the R-35 path; the `write` effect of a stop is stated as Task 10's.
+
+## Rulings applied
+
+The controller's rulings, as revision 2 applies them:
+
+| Question | Ruling | Where it lands |
+| --- | --- | --- |
+| Q1 | Option B: the nullable `consented_context_oid` column | sections 2.2 and 4.3 |
+| Q2 | A preflight-only `ClosureBlocker::RemoteContextUnmaterialized`, appended after `HistoryUnresolved` and left out of `CLOSURE_BLOCKERS` (record.rs:133-156), so the stored mask and its CHECK are unchanged | Task 9; noted in Obligation 10 |
+| Q3 | `Closing → PublicationPending → Published \| Complete` | section 3 |
+| Q4 | A shape-only CHECK; the value list is in Rust (`BranchAnswer::parse`) | section 2.2 |
+| Q5 | `BranchDeleted → Abandoned` is permitted for `new_branch` | section 3 |
+| Q6 | `item resolve-history` passes a branch record's hold, and the same request then continues | slice E only (section 7); if the owner overturns it, only that row of section 7 and its D16 row change |
+| Q7 | Row 5 is the runner's configuration check plus the `Transport` kinds `PublicationRemoteMissing`, `EndpointChanged` and `ConfigurationInvalid` | section 9.1 |
+
+Tests never assert an exact attempt number: `child()` replaces a minted, unrun attempt (run.rs:1012, 1020, 1087-1092).
+
+The controller's rulings on revision 2's checker points:
+
+| Point | Ruling | Where it lands |
+| --- | --- | --- |
+| R21 | D20 asserts that a child is listed on its own | §11.3 |
+| R22 | The poll's retirement check covers every hold | §7 |
+| R23 | Prepare's `busy` has a mechanism | §8.2 |
+| R24 | The direct poll row is dropped | §7; open question 2 |
+| R25 | A new request observes in the live mode | §8.1 |
+
+## 0. Decisions in one place
+
+- **The path.** A record's path is `(integration_mode, action)`. `(direct, close)` is a direct record and keeps every rule it has today. The one exception is the poll's retirement check, which R-17 extends to every hold (section 7). Every other pair is a branch record. The shared runner sees only `RecordPath { Direct, Branch }`.
+- **The runner.** Branch records run a separate tail in `promotion/run.rs`: `promote_branch` and `finish_branch`. `promote_inner` dispatches to it right after the shared prefix (lookup, consent, `begin_record`, cancellation). The direct tail's behaviour is unchanged; the refactors it goes through are listed in section 0.1.
+- **Ruling 3: "a branch outcome of its own".** `TicketClosureOutcome` (closure/mod.rs:245-268) is unchanged, so E-28 is not applied. `TicketClosureResult` gains `Branch(BranchClosureOutcome)` and `BranchIndexPending(IndexPending<BranchClosureOutcome>)`. That costs 3 mechanical arms (section 11.4).
+- **Ruling 4.** The direct `record::begin_record` (record.rs:474-493) keeps its 7-argument signature. A new `record::begin_branch_record` serves branch records, so E-29 is not applied.
+- **Ruling 5.** `PromotionIo` gets no new method: the publication child is a `synchronize` call with a context target (run.rs:21-40). E-32 is not applied, and `FakeIo`'s fields are unchanged (section 11.2).
+- **Finished branch records answer from their record.** Every finished branch record, complete or abandoned by the runner with an answer, answers `Ok(TicketClosureResult::Branch…)` rebuilt from its stored `answer_code`. That holds on the first call, a same-request re-entry and a replay alike, in the domain and in the binding (D19). Stops stay `Err(…)`. A refusal recorded at insertion keeps today's `Err(refusal)`.
+- **The clock.** `LifecycleRequest` gains a field `clock: fn() -> OffsetDateTime`. The builders default it to the wall clock, and the one test literal uses `..` (promotion/run_tests.rs:5432). The direct hook keeps its wall clock (checkpoint.rs:670, unchanged).
+- **The observation's mode (R25).** A new request observes in the live configuration's mode. A same-request continuation observes in its record's mode (section 8.1).
+
+### 0.1 Behaviour-preserving refactors of the direct path, and what guards each
+
+The direct tests named here run in the slice that makes the refactor, by exact name. The `ticket_closure` and `document_promotion` SSH targets run at review-ready (Task 16).
+
+| Refactor | Slice | Guarding direct tests |
+| --- | --- | --- |
+| `promote_inner`'s context-child block (run.rs:665-712) extracted into `context_step`. The abandon at 700 becomes a returned `ContextStep::Gone`, which the direct caller abandons exactly as today | C | closure run tests `pre_checkpoint_refusals_abandon_with_nothing_written_replay_and_a_new_id_works` (500), `cancellation_before_integration_is_interrupted_and_the_same_id_continues` (1378), `a_minted_context_attempt_that_never_reserved_has_no_delete_guard` (1750), `a_reset_that_leaves_the_context_contained_without_tracking_reconfirms` (1789); promotion run tests `every_interruption_reopens_with_one_candidate_and_only_unfinished_children` (491), `post_child_new_path_reconfirms_but_primary_only_merge_preserves_consent` (687), `remote_children_publication_cleanup_and_replay_are_once_only` (5189) |
+| `build_closure` (checkpoint.rs:138-199) split into `build_closure_commit` plus the merge it already does | C | every `closure::checkpoint::tests` test; `process_exit_at_every_boundary_reopens_without_repeated_effects` (run_tests.rs:1181) |
+| `reconcile_closing` (390-500) and `finish_context_move` (837-845) keyed on `written_commit()`, which equals `closure_oid` for every direct record | C | the ten `reconcile_*` tests (checkpoint_tests.rs:509-690); `never_abandons_after_the_checkout` / `_after_the_checkpoint` / `_with_an_adopted_descendant` (run_tests.rs:932-943) |
+| `child()`'s cancel-and-acknowledge (run.rs:1045-1061) extracted into `acknowledge_cancellation`, called by `child()` and `let_go` | D | promotion `ownership_first_attempt_matrix_both_children_has_no_permanent_strand` (1008), `uncertain_child_ownership_fails_closed_without_replacement_and_primary_returns_pending` (1100), `cancel_at_pre_ref_and_each_local_boundary_stops_before_the_whole_step` (2203), `cancellation_before_and_after_integration_preserves_and_retry_finishes` (5318) |
+| `observe_git` (604-1037) takes the mode as a parameter and guards the direct-only inserts with `if !branch` | B | every `closure::observe::tests` test, `closure_digest_golden_vector` (observe_tests.rs:1380) included: its golden must not change |
+| `child_allowed(step, role)` becomes `child_allowed(&ParentFacts, role)` | A | `child_fence_admits_closure_primary_only_while_integrated_or_publication_pending` (reservation_tests.rs:4386), the child-fence wording tests (4716-4746), promotion `record_tests` 201 |
+| `Lifecycle::refuse_record`'s `remote: Option<&str>` becomes `config: &RepositoryConfig` (both impls read `config.publication_remote`) | B | `pre_checkpoint_refusals_abandon_…` (500), `a_changed_or_missing_identity_since_the_preview_is_external_change` (565), promotion `new_blocker_is_stored_and_replayed_before_any_child` (5133) |
+| `ClosureRecord::remote_deletion_required` made path-aware (direct unchanged) | C | `a_child_publication_guards_the_delete_and_the_checkpoint_is_retired` (1615), `without_a_child_or_tracking_context_nothing_is_reserved_or_deleted` (1727) |
+| `Lifecycle::preview_request` gains `record: Option<&Self::Record>` (R25). Its three call sites: run.rs:256's `preview` helper, used at 672 and 726 with `Some(&r)`; run.rs:501 with `None`; integrate.rs:122 with `parent`. Closure's `type PreviewRequest` becomes `ClosurePreviewRequest { request: PreviewTicketClosureRequest, mode: Option<Integration> }`, and promotion's impl ignores the argument. A direct record's continuation therefore keeps today's direct observation after a switch to pull-request mode | B | `a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview` (2496), `a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation` (2464), every `promotion::run::tests` test |
+| `pending_work` (observe.rs:404-448) gains the live `synchronize_context` read (section 8.2), run only when the observation's mode is pull request. A direct prepare reads nothing new | B | every `closure::observe::tests` test, `closure_digest_golden_vector` (1380) included |
+
+## 1. Design Checkpoint Obligations
+
+**Obligation 1, path accessors.**
+- `promotion/lifecycle.rs:171` `LifecycleRecord` gains `fn path(&self) -> RecordPath { RecordPath::Direct }` (slice A) and `fn answered(&self) -> bool { false }` (slice C).
+- `promotion/lifecycle_record.rs:262` `ParentRecord` gains `fn closure_step(&self) -> Option<ClosureStep> { None }`. `ClosureRecord` overrides it with `Some(self.step)`.
+- `ClosureRecord` (record.rs:166-197) gains:
+  - `path()`: `Direct` iff `(integration_mode, action) == (Integration::Direct, ClosureAction::Close)`;
+  - `written_commit()`: `withdraw_oid` for `withdraw`, else `closure_oid`. It lands in slice A with the three readers below;
+  - `answered()`: `answer_code.is_some()`.
+- `ParentFacts` (lifecycle_record.rs:475-516) gains `path: RecordPath` and `closure_step: Option<ClosureStep>`, filled in `ParentFacts::of` (484). `child_allowed` reads them (section 5).
+- `effect_written()` (record.rs:891-893) becomes `written_commit().is_some()`. `written_checkpoint()` (817-819) becomes `written_commit()`.
+- `merged_context()` (198-207): unchanged for direct. For branch it is `written_commit().or(context_oid)`. A `new_branch` record before `closing` gives `retired_oid`, which Task 9 uses.
+- Resume routes by path and step, not by `integration_oid`:
+  - the branch dispatch after run.rs:604;
+  - the answered checks before run.rs:461 and before run.rs:573;
+  - inside `promote_branch`, `r.primary_sync_id().is_some()` goes straight to `finish_branch` (design R-3). Attempt numbering is internal.
+
+**Obligation 2, the branch hook (R-34).** `closure/checkpoint.rs` gains `branch_step` (section 4.3), built from the direct hook's parts:
+- the lease, as `integrate.rs:136`;
+- `context_synchronization_unfinished` (record.rs:788), checked before the write and inside the `closing` transaction (as checkpoint.rs:648, 680-697);
+- the identity against the consented `closed_by` (as checkpoint.rs:659-668);
+- `closed_at` from `request.clock`, stored in the `closing` UPDATE;
+- `build_closure_commit`, the checkpoint-only builder;
+- `begin_branch_closing`, the per-action variant of `begin_closing`;
+- `move_context_to_checkpoint_with` (checkpoint.rs:314);
+- the reconciliation generalized to `written_commit()`.
+
+These do not apply to a branch record: `primary_advanced`, "the context holds the base" (625-644), `current_base` (811), `post_checkpoint_result` (253), `adopt_written_closure` (record.rs:640) and `resume_written` (checkpoint.rs:728). `base_oid` is stored as the tracking primary the hook read. The preconditions hold without a `LeasedIntegration`: the hook takes its own lease, and the parts take the root repository, the registry, the confirmation and the context worktree's repository (`context_repository`, checkpoint.rs:292).
+
+**Obligation 3, the rebuild.** Section 2.
+
+**Obligation 4, completion and answers.**
+- **Completion.** `record::complete_branch_record` completes a branch record with no retirement. `record::abandon_branch_record` abandons one with its refusal and `answer_code` (section 2.4). `reconcile_completion` (lifecycle_record.rs:1001-1025) is reached after an uncertain completion commit. It works for branch records because `ClosureRecord::remote_deletion_required()` answers `false` for them (section 2.3): a branch `close` has no parent remote row, so 1019-1021 no longer refuses.
+- **Domain re-entry and replay** read `answer_code` through `answered()`:
+  - before run.rs:461 and 573: `if r.answered() { return Ok(refresh::<L>(…, true)); }`;
+  - in `run_observed` (370), before the `integration_oid` test: `if r.path() == RecordPath::Branch { if r.answered() { return Ok(refresh::<L>(service, &root, &r, true)); } index_children_owed(service, &root, &r); return Err(error); }`.
+- **Binding re-entry (slice C).**
+  - `ParentView` (promotion/mod.rs:365-386) gains `path: RecordPath` and `answered: bool`, filled in `lifecycle_parent` (427-438) and carried by `of_blockers` (392-408).
+  - `ended_answer` (bind/lifecycle.rs:853-879) returns `None` for `parent.answered`. `row` (1089-1110) then answers `Row::Unfinished`, and the rerun reaches the domain, which answers from `answer_code`. Today `ended_answer` would answer an abandoned parent from its refusal alone (`ExternalChange`/`ReconfirmationRequired` → `external_change`).
+  - `stopped` (615-716) treats an answered parent as it treats a `Complete` one (the arm at 679-697): the same-request recovery and `Standing::Owed`.
+- **Outcome types.** `TicketClosureOutcome` is unchanged. The new public `BranchClosureOutcome` (closure/mod.rs) holds, each with an accessor:
+  - `operation_id`, `action: ClosureAction`, `answer: BranchAnswer`;
+  - `checkpoint_oid: Option<Oid>`: `written_commit()` for a `complete` record, `None` for an abandoned one, since an abandon from `closing` in the `NothingWritten` case holds an unreferenced `closure_oid`;
+  - `publication: Option<PromotionPublication>`, `Some` only when the publication child completed.
+- **`make_outcome`** (run.rs:1898-2007) returns `L::branch_outcome(r, publication)` for a branch record, before the `expect` at 1904-1907.
+- **The closure's lifecycle.** `TicketClosureLifecycle::Outcome` becomes `pub(in super::super) enum ClosureOutcome { Direct(TicketClosureOutcome), Branch(BranchClosureOutcome) }`. It is not module-private, because it is a `pub(in super::super)` trait's associated type (error E0446). `complete` and `index_pending` (closure/lifecycle.rs:438-443) map it.
+- **The binding's verb.**
+  - `Reached` (bind/lifecycle_verb.rs:72-78) is unchanged.
+  - `LifecycleVerb::call` (113-123) returns `Option<Result<Called, Stop>>`, with `pub(in super::super::super) enum Called { Reached(Reached), Branch { outcome: BranchClosureOutcome, index_pending: bool } }`. `Promote` wraps in `Called::Reached`. `Close::call` (430-434) maps the new variants to `Called::Branch`. `closure_reached` (260-268) is unchanged.
+  - `LifecycleBinding::call` (bind/lifecycle.rs:776) sends `Called::Branch` to a new `branch_reached`: the code from 9.3, effects (`checkpoint: Committed` when `checkpoint_oid` is some; `publication` from the outcome; `discovery` from `index_pending`), no data, standing `Final`.
+  - Task 10 replaces the data and effects with `PullRequestClosureMutationDto`, and adds a stop's `write` and `checkpoint` `committed` through `parent_effects`, which is in Task 10's file list (R-5). Task 7's stop effects are the before-integration shape (Obligation 8).
+
+**Obligation 5 (Task 8's; room left).** `ClosureAction::Withdraw`, `withdraw_oid`, its `closing` CHECK, `written_commit()` and the generalized reconciliation exist from this task. A withdraw `Lifecycle` over `ClosureRecord` needs only its observation and digest, `BranchWrite::Withdraw { commit }` and its answer rows. `new_branch` (Task 9) has its action, `retired_oid`, `pending_ref`, step `retired`, permits and CHECKs here. The close observation keeps today's blockers for Part D's situations 2 and 3 until Task 9.
+
+**Obligation 6, R-30.** Met by Task 6:
+- `remote/sync.rs` `push_unless_unclosed`, just before the push;
+- `ended_if_unresolved` (sync.rs:4336-4357) keeps a lifecycle child stopped by `TicketClosed`;
+- the seam is ruling 12's recording-push test.
+
+Task 7 consumes it: answer row 4, and D6's `context_ticket_closed`.
+
+**Obligation 7, the publication child's error.** `finish_branch` returns a stopped publication child's error as `Err(L::Error::context_synchronization(Box::new(error)))`, the context child's constructor (run.rs:691). It stores `publication_error`'s category (1162-1180). The binding maps the error to `Stop::ContextSynchronization` (lifecycle_verb.rs:446-448), which answers as `item sync` does (R-5). There is no new error variant.
+
+**Obligation 8, the binding's sites.**
+- `Stages::event` (bind/lifecycle.rs:160-183, slice A): `ChildStarting(Publication) => Publishing`, and `ChildSafePoint(Primary | Publication, _) => return`. The design is silent on the publication child's stages; this mirrors the primary child's.
+- `held_by_its_child` (1359-1374): unchanged. It reads both slots (1371). The withdraw arm comes with the verb (Task 11).
+- `ParentView` and `ended_answer`/`stopped`: Obligation 4 (slice C).
+- `parent_integrated` (1165-1186, slice C) answers `false` for `path == Branch`. So `parent_effects` (1206-1298) and `bind/mod.rs:1079-1083`'s recorded effects give a branch record the before-integration shape. Task 10 adds the publication child's push and `write`.
+- `way_out.rs` and `mutate.rs` belong to Tasks 10 and 11.
+
+**Obligation 9, the conflict lookups.** These are Task 12's (`remote/state.rs` 3828 and 3860; callers `conflict_read.rs:449`, `bind/conflict.rs:196`, `records.rs:845`). Task 7 makes them decidable in SQL:
+- current child: `CASE WHEN NOT (integration_mode='direct' AND action='close') AND primary_attempt>0 THEN primary_sync_id ELSE context_sync_id END`;
+- reverse map: `context_sync_id=?2 OR (NOT (integration_mode='direct' AND action='close') AND primary_sync_id=?2)`.
+
+**Obligation 10, no new stored closure blocker.**
+- `ClosureBlocker` (closure/mod.rs:36-60), `CLOSURE_BLOCKERS` (record.rs:133-156) and the mask CHECK are unchanged in Task 7.
+- A confirm whose situation changed differs in its digest, so it answers `external_change` through run.rs:518-527.
+- The root's `WorktreeConflicted` condition is `PrimaryConflicted` (ruling 6).
+- Task 9 adds the preflight-only `RemoteContextUnmaterialized` under Q2's ruling.
+- The prepare's "busy, naming it" is an error code with a blocker, not a `ClosureBlocker` (section 8.2).
+
+**Obligation 11, `Integration`.** `integration_mode` decodes into `crate::canonical::Integration` (canonical.rs:90-102). There is no new mode enum.
+
+## 2. The rebuilt record
+
+### 2.1 The frozen v2 DDL and the migration
+
+- record.rs:229-266: today's `SCHEMA` text is kept verbatim as `const SCHEMA_V2: &str`, with a doc line saying it is the `closure_refusal_blockers_v2` rebuild's table, frozen there. `SCHEMA` becomes the v3 text in 2.2. `INDEX` (267) is unchanged.
+- New constants:
+  - `MODES_MARKER: &str = "wave_06_closure_modes_v1"`;
+  - `V2_COLUMNS: &str`, the 25 v2 column names in table order (`repository_id` through `adopted_context_oid`).
+- `migrate` (272-313):
+  - the created path (286) runs the v3 `SCHEMA` and inserts `MARKER`;
+  - the v2 rebuild at 304 interpolates `{SCHEMA_V2}`, not `{SCHEMA}`; its `SELECT *` stays, because v1 and v2 share the 25 columns;
+  - after 311 comes a third block:
+    ```rust
+    let modes: bool = /* EXISTS registry_migrations name=MODES_MARKER */;
+    if !modes {
+        // The path columns: rebuild a table that predates them. Existing rows read
+        // `direct` and `close` (their column defaults); the index goes first.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_modes; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM ticket_closures_before_modes; DROP TABLE ticket_closures_before_modes;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MODES_MARKER]).map_err(|_| state::recovery_required())?;
+    }
+    validate_schema(tx)
+    ```
+- What a registry gets:
+
+  | Registry | Result |
+  | --- | --- |
+  | fresh | v3 and three markers, no rebuild |
+  | v1 | two rebuilds in the one registry-schema transaction (discovery.rs:2749) |
+  | v2 | one rebuild |
+
+### 2.2 The v3 `SCHEMA`
+
+- Columns 230-254 are unchanged except `step`, which gains `'retired'`:
+  `step TEXT NOT NULL CHECK(step IN ('confirmed','context_synchronized','closing','integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','retired','complete','abandoned','superseded')),`
+- Appended after `adopted_context_oid`. `<oid x>` is today's OID shape:
+  ```sql
+  integration_mode TEXT NOT NULL DEFAULT 'direct' CHECK(integration_mode IN ('direct','pull_request')),
+  action TEXT NOT NULL DEFAULT 'close' CHECK(action IN ('close','withdraw','new_branch')),
+  withdraw_oid TEXT CHECK(<oid withdraw_oid>),
+  retired_oid TEXT CHECK(<oid retired_oid>),
+  pending_ref TEXT CHECK(pending_ref IS NULL OR pending_ref='refs/manyhands/closures/'||operation_id),
+  answer_code TEXT CHECK(answer_code IS NULL OR (typeof(answer_code)='text' AND length(answer_code) BETWEEN 1 AND 64 AND answer_code NOT GLOB '*[^a-z_]*')),
+  consented_context_oid TEXT CHECK(<oid consented_context_oid>),
+  ```
+- The stored DDL carries no SQL comments, because `validate_schema_object` compares the text exactly.
+- `consented_context_oid` is Q1's column: the head the branch digest bound at confirm, written by `begin_branch_record`.
+- `answer_code`'s values are checked in Rust (`BranchAnswer::parse` in `decode`); that is Q4's ruling.
+- The table CHECKs at 255-262 are kept verbatim.
+- Three changed CHECKs replace 263, 264 and 265:
+  ```sql
+  CHECK(closed_at IS NULL OR closure_kind IS 'record' OR action='new_branch'),
+  CHECK(adopted_context_oid IS NULL OR (closure_oid IS NOT NULL AND adopted_context_oid!=closure_oid AND closure_kind IS 'record' AND integration_mode='direct' AND action='close')),
+  CHECK(step!='closing' OR (base_oid IS NOT NULL AND context_oid IS NOT NULL AND (
+      (action='close' AND closure_kind IS 'record' AND closed_at IS NOT NULL)
+   OR (action='close' AND integration_mode='pull_request' AND closure_kind IS 'existing' AND closed_at IS NULL)
+   OR (action='withdraw' AND closure_kind IS 'existing' AND closed_at IS NULL AND withdraw_oid IS NOT NULL)
+   OR (action='new_branch' AND closed_at IS NOT NULL)))),
+  ```
+- New CHECKs:
+  ```sql
+  CHECK(action!='new_branch' OR integration_mode='pull_request'),
+  CHECK((integration_mode='direct' AND action='close') OR (integration_oid IS NULL AND integration_kind IS NULL AND step NOT IN ('integrating','integrated','remote_deleted'))),
+  CHECK(NOT (integration_mode='direct' AND action='close') OR (withdraw_oid IS NULL AND retired_oid IS NULL AND pending_ref IS NULL AND answer_code IS NULL AND consented_context_oid IS NULL AND step!='retired')),
+  CHECK(step NOT IN ('worktree_removing','worktree_removed','branch_deleted','retired') OR (integration_mode='direct' AND action='close' AND step!='retired') OR action='new_branch'),
+  CHECK(step!='context_synchronized' OR action!='new_branch'),
+  CHECK(withdraw_oid IS NULL OR (action='withdraw' AND step NOT IN ('confirmed','context_synchronized'))),
+  CHECK(retired_oid IS NULL OR action='new_branch'),
+  CHECK(pending_ref IS NULL OR (action='new_branch' AND closure_oid IS NOT NULL AND step NOT IN ('complete','abandoned','superseded'))),
+  CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
+  CHECK(step!='complete' OR (integration_mode='direct' AND action='close') OR answer_code IS NOT NULL)
+  ```
+- A direct row's `closing` CHECK is today's. The unique unfinished index keeps one unfinished record per ticket, of any action. The record never holds `closed_by`, a title, a body or a URL.
+
+### 2.3 Rust types (record.rs, closure/mod.rs)
+
+- `ClosureStep` (record.rs:30-36) gains `Retired=>"retired"` between `BranchDeleted` and `Complete`.
+  - `From<ClosureStep> for ParentStep` (92-110) maps `Retired => BranchDeleted`.
+  - `set_step` (862-867) keeps `Retired` when it is given `BranchDeleted`, as it keeps `Closing`.
+- `closure/mod.rs` gains `pub enum ClosureAction { Close, Withdraw, NewBranch }` and `pub enum BranchAnswer { … }` (values in 9.2; `Copy`; a categories-only `Debug`).
+  - `ClosureAction`'s `name`/`parse` land in slice A, where `insert_record` and `decode` read them.
+  - `BranchAnswer::parse` lands in A (read by `decode`); `name` lands in C (read by the writers). No slice leaves dead code.
+- `RecordPath { Direct, Branch }` is `pub(in super::super)` in `promotion/lifecycle.rs`.
+- `ClosureRecord` gains these fields, decoded in `decode` (333-363) and immutable in `save_record`: `integration_mode: Integration`, `action: ClosureAction`, `withdraw_oid`, `retired_oid`, `pending_ref: Option<String>`, `answer_code: Option<BranchAnswer>`, `consented_context_oid`. The `Debug` (208-225) adds `integration_mode`, `action`, `answer_code`, `withdraw_oid` and `retired_oid`.
+- `validate` (365-442) is per path. Direct rows run today's body, plus a refusal of any branch-only field or of `Retired`. Branch rows replace 395-402 and 407-423 with these rules:
+  - `integration_oid`, `integration_kind` and `adopted_context_oid` are none, and the step is not `Integrating`, `Integrated` or `RemoteDeleted`;
+  - `context_oid` from `context_synchronized` (from `closing` for `new_branch`);
+  - `base_oid` from `closing`;
+  - the per-action rules of 2.2's `closing` CHECK;
+  - `closed_at` before `closing` only for `new_branch`;
+  - `withdraw_oid` only for `withdraw` from `closing`;
+  - `retired_oid` and `pending_ref` only for `new_branch`;
+  - `cleanup` only for `new_branch` at `worktree_removing` through `branch_deleted`;
+  - `complete` needs `answer_code`, and `answer_code` only at `complete` or `abandoned`;
+  - at `publication_pending` the publication is none or not published/current;
+  - no publication rule at `published` or `complete`;
+  - `remote_name` required.
+- `save_record` (545-591):
+  - the seven new fields join the unchanged-field checks at 556-579;
+  - the permits call at 568-570 dispatches by path: `old.step.permits(…)` for direct, `old.step.branch_permits(r.step, old.action)` for branch.
+- `supersedable` (460-463) becomes `old.path() == RecordPath::Direct && <today's>`.
+- `remote_deletion_required` (`deletion_reservation_required`, 768-770; impl 925-927) becomes `r.path() == RecordPath::Direct && <today's>` (slice C). A branch record reserves no parent row for a remote delete.
+- `insert_record` (519-541) gains `path: (Integration, ClosureAction)` and `consented: Option<Oid>`. `begin_record` passes `(Direct, Close)` and `None`.
+
+### 2.4 Record writers (record.rs; each re-reads the record through `read_record`, which validates it)
+
+```rust
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn begin_branch_record(tx: &Transaction<'_>, id: i64, op: OperationId, item: &ItemId,
+    expectation: ClosureExpectation, remote: Option<&str>, kind: ClosureKind,
+    path: (Integration, ClosureAction), consented: Option<Oid>) -> Result<ClosureRecord, RepositoryError>;
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn refuse_record_on(/* refuse_record's arguments */, path: (Integration, ClosureAction)) -> Result<ClosureRecord, RepositoryError>;
+
+pub(in super::super) enum BranchWrite { Closure { closed_at: OffsetDateTime, commit: Oid }, Existing } // Task 8: Withdraw
+pub(in super::super) fn begin_branch_closing(tx: &Transaction<'_>, repository_id: i64,
+    operation: OperationId, base: Oid, write: BranchWrite) -> Result<(), RepositoryError>;
+pub(in super::super) fn begin_publication(tx: &Transaction<'_>, id: i64, op: OperationId) -> Result<ClosureRecord, RepositoryError>;
+pub(in super::super) fn complete_branch_record(tx: &Transaction<'_>, id: i64, op: OperationId,
+    answer: BranchAnswer, link: Option<&PullRequestLink>, given_at: i64) -> Result<(), RepositoryError>;
+pub(in super::super) fn abandon_branch_record(tx: &Transaction<'_>, id: i64, op: OperationId,
+    refusal: &Refusal, answer: BranchAnswer, link: Option<&PullRequestLink>, given_at: i64) -> Result<(), RepositoryError>;
+```
+
+- `begin_branch_record` follows `begin_record` (474-493): the existing record is returned; a supersedable direct record is superseded; anything else is `busy`. It inserts the path and `consented`.
+- **Refusals at insertion.** `Lifecycle::refuse_record` (promotion/lifecycle.rs:391-400) replaces `remote: Option<&str>` with `config: &RepositoryConfig`, the configuration the revalidation observed with (run.rs:507). Both impls read `config.publication_remote`. The closure impl (closure/lifecycle.rs:223-243) stores:
+  - the observed path when `observed` is some;
+  - otherwise `(config.integration(), Close)`. A refusal at insertion belongs to a new request, which always observes in the live mode (R25), so the mode the revalidation observed in is the configuration's, whatever unfinished record the ticket has.
+
+  It calls `record::refuse_record_on`. The direct `record::refuse_record` keeps its signature and passes `(Direct, Close)`.
+- `begin_branch_closing` requires step `ContextSynchronized`, a branch path, action `Close`, a kind matching the write (`Closure`↔`Record`, `Existing`↔`Existing`), and a non-zero `base`. It runs `UPDATE step='closing', base_oid, closed_at, closure_oid`. The caller re-checks `context_synchronization_unfinished` in the same transaction.
+- `begin_publication` requires a branch path, `Closing` and `primary_attempt == 0`. It runs `parent::next_attempt::<ClosureRecord>(tx, id, op, ChildRole::Publication)`, then `UPDATE step='publication_pending'`, in one transaction.
+- `complete_branch_record` requires:
+  - a branch path, step `PublicationPending` or `Published`, and a post-child answer (9.2);
+  - the second slot's row, when present, not active without authority (R-36).
+
+  It runs `UPDATE step='complete', answer_code, cleanup_category=NULL, cancel_requested=0`, and `pull_request_links::upsert_link` when `link` is some. It does no retirement and no `finish_parent`.
+- `abandon_branch_record` requires:
+  - a branch path;
+  - step `Confirmed`, `ContextSynchronized`, or `Closing` with nothing written (caller-proved);
+  - the context slot's row, when present, not active without authority.
+
+  It runs `UPDATE step='abandoned', refusal_category, refusal_blockers, answer_code`, plus `upsert_link` for `AlreadyClosing`.
+- `pull_request_links.rs` gains `pub(super) fn upsert_link(connection: &Connection, repository_id: i64, kind: &str, item_id: &str, link: &PullRequestLink, given_at: i64) -> rusqlite::Result<()>`. It runs `INSERT … ON CONFLICT(repository_id,kind,item_ulid) DO UPDATE SET source, target, forge, url, given_at`, with the forge written by the stored name `link_of` (pull_request_links.rs:11-33) parses.
+- **The link.** It is built outside the transaction by `checkpoint::branch_link(repo, primary: &str, forge: Option<&ForgeSetting>, remote: &str, item) -> PullRequestLink`: `forge::pull_request_link(forge::recognise(<git2 URL of remote, if it exists>, forge).as_ref(), &context_branch, primary)` (R-25).
+  - With a valid configuration, `primary` and `forge` are that configuration's.
+  - On the R-35 path (no valid configuration) they come from the configuration in `base_oid`'s tree, as `recorded_primary` (run.rs:417-433) reads it, and the URL is none when the remote is gone.
+  - `given_at` is `request.clock().unix_timestamp()`.
+
+## 3. `permits` per path
+
+**Direct.** `ClosureStep::permits` (record.rs:64-87) is unchanged, and `Retired` is never a source or target. Its transitions, as today:
+- `Confirmed→ContextSynchronized`
+- `ContextSynchronized→Closing` (record) or `ContextSynchronized→Integrating` (existing)
+- `Closing→Integrating`
+- `Integrating→Integrated`
+- `Integrated→Published|PublicationPending`
+- `PublicationPending→Published`
+- `PublicationPending→WorktreeRemoving` (no remote)
+- `Published→RemoteDeleted`
+- `RemoteDeleted→WorktreeRemoving`
+- `WorktreeRemoving→WorktreeRemoved`
+- `WorktreeRemoved→BranchDeleted`
+- `Confirmed|ContextSynchronized|Closing→Abandoned`
+
+`Complete` and `Superseded` are written by `complete_record` and `supersede`.
+
+**Branch.** `fn branch_permits(self, next: Self, action: ClosureAction) -> bool`. Terminal steps permit nothing; self loops are allowed.
+
+| Action | Transitions |
+| --- | --- |
+| `close`, `withdraw` | `Confirmed→ContextSynchronized`, `ContextSynchronized→Closing`, `Closing→PublicationPending`, `PublicationPending→Published\|Complete`, `Published→Complete`, `Confirmed\|ContextSynchronized\|Closing→Abandoned` |
+| `new_branch` | `Confirmed→WorktreeRemoving\|Closing`, `WorktreeRemoving→WorktreeRemoved`, `WorktreeRemoved→BranchDeleted`, `BranchDeleted→Retired`, `Retired→Closing`, `Closing→PublicationPending`, `PublicationPending→Published\|Complete`, `Published→Complete`, `Confirmed\|BranchDeleted\|Retired→Abandoned` |
+
+How branch differs:
+- no integration steps;
+- `Closing→PublicationPending` with the mint (Q3's ruling);
+- `PublicationPending→Complete` (rows 1 to 5);
+- no remote delete;
+- never superseded;
+- `BranchDeleted→Abandoned` for `new_branch`, for F8's re-check (Q5's ruling).
+
+A branch record leaves `Closing` for `Abandoned` only while reconciliation proves nothing written, with the direct rule's meaning (ruling 8, section 10).
+
+## 4. The path in the runner
+
+### 4.1 `promote_inner` (run.rs:434-870)
+
+1. **Prior-record block (448-480).**
+   - Before 461: `if validated.answered() { return Ok(refresh::<L>(…, true)); }`.
+   - At 473-479 add `|| validated.path() == RecordPath::Branch && validated.primary_sync_id().is_some()`. Such a record, under a configuration that is not valid, goes to `finish_branch` with `config: None` (R-35, slice D), with `recorded_primary(&root, &validated)`.
+     - In slice C it answers `Err(L::Error::recovery_required())`, with the record unchanged.
+     - It must not answer `recovery::<L>`: that sets `cleanup = RecoveryRequired`, which a branch record's `validate` refuses, so the save would be dropped. It would also build an outcome for an unanswered record.
+2. **Prepare, revalidation and consent (481-535)** are unchanged in shape. The new request's prepare (501) passes `record: None`, so it observes in the live mode (R25). A foreign live synchronization answers `Repository(RepositoryBusy)` here, through the `?` at 506 (section 8.2). D17 and D18 answer `external_change` through the compare at 521, with the refused row stored through `L::refuse_record(…, &config, …)` at 547-557.
+3. **Begin (536-571).** `TicketClosureLifecycle::begin_record` (closure/lifecycle.rs:193-213) calls `record::begin_branch_record` for a branch observation, with `consented = Some(observation.context_oid)`.
+4. **After begin.** Before 573: `if r.answered() { return Ok(refresh::<L>(…, true)); }`. Cancellation clearing (584-590) is shared.
+5. **Branch dispatch, after 604.** `if r.path() == RecordPath::Branch { return promote_branch::<L>(lifecycle, service, &request, &config, &bound_primary, &mut r, existing, io, progress); }`.
+6. **Lines 606-870 serve direct records.** The context block (665-712) is extracted into `context_step` (section 0.1).
+
+### 4.2 `promote_branch` (new, run.rs)
+
+```rust
+fn promote_branch<L: Lifecycle>(lifecycle: &L, service: &RepositoryService, request: &LifecycleRequest<L::Expectation>,
+    config: &RepositoryConfig, primary: &str, r: &mut L::Record, existing: bool,
+    io: &mut impl PromotionIo, progress: &mut dyn RunObserver) -> Result<L::Output, L::Error>
+```
+
+1. **The publication child exists.** If `r.primary_sync_id().is_some()`, return `finish_branch(…, Some(config), …)`.
+2. **Before `closing`.**
+   - `r.remote_name() != config.publication_remote` answers `Err(interrupted)` (as 653-655). At `closing` this is skipped: `finish_branch` answers it as row 5.
+   - `AfterConfirmed` when `!existing`.
+   - The cancellation check, with `release_child(Context)` at `Confirmed` (as 659-664).
+3. **At `Confirmed`, `context_step`.** On a child error, classify first:
+   - **Cancelled:** `release_child(Context)`, then `Err(interrupted)` (as 687-690).
+   - **A D6 end (slice D).** `fn ends_context_child(e: &SynchronizationError) -> bool` is `matches!(e, RemoteContextDeleted | HistoryUnresolved | TicketClosed)`: the stops `ended_if_unresolved` keeps for a lifecycle child, or that only `request cancel` lets go (Fact 15). On a D6 end: `let_go(Context)` (4.4), then `L::end_branch(service, root, r, BranchEnd::ContextChild(&e))`, then `Ok(refresh::<L>(…, false))` on the reloaded record.
+   - **Any other stop (D5, D7):** `Err(L::Error::context_synchronization(Box::new(e)))`. The child is left as it stands, retained or not, for `child()` on the same request, and the record stays `confirmed`.
+   - **In slice C** there is no D6 branch: every non-cancelled error is the D5/D7 return.
+   - **`ContextStep::Gone`** (the context branch is gone after the child): `L::end_branch(…, BranchEnd::ContextGone)`, then `Ok(refresh)`. This is in slice C.
+   - **On success:** step `context_synchronized`, saved, then `AfterContextSync` (as 707-711).
+4. **Cancellation.** The check at 713-715.
+5. **Recording.** `progress.event(RunEvent::Recording)` under 766-767's condition.
+6. **Step 3.** `lifecycle.branch_step(service, request, r)?`:
+   - `BranchStep::Closing`: reload, then `finish_branch(…, Some(config), …)`.
+   - `BranchStep::Finished`: reload, then `Ok(refresh)`. The hook abandoned the record with its answer.
+   - Errors (`busy`, repository) return with the record unchanged.
+
+### 4.3 The hook: `Lifecycle::branch_step`, implemented in checkpoint.rs
+
+`TicketClosureLifecycle::branch_step(&self, service, request, r)` calls `checkpoint::branch_step(service, &request.root, request.confirmed_identity.as_ref(), (request.clock)(), r)`. In order:
+
+1. **Prepare and lease.**
+   - `observe::prepare_observation_in(service, &request, Some(r.integration_mode))` for the item, outside the lease. Its mode is the record's (R25), so the record continues in its own mode after a switch.
+   - A foreign live synchronization of the context (not the record's own child) answers `Err(TicketClosureError::Repository(e))` here, with `e.kind == RepositoryBusy` and its blocker naming the row. The binding answers `busy` (8.2). In the direct close the same case is the hook's `E::busy()` at checkpoint.rs:648.
+   - Then `repository_lease(&repository, root, RepositoryOperation::Read)`.
+2. **At `closing`.**
+   - Kind `existing` returns `Closing`.
+   - Kind `record` runs `reconcile_closing(context_repo, r)` on `written_commit()`:
+     - `CheckoutDone`: `context_moving`, `finish_context_move`, `context_moved_item`, `AfterClosureCheckpoint`, then `Closing`.
+     - `CheckpointWritten`: `context_moved_item`, then `Closing`.
+     - `Unrecognized`: `Err(recovery_required)`, with the record kept.
+     - `NothingWritten`: continue below as `closing`.
+
+   `context_moved_item` marks only the item context, as `context_moving` (567-578) does.
+3. **Tip check.** A tip of the context ref other than `r.context_oid` abandons with `ExternalChange`/`external_change` (as 622-624).
+4. **3.1.** The tracking primary (`refs/remotes/<remote>/<primary>`) names a closure (`commit_names_closure`, 239-248): abandon with `Blocked([AlreadyClosed])`/`AlreadyClosed`.
+5. **3.2.** The tip names a closure:
+   - kind `record`: abandon with `ExternalChange`/`AlreadyClosing` and `link`;
+   - kind `existing`: continue to step 6.
+6. **Revalidate.** `observe::revalidate_under_lease(&prepared, service, &repository)`. It keeps the mode the prepare was made in (8.1).
+   - Blocked: abandon with `ReconfirmationRequired`/`reconfirmation_required` (R-18; as run.rs:786-793).
+   - Ready: `observe::branch_expectation_with_head(&obs, r.consented_context_oid) == r.expectation`, else abandon with `ExternalChange`/`external_change` (D21; an identity changed since consent).
+   - Kind `existing` with the proof holding: `begin_branch_closing(tracking, BranchWrite::Existing)`, then `Closing`.
+7. **3.3, kind `record`, open tip.**
+   - `context_synchronization_unfinished` gives `Err(busy)`.
+   - The live identity against `obs`'s `Record { closed_by }` (as 659-668); a mismatch abandons with `ExternalChange`.
+   - `closed_at = r.closed_at.unwrap_or_else(|| whole_utc_seconds(now))`.
+   - `build_closure_commit(repo, item, path, tip, closed_at, &identity)`; `Invalid` abandons with `ReconfirmationRequired`.
+   - One transaction: `context_synchronization_unfinished`, then `begin_branch_closing(tracking, Closure { … })`, or at `closing` `replace_unmoved_closure` (619-631).
+   - `ClosureAfterClosingRecorded`, `context_moving`, `move_context_to_checkpoint_with(…, between: ClosureDuringCheckpointCheckout)`, `context_moved_item`, `AfterClosureCheckpoint`, then `Closing`.
+8. **Abandons.** Every abandon is one `abandon_branch_record` transaction under the lease. An abandon from `closing` happens only after `NothingWritten`.
+
+### 4.4 `finish_branch` (new, run.rs)
+
+`fn finish_branch<L: Lifecycle>(lifecycle, service, request, config: Option<&RepositoryConfig>, primary: &str, r: &mut L::Record, io, progress) -> Result<L::Output, L::Error>`. `finish_integrated` and `finish_steps` (1242-1728) are unchanged.
+
+1. **Mint.** If `r.primary_sync_id().is_none()`: `*r = with_transaction(|tx, id| L::begin_publication(tx, id, op))`.
+2. **The remote is current.** `remote_current = config.is_some_and(|c| c.primary_branch == primary && c.publication_remote.as_deref() == r.remote_name())`. In slice C, `!remote_current` answers `Err(L::Error::recovery_required())` with the record at `publication_pending`. Slice D replaces this with row 5.
+3. **A completed child comes first.** If the second slot is `ChildState::Complete`, `child()` replays it (1014-1016), whatever cancellation says.
+4. **Otherwise, when cancelled:** `release_child(Publication)`, `set_publication(Cancelled)`, `save`, then `Err(interrupted)` (D15).
+5. **Run the child.** `result = child::<L>(…, ChildRole::Publication, …)`.
+   - On `Ok`: `remember_publication` (1190-1206), `save`, `AfterPublication`.
+   - On `Err` with cancellation: as step 4.
+6. **The answer.** `answer = L::branch_answer(service, request, r, &result)?`. Slice D adds the `remote_current: bool` argument.
+   - `None`: `set_publication(publication_error(&e))`, keep `publication_pending`, `save`, then `Err(L::Error::context_synchronization(Box::new(e)))` (Obligation 7). In slice C every child error ends here.
+   - `Some(finish)`:
+     - for a stopped child (slice D, rows 1 to 5), `let_go(Publication)` first;
+     - then `BeforeCompletion`, the transaction `L::complete_branch(tx, id, op, &finish)`, `reconcile_completion` on an uncertain commit (as 1714-1721; path-aware through 2.3), `PromotionAfterCompletionCommit`, reload, `AfterCompletion`, and `Ok(refresh::<L>(…, false))`.
+
+`let_go::<L>(service, request, r, role, io)` is new in slice D. It is called only on a D6 end or a row 1 to 5 completion:
+- `release_child` (988-1000);
+- then, if the row is still active, `acknowledge_cancellation` (extracted from 1045-1061);
+- then `L::child_state` must be `Absent`, `Complete`, or `Unowned` in a terminal phase, or the call answers `Err(recovery_required)` with the record unfinished.
+
+### 4.5 Other runner places and the trait
+
+- `children_contexts` (1877-1886): for a branch record, either slot gives `ContextKey::Item(item)` once.
+- `refresh_with_publication` (1829-1862): for a branch record the contexts are `[ContextKey::Item(item)]`, and a replay checks `service.owed_of(root, &[Item]).is_empty()`.
+- `child_id` (975-979): `Primary | Publication` → `primary_sync_id()`. `synchronization_target` (1130-1142): `Publication` → `Context { kind: kind.authoring(), item_id }`. Both in slice A.
+- `primary_authority` (1209-1240) passes `second_role(r.path())`.
+- `remember_publication` (1190-1206) is unchanged.
+- `Lifecycle` trait additions (promotion/lifecycle.rs:351-554). None has a default body. Promotion's impl (759-1004) answers `Err(…recovery_required())` or `unreachable!("a promotion record is always direct")`, and sets `type BranchFinish = std::convert::Infallible;`.
+  ```rust
+  type BranchFinish: Clone;                                                       // slice C
+  fn branch_step(&self, service: &RepositoryService, request: &LifecycleRequest<Self::Expectation>, r: &Self::Record) -> Result<BranchStep, Self::Error>;   // C
+  fn end_branch(service: &RepositoryService, root: &Path, r: &Self::Record, end: BranchEnd) -> Result<(), RepositoryError>;  // C; D makes it `end: BranchEnd<'_>`
+  fn begin_publication(tx: &Transaction<'_>, id: i64, op: OperationId) -> Result<Self::Record, RepositoryError>;               // C
+  fn branch_answer(service: &RepositoryService, request: &LifecycleRequest<Self::Expectation>, r: &Self::Record,
+      child: &Result<SynchronizationOutcome, SynchronizationError>) -> Result<Option<Self::BranchFinish>, RepositoryError>;   // C; D adds `remote_current: bool`
+  fn complete_branch(tx: &Transaction<'_>, id: i64, op: OperationId, finish: &Self::BranchFinish) -> Result<(), RepositoryError>;  // C
+  fn branch_outcome(r: &Self::Record, publication: Option<PromotionPublication>) -> Self::Outcome;                            // C
+  ```
+- In `promotion/lifecycle.rs`:
+  - `pub(in super::super) enum BranchStep { Closing, Finished }`;
+  - In slice C, `pub(in super::super) enum BranchEnd { ContextGone }`, with no lifetime: a lifetime that no variant uses is error E0392. Slice D makes it `pub(in super::super) enum BranchEnd<'a> { ContextGone, ContextChild(&'a SynchronizationError) }` and the trait's parameter `end: BranchEnd<'_>`, in one change.
+- The closure's `BranchFinish` is `pub(in super::super) struct BranchFinish { answer: BranchAnswer, link: Option<PullRequestLink>, given_at: i64 }`.
+- `end_branch(ContextGone)` abandons with `ReconfirmationRequired`/`reconfirmation_required`.
+- `LifecycleRequest` (116-124) gains `clock: fn() -> OffsetDateTime`, defaulted in both builders (promotion/run.rs:287-307; closure/lifecycle.rs:54-74). `close_ticket_observed` (closure/mod.rs:374-382) gains `clock`, which its one caller, `mutation/progress.rs:450`, passes as `OffsetDateTime::now_utc`.
+
+## 5. The second-slot readers
+
+| Reader | Change | Slice |
+| --- | --- | --- |
+| `ChildRole` (lifecycle_record.rs:450-454) | gains `Publication` | A |
+| `child_allowed` (457-465) | becomes `fn(&ParentFacts, role)`, shown below | A |
+| `attempt_of` (466-471), `mint_attempt` (676-679), `ChildExecution::validate` (584-587) | `Primary \| Publication` → the second slot | A |
+| `next_attempt` (648) | gates on `child_allowed(&ParentFacts::of_ref(&r), role)` | A |
+| `ChildExecution::validate_request` (554-571) | gains `(Publication, Context { kind, item_id }) => *kind == self.kind.authoring() && item_id == &self.item` | A |
+| `remote_identity_of` (761-781) | a branch record's second slot expects `SynchronizeContext`, so 780-781's item check applies | A |
+| `audit` (880-919) | loops `[Context, second_role(r.path())]`; `second_role` (Direct → Primary, Branch → Publication) is the production constructor of `Publication` in slice A | A |
+| `ChildExecution::role()` and `is_publication_of(kind, parent) -> bool` | read by the fence exemption and the test IO | C |
+| run.rs readers and `Stages` | sections 4.5 and 1 | A and C |
+| By column name, unchanged | `bindings` (lifecycle_record.rs:312), `existing_record`'s collision (357), `child_repository` (840), `reservation.rs` `abandonable` (801-812), `recovery.rs` `attribute_remote_row` (1154-1199), `local_sync/record.rs` `FOREIGN_IDENTITIES` (1058-1072), `read/status.rs` (705-737, 639), `registration_removal.rs` (210-225), `ParentView.children` | — |
+| Conflict lookups | Obligation 9 | Task 12 |
+
+The new `child_allowed`:
+
+```rust
+fn child_allowed(facts: &ParentFacts, role: ChildRole) -> bool {
+    match (facts.path, role) {
+        (_, ChildRole::Context) => facts.step == ParentStep::Confirmed,
+        (RecordPath::Direct, ChildRole::Primary) => matches!(facts.step, ParentStep::Integrated | ParentStep::PublicationPending),
+        (RecordPath::Branch, ChildRole::Publication) => matches!(facts.closure_step, Some(ClosureStep::Closing | ClosureStep::PublicationPending)),
+        (RecordPath::Direct, ChildRole::Publication) | (RecordPath::Branch, ChildRole::Primary) => false,
+    }
+}
+```
+
+## 6. The fence: its range and its exemption
+
+- **The range** (record.rs:774-785).
+  - `written_closure_holder(db, id, item) -> Result<Option<(OperationId, RecordPath)>, _>` is added in slice C. Slice A changes only `written_closure_unfinished`'s SQL, which is `holder.is_some()` from C on.
+  - The SQL: `(integration_mode='direct' AND action='close' AND step IN (<today's nine>)) OR (NOT (integration_mode='direct' AND action='close') AND step NOT IN ('complete','abandoned','superseded') AND (step NOT IN ('confirmed','context_synchronized') OR (action='new_branch' AND closure_oid IS NOT NULL)))`.
+  - Slice E adds `branch_hold(db, id, item) -> Option<OperationId>` and `hold_refusal(op) -> RepositoryError`, which is `recovery_required().with_blocker(Blocker::remote(&op.to_string()))`.
+- **The exemption** (slice C). `closure_holds_context` (reservation.rs:427-440) gains `execution: Option<&ChildExecution>` and answers `false` iff the holder is a branch record and `execution.is_some_and(|e| e.is_publication_of(TicketClosure, holder))`.
+  - Both callers already pass a validated execution: 1618-1622 (validated at 1503-1505) and 3211-3213 (validated at 3181-3183).
+  - Everything else of the ticket's `SynchronizeContext` target stays `Busy`.
+  - An execution of another record never reaches the fence. The reservation's identity check refuses it first: `validate_poll_identity` → `remote_identity_of` (lifecycle_record.rs:733, 761-781) answers `OperationMismatch`, since the target's item or slot is not that record's. Its own `validate` (573-605) may refuse it earlier with the same kind.
+- **The poll's materialize and fast-forward checks** (poll.rs:387-397, 663-672) call `written_closure_unfinished` and cover branch records through the new range. The poll's retirement check is in section 7.
+
+## 7. The writers the hold reaches, per mode (slice E)
+
+"Named" means the domain error carries `with_blocker(Blocker::remote(op))` (repository.rs:1518), which `read/status.rs` `read_blocking_operation` resolves through `closure_operations` and `Answer::naming` (bind/mod.rs:361-407) names. Slice E adds `naming` to any of these bindings that does not already pass its domain error's blocker, as `bind/save.rs:250-253` does.
+
+| Writer | Where the hold is checked | Branch record | Direct record |
+| --- | --- | --- | --- |
+| save, slug, context prepare, comment checkpoint | `repository.rs` `refuse_closed_ticket` (300-324) gains `service` and checks `branch_hold` (a registry read, as 4470-4509) before the guard at 317. Callers: 2398-2400, 3101-3106 (save, relationship and slug; `bind/ticket.rs` 1248→1252→3044→3065→3103), 3496-3502 | `recovery_required`, named | the guard's `ticket_closed`. The new read runs in both modes, because a withdraw is a branch record in either mode, so a registry read error now surfaces here as `recovery_required`. Guarded by `ticket_guard_tests` (Task 2), `tests/mutation_bridges` and `comment_publication` at review-ready |
+| `item sync`, a comment's publication | `closure_holds_context` (6) | `busy` | `busy` |
+| `item republish` | `bind/republish.rs` `observe` 201-209, after `require_ticket_open`: `branch_hold`. The domain's `SynchronizeContext` reservation is the backstop (`busy`) | `recovery_required`, named | unchanged |
+| `item resolve-history` | no hold check (Q6's ruling; this row is the only Q6 site) | passes; the same request then continues its record | unchanged |
+| `ticket repair` | `bridges/repair.rs` `repair_item`, after 482-488: `branch_hold` | `recovery_required`, named | unchanged |
+| `context retire` | `context_retirement/authority.rs` `claim_scoped`, in its transaction after 324: `branch_hold` | `recovery_required`, named | unchanged |
+| the poll's retirement | `context_retirement/source.rs` `capture_target`, in the transaction at 228-235: a ticket item for which `written_closure_unfinished` holds gets `c.refusal = Some("recovery_required")`. `authority.rs` `claim_initial` (in its transaction after 423) is the backstop | candidate refused; the context left alone | **a change in direct behaviour, by construction:** the check is `written_closure_unfinished`, whose direct range (`closing` through `branch_deleted`) is unchanged, so a direct record's candidate is refused the same way (R-17's "while it holds"). The direct test row is dropped (R24); open question 2 disputes its premise and proposes a reachable row |
+| the ticket's own `context sync-local` | `local_sync/record.rs` `admit` (1144-1220): the exception at 1169-1176 gains `\|\| r.path() != RecordPath::Direct`. A branch record on the same item answers `ReadError::new(RecoveryRequired)` with `recovery = vec![RecoveryAction::for_operation(RecoveryActionKind::OperationShow, op.to_string(), [])]` | `recovery_required`, naming the record by its recovery action | unchanged (K-10) |
+| poll materialize, fast-forward | `poll.rs` 387-397, 663-672 | the context left alone | unchanged |
+| `context release` | `context_release.rs` 218-241, unchanged | refused | refused |
+
+Before `closing`, a branch record's prepare is held by `held` (bind/lifecycle.rs:386-426), and its step 3 waits through `context_synchronization_unfinished`.
+
+## 8. The branch observation
+
+### 8.1 Mode, dispatch and situations (slice B)
+
+- **The mode (R25).**
+  - `observe::prepare_observation_in(service, request, mode: Option<Integration>)` is the one entry point. `None` means the live `config.integration()` (canonical.rs:146-148). `prepare_observation` (observe.rs:313-318) is `prepare_observation_in(…, None)`.
+  - `observe_git` takes the resolved `mode`. `PreparedClosureObservation` (291-298) stores it, and `revalidate_under_lease` (371-402) keeps the stored mode without reading it again.
+  - **A new request always observes in the live mode:** the binding's prepare (`V::observe` → `preview_ticket_closure`), the confirm's prepare (run.rs:501, `record: None`), and a refusal at insertion.
+  - **A same-request continuation passes its record's mode:**
+    - `Lifecycle::preview_request(root, item, identity, record: Option<&Self::Record>)`, from run.rs:256 at 672 and 726, and integrate.rs:122 with `parent`;
+    - the branch hook (4.3, step 1).
+
+    So a record continues in its own mode, direct ones included (R-2). After a switch to pull-request mode, a direct record's retry continues the direct close and pushes the primary, as R-2 has it.
+  - **A non-supersedable unfinished record** answers decision 33's `recovery_required` at a new prepare, through `held` (bind/lifecycle.rs:386-426).
+  - **A supersedable direct record that a pull-request prepare meets.** `supersedable` requires a cleanup category of `ContextChanged`, `IgnoredFiles` or `RemoteContextChanged` (promotion/record.rs:69-74) and a step other than `closing` or `integrating` (record.rs:460-463). Those categories are set only by `finish_integrated` (run.rs:1263) after integration, so the local primary holds the record's merged closure.
+    - The pull-request observation's situation 1 then gives `[AlreadyClosed]`.
+    - `held` finds no holder, since `unfinished_holder` (promotion/mod.rs:449-460) drops supersedable records.
+    - `blocked_code([AlreadyClosed])` is `TicketClosed` (bind/lifecycle.rs:213-219). The prepare answers `ticket_closed`, blocker `already_closed`, and writes nothing.
+    - The old direct record is untouched: no confirm can follow a blocked prepare, and a confirm whose revalidation is blocked only refuses at insertion (`refuse_record` never supersedes, record.rs:511-515). It stays at its cleanup stop, to be finished by its own request (in its direct mode) or superseded by a later direct-mode request.
+- **Dispatch.** `let branch = mode == Integration::PullRequest;`. These inserts are guarded with `if !branch`: `PrimaryNotCheckedOut`, `PrimaryDirty`, the primary-presence `PrimaryConflicted`, `PrimaryAheadOfRemote` and `ContextBehindRemote` (669-701). After the remote facts, `if branch { return branch_observation(…) }`.
+- **Paths.** `ClosureObservation` (204-231) gains `path: (Integration, ClosureAction)`, and `TicketClosurePreview` (closure/mod.rs:118-185) gains `path` and an accessor.
+- **A branch observation's fields.**
+  - `base` is the tracking primary.
+  - `needs_context_child` is true.
+  - `changes` is empty, and the planned cleanup is all false.
+  - `integration` is `MergeCommit`, documented as unused by a branch record and read only as "the context child runs".
+- **Situations,** in Part D's order:
+  1. The local or tracking primary's ticket is not `Open` (`Malformed` included): `AlreadyClosed`.
+  2. Today's `RemoteContextDeleted`, until Task 9.
+  3. Today's `ContextMissing` or `AlreadyClosed` (744-748), until Task 9.
+  4. The context's ticket holds a closure: `Existing`.
+  5. Otherwise: `Record`.
+
+### 8.2 Blockers and the prepare's `busy`
+
+- **Kept:** `NotATicket`, `ContextMissing`, `ContextNonconforming`, `ContextDirty`, `ContextConflicted`, `ConflictPending`, `LocalOperationPending`, `CommentPublicationPending`, `PrimaryMissing` (local primary, or tracking primary), `RemoteContextDeleted`, `HistoryUnknown`, `HistoryUnresolved`, `AlreadyClosed`, `IdentityRequired` (`record`), `TicketInvalidAfterClosure` (a `Malformed` context closure, or `closed_ticket_bytes` refusing the tip's ticket).
+- **Ruling 6:** the root repository's `state() != RepositoryState::Clean` (the condition `require_clean_target_state`, sync.rs:747-780, refuses through the common directory) is `PrimaryConflicted`, whatever branch the root is on.
+- **Not reported:** `PrimaryNotCheckedOut`, `PrimaryDirty`, `PrimaryAheadOfRemote` (except Task 9's 3.3), `ContextBehindRemote`, `IntegrationConflict`, `PrimaryReopened`.
+- **"An unfinished synchronization of the ticket's context (busy, naming it)."** The direct prepare has no mechanism to reuse: `pending_work` reads only local rows and comment bindings, and the direct close meets this only at confirm (checkpoint.rs:648, 680-697).
+- **The new read.** In pull-request mode only, `pending_work` also reads:
+  ```sql
+  SELECT operation_ulid FROM remote_operation_records
+   WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2
+     AND phase NOT IN ('completed','interrupted','cancelled','failed')
+     AND operation_ulid NOT IN (SELECT context_sync_id FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded') AND context_sync_id IS NOT NULL
+                                UNION SELECT primary_sync_id FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded') AND primary_sync_id IS NOT NULL)
+   LIMIT 1
+  ```
+  The phase predicate is record.rs:796's.
+  - The unfinished record's own children are left out, so the binding's `held` answers for them (decision 33): a kept context stop (D5), a retained context conflict (D7), a kept publication stop (D8), a publication conflict (D10).
+  - A foreign live synchronization, such as a manual `item sync`, is what remains.
+- **The answer.** `branch_observation` answers `Err(RepositoryError)` of kind `RepositoryBusy` with `.with_blocker(Blocker::remote(&op))` for such a row.
+- **What each layer answers for a foreign live row:**
+
+  | Where | Domain | Binding |
+  | --- | --- | --- |
+  | prepare | the error | `LifecycleBinding::observe` (bind/lifecycle.rs:379-384) maps it with `refused(error).naming(service, &root, error.blocker())`: `busy`, naming the row. The direct observation sets no blocker and runs no such read, so the direct answers are unchanged |
+  | a new request's confirm | `L::prepare(…)?` (run.rs:499-506) propagates the error, which `prepare_observation_at` passes on (observe.rs:347-358), as `TicketClosureError::Repository(e)` with `e.kind == RepositoryBusy` (closure/mod.rs:344-348). It does not go through `mapped` at 531. Nothing is inserted | `Stop::Repository(e)` → `repository_error_code(RepositoryBusy)` = `busy` (bind/lifecycle.rs:1302; read/mod.rs:299) |
+  | step 3's prepare (4.3, step 1) | the same `Repository(RepositoryBusy)`, with the record unchanged | `busy` |
+
+  The error is not mapped, for two reasons. The `?` at run.rs:506 is the direct path's, and mapping it would change a direct close's variant for every `RepositoryBusy` its prepare can meet. `TicketClosureError::Busy` carries no blocker, which Task 10's stop data needs.
+- **The holder's own kept child, at a new request's confirm:** with the exclusion, the observation passes and `begin_record` answers `busy` (record.rs:486-489) through `mapped` at run.rs:571. That is `TicketClosureError::Busy`.
+
+### 8.3 The digest
+
+- `PULL_REQUEST_CLOSURE_DIGEST_DOMAIN = b"manyhands pull request closure v1"`.
+- `branch_expectation(o)` is `branch_expectation_with_head(o, Some(o.context_oid))`.
+- `branch_expectation_with_head(o, head)` hashes `blake3(domain ‖ fields)` with `digest::field` framing:
+  - the action tag (`close 0`, `withdraw 1`, `new_branch 2`);
+  - the item;
+  - the context branch and the primary branch;
+  - `digest::remote`;
+  - the head (`[0]` none, or `[1]` followed by 20 bytes);
+  - the closure effect, framed as `expectation` (observe.rs:1041-1073) frames it: `0‖closed_by` for `record`, `1‖closed_by‖closed_at` for `existing`;
+  - for `new_branch`, Task 9's fields.
+- A `record` closure's `closed_at` is not bound (C6).
+- The domain makes D17; `closed_by` makes D18. A changed action, effect or head is `external_change` at confirm. At step 3, `consented_context_oid` stands in for the head the child may have moved (Q1).
+
+## 9. The answer table
+
+### 9.1 After the publication child: `checkpoint::publication_answer` (rows 6 to 9 in slice C, rows 1 to 5 in slice D)
+
+- "This record's closure" is `commit_closure_text(closure_oid)` for `record`, `commit_closure_text(context_oid)` for `existing`, compared on both fields.
+- "The tracking primary" is `refs/remotes/<remote>/<primary>` as the child left it.
+- "The head" is the completed child's authority OID.
+
+| # | Condition | `BranchAnswer` | Code | Record |
+| --- | --- | --- | --- | --- |
+| 1 | the tracking primary holds this closure | `Merged` | `ok` | `complete` |
+| 2 | the tracking primary names another closure | `ClosedElsewhere` | `ticket_closed` | `complete` |
+| 3 | child `Err(RemoteContextDeleted)` | `RemoteBranchDeleted` | `remote_branch_deleted` | `complete` |
+| 4 | child `Err(TicketClosed)` | `TicketClosed` | `ticket_closed` | `complete` |
+| 5 | `!remote_current`, or child `Err(Transport)` of kind `PublicationRemoteMissing \| EndpointChanged \| ConfigurationInvalid` (Q7) | `RemoteChanged` | `recovery_required` | `complete` |
+| — | child `Err(other)` | `None`: the stop stands | the child's | `publication_pending` |
+| 6 | child `Ok`, kind `existing` | `Existing` | `already_closing` | `complete` |
+| 7 | child `Ok`, the head holds this closure | `Published` | `ok` | `complete` |
+| 8 | child `Ok`, the head names another closure | `KeptPublished` | `already_closing` | `complete` |
+| 9 | child `Ok`, the head names no closure | `WithdrawnSince` | `ok`, recording `withdrawn_since` | `complete` |
+
+- A child `Ok` outcome with no OID is `recovery_required`.
+- Rows 1 to 5 after a stopped child let it go first.
+- Every completion upserts the link (2.4).
+
+### 9.2 Stored `answer_code` values (`BranchAnswer`)
+
+- **After the child:** `merged`, `closed_elsewhere`, `remote_branch_deleted`, `ticket_closed`, `remote_changed`, `existing`, `published`, `kept_published`, `withdrawn_since`.
+- **Abandons,** each with the refusal it stores:
+
+  | Answer | Cause | Refusal |
+  | --- | --- | --- |
+  | `already_closed` | 3.1 | `Blocked([AlreadyClosed])` |
+  | `already_closing` | 3.2, `record`; the link upserted | `ExternalChange` |
+  | `external_change` | D21, a moved tip, a failed digest proof, an identity mismatch | `ExternalChange` |
+  | `reconfirmation_required` | a blocked revalidation, an invalid closed ticket, `ContextGone` | `ReconfirmationRequired` |
+  | `context_remote_branch_deleted`, `context_history_unresolved`, `context_ticket_closed` | D6 | `ReconfirmationRequired` |
+
+  The refusal keeps `abandoned ⇔ refusal` true; `answer_code` decides the answer, in the domain and, through `ParentView.answered`, in the binding.
+
+### 9.3 Codes (binding, `fn branch_code(BranchAnswer) -> ResultCode`, slice C)
+
+| Code | Answers |
+| --- | --- |
+| `Ok` | `merged`, `published`, `withdrawn_since` |
+| `AlreadyClosing` | `existing`, `kept_published`, `already_closing` |
+| `TicketClosed` | `closed_elsewhere`, `ticket_closed`, `already_closed`, `context_ticket_closed` |
+| `RemoteBranchDeleted` | `remote_branch_deleted`, `context_remote_branch_deleted` |
+| `RecoveryRequired` | `remote_changed`, `context_history_unresolved` (as outcome.rs:233-240) |
+| `ExternalChange` | `external_change` |
+| `ReconfirmationRequired` | `reconfirmation_required` |
+
+The answer and the record's final step are written in one transaction, and every later call answers from them.
+
+## 10. Ruling 8's open points, settled
+
+1. **`repo sync` for a tip only the local primary holds (3.3).** This is Task 9's. In that case the local primary is ahead of the remote, so the refusal also carries the existing `PrimaryAheadOfRemote`, which `way_out.rs` (319-335) routes to `SharePrimary`. The blocker itself is Q2's preflight-only variant.
+2. **`closed_at` frozen before the commit (C6).** The commit object is built unreferenced, then one UPDATE (`begin_branch_closing`) stores `closed_at` and `closure_oid` together, before the ref moves. A `NothingWritten` rebuild reuses `closed_at` (4.3, step 7). No CHECK is relaxed.
+3. **`permits`' abandon list.** Section 3: direct unchanged; branch `close` and `withdraw` from `Confirmed`, `ContextSynchronized`, and `Closing` with nothing written; `new_branch` from `Confirmed`, `BranchDeleted` (Q5) and `Retired`.
+4. **The frozen DDL.** `SCHEMA_V2` (2.1).
+
+## 11. The test plan
+
+### 11.1 Module and fixture
+
+The run tests are the `pull_request` module: a new file `src/repository/closure/run_pull_request_tests.rs`, declared in `closure/run_tests.rs` as `#[path = "run_pull_request_tests.rs"] mod pull_request;`. Its module path is `repository::closure::run_tests::pull_request::<test>`, and each test runs by exact name.
+
+`struct PullRequest { f: Fixture, primary_before: Oid }` builds on `Fixture::remote()` (run_tests.rs:75-87):
+- `new()` commits `.manyhands/config.toml` with `format_version = 2`, `integration = "pull_request"` and `publication_remote = "origin"` on `main` at the root, and moves `refs/remotes/origin/main` to it. It reuses Task 2's or Task 6's helper through `test_support.rs` if one exists.
+- `request()` returns the request for `preview_ticket_closure`'s expectation.
+- `run(req, io)` is `run::run_with_io(&TicketClosureLifecycle, &service, LifecycleRequest { clock, ..lifecycle_request(req) }, io)`, with `fn clock() -> OffsetDateTime { OffsetDateTime::from_unix_timestamp(1_795_000_000).unwrap() }`.
+- `branch(result)` returns the branch outcome.
+- `closed_commit_on(parent, closed_at, closed_by)`, `open_commit_on(parent)` and `remote_clone_commit(...)` build the commits a remote clone, a forge merge or a withdraw would make.
+- `assert_primary_untouched(&io)` checks `refs/heads/main == primary_before` and `io.primary_calls == 0`. Every run test ends with it.
+
+### 11.2 `PullRequestIo` (`FakeIo` is wrapped, and its fields are unchanged)
+
+```rust
+struct PullRequestIo {
+    inner: FakeIo,
+    /// `refs/remotes/origin/main` as each role's fetch leaves it, written first, before any stop.
+    fetched: Vec<(ChildRole, Oid)>,
+    /// Scripted answers by role, first in first out; `kept: true` reserves the child and leaves its row active.
+    stops: VecDeque<(ChildRole, SynchronizationError, bool /* kept */)>,
+    /// One real merge, taken once: the role and the incoming commit for `promotion_test_drive_local_bound`.
+    drive: Option<(ChildRole, Oid)>,
+    primary_calls: usize,
+}
+```
+
+`synchronize`, in order:
+1. A `Primary` target increments `primary_calls` and returns `Err(RecoveryRequired)`.
+2. **An acknowledgement.** A `restart: true` request for a row with `cancel_requested=1` (the cancel-and-acknowledge `child()` and `let_go` make) sets that row `phase='cancelled', outcome='cancelled'` and returns `Err(Interrupted)`, as a real child does at its first safe point.
+3. **The fetch.** Write `refs/remotes/origin/main` from `fetched` for `execution.role()`, before step 4, so a stop still leaves its fetch.
+4. **A scripted stop.** Pop the front of `stops` if its role matches. When `kept`, the IO first reserves the child as `FakeIo` does (`reserve_promotion_child`, promotion/run_tests.rs:385-397) and leaves the row reserved and active, the shape a real `RemoteContextDeleted`, `TicketClosed` or `HistoryUnresolved` stop keeps (sync.rs:4336-4357; Fact 15). Return the error.
+5. **A real merge.** If `drive` matches the role, `take` it and call `sync::promotion_test_drive_local_bound(service, &req, incoming, execution)` (sync.rs:3983-4091).
+   - On `Err` (a conflict, D7 and D10), return it, with the row retained.
+   - On `Ok(merged)`, complete the row with `merged` as its authority, through a test helper `complete_child_row(service, root, op, oid, kind)` extracted unchanged from `FakeIo`'s completion UPDATE (promotion/run_tests.rs:417-421), and return `Published { oid: merged }`.
+
+   The local update moves the context ref and its worktree as a real child does.
+6. **Otherwise,** `inner.synchronize`, a `FakeIo` completion with the local head.
+7. **The tracking context.** Write `refs/remotes/origin/manyhands/ticket/<ID>` to the published OID.
+
+`delete` delegates. `FakeIo` and its 16 impls (E-32) are unchanged apart from the extracted `complete_child_row`, which leaves `FakeIo`'s behaviour as it is.
+
+`DriveThenStop { inner: PullRequestIo, incoming: Oid }` is a second wrapper, for d13's in-process row. Its publication child calls `promotion_test_drive_local_bound` for `incoming` and returns `Err(SynchronizationError::Interrupted)` without completing the row. The row is left reserved after the local update and before any push, as a lost process leaves it. Every other call it delegates to `inner`, whose `drive` is `None`.
+
+`stops` with `kept: true` and a "something to lose" shape (d11's fourth row) also writes the evidence the decode rule requires for `local_prepared` (remote/state.rs:3544-3580):
+- `phase='local_prepared'` and `sync_checkpoint='local_prepared'` together;
+- `expected_oid`, `local_oid` and `primary_tracking_oid` set: the fetched remote tip, the local head and the fetched primary.
+
+`release_promotion_child` then reports something to lose (reservation.rs:1812-1825), and `let_go` takes the cancel-and-acknowledge path.
+
+### 11.3 Tests, each run red first, by slice
+
+| Slice | Test | Setup | Asserts |
+| --- | --- | --- | --- |
+| A | `branch_records_rebuild_and_keep_direct_rows` (P7, `closure/record_tests.rs`) | `db()` (20), plus a table from `SCHEMA_V2` with direct rows at `confirmed`, `closing`, `integrating` and `complete`, without the modes marker | one rebuild; each row reads `Direct`/`Close` with the other columns equal; the marker once; a second migrate changes nothing; a branch row at `publication_pending` inserts and reads back; the direct rows still validate |
+| A | `child_fence_admits_the_publication_child_only_while_a_branch_record_publishes` (`remote/reservation_tests.rs`, beside 4386) | `close_parent` (3696), made a branch record by SQL `UPDATE` | `Publication` validates at `closing` and `publication_pending`, and is refused at `confirmed`, `context_synchronized`, `published` and `complete`; `Primary` refused on a branch record; `Publication` refused on a direct one |
+| B | `pull_request_prepare_decides_the_situation_and_its_blockers` (`closure/observe_tests.rs`, table) | rows: situation 1 by the local primary and by the tracking primary; 4; 5; `PrimaryConflicted` with a merge in progress at a root on another branch; each dropped blocker absent; a foreign live `synchronize_context` row; an unfinished record's own live child row | the situation or blocker of each row; the foreign row answers kind `RepositoryBusy` with `blocker().operation_id == row`; the record's own child row does not make it busy; the domain digest differs from the direct one for the same state; `closed_at` of `record` not bound |
+| B | `a_new_request_observes_live_and_a_continuation_its_record_s_mode` (`closure/observe_tests.rs`, R25) | a direct record at a supersedable cleanup stop (`ContextChanged`) after integration, then the configuration switched to pull request | `prepare_observation_in(…, None)` observes pull request and is blocked `[AlreadyClosed]` (situation 1), and the old record is unchanged; `prepare_observation_in(…, Some(Direct))` observes direct (the direct digest) |
+| B | `d17_a_mode_switch_between_prepare_and_confirm_is_external_change` | table, both directions | `Err(ExternalChange)`; the refused row's path is the confirm's mode and its `answer_code` none; no commit; no child ran |
+| B | `d18_an_identity_change_between_prepare_and_confirm_is_external_change` | `user.email` changed after prepare | `Err(ExternalChange)`; nothing written |
+| C | `d1_records_publishes_and_completes_without_touching_the_primary` | `PullRequestIo` default | `Published`; one `Close ticket <ULID>` commit over the synchronized head, with `closed_at == clock()` and `closed_by`; the tracking context at it; `complete` with `answer_code == published`; the link row (`linked_items_for_test`); the hold released after; the same request again gives the same answer |
+| C | `d2_an_existing_closure_publishes_pending_work_and_is_already_closing` | the head holds a closure before prepare | preview `Existing`; no new commit; `Existing`; `complete`, `closure_oid` none; the link row present |
+| C | `d3_a_closure_the_context_child_brings_in_abandons_as_already_closing` | `drive = (Context, closed_commit_on(head))` (a real fast-forward of the ref and the worktree) | `AlreadyClosing`; no closure commit; `abandoned` with `answer_code`; the link upserted; the same request again (domain) gives the same. The binding's `ended_answer` is asserted in `a_branch_parent_view_is_never_integrated` |
+| C | `d4_a_closure_the_tracking_primary_holds_after_the_context_child_abandons_as_ticket_closed` | `fetched = [(Context, closed_commit_on(primary))]` | `AlreadyClosed`, refusal `Blocked([AlreadyClosed])`; nothing written |
+| C | `d5_a_stopped_context_child_keeps_the_record_confirmed_and_the_same_request_continues` | table of context stops: transport, key, host (`Transport` kinds), `PushRejected`, `Busy`, `PollYielding`, one of them `kept`; plus a row where a manual `item sync` of the context (`reserve_remote_operation`, as run_tests.rs:1864) is live when step 3 runs | stop rows: `Err(ContextSynchronization(e))`; `confirmed`; the kept row's child still reserved (not let go); a new request's confirm `Err(Busy)` (its own child is excluded, so `begin_record` answers); the same request then gives `Published`. The manual row: `Err(Repository(e))` with `e.kind == RepositoryBusy` and `e.blocker()` naming the manual row; `context_synchronized`; nothing written; once the manual row is cancelled the same request gives `Published` |
+| C | `d7_a_context_conflict_is_retained_and_the_same_request_continues` | `drive = (Context, conflicting remote commit)` | `Err(ContextSynchronization(ConflictPending))`; child retained; resolved through the conflict verbs' library call; the same request then gives `Published` |
+| C | `d8_a_stopped_publication_child_is_held_and_the_same_request_continues` | table of publication stops: transport, key, host, `Busy`, `PollYielding`; one row `kept` | `Err(ContextSynchronization(e))`; `publication_pending` with that category; held; reads `closing`; the same request then gives `Published` |
+| C | `d9_a_rejected_publication_is_replaced_and_keeps_the_published_closure` | first call `stops = [(Publication, PushRejected, true)]`; second call `drive = (Publication, remote_clone_commit with another closure)` | the first call is D8; the second's child merges (Part G) and completes: `KeptPublished` |
+| C | `d10_a_publication_conflict_is_retained_and_the_same_request_continues` | `drive = (Publication, conflicting commit)` | as D8, with `ConflictPending`; resolved; the same request continues to the answer |
+| C | `d12_a_crash_before_the_ref_moved_rebuilds_the_same_commit` | `exit_at` (run_tests.rs:1151) at `EXITS[2]` (`ClosureAfterClosingRecorded`) and `EXITS[3]` (`ClosureDuringCheckpointCheckout`); `closure_exit_child` (1101-1149) runs `FakeIo`, which completes a context-target publication child | the same `closed_at`; one `Close ticket` commit (`commits_in_odb`, 156); `Published` |
+| C | `d13_a_crash_after_the_ref_moved_never_runs_the_hook_again` | `exit_at` at `EXITS[4]` (`AfterClosureCheckpoint`), `EXITS[7]` (`AfterPublication`), `EXITS[12]` (`BeforeCompletion`); plus an in-process row through `DriveThenStop` (11.2), whose drive leaves its row reserved and uncompleted | no second commit; `RunEvent::Recording` not told once `primary_attempt > 0` (the `Told` observer, as 2321); `child()` replays or restarts; the answer's row (`Published`, or `KeptPublished` for the in-process row) |
+| C | `d14_a_new_request_while_unfinished_is_held_and_busy` | table: a record at `publication_pending` from D8's `kept` row (its own publication child holds a live row), and a record at `confirmed` from D5's `kept` row (its own context child holds one) | `promotion::unfinished_holder::<ClosureRecord>` names the record; a new prepare through the binding, `f.service.prepare(&Mutation::TicketClose(…))` (as run_tests.rs:2402-2407), answers `recovery_required` (not `busy`) with the holder's recovery action: `request.retry` naming its request, or `operation.resume` naming its operation when no request record holds it (bind/lifecycle.rs:413-420); a new request's confirm `Err(Busy)`; nothing written |
+| C | `d15_a_cancelled_publication_child_is_replaced_by_the_same_request` | a wrapper that calls `cancel_ticket_closure` at the publication child and returns `Err(Interrupted)` (as `CancelAfterPrimary`, run_tests.rs:1435-1460) | `Err(Interrupted)`; `publication_pending`/`cancelled`; the same request: a new attempt; `Published` |
+| C | `d20_operations_list_a_branch_record_as_a_close_and_its_child_as_its_own_row` (library half; design correction) | a record at `publication_pending` with its publication child's row reserved (D10's conflict) | the operations read (`read/status.rs` `repository_operations`, 845-858) lists the record once as `close` with its step and resume offered; it lists the publication child as its own `synchronize_context` row with no next action while it holds the reservation (520-540), attributed to the record's request (`recovery.rs` 1154-1199); abandon of the child is refused (`reservation.rs` `abandonable`, 801-812). This is what a direct close's child gets today |
+| C | `d21_a_changed_existing_closure_before_step_three_abandons_as_external_change` | `existing` preview; table: `drive = (Context, closed_commit_on(head, another closure))`, and `drive = (Context, open_commit_on(head))` (a withdraw) | `ExternalChange` abandon (not `reconfirmation_required`: the worktree is clean after the real update); no closure commit |
+| C | `a_branch_record_s_own_publication_child_passes_the_fence` (E-23, `closure/run_tests.rs` after 1894) | a `PullRequest` record at `publication_pending`, built in the child module and used through `pub(super)` | its validated execution reserves (`Reserved`); a manual reservation of the same target `Busy`; a stale attempt's execution refused with the lifecycle mismatch |
+| C | `closure_hold_lets_through_only_its_own_publication_child` (`reservation_tests.rs`) | — | through the reserve (1618) and restart (3211) callers: exempt for the holder's own `Publication` execution; `Busy` with no execution; `Busy` for a direct holder; another record's execution refused by `validate` with the lifecycle mismatch (`OperationMismatch`) before the fence |
+| C | `a_branch_parent_view_is_never_integrated` (`mutation/bind/lifecycle_tests.rs`) | a `ParentView` literal as at 264 with `path: Branch` | `parent_integrated == false` at `publication_pending` and `complete`; `ended_answer` returns `None` when `answered` |
+| D | `d6_a_deleted_or_ended_context_child_abandons_with_its_code` | table: context stops `RemoteContextDeleted`, `HistoryUnresolved`, `TicketClosed`, each `kept` | `abandoned` with `context_remote_branch_deleted` / `context_history_unresolved` / `context_ticket_closed`; the child's row no longer active (let go through `release_promotion_child`, nothing to lose); nothing written; the same request again gives the same |
+| D | `d11_a_deleted_remote_branch_after_the_closure_answers_by_the_tracking_primary` | table of 3: `stops = [(Publication, RemoteContextDeleted, true)]`, `fetched = [(Publication, this closure / another / open)]`; a fourth row whose kept row has the full `local_prepared` evidence (11.2), so `release` reports something to lose and the cancel-and-acknowledge path runs | `Merged`, `ClosedElsewhere`, `RemoteBranchDeleted`, all `complete`; in every row the child's row ends terminal before completion |
+| D | `answer_table_chooses_each_row_in_order` | 9 rows (`kept` stops for 3 and 4; `fetched` for 1 and 2; `publication_remote` changed in the configuration for 5; an `existing` record for 6; plain for 7; `drive` with another clone's closure for 8 and its withdraw for 9) | each row's `BranchAnswer` and `answer_code`; `complete`; the link; no active child row left |
+| E | `d16_the_hold_refuses_every_writer_but_its_own_publication_child` | table; a record at `closing` (`failing(AfterClosureCheckpoint)`, run_tests.rs:143) and at `publication_pending` (D8) | `save_ticket_with`, the slug (`TicketWriteOptions { slug }`), `prepare_context`, `checkpoint_comment_locally_with`, `repair_item` and `execute_retirement_request` answer `RecoveryRequired` with `blocker().operation_id == record op`; the ticket's `begin_local_context_sync_with_request` answers a `ReadError` `RecoveryRequired` whose recovery action names the record's operation; a manual context reservation and the domain republish answer `Busy`; `resolve_history` is not refused by the hold (Q6); the poll row (below) refuses its candidate; then the same request's publication child completes |
+| E | D16's poll row (branch only, R24) | a record at `publication_pending` whose publication child was let go (D15's cancelled row, so no child holds the reservation and `poll`'s reservation is `Reserved`, run_tests.rs:1948-1959); the tracking primary and the local primary moved by hand to a commit holding this closure; the remote context reported absent | the poll runs its retirement pass through the entry that reaches `capture_retirement_target` (poll.rs:2177), with `poll::synthetic_fetch` as `context_retirement/acceptance_tests.rs` 313-360 does, if `poll` (run_tests.rs:1938) does not reach it; `PollDisposition::Closed` is observed and its candidate refused; the context ref and worktree are unchanged; then the same request completes (row 1) |
+
+The direct close's existing tests run unchanged and are exempt from fail-first. The refactors' guards (section 0.1) run in their slices.
+
+### 11.4 E-22, E-23 and the mechanical edits
+
+**E-22 (slice A)**, in `closure/record_tests.rs`:
+- `steps_permit_only_designed_transitions` (140): the direct assertions are unchanged. It gains `branch_permits` rows: each transition of section 3, and the refusals `Closing→Integrating`, `→Superseded`, `Closing→Published` and `Retired` for `close`.
+- `closure_step_round_trips_through_parent_view` (250): `Retired` views as `BranchDeleted`, and writing that back keeps `Retired`.
+- `step_invariants_enforced` (324): one `rejected(…)` row and its accepted twin per CHECK of 2.2.
+- `no_closed_by_column_or_value` (830): the column list (838-866) gains `integration_mode, action, withdraw_oid, retired_oid, pending_ref, answer_code, consented_context_oid`.
+- `migration_is_all_or_nothing_and_idempotent` (91): three markers on the fresh path, none after the fault.
+- `closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once` (1324): the old table is built from `SCHEMA_V2` with the mask narrowed, the v2 and modes markers are deleted, and both rebuilds run once.
+
+Two more files:
+- `tests/recovery_foundation_gate.rs:1131-1143`: `"wave_06_closure_modes_v1"`, last.
+- `recovery.rs:4529-4549` and `tests/read_status.rs:1405, 1821`: unaffected. The implementer confirms each by running it.
+
+**E-23 (slice C):** the new test above. The C1 pair (run_tests.rs:1864, 1894) is unchanged.
+
+**Mechanical edits** (a new arm, field or return type; no assertion's meaning changes):
+
+| Slice | Edit |
+| --- | --- |
+| A | E-30: `ChildRole::Publication => unreachable!(…)` arms in `remote/reservation_tests.rs` 4542, 4546, 4577, 4633, 4660 and `promotion/record_tests.rs` 222-236 |
+| B | `closure/observe_tests.rs:1380-1382` `closure_digest_golden_vector`: the `ClosureObservation` literal gains `path: (Integration::Direct, ClosureAction::Close)`; its golden value must not change |
+| C | `TicketClosureResult` arms in `closure/run_tests.rs:250-255` (`authoritative`), `tests/ticket_closure.rs:364-367` and `572-575` (ruling 3; the SSH target is compiled now and run at review-ready) |
+| C | `mutation/bind/lifecycle_tests.rs:174-199` `impl LifecycleVerb for Fixed`: `call` returns `Option<Result<Called, Stop>>`; the body stays `None` |
+| C | `ParentView`'s literal at `mutation/bind/lifecycle_tests.rs:264` gains `path: RecordPath::Direct, answered: false` |
+| C | `promotion/run_tests.rs`: `complete_child_row` extracted from `FakeIo` (417-421), with behaviour unchanged |
+
+E-28, E-29 and E-32 are not applied. E-31's direct lists (reservation_tests.rs 3748-3754, 4413-4425) are unchanged; the branch rows go in the new fence test.
+
+## 12. Slices
+
+Each slice compiles and passes the static gates. The direct tests stay green.
+
+**A. The record's path.**
+- `closure/record.rs`: 2.1 to 2.3 except `remote_deletion_required`; `written_commit()` with its readers `effect_written`, `written_checkpoint` and `merged_context`; `branch_permits`; the save dispatch; `supersedable`; the fence SQL.
+- `closure/mod.rs`: `ClosureAction`, and `BranchAnswer` with `parse`.
+- `promotion/lifecycle.rs`: `RecordPath`, `LifecycleRecord::path`.
+- `promotion/lifecycle_record.rs`: `ChildRole::Publication`, `ParentFacts`, `child_allowed`, the slot readers, `remote_identity_of`, `audit`, `second_role`.
+- `promotion/run.rs`: the `child_id` and `synchronization_target` arms.
+- `mutation/bind/lifecycle.rs`: the `Stages` arms.
+- `tests/recovery_foundation_gate.rs`.
+- Tests: P7, the fence test. Edits: E-22, E-30.
+
+**B. The branch observation and consent.**
+- `closure/observe.rs`: 8.1 to 8.3: `prepare_observation_in` and the stored mode (R25); the pull-request-only `pending_work` read, which leaves out the record's own children; the prepare's `busy`.
+- `closure/mod.rs`: `TicketClosurePreview.path`.
+- `closure/record.rs`: `begin_branch_record`, `refuse_record_on`.
+- `closure/lifecycle.rs`: the begin and refuse dispatch, plus a `require_identity` override that answers `Err(RecoveryRequired)` for a branch observation until slice C. No record or commit is written.
+- `promotion/lifecycle.rs`, `promotion/run.rs` (256, 501, 547-557, 672, 726) and `promotion/integrate.rs:122`: `refuse_record` takes `config`, and `preview_request` takes `record`.
+- `closure/lifecycle.rs`: `ClosurePreviewRequest`.
+- `mutation/bind/lifecycle.rs:379-384`: `observe` names its error's blocker.
+- Tests: the two `observe_tests` tests (`pull_request_prepare_decides_the_situation_and_its_blockers`, `a_new_request_observes_live_and_a_continuation_its_record_s_mode`), D17, D18. Edit: `closure_digest_golden_vector`'s literal.
+
+**C. The branch runner, the publication child and the binding's re-entry.**
+- `closure/checkpoint.rs`: `build_closure_commit`, the generalized reconciliation, `branch_step`, `publication_answer` rows 6 to 9, `branch_link`.
+- `closure/record.rs`: the writers of 2.4, `written_closure_holder`, path-aware `remote_deletion_required`.
+- `closure/lifecycle.rs`: the trait methods, `ClosureOutcome`, `BranchFinish`, `end_branch(ContextGone)`; the slice B override removed.
+- `closure/mod.rs`: `BranchClosureOutcome`, the result variants, `BranchAnswer::name`, the clock parameter.
+- `promotion/lifecycle.rs`: the trait additions, `BranchStep`, `BranchEnd { ContextGone }` with no lifetime, `LifecycleRequest.clock`, `answered`.
+- `promotion/lifecycle_record.rs`: `ChildExecution::role`, `is_publication_of`.
+- `promotion/run.rs`: the dispatch, `context_step`, `promote_branch` (D5/D7 return), `finish_branch` (rows 6 to 9 and the stop's return), `make_outcome`, the answered checks, `children_contexts`, the refresh contexts, and the interim R-35 arm at 473-479 answering `Err(recovery_required)`.
+- `promotion/mod.rs`: `ParentView.path` and `answered`.
+- `remote/reservation.rs`: the exemption.
+- `pull_request_links.rs`: `upsert_link`.
+- `mutation/progress.rs:450`.
+- `mutation/bind/lifecycle_verb.rs`: `Called`, `branch_code`.
+- `mutation/bind/lifecycle.rs`: `branch_reached`, `parent_integrated`, `ended_answer`, `stopped`.
+- Tests: D1 to D5, D7 to D10, D12 to D15, D20, D21, E-23, the hold unit test, the `ParentView` test.
+- Edits: the `TicketClosureResult` arms, `Fixed::call`, the `ParentView` literal, `complete_child_row`.
+
+**D. The stop rows and the ends.**
+- `closure/checkpoint.rs`: rows 1 to 5.
+- `closure/lifecycle.rs`: `end_branch(ContextChild)`.
+- `promotion/lifecycle.rs`: `BranchEnd<'a>` with `ContextChild(&'a SynchronizationError)`, and the trait's `end: BranchEnd<'_>`; `branch_answer` gains `remote_current`.
+- `promotion/run.rs`: `ends_context_child`, `let_go`, `acknowledge_cancellation`, rows 1 to 5 in `finish_branch`, the R-35 prior-record path (473-479, replacing C's interim arm), `run_observed`'s branch arm.
+- Tests: D6, D11, the answer table.
+
+**E. The hold.**
+- `closure/record.rs`: `branch_hold`, `hold_refusal`.
+- `src/repository.rs`: `refuse_closed_ticket` and its callers.
+- `bridges/repair.rs`.
+- `context_retirement/authority.rs` and `source.rs`.
+- `local_sync/record.rs`.
+- `mutation/bind/republish.rs`.
+- The writers' bindings' `naming`.
+- The Q6 ruling (resolve-history gets no check) lives only here.
+- Tests: D16, with its poll row (branch only, R24).
+
+**Review-ready SSH tier for these paths** (Task 16): `ticket_closure`, `document_promotion`, `mutation_remote`, the `remote/` targets, `cli_remote`, `comment_publication`, and `--lib repository::local_sync::`.
+
+## Open questions for the controller
+
+All seven questions of revision 1 are ruled, and so are the checker's points R21 to R25; the rulings are applied above. Two questions remain:
+
+1. **D20 is a correction to the design.** Today the operation list lists a direct close's live child row on its own: `read/status.rs` 705-737 skips only a parent's own row, and 520-540 lists any row that holds the reservation, with no next action. Under the controller's ruling, branch records do the same and d20 asserts it. Task 15's D-1 amendment of `docs/RFC/cli-contract.md` ("`operation list` and `operation show` of a branch record") should say so, and the design's D20 row and Baseline Fact 12 want the same correction. This is for the owner or the documents task to record. It does not block Task 7.
+
+2. **R24: I dispute "a direct record cannot produce a `Closed` candidate through a poll while the fence holds it".**
+   - **Dropped as ruled.** The `BeforeRemoteDeletion` row is unreachable: the close holds its parent reservation there (run.rs:1428-1449), which refuses the poll (1368-1371), and the `poll` helper panics unless it gets `Reserved` (closure/run_tests.rs:1948-1959).
+   - **Reachable while the fence holds: `publication_pending` after a cancelled primary child.**
+     - `finish_steps` lets the child go (`release_child`, 1342-1344) and returns `AwaitingPublication` at 1351-1353, before the cleanup's reservation (1395-1441). So no row holds the reservation, and a poll can reserve.
+     - The context child published the context, so an outside deletion is observed as deleted.
+     - The local primary holds the integrated closure, which `completed_deleted_context` (poll.rs:279-294) needs for `Closed`.
+     - Without the new check, `capture_target` would retire the context under the unfinished direct record.
+   - **The same holds at `published`** after the cleanup's full check stops it (1381-1385), before it reserves.
+   - **Proposed fix:** a direct row, `a_poll_does_not_retire_a_context_a_direct_closure_holds` in `closure/run_tests.rs` beside 1983-2120. Its setup is `Fixture::remote()` and `CancelAfterPrimary` (1435-1460), a record at `publication_pending` with publication `cancelled`, and the remote context reported deleted. It asserts `Closed` is observed and its candidate refused, the context unchanged, and that the same request then completes.
+   - **Status:** not in the slices until the controller rules. Slice E would carry it.
