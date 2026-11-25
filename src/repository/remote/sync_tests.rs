@@ -11162,9 +11162,9 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
 mod ticket_context_closure_rule {
     use super::*;
 
-    const PATH: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAV/ticket.md";
+    pub(super) const PATH: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAV/ticket.md";
 
-    fn ticket(closed: bool, body: &str) -> String {
+    pub(super) fn ticket(closed: bool, body: &str) -> String {
         let closure = if closed {
             "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"\n"
         } else {
@@ -11282,6 +11282,13 @@ mod ticket_context_closure_rule {
                 .unwrap(),
             Some(pass.primary_incoming)
         );
+        // Window zero is no pinned window: it has no primary side.
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 0)
+                .unwrap(),
+            None
+        );
         for (result, accepted) in [(false, false), (true, true)] {
             assert_eq!(
                 verdicts(
@@ -11317,6 +11324,33 @@ mod ticket_context_closure_rule {
         }
     }
 
+    /// A primary-target synchronization is given real pinned windows too: only
+    /// the target's kind keeps them from giving a primary side.
+    #[test]
+    fn a_primary_target_pinned_window_gives_no_primary_side() {
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let incoming = child_file(&fixture.repository(), fixture.base, "incoming.txt", b"in\n");
+        fixture.fetch(incoming, 2);
+        fixture.append_window(1, incoming).unwrap();
+        let db = fixture.db();
+        assert_eq!(
+            db.query_row(
+                "SELECT kind, primary_oid FROM remote_integration_windows WHERE number=1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap(),
+            ("pinned".to_owned(), incoming.to_string())
+        );
+        assert_eq!(
+            fixture
+                .service
+                .synchronization_primary_side(fixture.root.path(), fixture.operation, 1)
+                .unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn a_primary_target_gives_no_primary_side_and_keeps_every_side_closure() {
         let (root, _data, service, operation, _, _) = resolution_fixture(&[(
@@ -11332,14 +11366,12 @@ mod ticket_context_closure_rule {
         })
         .unwrap()
         .unwrap();
-        for window in [0, 1] {
-            assert_eq!(
-                service
-                    .synchronization_primary_side(root.path(), operation, window)
-                    .unwrap(),
-                None
-            );
-        }
+        assert_eq!(
+            service
+                .synchronization_primary_side(root.path(), operation, 0)
+                .unwrap(),
+            None
+        );
         for (result, accepted) in [(false, false), (true, true)] {
             assert_eq!(
                 verdicts(
@@ -11354,6 +11386,59 @@ mod ticket_context_closure_rule {
                 "primary target, result closed: {result}"
             );
         }
+    }
+}
+
+/// R-12 at a real call site: the preflight of `resolve_synchronization` for a
+/// ticket context's Context-stage conflict under a pinned window, whose fetched
+/// primary holds the ticket's closure.
+mod ticket_context_resolution_call_site {
+    use super::ticket_context_closure_rule::{PATH, ticket};
+    use super::*;
+
+    #[test]
+    fn resolve_synchronization_keeps_the_closure_the_pinned_primary_holds() {
+        let pass = ContextPass::with_files(
+            (PATH, ticket(true, "primary").as_bytes()),
+            (PATH, ticket(false, "incoming").as_bytes()),
+            Some((PATH, ticket(false, "local").as_bytes())),
+        );
+        let root = pass.root.path();
+        assert!(matches!(
+            pass.integrate(),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let stage = pass.stage(0).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Context);
+        assert_eq!(stage.window_number, 1);
+        let repository = git2::Repository::open(pass.repository.workdir().unwrap()).unwrap();
+        let (index, head) = (
+            fs::read(repository.path().join("index")).unwrap(),
+            repository.head().unwrap().target(),
+        );
+        // The result opens the ticket the pinned primary has closed.
+        let outcome = try_resolve_fixture(
+            root,
+            &pass.service,
+            pass.operation,
+            &["", &ticket(false, "result"), ""],
+        );
+        assert_eq!(
+            outcome.unwrap(),
+            ResolveSynchronizationOutcome::ValidationFailed
+        );
+        assert_eq!(repository.head().unwrap().target(), head);
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+        // The same resolution keeping the primary's closure is accepted.
+        assert!(matches!(
+            try_resolve_fixture(
+                root,
+                &pass.service,
+                pass.operation,
+                &["", &ticket(true, "result"), ""],
+            ),
+            Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+        ));
     }
 }
 
@@ -13951,12 +14036,35 @@ struct ContextPass {
 
 impl ContextPass {
     fn new() -> Self {
-        Self::with_primary_file("remote-primary.txt", b"primary\n")
+        Self::with_files(
+            ("remote-primary.txt", b"primary\n"),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
     }
 
     /// As `new`, with the fetched primary adding `primary_path` (which may be
     /// nested) instead of the default file.
     fn with_primary_file(primary_path: &str, primary_bytes: &[u8]) -> Self {
+        Self::with_files(
+            (primary_path, primary_bytes),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
+    }
+
+    /// As `new`, with the fetched primary and the fetched context each adding
+    /// the file given (a path may be nested). With `diverge`, the local
+    /// context branch first gains a commit that sets that file, and the
+    /// fetched context is a sibling of it, so the file the context already
+    /// holds conflicts in the Context stage with the saved ticket as its base.
+    fn with_files(
+        primary: (&str, &[u8]),
+        context: (&str, &[u8]),
+        diverge: Option<(&str, &[u8])>,
+    ) -> Self {
+        let (primary_path, primary_bytes) = primary;
+        let (context_path, context_bytes) = context;
         let (root, data, service) = fixture();
         let primary_repository = git2::Repository::open(root.path()).unwrap();
         primary_repository
@@ -13979,8 +14087,20 @@ impl ContextPass {
         })
         .unwrap();
         let repository = materialized_target(root.path(), "main", &target).unwrap();
-        let local = repository.head().unwrap().target().unwrap();
-        let context_incoming = child_file(&repository, main, "remote-context.txt", b"context\n");
+        let head = repository.head().unwrap().target().unwrap();
+        let (local, context_parent) = match diverge {
+            Some((path, bytes)) => {
+                let local = child_path(&repository, head, path, bytes);
+                let name = repository.head().unwrap().name().unwrap().to_owned();
+                repository.reference(&name, local, true, "fixture").unwrap();
+                repository
+                    .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .unwrap();
+                (local, head)
+            }
+            None => (head, main),
+        };
+        let context_incoming = child_path(&repository, context_parent, context_path, context_bytes);
         let primary_incoming = child_path(&repository, main, primary_path, primary_bytes);
         let selected = target_ref(&plan, &target);
         for (reference, oid) in [
