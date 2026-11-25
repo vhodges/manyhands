@@ -4343,6 +4343,41 @@ fn a_pull_request_enable_without_a_key_leaves_a_recorded_setup() {
         &[],
         &created,
     );
+    // `poll once` takes the setup poll for a first-time setup, and a recorded
+    // setup is not on the remote yet: it answers `not_published` without a
+    // connection, and the request is finished.
+    let polled = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+        Mutation::PollOnce(manyhands::repository::PollOnceInput {
+            root: plain.root.clone(),
+        }),
+    );
+    assert_eq!(polled.code, ResultCode::Ok, "{}", polled.message);
+    let polled_data = serde_json::to_value(&polled.data).unwrap();
+    assert_eq!(polled_data["type"], "setup_poll");
+    assert_eq!(polled_data["setup_id"], setup_id);
+    assert_eq!(polled_data["outcome"], "not_published");
+    assert_eq!(polled_data["integration"], serde_json::Value::Null);
+    assert_eq!(polled_data["differs"], false);
+    support::schema::check_published("setup_poll.schema.json", &polled_data).unwrap();
+    assert_eq!(
+        desk.record("01ARZ3NDEKTSV4RRFFQ69G5FX3").unwrap().state,
+        RequestState::Finished
+    );
+    support::mutation_golden::assert_contract_at(
+        "poll_once_setup_not_published",
+        &root,
+        Some("setup_poll.schema.json"),
+        &[
+            (setup_id.as_str(), "<setup>"),
+            (
+                &format!("manyhands/setup/{setup_id}"),
+                "manyhands/setup/<setup>",
+            ),
+        ],
+        &polled,
+    );
     let observed = desk.service.observe_host(
         &plain.root,
         None,

@@ -269,6 +269,15 @@ impl Session for Scripted {
     > {
         None
     }
+
+    fn poll_setup(
+        &self,
+        _: &RepositoryService,
+        _: &Path,
+        _: RequestId,
+    ) -> Option<Result<crate::repository::SetupPollReport, crate::repository::SetupPollError>> {
+        None
+    }
 }
 
 /// A repository on `main` with one commit, the remote `origin` at an

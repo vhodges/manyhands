@@ -1056,6 +1056,9 @@ pub enum MutationDataDto {
     /// Of a pull-request `repo enable` or `remote select`: the setup it
     /// recorded, with its state.
     Setup(Box<SetupMutationDto>),
+    /// Of a `poll once` of a repository whose first-time setup is pending:
+    /// what the setup poll saw, and what it did (design Part G).
+    SetupPoll(Box<SetupPollDto>),
     /// Of a `busy` or `recovery_required` answer that names the operation
     /// in its way. It is never stored: a record keeps the command's own.
     Blocked(BlockedDto),
@@ -1160,6 +1163,107 @@ impl SetupMutationDto {
             branch: text("branch")?,
             remote: text("remote")?,
             integration,
+            pull_request: crate::repository::PullRequestDto {
+                source: link.get("source")?.as_str()?.to_owned(),
+                target: link.get("target")?.as_str()?.to_owned(),
+                forge,
+                url: optional("url")?,
+            },
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupPollDto`: one value, so that the data of a setup poll
+    /// is told apart by it alone.
+    SetupPollType {
+        SetupPoll => "setup_poll",
+    }
+);
+
+/// What a setup poll answers: the setup it looked at, what it saw
+/// (`outcome`), the merged mode on activation (`integration`, else null),
+/// whether the merged file is not the one the setup intended, and the link
+/// that opens the pull request. It holds no remote location, credential or
+/// identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupPollDto {
+    pub r#type: SetupPollType,
+    pub setup_id: String,
+    pub outcome: String,
+    pub integration: Option<String>,
+    pub differs: bool,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl SetupPollDto {
+    /// The data of a setup poll's report.
+    pub(crate) fn of(report: &crate::repository::setup::poll::SetupPollReport) -> Self {
+        Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: report.setup_id.to_string(),
+            outcome: report.outcome.as_str().to_owned(),
+            integration: report
+                .integration
+                .map(|integration| integration.as_str().to_owned()),
+            differs: report.differs,
+            pull_request: crate::repository::PullRequestDto::from(&report.link),
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_poll" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let outcome = text("outcome")?;
+        if !crate::repository::setup::poll::SetupPollOutcome::ALL
+            .iter()
+            .any(|known| known.as_str() == outcome)
+        {
+            return None;
+        }
+        let integration = match stored.get("integration")? {
+            serde_json::Value::Null => None,
+            value => {
+                let mode = value.as_str()?;
+                if !matches!(mode, "direct" | "pull_request") {
+                    return None;
+                }
+                Some(mode.to_owned())
+            }
+        };
+        let link = stored.get("pull_request")?.as_object()?;
+        if link.len() != 4 {
+            return None;
+        }
+        let optional = |key: &str| match link.get(key)? {
+            serde_json::Value::Null => Some(None),
+            value => Some(Some(value.as_str()?.to_owned())),
+        };
+        let forge = optional("forge")?;
+        if let Some(forge) = &forge
+            && !crate::canonical::ForgeKind::ALL
+                .iter()
+                .any(|known| known.as_str() == forge)
+        {
+            return None;
+        }
+        Some(Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: text("setup_id")?,
+            outcome,
+            integration,
+            differs: stored.get("differs")?.as_bool()?,
             pull_request: crate::repository::PullRequestDto {
                 source: link.get("source")?.as_str()?.to_owned(),
                 target: link.get("target")?.as_str()?.to_owned(),
@@ -2618,6 +2722,8 @@ impl MutationDataDto {
             | Self::ResolveHistory(_)
             // A setup's data names no host: the transport's error does.
             | Self::Setup(_)
+            // Nor does a setup poll's.
+            | Self::SetupPoll(_)
             // Nor is a request refused for another operation's row
             // refused for its host.
             | Self::Blocked(_) => None,
@@ -2717,7 +2823,9 @@ impl MutationDataDto {
             }
             // A poll's report, or the host it stopped for on its first call.
             Command::PollOnce => {
-                if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup_poll") {
+                    SetupPollDto::from_stored(stored).map(|data| Self::SetupPoll(Box::new(data)))
+                } else if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
                     PollRetirementMutationDto::from_stored(stored).map(Self::PollRetirement)
                 } else if stored.get("completion").is_some() {
                     PollMutationDto::from_stored(stored).map(Self::Poll)

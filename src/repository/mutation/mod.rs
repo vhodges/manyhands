@@ -156,8 +156,8 @@ pub use dto::{
     RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
     RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
     RequestResultDto, RequestState, SetupForgeDto, SetupMutationDto, SetupMutationType,
-    SetupPreviewDto, SynchronizationConflictMutationDto, SynchronizationConflictType,
-    SynchronizationMutationDto, TicketMutationDto,
+    SetupPollDto, SetupPollType, SetupPreviewDto, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};

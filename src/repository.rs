@@ -147,6 +147,7 @@ pub use remote::{
     SynchronizationOutcome, SynchronizationResult, SynchronizationSettings, SynchronizationStage,
     SynchronizationTarget, SynchronizeRemoteRequest,
 };
+pub use setup::poll::{SetupPollError, SetupPollOutcome, SetupPollReport};
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
 /// The attempt ID `conflict resolve` derives, for the source-included test

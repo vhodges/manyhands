@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 setup poll",
+  "description": "The data of a poll once of a repository whose first-time setup is pending: what the poll saw of the setup on the remote's primary, and, on activated, the merged mode. Every outcome is an ok answer and the request is finished: a stop is final and a new request polls again. It holds no remote location, credential or identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "setup_id",
+    "outcome",
+    "integration",
+    "differs",
+    "pull_request"
+  ],
+  "properties": {
+    "type": {
+      "description": "Always setup_poll: the tag that tells this data from every other command's.",
+      "type": "string",
+      "enum": [
+        "setup_poll"
+      ]
+    },
+    "setup_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "description": "What the poll saw, in the order it checks: not_published (the setup is recorded and not on the remote yet, and nothing was connected to), configuration_invalid or primary_differs (the remote's primary holds a configuration that cannot be read or names another primary branch), branch_deleted (the setup branch is gone and the primary does not hold the setup), waiting_for_merge, waiting_for_checkout (the root is not on the primary, or not clean), diverged (the local primary has commits the remote's lacks) and activated (the primary was fast-forwarded and the repository is set up).",
+      "type": "string",
+      "enum": [
+        "not_published",
+        "configuration_invalid",
+        "primary_differs",
+        "branch_deleted",
+        "waiting_for_merge",
+        "waiting_for_checkout",
+        "diverged",
+        "activated"
+      ]
+    },
+    "integration": {
+      "description": "The merged mode on activated, null otherwise.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "direct",
+        "pull_request",
+        null
+      ]
+    },
+    "differs": {
+      "description": "True when the merged file is not the one the setup intended; the merged one is in effect.",
+      "type": "boolean"
+    },
+    "pull_request": {
+      "$ref": "pull_request.schema.json"
+    }
+  }
+}

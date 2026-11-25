@@ -10,9 +10,13 @@ pub(crate) mod data;
 pub(crate) mod enable;
 pub(crate) mod intent;
 mod lock;
+pub(crate) mod poll;
 pub(crate) mod publish;
 pub(crate) mod record;
 
 // The bindings of the later tasks name the trait through here.
 #[allow(unused_imports)]
 pub(crate) use channel::SetupChannel;
+
+#[cfg(test)]
+pub(crate) mod test_world;

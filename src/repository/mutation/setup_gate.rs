@@ -8,9 +8,9 @@
 //! a setup's own request continues past it.
 //!
 //! A setup is pending while its record exists and the local primary does not
-//! yet hold it (`is_complete`). A complete setup is read as none; finishing
-//! it is the setup completion's work, not the gate's, so `check` and
-//! `check_in` are read-only: no lock, no write. A repository the registry
+//! yet hold it (`is_complete`). A complete setup is read as none, and `check`
+//! finishes it (design Part B, R-17) when the setup lock is free; `check_in`,
+//! inside an acceptance transaction, is read-only: no lock, no write. A repository the registry
 //! does not hold, or holds with no record, refuses nothing. A record this
 //! build cannot read refuses what the gate refuses, as `recovery_required`,
 //! and lets through what carries on, so the way out (`repo remove`) runs.
@@ -28,7 +28,7 @@ use crate::{
     repository::{
         ReadError, RepositoryOperation, RepositoryService,
         setup::{
-            complete,
+            self, complete,
             record::{self, SetupKind, SetupRecord},
         },
     },
@@ -54,11 +54,20 @@ pub(super) fn check(
     if command.setup_gate() == SetupGate::Carries {
         return Ok(());
     }
-    service
+    let mut complete = false;
+    let verdict = service
         .read_session(RepositoryOperation::Read, |connection| {
-            Ok(look(connection, command, root))
+            Ok(look(connection, command, root, &mut complete))
         })
-        .unwrap_or(Ok(()))
+        .unwrap_or(Ok(()));
+    // A setup the local primary already holds refuses nothing, and is
+    // finished here, before the command goes on (design Part B). A held
+    // lock, an operation in the way or a failure changes no answer: the
+    // next look finishes it.
+    if verdict.is_ok() && complete {
+        let _ = setup::complete::finish(service, root);
+    }
+    verdict
 }
 
 /// `check`, inside the acceptance transaction: the same refusal from the
@@ -69,7 +78,7 @@ pub(super) fn check_in(
     command: Command,
     root: &Path,
 ) -> Result<(), Answer> {
-    look(tx, command, root)
+    look(tx, command, root, &mut false)
 }
 
 /// `check_in` for the acceptance transactions, which fail with a read
@@ -85,7 +94,13 @@ pub(super) fn admit(
     check_in(tx, command, root).map_err(|answer| ReadError::new(answer.code))
 }
 
-fn look(connection: &Connection, command: Command, root: &Path) -> Result<(), Answer> {
+/// `complete` is set when a setup is there and the local primary holds it.
+fn look(
+    connection: &Connection,
+    command: Command,
+    root: &Path,
+    complete: &mut bool,
+) -> Result<(), Answer> {
     let gate = command.setup_gate();
     if gate == SetupGate::Carries {
         return Ok(());
@@ -117,6 +132,7 @@ fn look(connection: &Connection, command: Command, root: &Path) -> Result<(), An
         return Ok(());
     }
     if holds(&root, &record) {
+        *complete = true;
         return Ok(());
     }
     Err(Answer::stopped(ResultCode::SetupPending))

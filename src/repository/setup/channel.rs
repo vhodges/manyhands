@@ -46,6 +46,8 @@ pub(crate) struct ServiceChannel<'a, P> {
     service: &'a RepositoryService,
     root: PathBuf,
     credentials: &'a mut SessionCredentials<P>,
+    /// A background call never prompts (today's `automatic` policy).
+    automatic: bool,
 }
 
 impl<'a, P> ServiceChannel<'a, P> {
@@ -58,7 +60,14 @@ impl<'a, P> ServiceChannel<'a, P> {
             service,
             root,
             credentials,
+            automatic: false,
         }
+    }
+
+    /// The channel of a background call, which never prompts.
+    pub(crate) fn automatic(mut self, automatic: bool) -> Self {
+        self.automatic = automatic;
+        self
     }
 
     fn request(&self, direction: SshDirection) -> VerifySshTransportRequest {
@@ -74,7 +83,7 @@ impl<P: SessionCredentialProvider> SetupChannel for ServiceChannel<'_, P> {
     fn fetch_base(&mut self, scope: &SetupScope) -> Result<SetupAdvertisement, SshTransportError> {
         let request = self.request(SshDirection::Fetch);
         self.service
-            .with_setup_remote(request, scope, false, self.credentials, |remote| {
+            .with_setup_remote(request, scope, self.automatic, self.credentials, |remote| {
                 remote.fetch_setup_base()
             })
     }
@@ -86,7 +95,7 @@ impl<P: SessionCredentialProvider> SetupChannel for ServiceChannel<'_, P> {
     ) -> Result<SetupPush, SshTransportError> {
         let request = self.request(SshDirection::Push);
         self.service
-            .with_setup_remote(request, scope, false, self.credentials, |remote| {
+            .with_setup_remote(request, scope, self.automatic, self.credentials, |remote| {
                 remote.push_setup_branch(commit)
             })
     }
@@ -94,7 +103,7 @@ impl<P: SessionCredentialProvider> SetupChannel for ServiceChannel<'_, P> {
     fn observe_branch(&mut self, scope: &SetupScope) -> Result<Option<Oid>, SshTransportError> {
         let request = self.request(SshDirection::Fetch);
         self.service
-            .with_setup_remote(request, scope, false, self.credentials, |remote| {
+            .with_setup_remote(request, scope, self.automatic, self.credentials, |remote| {
                 remote.observe_setup_branch()
             })
     }

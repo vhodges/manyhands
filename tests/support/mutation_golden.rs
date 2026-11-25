@@ -140,6 +140,7 @@ pub const CASES: &[&str] = &[
     "poll_once_no_remote",
     "poll_once_poll_yielding",
     "poll_once_repository_inaccessible",
+    "poll_once_setup_not_published",
     "poll_once_transport_unavailable",
     "poll_once_transport_with_no_row",
     "poll_once_unlock_required",

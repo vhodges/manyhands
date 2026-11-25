@@ -265,6 +265,7 @@ const DATA: &[(&str, &[&str])] = &[
         &[
             "poll_mutation",
             "poll_retirement_mutation",
+            "setup_poll",
             "synchronization_mutation",
         ],
     ),

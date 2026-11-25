@@ -39,6 +39,7 @@ use super::{
         remote::sync::RepublishConsent,
         setup::{
             channel::ServiceChannel,
+            poll::{SetupPollError, SetupPollReport},
             publish::{Published, SetupError, continue_setup},
         },
         transport::{
@@ -342,6 +343,18 @@ pub(crate) trait Session {
         root: &std::path::Path,
         request_id: RequestId,
     ) -> Option<Result<Published, SetupError>>;
+
+    /// Polls the pending setup of the repository at `root` with the
+    /// session's credentials, stopped by the call's token and by the flag of
+    /// the request `asked_of`; see `RepositoryService::poll_setup`. `None`
+    /// when the session has no credentials, or they are in use: nothing was
+    /// called.
+    fn poll_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -519,6 +532,17 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut channel = ServiceChannel::new(service, root.to_owned(), &mut credentials);
         Some(continue_setup(service, root, request_id, &mut channel))
     }
+
+    fn poll_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.poll_setup_observed(root, false, &mut credentials, Some(&probe)))
+    }
     fn poll_once_retiring(
         &self,
         service: &RepositoryService,
@@ -638,6 +662,15 @@ impl Session for NoSession {
         _root: &std::path::Path,
         _request_id: RequestId,
     ) -> Option<Result<Published, SetupError>> {
+        None
+    }
+
+    fn poll_setup(
+        &self,
+        _service: &RepositoryService,
+        _root: &std::path::Path,
+        _asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>> {
         None
     }
 

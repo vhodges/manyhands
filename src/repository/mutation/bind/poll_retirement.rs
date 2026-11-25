@@ -9,6 +9,7 @@ use super::*;
 use crate::repository::{
     self, PollPublicationRemoteRequest, RemotePollInvocation,
     context_retirement::{handoff, pass},
+    setup::poll::SetupPollPath,
 };
 
 pub(crate) struct PollRetirementBinding {
@@ -297,45 +298,7 @@ impl PollRetirementBinding {
             Some(ran.answer.code).filter(|c| *c != ResultCode::Ok),
         )
     }
-}
-impl Binding for PollRetirementBinding {
-    fn admit(
-        &self,
-        _service: &RepositoryService,
-        tx: &rusqlite::Transaction<'_>,
-        a: &Accepted,
-    ) -> Result<(), repository::ReadError> {
-        pass::begin(tx, a).map_err(|_| repository::ReadError::new(ResultCode::RecoveryRequired))
-    }
-    fn command(&self) -> Command {
-        Command::PollOnce
-    }
-    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
-        EndedWithoutCheckpoint::SaysNothing
-    }
-    fn place(&self) -> Place<'_> {
-        Place::Repository(&self.root)
-    }
-    fn target(&self) -> String {
-        String::new()
-    }
-    fn fields(&self, b: IntentDigestBuilder) -> IntentDigestBuilder {
-        b.field("retire_completed", FieldValue::Flag(true))
-    }
-    fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
-        Scope {
-            repository,
-            branch: position.and_then(|p| p.branch().map(str::to_owned)),
-            ..Scope::default()
-        }
-    }
-    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        PollOnceBinding::from(PollOnceInput {
-            root: self.root.clone(),
-        })
-        .prepare(call)
-    }
-    fn run(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
+    fn run_retiring(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
         let request = PollPublicationRemoteRequest {
             root: a.root(),
             operation_id: a.operation_id,
@@ -387,12 +350,87 @@ impl Binding for PollRetirementBinding {
             },
         }
     }
+    fn rerun_ordinary(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
+        // No captured selection: finish ordinary P ONLY. No original source or
+        // wrapper is attached on this route, even when repaired P returns Ok.
+        let ordinary = PollOnceBinding::from(PollOnceInput {
+            root: self.root.clone(),
+        });
+        let ran = ordinary.rerun(call, a, &Entered::Unfinished);
+        self.reported(call, a, ran)
+    }
+}
+impl Binding for PollRetirementBinding {
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        a: &Accepted,
+    ) -> Result<(), repository::ReadError> {
+        // A first-time setup is polled by the setup poll, which has no
+        // report to cut a retirement pass from: no pass is begun for it.
+        if repository::setup::poll::replaces_in(tx, &a.root()) {
+            return Ok(());
+        }
+        pass::begin(tx, a).map_err(|_| repository::ReadError::new(ResultCode::RecoveryRequired))
+    }
+    fn command(&self) -> Command {
+        Command::PollOnce
+    }
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::SaysNothing
+    }
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
+    }
+    fn target(&self) -> String {
+        String::new()
+    }
+    fn fields(&self, b: IntentDigestBuilder) -> IntentDigestBuilder {
+        b.field("retire_completed", FieldValue::Flag(true))
+    }
+    fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
+        Scope {
+            repository,
+            branch: position.and_then(|p| p.branch().map(str::to_owned)),
+            ..Scope::default()
+        }
+    }
+    fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        PollOnceBinding::from(PollOnceInput {
+            root: self.root.clone(),
+        })
+        .prepare(call)
+    }
+    /// A first-time setup is polled by the setup poll alone (data `SetupPoll`,
+    /// no retirement); a change on another remote runs today's retiring poll
+    /// and then the setup poll, whose answer is dropped. Known limit: a record
+    /// that completes between `admit` and `run` leaves a request with no pass
+    /// row on the ordinary path, which answers `recovery_required` and is owed.
+    fn run(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
+        match repository::setup::poll::path_of(call.service, &a.root()) {
+            Ok(Some(SetupPollPath::Replace)) => PollOnceBinding::setup_poll(call, a),
+            Ok(Some(SetupPollPath::After)) => {
+                let ran = self.run_retiring(call, a);
+                PollOnceBinding::then_setup_poll(call, a, &ran);
+                ran
+            }
+            Ok(None) | Err(_) => self.run_retiring(call, a),
+        }
+    }
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
         a: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
+        // A setup poll has no pass and no row: it takes its path again.
+        if matches!(
+            repository::setup::poll::path_of(call.service, &a.root()),
+            Ok(Some(SetupPollPath::Replace))
+        ) {
+            return Ok(Entered::Unfinished);
+        }
         // A failed original P may have a cut without a captured image. Never
         // execute P again once that cut exists, even if its journal was lost.
         let history = pass::has_cut(call.service, &a.root(), a.operation_id).and_then(|cut| {
@@ -439,13 +477,16 @@ impl Binding for PollRetirementBinding {
         }
     }
     fn rerun(&self, call: &CallContext<'_>, a: &Accepted, _entered: &Entered) -> Ran {
-        // No captured selection: finish ordinary P ONLY. No original source or
-        // wrapper is attached on this route, even when repaired P returns Ok.
-        let ordinary = PollOnceBinding::from(PollOnceInput {
-            root: self.root.clone(),
-        });
-        let ran = ordinary.rerun(call, a, &Entered::Unfinished);
-        self.reported(call, a, ran)
+        match repository::setup::poll::path_of(call.service, &a.root()) {
+            Ok(Some(SetupPollPath::Replace)) => return PollOnceBinding::setup_poll(call, a),
+            Ok(Some(SetupPollPath::After)) => {
+                let ran = self.rerun_ordinary(call, a);
+                PollOnceBinding::then_setup_poll(call, a, &ran);
+                return ran;
+            }
+            Ok(None) | Err(_) => {}
+        }
+        self.rerun_ordinary(call, a)
     }
     fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
         None

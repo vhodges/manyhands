@@ -553,6 +553,15 @@ impl Session for Recorder {
     > {
         None
     }
+
+    fn poll_setup(
+        &self,
+        _: &RepositoryService,
+        _: &std::path::Path,
+        _: crate::repository::RequestId,
+    ) -> Option<Result<crate::repository::SetupPollReport, crate::repository::SetupPollError>> {
+        None
+    }
 }
 
 /// D5 decision 11, L3, R-15: each step a run tells of is a stage. The

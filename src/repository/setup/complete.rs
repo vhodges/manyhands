@@ -1,9 +1,24 @@
 //! Whether a pending setup has merged: level-triggered, from what the local
 //! primary holds now (design Part B, R-17).
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
-use super::record::SetupRecord;
-use crate::canonical;
+use rusqlite::{OptionalExtension, TransactionBehavior};
+
+use super::{
+    data as setup_data,
+    lock::{self, Begun, Held},
+    publish::SetupError,
+    record::{self, SetupRecord},
+};
+use crate::{
+    canonical,
+    repository::{
+        OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+        RequestState, cache_write_guard, coordination::SetupLock, mutation::finish_setup_request,
+        remote::state,
+    },
+    results::ResultCode,
+};
 
 /// Whether the local primary already holds the setup `record`.
 ///
@@ -40,3 +55,225 @@ pub(crate) fn is_complete(
         .is_some_and(|configuration| configuration.primary_branch == record.primary_branch);
     Ok(names_the_primary && record.base_configuration_oid != Some(entry.id()))
 }
+
+/// Finishes the setup of the repository at `root` when the local primary
+/// holds it, under the setup lock (design Part B). `Ok(false)` when there is
+/// nothing to finish: no setup, one not complete, HEAD not on the primary,
+/// the lock held, or an operation in the way (the next look finishes it).
+pub(crate) fn finish(service: &RepositoryService, root: &Path) -> Result<bool, RepositoryError> {
+    finish_waiting(service, root, None)
+}
+
+/// `finish`, waiting `wait` for a held lock instead of the usual timeout, so
+/// that a test of the held lock spends no real time.
+pub(super) fn finish_waiting(
+    service: &RepositoryService,
+    root: &Path,
+    wait: Option<Duration>,
+) -> Result<bool, RepositoryError> {
+    match lock::begin_with(service, root, wait, || {}) {
+        Ok(Begun::Held(held)) => {
+            let Held {
+                lock: _lock,
+                repository,
+                repository_id,
+                record,
+            } = *held;
+            let root = lock::canonical_root(root).map_err(into_repository_error)?;
+            finish_record(service, &root, &repository, repository_id, &record)
+        }
+        Ok(Begun::Gone) => Ok(false),
+        Err(SetupError::Busy) => Ok(false),
+        Err(error) => Err(into_repository_error(error)),
+    }
+}
+
+/// `finish`, for a caller that already holds the setup lock `lock`.
+pub(crate) fn finish_held(
+    _lock: &SetupLock,
+    service: &RepositoryService,
+    root: &Path,
+) -> Result<bool, RepositoryError> {
+    let root = lock::canonical_root(root).map_err(into_repository_error)?;
+    let Some((repository_id, record)) =
+        lock::read_record(service, &root).map_err(into_repository_error)?
+    else {
+        return Ok(false);
+    };
+    let repository = git2::Repository::open(&root).map_err(|error| {
+        RepositoryError::git(lock::operation_of(record.kind), Some(root.clone()), error)
+    })?;
+    finish_record(service, &root, &repository, repository_id, &record)
+}
+
+fn into_repository_error(error: SetupError) -> RepositoryError {
+    match error {
+        SetupError::Repository(error) => error,
+        _ => state::recovery_required(),
+    }
+}
+
+/// The finish proper, under the setup lock, for the record read under it.
+fn finish_record(
+    service: &RepositoryService,
+    root: &Path,
+    repository: &git2::Repository,
+    repository_id: i64,
+    record: &SetupRecord,
+) -> Result<bool, RepositoryError> {
+    let operation = lock::operation_of(record.kind);
+    let git = |error| RepositoryError::git(operation, Some(root.to_owned()), error);
+    if !is_complete(repository, record).map_err(git)? {
+        return Ok(false);
+    }
+    // Only while HEAD names the primary: with the setup branch (or any other)
+    // checked out, the working tree is not the primary's.
+    let primary_ref = format!("refs/heads/{}", record.primary_branch);
+    let head = repository.find_reference("HEAD").map_err(git)?;
+    if head.symbolic_target() != Some(primary_ref.as_str()) {
+        return Ok(false);
+    }
+    // What the primary holds is the merged configuration.
+    let merged = repository
+        .find_reference(&primary_ref)
+        .and_then(|reference| reference.peel_to_commit())
+        .and_then(|commit| commit.tree())
+        .and_then(|tree| tree.get_path(Path::new(canonical::CONFIG_PATH)))
+        .and_then(|entry| repository.find_blob(entry.id()))
+        .map_err(git)?
+        .content()
+        .to_vec();
+
+    // 1. The local setup branch, only at the commit the record names (it is
+    // kept anywhere else, K-15), and the private base ref. Both are deleted
+    // before the record, so a crash leaves a record the next look finishes.
+    let branch = format!("refs/heads/manyhands/setup/{}", record.setup_id);
+    match repository.find_reference(&branch) {
+        Ok(mut reference) if reference.target() == record.commit_oid => {
+            reference.delete().map_err(git)?;
+        }
+        Ok(_) => {}
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(git(error)),
+    }
+    let base = format!("refs/manyhands/setups/{}/base", record.setup_id);
+    match repository.find_reference(&base) {
+        Ok(mut reference) => reference.delete().map_err(git)?,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(git(error)),
+    }
+
+    // 2. A setup on another remote reconciles the registration and stores
+    // the remote plan as remote selection does, under the lifecycle check
+    // remote selection takes. In the way, it stops and the next look
+    // finishes it.
+    let lifecycle = if on_another_remote(repository, record) {
+        match service.begin_lifecycle(
+            repository,
+            root,
+            RepositoryOperation::SetPublicationRemote,
+            OperationId::new(),
+            &record.remote_name,
+        ) {
+            Ok(begun) => Some(begun),
+            Err(error)
+                if matches!(
+                    error.kind,
+                    RepositoryErrorKind::RecoveryRequired | RepositoryErrorKind::RepositoryBusy
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    let ended = (|| -> Result<(), RepositoryError> {
+        if lifecycle.is_some() {
+            service.reconcile_registration(
+                repository,
+                root,
+                RepositoryOperation::SetPublicationRemote,
+            )?;
+        }
+        // 3. One registry transaction: the request, if still accepted, then
+        // the record. `already_applied` when the merged file is the intended
+        // one, `external_change` when it was edited in review.
+        let code = if merged == record.configuration {
+            ResultCode::AlreadyApplied
+        } else {
+            ResultCode::ExternalChange
+        };
+        let data = setup_data::of(service, root, None);
+        let now = service.clock.now().unix_timestamp();
+        let data_directory = service
+            .registry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let _guard = cache_write_guard(&service.registry_path, data_directory, operation)?;
+        service.require_index_available(operation, Some(root))?;
+        let mut connection = service.open_migrated_registry(operation)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(RepositoryError::sqlite)?;
+        let finished = finish_setup_request(&tx, repository_id, record.request_id, code, data, now)
+            .map_err(|_| state::recovery_required())?;
+        if !finished {
+            // Already finished is fine. Still accepted, the guard refused it:
+            // ending the setup now would leave an accepted request with no
+            // record (R-19), so nothing is written.
+            let state: Option<String> = tx
+                .query_row(
+                    "SELECT state FROM request_records WHERE request_ulid = ?1",
+                    [record.request_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(RepositoryError::sqlite)?;
+            if state.as_deref() == Some(RequestState::Accepted.as_str()) {
+                return Err(state::recovery_required());
+            }
+        }
+        record::delete(&tx, repository_id)?;
+        tx.commit().map_err(RepositoryError::sqlite)
+    })();
+    if let Some((lease, lifecycle_record)) = lifecycle {
+        match &ended {
+            Ok(()) => service.complete_lifecycle(
+                root,
+                RepositoryOperation::SetPublicationRemote,
+                lifecycle_record,
+            )?,
+            // Nothing of this call's own is left: the row is closed, so the
+            // next look begins afresh.
+            Err(_) => service.discard_lifecycle(
+                root,
+                RepositoryOperation::SetPublicationRemote,
+                lifecycle_record,
+            )?,
+        }
+        drop(lease);
+    }
+    ended.map(|()| true)
+}
+
+/// Whether the setup's remote is not the publication remote the primary's
+/// configuration named before the setup: every first-time setup, and a change
+/// that names a first or a different remote.
+pub(super) fn on_another_remote(repository: &git2::Repository, record: &SetupRecord) -> bool {
+    let Some(base) = record.base_configuration_oid else {
+        return true;
+    };
+    let before = repository
+        .find_blob(base)
+        .ok()
+        .and_then(|blob| std::str::from_utf8(blob.content()).ok().map(str::to_owned))
+        .and_then(|text| canonical::parse_repository_config(&text).ok())
+        .and_then(|configuration| configuration.publication_remote);
+    before.as_deref() != Some(record.remote_name.as_str())
+}
+
+#[cfg(test)]
+#[path = "complete_tests.rs"]
+mod tests;

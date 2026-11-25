@@ -730,7 +730,7 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        PollMutationCompletion, PollTargetDisposition,
+        PollMutationCompletion, PollTargetDisposition, SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -803,6 +803,23 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         ),
         (
             "setup_mutation.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "type",
+            SetupPollType::ALL.map(SetupPollType::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "outcome",
+            SetupPollOutcome::ALL.map(SetupPollOutcome::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
             "integration",
             [Integration::Direct, Integration::PullRequest]
                 .map(Integration::as_str)

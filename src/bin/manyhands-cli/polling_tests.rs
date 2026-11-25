@@ -601,3 +601,138 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
         assert!(!text.contains("all contexts retired"));
     }
 }
+
+const SETUP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+fn setup_poll_envelope(
+    outcome: &str,
+    integration: Option<&str>,
+    differs: bool,
+    url: Option<&str>,
+) -> Envelope<MutationDataDto> {
+    let mut envelope = poll_envelope(ResultCode::Ok, Vec::new());
+    envelope.data = Some(MutationDataDto::SetupPoll(Box::new(
+        manyhands::repository::SetupPollDto::from_stored_for_testing(&serde_json::json!({
+            "type": "setup_poll",
+            "setup_id": SETUP,
+            "outcome": outcome,
+            "integration": integration,
+            "differs": differs,
+            "pull_request": {
+                "source": format!("manyhands/setup/{SETUP}"),
+                "target": "main",
+                "forge": null,
+                "url": url,
+            },
+        }))
+        .expect("a stored setup poll"),
+    )));
+    envelope
+}
+
+/// Part G's human lines: the outcome in words, the link while waiting, and
+/// what the person does next. Nothing the stored data would print as fields.
+#[test]
+fn setup_poll_lines() {
+    let branch = format!("manyhands/setup/{SETUP}");
+    let rows: [(&str, &[&str]); 8] = [
+        (
+            "not_published",
+            &["Setup: recorded, not published yet", "same request"],
+        ),
+        (
+            "configuration_invalid",
+            &[
+                "Setup: the configuration on the remote's main cannot be read",
+                "repo setup-cancel",
+            ],
+        ),
+        (
+            "primary_differs",
+            &[
+                "Setup: the configuration on the remote names another primary branch",
+                "repo setup-cancel",
+            ],
+        ),
+        (
+            "branch_deleted",
+            &[
+                &format!("Setup: {branch} is gone from the remote"),
+                "repo setup-cancel",
+            ],
+        ),
+        (
+            "waiting_for_merge",
+            &[
+                &format!("Setup: waiting for {branch} to merge into main"),
+                "open a pull request from",
+            ],
+        ),
+        (
+            "waiting_for_checkout",
+            &["Setup: merged, waiting for main to be checked out and clean"],
+        ),
+        (
+            "diverged",
+            &["Setup: merged, but the local main has commits the remote's main lacks"],
+        ),
+        ("activated", &["Setup: merged and active, in direct mode"]),
+    ];
+    for (outcome, expected) in rows {
+        let activated = outcome == "activated";
+        let output = once_output(
+            &setup_poll_envelope(outcome, activated.then_some("direct"), false, None),
+            false,
+            ROOT,
+        );
+        let text = stdout(&output);
+        no_raw_control(text);
+        for line in expected {
+            assert!(text.contains(line), "{outcome}: {line:?} in {text}");
+        }
+        // The link is for the person who waits, and for no other outcome.
+        assert_eq!(
+            text.contains("open a pull request from"),
+            outcome == "waiting_for_merge",
+            "{outcome}: {text}"
+        );
+        // Every outcome is `ok`: no note of a final stop.
+        assert!(stderr(&output).is_empty(), "{outcome}: {}", stderr(&output));
+        assert_eq!(output.status, 0, "{outcome}");
+    }
+
+    // A link that opens the pull request is printed as its address.
+    let output = once_output(
+        &setup_poll_envelope(
+            "waiting_for_merge",
+            None,
+            false,
+            Some("https://github.com/team/repo/compare/main...x?expand=1"),
+        ),
+        false,
+        ROOT,
+    );
+    assert!(
+        stdout(&output)
+            .contains("pull request: https://github.com/team/repo/compare/main...x?expand=1\n"),
+        "{}",
+        stdout(&output)
+    );
+
+    // A merged file that is not the one set up says so, and the merged mode
+    // is the one named.
+    let output = once_output(
+        &setup_poll_envelope("activated", Some("pull_request"), true, None),
+        false,
+        ROOT,
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("Setup: merged and active, in pull_request mode"),
+        "{text}"
+    );
+    assert!(text.contains("differs from the one set up"), "{text}");
+
+    // The stored data prints no raw fields next to the lines.
+    assert!(!stdout(&output).contains("setup_id"), "{}", stdout(&output));
+}
