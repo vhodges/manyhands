@@ -651,6 +651,12 @@ result_codes! {
         "The remote rejected the push.";
     PrimaryHasLocalCommits => "primary_has_local_commits", Some(FailureClass::Blocked),
         "The local primary branch has commits the remote does not have.";
+    SetupPending => "setup_pending", Some(FailureClass::Blocked),
+        "The repository's Manyhands setup has not merged yet.";
+    RemotePrimaryMissing => "remote_primary_missing", Some(FailureClass::Blocked),
+        "The remote has no primary branch to set up from.";
+    RemoteAlreadySetUp => "remote_already_set_up", Some(FailureClass::Blocked),
+        "The remote's primary already holds a Manyhands configuration.";
     NoSelectedKey => "no_selected_key", Some(FailureClass::Blocked),
         "No key is selected.";
     KeyUnavailable => "key_unavailable", Some(FailureClass::Blocked),

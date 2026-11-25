@@ -853,6 +853,9 @@ fn recovery(
         ResultCode::RecoveryRequired
         | ResultCode::InvalidSlugConfiguration
         | ResultCode::InvalidConfiguration => vec![at_root(RecoveryActionKind::RepoInspect)],
+        // A pull-request setup that has not merged yet: the repository's
+        // `setup` says where it stands, and the inspection shows it.
+        ResultCode::SetupPending => vec![at_root(RecoveryActionKind::RepoInspect)],
         // A rebuild is of one repository and takes its root. A result
         // that names no repository, as that of a key command on an index
         // that cannot be read is, has no root to give: an action without
@@ -1007,6 +1010,11 @@ fn recovery(
         | ResultCode::RemoteBranchDeleted
         | ResultCode::PushRejected
         | ResultCode::PrimaryHasLocalCommits
+        // A setup that finds no primary branch on the remote to set up
+        // from, or one that already holds a Manyhands configuration:
+        // the remote is what is to change, which is the caller's to do.
+        | ResultCode::RemotePrimaryMissing
+        | ResultCode::RemoteAlreadySetUp
         | ResultCode::NoSelectedKey
         | ResultCode::KeyRejected
         | ResultCode::UnlockRequired

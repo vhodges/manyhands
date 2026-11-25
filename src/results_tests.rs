@@ -31,7 +31,7 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 /// order, then the mutation codes of the design's Result Mapping table,
 /// class by class in its order.
 /// The two CLI codes follow `invalid_input`.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
+const DESIGN_CODES: [(&str, Option<FailureClass>); 74] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -87,6 +87,9 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
     ("remote_branch_deleted", Some(FailureClass::Blocked)),
     ("push_rejected", Some(FailureClass::Blocked)),
     ("primary_has_local_commits", Some(FailureClass::Blocked)),
+    ("setup_pending", Some(FailureClass::Blocked)),
+    ("remote_primary_missing", Some(FailureClass::Blocked)),
+    ("remote_already_set_up", Some(FailureClass::Blocked)),
     ("no_selected_key", Some(FailureClass::Blocked)),
     ("key_unavailable", Some(FailureClass::Blocked)),
     ("key_rejected", Some(FailureClass::Blocked)),
@@ -209,6 +212,9 @@ fn result_code_messages_are_fixed() {
         "The published branch was deleted on the remote.",
         "The remote rejected the push.",
         "The local primary branch has commits the remote does not have.",
+        "The repository's Manyhands setup has not merged yet.",
+        "The remote has no primary branch to set up from.",
+        "The remote's primary already holds a Manyhands configuration.",
         "No key is selected.",
         "The selected key cannot be read.",
         "The remote rejected the selected key.",
