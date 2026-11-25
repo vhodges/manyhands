@@ -733,6 +733,16 @@ fn supersedable(old: &ClosureRecord) -> bool {
         && !matches!(old.step, ClosureStep::Closing | ClosureStep::Integrating)
         && old.cleanup.is_some_and(CleanupCategory::supersedable)
 }
+/// Whether the item has an unfinished record that a new request could not
+/// supersede: the holder decision 33's prepare names.
+pub(in super::super) fn holds_new_requests(
+    db: &Connection,
+    id: i64,
+    item: &ItemId,
+) -> Result<bool, RepositoryError> {
+    Ok(parent::unfinished_record::<ClosureRecord>(db, id, item)?
+        .is_some_and(|old| !supersedable(&old)))
+}
 pub(in super::super) type ReplacementGuard = parent::ReplacementGuard<ClosureRecord>;
 pub(in super::super) fn replacement_guard(
     tx: &Transaction<'_>,

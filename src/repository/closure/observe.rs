@@ -299,6 +299,9 @@ struct PendingWork {
     /// A pull-request close only: a live synchronization of the ticket's
     /// context that no unfinished closure record of it owns.
     synchronization: Option<String>,
+    /// A pull-request close only: an unfinished record of the ticket that a
+    /// new request could not supersede holds it (decision 33).
+    record_unfinished: bool,
 }
 
 /// Prepared outside the lease (discovery), revalidated inside it without
@@ -510,6 +513,7 @@ fn pending_work(
         local_operation,
         comment_publication,
         synchronization,
+        record_unfinished: branch && super::record::holds_new_requests(tx, repository_id, item)?,
     })
 }
 
@@ -1255,17 +1259,6 @@ fn branch_observation(
         tracking_primary,
         tracking_context,
     } = gathered;
-    // A synchronization of the context that is not this ticket's record's
-    // own is `busy`, and names the row.
-    if let Some(operation) = &pending.synchronization {
-        return Err(RepositoryError::new(
-            RepositoryOperation::Read,
-            Some(root.to_owned()),
-            RepositoryErrorKind::RepositoryBusy,
-            "another synchronization of the ticket's context is unfinished",
-        )
-        .with_blocker(Blocker::remote(operation)));
-    }
     let path = ticket_path(item);
     let base = tracking_primary;
     if base.is_none() {
@@ -1275,23 +1268,37 @@ fn branch_observation(
         Some(commit) if !facts.not_ticket => closure_at(repository, commit, &path, root),
         _ => Ok(FileClosure::Open),
     };
-    // Situation 1.
-    let closed = !matches!(closure_of(primary_oid)?, FileClosure::Open)
-        || !matches!(closure_of(base)?, FileClosure::Open);
-    if closed {
+    // Situation 1 decides: a ticket a primary has closed is `already_closed`
+    // and nothing after it is asked, whatever the context or the remote say.
+    if !matches!(closure_of(primary_oid)?, FileClosure::Open)
+        || !matches!(closure_of(base)?, FileClosure::Open)
+    {
         blockers.insert(AlreadyClosed);
+        return Ok(Err(refusal_of(blockers, None)));
+    }
+    // A synchronization of the context that is not an unfinished record's
+    // own is `busy`, and names the row. While such a record holds the ticket
+    // the hold is the binding's to answer (decision 33), not this read's.
+    if let Some(operation) = pending
+        .synchronization
+        .as_deref()
+        .filter(|_| !pending.record_unfinished)
+    {
+        return Err(RepositoryError::new(
+            RepositoryOperation::Read,
+            Some(root.to_owned()),
+            RepositoryErrorKind::RepositoryBusy,
+            "another synchronization of the ticket's context is unfinished",
+        )
+        .with_blocker(Blocker::remote(operation)));
     }
     // Situation 2, until Task 9.
-    if tracking_context.is_none() && !facts.not_ticket {
+    if config.publication_remote.is_some() && tracking_context.is_none() && !facts.not_ticket {
         blockers.extend(remote_history_blocker(snapshot, item));
     }
     // Situation 3, until Task 9.
     if context_missing {
-        blockers.insert(if closed {
-            AlreadyClosed
-        } else {
-            ContextMissing
-        });
+        blockers.insert(ContextMissing);
     }
     let context_ticket = context_ticket_at(
         repository,

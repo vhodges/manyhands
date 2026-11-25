@@ -2239,9 +2239,9 @@ fn written_closure_unfinished_covers_branch_records_by_step() {
 }
 
 /// A branch record begins with its path and the head its consent bound,
-/// replays by its operation, is never superseded, supersedes a direct
-/// record's supersedable cleanup stop, and a refusal is stored with the path
-/// it was made in.
+/// replays by its operation, is `busy` to another request while it is
+/// unfinished, supersedes a direct record's supersedable cleanup stop, and a
+/// refusal is stored with the path it was made in.
 #[test]
 fn a_branch_record_begins_replays_and_is_refused_on_its_own_path() {
     use crate::canonical::Integration;

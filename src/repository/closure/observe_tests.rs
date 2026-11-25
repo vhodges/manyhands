@@ -1639,6 +1639,18 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
         f.tracking("main", f.closed_base(malformed));
         assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed], "{malformed}");
     }
+    // It decides: nothing after it is asked. A primary that holds the
+    // closure with a context whose remote branch is gone (a forge merged and
+    // deleted it, and a poll fetched), and a synchronization of the context
+    // that is not a record's own, are both `already_closed` and nothing else.
+    let f = pull_request_fixture();
+    f.close_primary();
+    f.history("observed_published");
+    assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
+    let f = pull_request_fixture();
+    f.close_primary();
+    f.reserve_context(OperationId::new());
+    assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
 
     // Situation 4: the context's ticket holds a closure. It is recorded as
     // it stands and needs no identity.
@@ -1703,7 +1715,7 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
 
     // What it drops, each shown blocked in direct mode first.
     type Disturb = fn(&Fixture);
-    let dropped: [(ClosureBlocker, Disturb); 5] = [
+    let dropped: [(ClosureBlocker, Disturb); 7] = [
         (ClosureBlocker::PrimaryNotCheckedOut, |f| {
             let head = f.repo.find_commit(f.base).unwrap();
             f.repo.branch("other", &head, false).unwrap();
@@ -1738,6 +1750,39 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
             write(&f.repo, &ticket(), primary);
             let tip = commit(&f.repo);
             f.tracking("main", tip);
+        }),
+        // The context holds a closure the primary has since removed.
+        (ClosureBlocker::PrimaryReopened, |f| {
+            let closed = f.close_context();
+            let original = tree_bytes(&f.repo, f.base, &ticket());
+            let reopened =
+                tree_commit(&f.repo, closed, &[(&ticket(), Some((&original, 0o100644)))]);
+            checkout(&f.repo, reopened);
+            f.tracking("main", reopened);
+        }),
+        // A conflict in the primary's index with no merge in progress, which
+        // is the checkout's own, not the root's state.
+        (ClosureBlocker::PrimaryConflicted, |f| {
+            let entry = |stage: u16, content: &[u8]| git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: f.repo.blob(content).unwrap(),
+                flags: stage << 12,
+                flags_extended: 0,
+                path: b"ordinary.txt".to_vec(),
+            };
+            let mut index = f.repo.index().unwrap();
+            index.remove_path(Path::new("ordinary.txt")).unwrap();
+            for (stage, content) in [(1, "base\n"), (2, "ours\n"), (3, "theirs\n")] {
+                index.add(&entry(stage, content.as_bytes())).unwrap();
+            }
+            index.write().unwrap();
         }),
     ];
     for (blocker, disturb) in dropped {
@@ -1786,6 +1831,104 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
     .unwrap();
     f.reserve_context(own.context_sync_id.unwrap());
     assert_eq!(f.ready().path(), path);
+    // While a record of the ticket that a new request could not supersede is
+    // unfinished, a foreign synchronization is not observe's to answer:
+    // decision 33's hold is, in the binding, which names the holder.
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='cancelled',outcome='cancelled'",
+            [],
+        )
+        .unwrap();
+    f.reserve_context(OperationId::new());
+    assert_eq!(f.ready().path(), path);
+    let prepared = f.service.prepare(&crate::repository::Mutation::TicketClose(
+        crate::repository::TicketCloseInput {
+            root: f.root.path().to_owned(),
+            id: id(),
+        },
+    ));
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["code"], "recovery_required", "{value}");
+    let holder = own_operation(&f);
+    assert!(
+        value["recovery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["operation_id"] == holder.to_string()),
+        "{value}"
+    );
+}
+
+/// The operation of the ticket's one unfinished closure record.
+fn own_operation(f: &Fixture) -> OperationId {
+    let text: String = f
+        .db()
+        .query_row(
+            "SELECT operation_id FROM ticket_closures WHERE step NOT IN ('complete','abandoned','superseded')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    OperationId::parse(&text).unwrap()
+}
+
+/// The synchronization a pull-request prepare reads leaves out both children
+/// of an unfinished record (the two slots), and finds the record.
+#[test]
+fn pending_work_leaves_out_a_record_s_own_children_and_finds_the_record() {
+    let f = pull_request_fixture();
+    let read_pending = |f: &Fixture| {
+        state::with_transaction(&f.service, f.root.path(), |tx, rid| {
+            pending_work(tx, rid, &id(), true)
+        })
+        .unwrap()
+    };
+    let none = read_pending(&f);
+    assert!(none.synchronization.is_none() && !none.record_unfinished);
+    let path = (Integration::PullRequest, ClosureAction::Close);
+    let (context, primary) = (OperationId::new(), OperationId::new());
+    let operation = state::with_transaction(&f.service, f.root.path(), |tx, rid| {
+        let record = record::begin_branch_record(
+            tx,
+            rid,
+            OperationId::new(),
+            &id(),
+            ClosureExpectation::from_bytes([1; 32]),
+            Some("origin"),
+            record::ClosureKind::Record,
+            path,
+            Some(f.context_oid()),
+        )?;
+        tx.execute(
+            "UPDATE ticket_closures SET context_attempt=1, context_sync_id=?1, primary_attempt=1, primary_sync_id=?2 WHERE operation_id=?3",
+            rusqlite::params![context.to_string(), primary.to_string(), record.operation_id.to_string()],
+        )
+        .unwrap();
+        Ok(record.operation_id)
+    })
+    .unwrap();
+    assert_eq!(own_operation(&f), operation);
+    let cancel = || {
+        f.db()
+            .execute(
+                "UPDATE remote_operation_records SET phase='cancelled',outcome='cancelled'",
+                [],
+            )
+            .unwrap();
+    };
+    for own in [context, primary] {
+        f.reserve_context(own);
+        let found = read_pending(&f);
+        assert!(found.synchronization.is_none() && found.record_unfinished);
+        cancel();
+    }
+    let foreign = OperationId::new();
+    f.reserve_context(foreign);
+    let found = read_pending(&f);
+    assert_eq!(found.synchronization, Some(foreign.to_string()));
+    assert!(found.record_unfinished);
 }
 
 /// The pull-request digest's wire bytes, written out by hand: its domain,
