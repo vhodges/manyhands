@@ -1082,6 +1082,7 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "dependency_cycle",
             "parent_cycle",
             "operations_unreadable",
+            "setup_unreadable",
             "unknown_problem",
         ]
     );

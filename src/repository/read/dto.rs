@@ -121,7 +121,9 @@ pub struct RepositorySummaryDto {
     pub enabled_at: Option<String>,
     pub accessibility: Accessibility,
     pub configuration: ConfigurationDto,
-    /// The repository's pending setup, or null when it has none.
+    /// The repository's pending setup, or null when it has none, or when
+    /// the record cannot be read, which `configuration.problems` then says
+    /// as `setup_unreadable`.
     pub setup: Option<RepositorySetupDto>,
     pub index: IndexStateDto,
     pub problem_count: u64,
@@ -222,7 +224,9 @@ pub struct RepositoryInspectionDto {
     pub head_branch: Option<String>,
     pub local_branches: Vec<String>,
     pub configuration: ConfigurationDto,
-    /// The repository's pending setup, or null when it has none.
+    /// The repository's pending setup, or null when it has none, or when
+    /// the record cannot be read, which `configuration.problems` then says
+    /// as `setup_unreadable`.
     pub setup: Option<RepositorySetupDto>,
     pub identity_state: IdentityAvailability,
     pub remotes: Vec<RemoteDto>,

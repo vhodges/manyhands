@@ -703,3 +703,65 @@ fn inspect_and_list_report_a_pending_setup() {
         ["recorded", "published"]
     );
 }
+
+// A setup the registry holds but this build cannot read does not refuse the
+// reads: `repo inspect` answers for the repository whatever is wrong, and
+// `repo list` never fails for one repository's content.
+#[test]
+fn an_unreadable_setup_degrades_the_reads() {
+    for (column, value) in [
+        // Configuration bytes that are not a configuration.
+        ("configuration", rusqlite::types::Value::Blob(vec![0xff])),
+        // An ID that is not a ULID (`U` is not in the alphabet).
+        ("setup_id", rusqlite::types::Value::Text("U".repeat(26))),
+    ] {
+        let f = SetupFixture::new();
+        f.set(SetupKind::Enable, false);
+        f.db()
+            .execute(
+                &format!("UPDATE repository_setups SET {column} = ?1"),
+                [value],
+            )
+            .unwrap();
+        // A second repository, which lists as usual.
+        let other = tempfile::tempdir().unwrap();
+        let other_root = other.path().canonicalize().unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        drop(git2::Repository::init_opts(&other_root, &options).unwrap());
+        f.service
+            .enable(EnableRepositoryRequest {
+                root: other_root.clone(),
+                primary_branch: "main".into(),
+                identity: Some(CommitIdentity {
+                    name: "Setup Test".into(),
+                    email: "setup@example.invalid".into(),
+                }),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+
+        let unreadable = |problems: &[ProblemDto]| {
+            problems
+                .iter()
+                .filter(|problem| problem.code == ProblemCode::SetupUnreadable)
+                .count()
+        };
+        let inspected = f.service.inspect_repository(&f.root).unwrap();
+        assert_eq!(inspected.setup, None, "{column}");
+        assert_eq!(unreadable(&inspected.configuration.problems), 1, "{column}");
+
+        let listed = f.service.list_repositories().unwrap();
+        assert_eq!(listed.items.len(), 2, "{column}");
+        for item in &listed.items {
+            assert_eq!(item.setup, None, "{column}");
+            let broken = Path::new(&item.root) == f.root;
+            assert_eq!(
+                unreadable(&item.configuration.problems),
+                usize::from(broken),
+                "{column}: {}",
+                item.root
+            );
+        }
+    }
+}

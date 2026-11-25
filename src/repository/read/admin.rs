@@ -11,7 +11,7 @@ use super::{
     IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
-    pending_setup::read_pending_setup,
+    pending_setup::read_setup_or_problem,
     resolve::{at_root, open_exactly, selected_repository},
     status::index_problems,
 };
@@ -379,8 +379,13 @@ impl RepositoryService {
             let mut items = Vec::new();
             for (mut item, repo) in rows {
                 // The index and the record only: no remote is read, so a
-                // link that needs the remote's URL has none.
-                item.setup = read_pending_setup(connection, repo.registration_id(), |_| None)?;
+                // link that needs the remote's URL has none. A setup this
+                // build cannot read reads as none, with a problem, and the
+                // list goes on.
+                let (setup, problem) =
+                    read_setup_or_problem(connection, repo.registration_id(), |_| None)?;
+                item.setup = setup;
+                item.configuration.problems.extend(problem);
                 item.problem_count =
                     u64::try_from(index_problems(connection, &repo)?.len()).unwrap_or_default();
                 items.push(item);
@@ -452,9 +457,11 @@ impl RepositoryService {
         };
         // A repository that is not registered has no setup. The link is
         // built with the setup remote's fetch URL as Git has it.
+        // One this build cannot read reads as none, with a problem, as
+        // unreadable operations do.
         let setup = match registration {
             Some(registration) => self.read_session(RepositoryOperation::Read, |connection| {
-                read_pending_setup(connection, registration, |name| {
+                read_setup_or_problem(connection, registration, |name| {
                     inspection
                         .remotes
                         .iter()
@@ -462,8 +469,10 @@ impl RepositoryService {
                         .map(|remote| remote.fetch_url.clone())
                 })
             })?,
-            None => None,
+            None => (None, None),
         };
+        let (setup, setup_problem) = setup;
+        configuration.problems.extend(setup_problem);
         Ok(RepositoryInspectionDto {
             selected_path,
             root,

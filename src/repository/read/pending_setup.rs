@@ -2,12 +2,43 @@
 
 use rusqlite::Connection;
 
-use super::{PullRequestDto, ReadError, RepositorySetupDto};
+use super::{ProblemDto, PullRequestDto, ReadError, RepositorySetupDto};
 use crate::{
     canonical, forge,
     repository::setup::record::{self, SetupRecord},
-    results::ResultCode,
+    results::{ProblemCode, ResultCode},
 };
+
+/// `read_pending_setup`, for a read that must answer whatever the record
+/// holds: a record this build cannot read (`recovery_required`, or the
+/// internal error a corrupt row converts to) reads as no setup, with the
+/// `setup_unreadable` problem for the caller to report. A busy or
+/// unavailable index still refuses.
+pub(super) fn read_setup_or_problem(
+    connection: &Connection,
+    repository_id: i64,
+    fetch_url: impl FnOnce(&str) -> Option<String>,
+) -> Result<(Option<RepositorySetupDto>, Option<ProblemDto>), ReadError> {
+    match read_pending_setup(connection, repository_id, fetch_url) {
+        Ok(setup) => Ok((setup, None)),
+        Err(error)
+            if matches!(
+                error.code(),
+                ResultCode::RecoveryRequired | ResultCode::InternalError
+            ) =>
+        {
+            Ok((
+                None,
+                Some(ProblemDto {
+                    code: ProblemCode::SetupUnreadable,
+                    path: None,
+                    target_id: None,
+                }),
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
 
 /// The setup of the registration `repository_id`, if it has one.
 ///
