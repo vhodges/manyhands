@@ -5369,8 +5369,32 @@ impl RepositoryService {
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
+        self.enable_direct_with(request, slug_prefix, None, None)
+    }
+
+    /// `enable_with_slug_prefix`, writing `remote` and `forge` to the
+    /// configuration it commits as well (design R-9): a direct enable that
+    /// names a publication remote or a forge writes them in its
+    /// initialization commit. A remote that is missing or not eligible is
+    /// refused before anything is written. With neither it is
+    /// `enable_with_slug_prefix` byte for byte. On a repository that is
+    /// enabled already nothing writes them, and the caller has checked that
+    /// they are the configuration's.
+    pub(crate) fn enable_direct_with(
+        &self,
+        request: EnableRepositoryRequest,
+        slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
-        self.enable_with_identity_provider(request, slug_prefix, &mut RepositoryIdentityConfig)
+        self.enable_with_identity_provider(
+            request,
+            slug_prefix,
+            remote,
+            forge,
+            &mut RepositoryIdentityConfig,
+        )
     }
 
     pub fn list_remotes(&self, root: &Path) -> Result<Vec<RemoteInfo>, RepositoryError> {
@@ -6257,6 +6281,8 @@ impl RepositoryService {
         self.enable_with_identity_provider(
             request,
             None,
+            None,
+            None,
             &mut SuppliedIdentityConfig { effective_config },
         )
     }
@@ -6265,6 +6291,8 @@ impl RepositoryService {
         &self,
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
@@ -6301,6 +6329,8 @@ impl RepositoryService {
         let result = self.enable_recorded(
             request,
             slug_prefix,
+            remote,
+            forge,
             identity_config,
             repository,
             root.clone(),
@@ -6316,6 +6346,8 @@ impl RepositoryService {
         &self,
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
         identity_config: &mut impl IdentityConfigProvider,
         repository: Repository,
         root: PathBuf,
@@ -6323,9 +6355,11 @@ impl RepositoryService {
         record: RecoveryRecord,
         effects: &CallEffects,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
-        let requested_config = canonical_configuration(
+        let requested_config = canonical_configuration_with(
             &request.primary_branch,
             slug_prefix,
+            remote,
+            forge,
             &root,
             RepositoryOperation::Enable,
         )?;
@@ -6513,7 +6547,20 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                 return Ok(EnableRepositoryOutcome::AlreadyEnabled);
             }
-            ConfigurationInspection::Missing => {}
+            ConfigurationInspection::Missing => {
+                // A remote that is to be written is one this clone can
+                // publish to; nothing is written for one that is not.
+                if let Some(remote) = remote
+                    && !publication_remote_eligible(&repository, &root, remote)?
+                {
+                    return Err(RepositoryError::new(
+                        RepositoryOperation::Enable,
+                        Some(root),
+                        RepositoryErrorKind::UnavailablePublicationRemote,
+                        "the publication remote is unavailable or ineligible",
+                    ));
+                }
+            }
         }
 
         let (identity, write_identity) = match request.identity {
@@ -12009,18 +12056,45 @@ fn canonical_configuration(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<String, RepositoryError> {
-    let mut unknown = toml::Table::new();
+    canonical_configuration_with(primary_branch, slug_prefix, None, None, root, operation)
+}
+
+/// `canonical_configuration` for a direct enable that names a publication
+/// remote or a forge (design R-9): they are written with the primary branch
+/// and the prefix. A configuration with none is the one without them, byte
+/// for byte.
+fn canonical_configuration_with(
+    primary_branch: &str,
+    slug_prefix: Option<&str>,
+    remote: Option<&str>,
+    forge: Option<&canonical::ForgeSetting>,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<String, RepositoryError> {
+    // A direct enable: today's file, with the remote and the forge when
+    // they are named.
+    let config = setup::intent::base_configuration(
+        primary_branch,
+        remote,
+        canonical::Integration::Direct,
+        forge,
+    );
+    canonical_configuration_for(config, slug_prefix, root, operation)
+}
+
+/// The file of `config`, with the short code prefix put in.
+fn canonical_configuration_for(
+    mut config: canonical::RepositoryConfig,
+    slug_prefix: Option<&str>,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<String, RepositoryError> {
     if let Some(prefix) = slug_prefix {
-        unknown.insert(
+        config.unknown.insert(
             canonical::SLUG_PREFIX_KEY.to_owned(),
             toml::Value::String(prefix.to_owned()),
         );
     }
-    let config = canonical::RepositoryConfig {
-        primary_branch: primary_branch.to_owned(),
-        publication_remote: None,
-        unknown,
-    };
     if canonical::slug_settings(&config).is_err() {
         return Err(RepositoryError::new(
             operation,
@@ -13509,10 +13583,11 @@ fn reconcile_registration(
 /// registration ID. `reconcile_registration` cannot: it needs the file in
 /// `HEAD`.
 ///
-/// A new row holds a null `config_blob_oid` and is marked for a refresh. A
-/// row that exists keeps its blob; it is marked accessible and for a refresh,
-/// as `reconcile_registration` marks it. Nothing else is written.
-#[cfg_attr(not(test), allow(dead_code))] // Used by the setup operations of the later tasks.
+/// The row holds a null `config_blob_oid` and is marked accessible and for a
+/// refresh. An enable runs only on a repository whose HEAD holds no
+/// configuration, so a blob an existing row holds is stale, and would make
+/// `repo list` read the setup as complete: it is cleared. Nothing else is
+/// written.
 fn register_setup_pending(
     transaction: &rusqlite::Transaction<'_>,
     root: &Path,
@@ -13536,7 +13611,7 @@ fn register_setup_pending(
                 root_path, enabled_at, accessibility, config_blob_oid, refresh_required
             ) VALUES (?1, ?2, 'accessible', NULL, 1)
             ON CONFLICT(root_path) DO UPDATE
-            SET accessibility = 'accessible', refresh_required = 1",
+            SET accessibility = 'accessible', config_blob_oid = NULL, refresh_required = 1",
             (root_path, enabled_at),
         )
         .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
@@ -13882,6 +13957,8 @@ mod tests {
                     identity: None,
                     operation_id: OperationId::new(),
                 },
+                None,
+                None,
                 None,
                 &mut provider,
             )

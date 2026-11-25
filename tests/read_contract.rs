@@ -15,8 +15,8 @@ use manyhands::{
         OperationNextAction, OperationOwner, PollingInterval, PollingOutcome, PreviewEffect,
         PreviewIdentitySource, ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter,
         ReadinessReasonCode, ReadinessState, RelationshipRejectionDto, RepositoryService,
-        RequestState, ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
-        transport::SshAuthority,
+        RequestState, ResolvedRepository, SetupMutationType, SharedKeyId, TicketFilter,
+        UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -783,6 +783,49 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             [Integration::Direct, Integration::PullRequest]
                 .map(Integration::as_str)
                 .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "type",
+            SetupMutationType::ALL
+                .map(SetupMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.identity.source",
+            PreviewIdentitySource::ALL
+                .map(PreviewIdentitySource::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.forge.kind",
+            ForgeKind::ALL.map(ForgeKind::as_str).to_vec(),
         ),
         (
             "lifecycle_blocked.schema.json",

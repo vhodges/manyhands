@@ -7,6 +7,7 @@ use crate::{
 };
 use clap::ArgMatches;
 use manyhands::{
+    canonical::{ForgeKind, ForgeSetting, Integration},
     repository::{
         CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, InitialsChange,
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
@@ -180,10 +181,58 @@ struct RepositoryInput {
     primary_branch: String,
     identity: Option<CommitIdentity>,
     slug_prefix: Option<String>,
+    /// What only `repo enable` takes: the publication remote, the mode and
+    /// the forge. A `repo create` input never holds them.
+    publication_remote: Option<String>,
+    integration: Option<Integration>,
+    forge: Option<ForgeSetting>,
 }
 
-fn repository_input(input: &InputObject) -> Result<RepositoryInput, InputError> {
-    input.only(&["primary_branch", "identity", "ticket_slug_prefix"])?;
+const FORGE_KINDS: &[&str] = &[
+    "bitbucket-cloud",
+    "bitbucket-data-center",
+    "github",
+    "gitlab",
+];
+
+/// The `forge` object of a `repo enable` input: closed, and each kind one of
+/// the four the configuration knows.
+fn forge_setting(forge: &InputObject) -> Result<ForgeSetting, InputError> {
+    forge.only(&["kind", "web_url", "pull_request_url"])?;
+    let kind = match forge.optional_string("kind")? {
+        None => None,
+        Some(kind) => Some(
+            ForgeKind::ALL
+                .into_iter()
+                .find(|known| known.as_str() == kind)
+                .ok_or(InputError::InvalidValue {
+                    field: "kind",
+                    allowed: FORGE_KINDS,
+                })?,
+        ),
+    };
+    Ok(ForgeSetting {
+        kind,
+        web_url: forge.optional_string("web_url")?,
+        pull_request_url: forge.optional_string("pull_request_url")?,
+    })
+}
+
+/// The input of `repo create`, or with `enable` of `repo enable`, which takes
+/// three fields more.
+fn repository_input(input: &InputObject, enable: bool) -> Result<RepositoryInput, InputError> {
+    if enable {
+        input.only(&[
+            "primary_branch",
+            "identity",
+            "ticket_slug_prefix",
+            "publication_remote",
+            "integration",
+            "forge",
+        ])?;
+    } else {
+        input.only(&["primary_branch", "identity", "ticket_slug_prefix"])?;
+    }
     let primary_branch = input.string("primary_branch")?;
     let identity = input
         .optional_object("identity")?
@@ -195,10 +244,27 @@ fn repository_input(input: &InputObject) -> Result<RepositoryInput, InputError> 
             })
         })
         .transpose()?;
+    let integration = match input.optional_string("integration")?.as_deref() {
+        None => None,
+        Some("direct") => Some(Integration::Direct),
+        Some("pull_request") => Some(Integration::PullRequest),
+        Some(_) => {
+            return Err(InputError::InvalidValue {
+                field: "integration",
+                allowed: &["direct", "pull_request"],
+            });
+        }
+    };
     Ok(RepositoryInput {
         primary_branch,
         identity,
         slug_prefix: input.optional_string("ticket_slug_prefix")?,
+        publication_remote: input.optional_string("publication_remote")?,
+        integration,
+        forge: input
+            .optional_object("forge")?
+            .map(|forge| forge_setting(&forge))
+            .transpose()?,
     })
 }
 
@@ -208,14 +274,21 @@ pub fn repo_create(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    repo_onboard(service, session, spec, args, |root, input, identity| {
-        Mutation::RepoCreate(RepoCreateInput {
-            root,
-            primary_branch: input.primary_branch.clone(),
-            identity,
-            slug_prefix: input.slug_prefix.clone(),
-        })
-    })
+    repo_onboard(
+        service,
+        session,
+        spec,
+        args,
+        false,
+        |root, input, identity| {
+            Mutation::RepoCreate(RepoCreateInput {
+                root,
+                primary_branch: input.primary_branch.clone(),
+                identity,
+                slug_prefix: input.slug_prefix.clone(),
+            })
+        },
+    )
 }
 
 pub fn repo_enable(
@@ -224,14 +297,24 @@ pub fn repo_enable(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    repo_onboard(service, session, spec, args, |root, input, identity| {
-        Mutation::RepoEnable(RepoEnableInput {
-            root,
-            primary_branch: input.primary_branch.clone(),
-            identity,
-            slug_prefix: input.slug_prefix.clone(),
-        })
-    })
+    repo_onboard(
+        service,
+        session,
+        spec,
+        args,
+        true,
+        |root, input, identity| {
+            Mutation::RepoEnable(RepoEnableInput {
+                root,
+                primary_branch: input.primary_branch.clone(),
+                identity,
+                slug_prefix: input.slug_prefix.clone(),
+                publication_remote: input.publication_remote.clone(),
+                integration: input.integration,
+                forge: input.forge.clone(),
+            })
+        },
+    )
 }
 
 fn repo_onboard(
@@ -239,12 +322,13 @@ fn repo_onboard(
     session: &mut Session,
     spec: &'static CommandSpec,
     args: &ArgMatches,
+    enable: bool,
     build: impl Fn(PathBuf, &RepositoryInput, Option<CommitIdentity>) -> Mutation,
 ) -> Output {
     let result = (|| {
         let flags = flags(session, spec, args)?;
         let object = input_object(session, spec, args, flags.request_id)?;
-        let input = repository_input(&object)
+        let input = repository_input(&object, enable)
             .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
         let root = mutation_root(session, spec, args, flags.request_id)?;
         Ok((flags, input, root))

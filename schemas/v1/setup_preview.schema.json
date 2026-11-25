@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 setup preview",
+  "description": "The data of a prepare envelope that gives a preview of a pull-request repo enable: the repository is registered with no configuration and its setup is recorded, committed on the remote's primary and published as a branch for a pull request. The remote is not contacted until the confirmed request runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "What the enable will do: the repository's root, the primary branch, the identity, the short code prefix, the mode the configuration sets, the setup remote's name and location (redacted), and the forge.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "primary_branch",
+        "identity",
+        "slug_prefix",
+        "integration",
+        "remote_name",
+        "remote_location",
+        "forge"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "email",
+            "source",
+            "written_locally"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the identity comes from: supplied with the request, or the level of Git configuration that holds it.",
+              "type": "string",
+              "enum": [
+                "supplied",
+                "repository",
+                "global",
+                "xdg",
+                "system",
+                "program_data",
+                "application"
+              ]
+            },
+            "written_locally": {
+              "description": "Whether the command writes the identity to the repository's own Git configuration. No other configuration is written.",
+              "type": "boolean"
+            }
+          }
+        },
+        "slug_prefix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "pull_request"
+          ]
+        },
+        "remote_name": {
+          "type": "string"
+        },
+        "remote_location": {
+          "description": "The remote's fetch location, redacted. Null when it has none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forge": {
+          "description": "The forge setting the configuration will hold. Null when the request supplies none.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "web_url",
+            "pull_request_url"
+          ],
+          "properties": {
+            "kind": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "bitbucket-cloud",
+                "bitbucket-data-center",
+                "github",
+                "gitlab",
+                null
+              ]
+            },
+            "web_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pull_request_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

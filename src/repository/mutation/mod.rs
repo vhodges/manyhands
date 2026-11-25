@@ -155,8 +155,9 @@ pub use dto::{
     RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
     RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
     RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    RequestResultDto, RequestState, SetupForgeDto, SetupMutationDto, SetupMutationType,
+    SetupPreviewDto, SynchronizationConflictMutationDto, SynchronizationConflictType,
+    SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -214,8 +215,8 @@ pub(in super::super) fn finish_recorded_retirement(
 }
 pub(super) use records::migrate as migrate_request_tables;
 /// Finishes the accepted request of a setup that a domain call ends, in the
-/// caller's registry transaction, with `code` and nothing else: no data, no
-/// effect (design K4; the setup data of a stored answer is the bindings').
+/// caller's registry transaction, with `code` and `data` (the setup, or for a
+/// refusal for local commits those commits) and no effect (design K4).
 /// The setup layer never sees an `Answer`: this builds it, as
 /// `finish_recorded_retirement` does for a retirement.
 pub(in super::super) fn finish_setup_request(
@@ -223,13 +224,17 @@ pub(in super::super) fn finish_setup_request(
     repository_id: i64,
     request_id: RequestId,
     code: ResultCode,
+    data: Option<MutationDataDto>,
     now: i64,
 ) -> Result<bool, super::ReadError> {
     records::finish_accepted(
         tx,
         repository_id,
         request_id,
-        &bind::Answer::stopped(code),
+        &bind::Answer {
+            data,
+            ..bind::Answer::stopped(code)
+        },
         now,
     )
 }

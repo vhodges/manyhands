@@ -496,6 +496,7 @@ impl Fixture {
                 self.repository_id,
                 self.request_id,
                 code,
+                None,
                 1_700_000_001
             )
             .unwrap()
@@ -798,7 +799,16 @@ fn s2_to_s4_a_refused_setup_is_ended() {
         let result = request.result.unwrap();
         assert_eq!(result.code, code, "{name}");
         assert_eq!(result.effects, Effects::not_requested(), "{name}");
-        assert_eq!(result.data, None, "{name}");
+        // It stores what a replay answers with: the setup as it stood, or for
+        // a refusal for local commits those commits.
+        let data = result.data.unwrap_or_else(|| panic!("{name}: data"));
+        if code == ResultCode::PrimaryHasLocalCommits {
+            assert_eq!(data["type"], "primary_local_commits", "{name}");
+        } else {
+            assert_eq!(data["type"], "setup", "{name}");
+            assert_eq!(data["state"], "recorded", "{name}");
+            assert_eq!(data["request_id"], f.request_id.to_string(), "{name}");
+        }
         // Its own operation row is kept, completed.
         let (state, step, repository) = f.operation_row().unwrap_or_else(|| panic!("{name}: row"));
         assert_eq!(

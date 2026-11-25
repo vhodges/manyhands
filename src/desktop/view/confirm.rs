@@ -646,6 +646,29 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
         }
     };
     match details {
+        PreviewDetailsDto::Setup(setup) => {
+            put("Root", Some(setup.root.clone()));
+            put("Primary branch", Some(setup.primary_branch.clone()));
+            put("Name", Some(setup.identity.name.clone()));
+            put("Email", Some(setup.identity.email.clone()));
+            put(
+                "Identity from",
+                Some(setup.identity.source.as_str().to_owned()),
+            );
+            put(
+                "Written to the repository",
+                Some(flag(setup.identity.written_locally)),
+            );
+            put("Short code prefix", setup.slug_prefix.clone());
+            put("Mode", Some(setup.integration.clone()));
+            put("Remote", Some(setup.remote_name.clone()));
+            put("Remote location", setup.remote_location.clone());
+            if let Some(forge) = &setup.forge {
+                put("Forge", forge.kind.clone());
+                put("Forge web address", forge.web_url.clone());
+                put("Pull request address", forge.pull_request_url.clone());
+            }
+        }
         PreviewDetailsDto::Repository(repository) => {
             put("Root", Some(repository.root.clone()));
             put("Primary branch", Some(repository.primary_branch.clone()));

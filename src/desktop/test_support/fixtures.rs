@@ -647,6 +647,9 @@ pub(crate) fn enable_through(service: &RepositoryService, root: &Path) {
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: None,
+            publication_remote: None,
+            integration: None,
+            forge: None,
         })
     };
     let prepared = service.prepare(&input());

@@ -1145,6 +1145,26 @@ fn with_host_action(
     recovery
 }
 
+/// The approval of a host as a result of a request offers it when the
+/// error that stopped the request names the host and the result's data
+/// does not, as a setup's does not: `host.approve` or `host.replace` for
+/// a stop of `code`, none for any other.
+pub(crate) fn host_action(
+    code: ResultCode,
+    root: &str,
+    authority: &str,
+    request_id: super::RequestId,
+) -> Vec<RecoveryAction> {
+    // A suggestion replaces what the code offers on its own, so the same
+    // request, which the approval is followed by, is part of it.
+    with_host_action(
+        vec![same_request(request_id)],
+        code,
+        Some(root),
+        Some(authority),
+    )
+}
+
 /// Adds `operation.abandon` to what a result of a request that stopped
 /// offers, where a pending local operation stands in the way.
 ///

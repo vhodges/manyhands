@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 setup mutation",
+  "description": "The data of a pull-request repo enable or remote select: the setup it recorded, with its state. A first call that published carries state published; every stop after the setup was recorded carries it too, state recorded until the remote holds the setup's branch. It holds no remote location, credential or identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "id",
+    "kind",
+    "state",
+    "request_id",
+    "branch",
+    "remote",
+    "integration",
+    "pull_request"
+  ],
+  "properties": {
+    "type": {
+      "description": "Always setup: the tag that tells this data from every other command's.",
+      "type": "string",
+      "enum": [
+        "setup"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "enable",
+        "change"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "recorded",
+        "published"
+      ]
+    },
+    "request_id": {
+      "description": "The request that recorded the setup, and the one that continues it.",
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "remote": {
+      "type": "string"
+    },
+    "integration": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "pull_request"
+      ]
+    },
+    "pull_request": {
+      "$ref": "pull_request.schema.json"
+    }
+  }
+}

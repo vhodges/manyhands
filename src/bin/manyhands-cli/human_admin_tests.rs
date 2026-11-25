@@ -327,6 +327,54 @@ fn a_failure_adds_request_operation_effects_and_data_lines() {
     }
 }
 #[test]
+fn a_setup_answer_says_how_far_the_setup_has_come_and_where_its_pull_request_opens() {
+    let setup = |state: &str, url: Option<&str>| {
+        Envelope::mutation(
+            "repo enable",
+            Scope::default(),
+            Outcome::Partial,
+            ResultCode::NoSelectedKey,
+        )
+        .with_data(MutationDataDto::Setup(Box::new(
+            manyhands::repository::SetupMutationDto::from_stored_for_testing(&serde_json::json!({
+                "type": "setup", "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "kind": "enable",
+                "state": state, "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+                "branch": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV", "remote": "origin",
+                "integration": "pull_request",
+                "pull_request": {"source": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "target": "main", "forge": null, "url": url},
+            }))
+            .unwrap(),
+        )))
+    };
+    let recorded = failure_extra(&setup("recorded", None), false);
+    assert!(
+        recorded.contains("Setup: recorded, not published yet\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(
+            "open a pull request from manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV into main"
+        ),
+        "{recorded}"
+    );
+    let published = mutation_success(&setup(
+        "published",
+        Some("https://forge.example.invalid/pr"),
+    ))
+    .stdout;
+    assert!(
+        published.contains(
+            "Setup: waiting for manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV to merge into main\n"
+        ),
+        "{published}"
+    );
+    assert!(
+        published.contains("pull request: https://forge.example.invalid/pr"),
+        "{published}"
+    );
+}
+#[test]
 fn the_wrong_passphrase_hint_appears_only_after_supplied_and_transport_unavailable() {
     for code in [
         ResultCode::TransportUnavailable,

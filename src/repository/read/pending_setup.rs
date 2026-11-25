@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::{ProblemDto, PullRequestDto, ReadError, RepositorySetupDto};
 use crate::{
     canonical, forge,
-    repository::setup::record::{self, SetupRecord},
+    repository::setup::record::{self, SetupRecord, SetupState},
     results::{ProblemCode, ResultCode},
 };
 
@@ -71,24 +71,62 @@ fn setup_dto(
     record: &SetupRecord,
     fetch_url: Option<&str>,
 ) -> Result<RepositorySetupDto, ReadError> {
-    let unreadable = || ReadError::new(ResultCode::RecoveryRequired);
-    let configuration = std::str::from_utf8(&record.configuration)
-        .ok()
-        .and_then(|text| canonical::parse_repository_config(text).ok())
-        .ok_or_else(unreadable)?;
+    let configuration = intended_configuration(record)?;
     let branch = format!("manyhands/setup/{}", record.setup_id);
     let forge = forge::recognise(fetch_url, configuration.forge().as_ref());
     let link = forge::pull_request_link(forge.as_ref(), &branch, &record.primary_branch);
-    Ok(RepositorySetupDto {
+    Ok(dto_of(record, &configuration, record.state(), &link))
+}
+
+/// The record's intended configuration; one that cannot be read is
+/// `recovery_required`.
+fn intended_configuration(record: &SetupRecord) -> Result<canonical::RepositoryConfig, ReadError> {
+    std::str::from_utf8(&record.configuration)
+        .ok()
+        .and_then(|text| canonical::parse_repository_config(text).ok())
+        .ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))
+}
+
+fn dto_of(
+    record: &SetupRecord,
+    configuration: &canonical::RepositoryConfig,
+    state: SetupState,
+    link: &forge::PullRequestLink,
+) -> RepositorySetupDto {
+    RepositorySetupDto {
         id: record.setup_id.to_string(),
         kind: record.kind.as_str().to_owned(),
-        state: record.state().as_str().to_owned(),
+        state: state.as_str().to_owned(),
         request_id: record.request_id.to_string(),
-        branch,
+        branch: format!("manyhands/setup/{}", record.setup_id),
         remote: record.remote_name.clone(),
         integration: configuration.integration().as_str().to_owned(),
-        pull_request: PullRequestDto::from(&link),
-    })
+        pull_request: PullRequestDto::from(link),
+    }
+}
+
+/// The setup a mutation answers with: the record, in `state`, with `link`
+/// as the pull request.
+pub(crate) fn setup_of(
+    record: &SetupRecord,
+    state: SetupState,
+    link: &forge::PullRequestLink,
+) -> Result<RepositorySetupDto, ReadError> {
+    Ok(dto_of(
+        record,
+        &intended_configuration(record)?,
+        state,
+        link,
+    ))
+}
+
+/// The setup a mutation answers with, with the link built from the remote's
+/// fetch URL as a read builds it.
+pub(crate) fn setup_with_url(
+    record: &SetupRecord,
+    fetch_url: Option<&str>,
+) -> Result<RepositorySetupDto, ReadError> {
+    setup_dto(record, fetch_url)
 }
 
 /// Whether the registration's stored configuration blob already shows the

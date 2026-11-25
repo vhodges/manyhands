@@ -104,10 +104,19 @@ impl RepositoryService {
         accepted: &Accepted,
         ran: Ran,
     ) -> Envelope<MutationDataDto> {
-        if super::local_control::effects(self, accepted.request_id)
+        // A request the domain finished itself, in the transaction that
+        // removed what it was for, is answered with what it stored: a local
+        // synchronization's, and a setup's (design K4), whose own local row
+        // completed at `setup_recorded`.
+        if (super::local_control::effects(self, accepted.request_id)
             .ok()
             .flatten()
             .is_some()
+            || accepted
+                .recorded_local_step(self)
+                .ok()
+                .flatten()
+                .is_some_and(|step| step.is(crate::repository::recovery::LocalStep::SetupRecorded)))
             && let Ok(Some(record)) = self.request_record(accepted.request_id)
             && record.state == RequestState::Finished
         {

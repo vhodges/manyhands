@@ -133,7 +133,16 @@ const DATA: &[(&str, &[&str])] = &[
     ("id new", &["new_id"]),
     // A create or enable answers with its preview and no other data.
     ("repo create", &["preview"]),
-    ("repo enable", &["blocked", "preview"]),
+    (
+        "repo enable",
+        &[
+            "blocked",
+            "preview",
+            "primary_local_commits",
+            "setup_mutation",
+            "setup_preview",
+        ],
+    ),
     ("repo remove", &["repository_removal_preview"]),
     (
         "repo identity-set",

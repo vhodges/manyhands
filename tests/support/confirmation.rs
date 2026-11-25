@@ -294,6 +294,9 @@ impl Plain {
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: None,
+            publication_remote: None,
+            integration: None,
+            forge: None,
         }
     }
 
@@ -799,6 +802,9 @@ impl Unregistered {
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: Some("mh".to_owned()),
+            publication_remote: None,
+            integration: None,
+            forge: None,
         })
     }
 }

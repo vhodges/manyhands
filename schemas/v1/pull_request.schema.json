@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 pull request link",
-  "type": "object",
+  "type": ["object", "null"],
   "additionalProperties": false,
   "required": ["source", "target", "forge", "url"],
   "properties": {

@@ -819,3 +819,91 @@ fn repository_grammar_requires_selectors_and_refuses_remove_input() {
     assert!(!f.root.exists());
     assert!(!f.env.data.exists());
 }
+
+/// A pull-request enable in a process that has initialized the Git transport,
+/// with no key selected: publishing stops for want of one, the setup stays
+/// recorded, and the same request goes on from its record. This is the stop
+/// the in-process tests cannot reach, since a test harness cannot initialize
+/// the transport.
+#[test]
+fn a_pull_request_enable_without_a_key_stops_with_no_selected_key() {
+    let mut f = Fixture::new("enable");
+    git2::Repository::open(&f.root)
+        .unwrap()
+        .remote("origin", "ssh://git@example.invalid/team/repo.git")
+        .unwrap();
+    let mut input: Value = serde_json::from_slice(&fs::read(&f.input).unwrap()).unwrap();
+    input["publication_remote"] = "origin".into();
+    input["integration"] = "pull_request".into();
+    f.set_input(&serde_json::to_vec(&input).unwrap());
+
+    let preview = checked(
+        &f.args("enable", &["--json", "--prepare"]),
+        &f.env,
+        &[],
+        0,
+        "ok",
+        Some("setup_preview.schema.json"),
+    );
+    let confirm = preview["data"]["confirmation_id"].as_str().unwrap();
+    let args = f.args(
+        "enable",
+        &["--json", "--request-id", REQUEST, "--confirm", confirm],
+    );
+    let stopped = checked(
+        &args,
+        &f.env,
+        &[],
+        4,
+        "no_selected_key",
+        Some("setup_mutation.schema.json"),
+    );
+    assert_eq!(stopped["outcome"], "partial");
+    assert_eq!(stopped["data"]["state"], "recorded");
+    let setup = stopped["data"]["id"].as_str().unwrap().to_owned();
+    let branch = stopped["data"]["branch"].as_str().unwrap().to_owned();
+    crate::support::mutation_golden::assert_contract_at(
+        "repo_enable_setup_recorded",
+        fs::canonicalize(&f.root).unwrap().to_str().unwrap(),
+        Some("setup_mutation.schema.json"),
+        &[
+            (setup.as_str(), "<setup>"),
+            (branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &stopped,
+    );
+
+    // The repository lists the setup; the local primary is untouched; the
+    // setup's remote is read by `host observe`, which stops where publishing
+    // did.
+    let listed = f.listed();
+    assert_eq!(listed["data"]["items"][0]["setup"]["state"], "recorded");
+    assert!(!f.root.join(".manyhands/config.toml").exists());
+    checked(
+        &[
+            "host",
+            "observe",
+            "--repo",
+            f.root.to_str().unwrap(),
+            "--json",
+        ],
+        &f.env,
+        &[],
+        3,
+        "no_selected_key",
+        None,
+    );
+
+    // The same request again: the same answer, and the setup is not made
+    // twice.
+    let again = checked(
+        &args,
+        &f.env,
+        &[],
+        4,
+        "no_selected_key",
+        Some("setup_mutation.schema.json"),
+    );
+    assert_eq!(again["data"], stopped["data"]);
+    assert_eq!(f.listed()["data"]["items"].as_array().unwrap().len(), 1);
+}

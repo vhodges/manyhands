@@ -73,6 +73,9 @@ impl Intent {
                 primary_branch: primary_branch.clone(),
                 identity: identity(id),
                 slug_prefix: slug_prefix.clone(),
+                publication_remote: None,
+                integration: None,
+                forge: None,
             }),
             Self::RepoRemove { root } => {
                 Mutation::RepoRemove(RepoRemoveInput { root: root.clone() })

@@ -41,7 +41,7 @@ mod dto;
 mod graph;
 mod items;
 mod local_sync;
-mod pending_setup;
+pub(crate) mod pending_setup;
 mod resolve;
 mod status;
 

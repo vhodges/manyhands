@@ -3239,6 +3239,11 @@ impl LocalRow {
         operation_from_name(&self.action)
     }
 
+    /// Whether the row's last step is `step`.
+    pub(super) fn step_is(&self, step: LocalStep) -> bool {
+        listed(self.step.as_deref()) == Some(step)
+    }
+
     /// Whether the row's state and step have the form of the names the
     /// journal stores; see `is_stored_name`.
     pub(super) fn is_well_formed(&self) -> bool {
@@ -3422,6 +3427,32 @@ pub(super) fn advance_after_observation(
     // call that failed is already stopping.
     if advanced == 0 && state != "error" {
         refuse_abandoned(connection, record_id)?;
+    }
+    Ok(())
+}
+
+/// Completes the row `record_id` at `step` in the caller's transaction, as a
+/// setup's recording does: the step and the completion are written with the
+/// record they belong to, or not at all. A row that is not there, or was
+/// abandoned, is an error.
+pub(super) fn complete_with_step(
+    connection: &Connection,
+    record_id: i64,
+    step: LocalStep,
+) -> Result<(), RepositoryError> {
+    let completed = connection
+        .execute(
+            &format!(
+                "UPDATE operation_records
+                    SET state = 'completed', completed_step = ?2, observed_at = ?3
+                  WHERE id = ?1 AND {NOT_ABANDONED}"
+            ),
+            params![record_id, step.as_str(), now()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    if completed == 0 {
+        refuse_abandoned(connection, record_id)?;
+        return Err(super::remote::state::recovery_required());
     }
     Ok(())
 }

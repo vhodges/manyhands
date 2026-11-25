@@ -226,7 +226,8 @@ fn registering_a_setup_adds_the_repository_without_a_configuration_blob() {
     let mut db = db();
     let tx = db.transaction().unwrap();
     let id = register_setup_pending(&tx, Path::new("/new")).unwrap();
-    // Again is the same registration, and an existing one keeps its blob.
+    // Again is the same registration, and an existing one loses its blob: an
+    // enable runs only where HEAD holds no configuration (ruling R-V).
     assert_eq!(register_setup_pending(&tx, Path::new("/new")).unwrap(), id);
     tx.execute(
         "UPDATE repositories SET config_blob_oid = ?2 WHERE id = ?1",
@@ -244,7 +245,7 @@ fn registering_a_setup_adds_the_repository_without_a_configuration_blob() {
         .unwrap();
     assert_eq!(
         (blob, accessibility.as_str(), refresh),
-        (Some("a".repeat(40)), "accessible", 1)
+        (None, "accessible", 1)
     );
     let fresh = {
         let tx = db.transaction().unwrap();

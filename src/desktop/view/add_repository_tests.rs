@@ -445,6 +445,9 @@ fn adding_a_folder_that_is_not_a_repository_shows_its_typed_failure(cx: &mut Tes
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: None,
+            publication_remote: None,
+            integration: None,
+            forge: None,
         }))
         .code;
     assert_ne!(prepared, ResultCode::Ok);

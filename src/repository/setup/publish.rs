@@ -23,8 +23,11 @@ use crate::{
         RepositoryService, RequestState, cache_write_guard,
         coordination::{repository_lease, repository_lease_waiting},
         mutation::{
-            RequestId, finish_setup_request, repository_error_code, ssh_transport_error_code,
+            LocalCommitDto, MutationDataDto, PrimaryLocalCommitsDto, PrimaryLocalCommitsType,
+            RequestId, SetupMutationDto, finish_setup_request, repository_error_code,
+            ssh_transport_error_code,
         },
+        read::pending_setup::setup_of,
         remote::sync::local_only_commits,
         request_store::RequestResult,
         transport::{SetupScope, SshTransportError, SshTransportErrorKind},
@@ -36,6 +39,9 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct Published {
     pub(crate) setup_id: ItemId,
+    // Reported by the poll and the cancel of later tasks; an enable's answer
+    // names the branch, never the commit (design K7).
+    #[allow(dead_code)]
     pub(crate) commit_oid: Oid,
     pub(crate) link: PullRequestLink,
 }
@@ -484,13 +490,43 @@ impl Publishing<'_> {
     /// failure is, the record and the accepted request stay, and the next
     /// call reaches the same refusal again.
     fn end_refused(&self, refusal: SetupError) -> SetupError {
-        match self.end(refusal.code()) {
+        let data = match self.refusal_data(&refusal) {
+            Ok(data) => data,
+            Err(error) => return error,
+        };
+        match self.end(refusal.code(), data) {
             Ok(()) => refusal,
             Err(error) => error,
         }
     }
 
-    fn end(&self, code: ResultCode) -> Result<(), SetupError> {
+    /// What the request is finished with besides the refusal's code: the
+    /// local commits that refused it, or the setup as it stood.
+    fn refusal_data(&self, refusal: &SetupError) -> Result<MutationDataDto, SetupError> {
+        if let SetupError::PrimaryHasLocalCommits { commits, complete } = refusal {
+            return Ok(MutationDataDto::PrimaryLocalCommits(
+                PrimaryLocalCommitsDto {
+                    r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                    local_commits: commits
+                        .iter()
+                        .map(|(oid, summary)| LocalCommitDto {
+                            oid: oid.to_string(),
+                            summary: summary.clone(),
+                        })
+                        .collect(),
+                    complete: *complete,
+                },
+            ));
+        }
+        let link = self.link()?;
+        let setup =
+            setup_of(&self.record, self.record.state(), &link).map_err(SetupError::Registry)?;
+        Ok(MutationDataDto::Setup(Box::new(SetupMutationDto::of(
+            setup,
+        ))))
+    }
+
+    fn end(&self, code: ResultCode, data: MutationDataDto) -> Result<(), SetupError> {
         match self.repository.find_reference(&self.scope.base_ref()) {
             Ok(mut reference) => reference.delete().map_err(|error| self.git(error))?,
             Err(error) if error.code() == ErrorCode::NotFound => {}
@@ -499,9 +535,15 @@ impl Publishing<'_> {
         let now = self.service.clock.now().unix_timestamp();
         self.write(|tx| {
             // The request first: its scope is the registration's root.
-            let finished =
-                finish_setup_request(tx, self.repository_id, self.record.request_id, code, now)
-                    .map_err(SetupError::Registry)?;
+            let finished = finish_setup_request(
+                tx,
+                self.repository_id,
+                self.record.request_id,
+                code,
+                Some(data),
+                now,
+            )
+            .map_err(SetupError::Registry)?;
             if !finished {
                 // Already finished is fine. Still accepted, the guard
                 // refused it: ending the setup now would leave an accepted

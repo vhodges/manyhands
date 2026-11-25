@@ -96,6 +96,7 @@ pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
 }
 pub fn preview(preview: &PreviewDto) -> String {
     let details = match &preview.details {
+        PreviewDetailsDto::Setup(d) => fields(d),
         PreviewDetailsDto::Repository(d) => fields(d),
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
@@ -201,6 +202,9 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
         PreviewEffect::WorktreeRemoved => "remove the editing worktree",
         PreviewEffect::BranchDeleted => "delete the local editing branch",
+        PreviewEffect::SetupRecorded => "record the setup",
+        PreviewEffect::SetupBranchCommitted => "commit the setup on a branch",
+        PreviewEffect::SetupBranchPublished => "publish the setup branch",
     }
 }
 fn effects(effects: &Effects) -> String {
@@ -246,16 +250,43 @@ pub fn mutation_success(envelope: &Envelope<MutationDataDto>) -> Human {
     stdout.push_str(&metadata(envelope));
     if let Some(data) = &envelope.data {
         stdout.push_str(&fields(data));
+        stdout.push_str(&setup_lines(data));
     }
     Human {
         stdout,
         notes: vec![],
     }
 }
+/// A setup's answer, in words: how far the setup has come and the link that
+/// opens its pull request. Nothing for any other data.
+fn setup_lines(data: &MutationDataDto) -> String {
+    let MutationDataDto::Setup(setup) = data else {
+        return String::new();
+    };
+    let link = &setup.pull_request;
+    let state = if setup.state == "published" {
+        format!(
+            "waiting for {} to merge into {}",
+            field(&setup.branch),
+            field(&link.target)
+        )
+    } else {
+        "recorded, not published yet".to_owned()
+    };
+    let line = manyhands::forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line();
+    format!("Setup: {state}\n{}\n", field(&line))
+}
 pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> String {
     let mut out = metadata(envelope);
     if let Some(data) = &envelope.data {
         out.push_str(&fields(data));
+        out.push_str(&setup_lines(data));
     }
     if supplied && envelope.code == ResultCode::TransportUnavailable {
         out.push_str("hint: if the passphrase was wrong, run the command again\n");
