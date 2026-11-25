@@ -6,6 +6,7 @@
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
+use crate::forge::PullRequestLink;
 use crate::results::{OperationFailureCode, ProblemCode, ResultCode, contract_enum};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -486,6 +487,13 @@ pub struct ItemDto {
     /// differ from the list's until the index is refreshed. Null for a
     /// document and for a nonconforming entry.
     pub readiness: Option<ReadinessDto>,
+    /// The pull request link this clone gave a ticket: its branch, the
+    /// primary it targets, the forge and the address that opens it. Only a
+    /// complete read of a ticket (`show`, and `show --path`) fills it, and
+    /// only for a ticket this clone gave a link; it is null in every list
+    /// (where it reads "not read here"), for a document and for a ticket
+    /// that has none.
+    pub pull_request: Option<PullRequestDto>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
     /// are not here. A value JSON cannot express, and a list or mapping
@@ -510,6 +518,16 @@ pub struct ItemDto {
     pub index: IndexStateDto,
 }
 
+contract_enum!(
+    /// Whether a closing ticket's closure is on the remote: `published` when
+    /// the ticket at the remote's tracking ref of its branch holds the same
+    /// closure, `pending` otherwise, including when there is no tracking ref.
+    ClosurePublication {
+        Published => "published",
+        Pending => "pending",
+    }
+);
+
 /// `closed_at` is set exactly when `state` is `closed` or `closing`.
 /// `closed_by` is set with it, except in a list from an index written
 /// before `closed_by` was stored, where it is null until the next refresh.
@@ -521,6 +539,35 @@ pub struct ClosureDto {
     pub state: ClosureState,
     pub closed_at: Option<String>,
     pub closed_by: Option<String>,
+    /// Only a complete read (`show`, and `show --path`) of a closing ticket
+    /// in a pull-request repository fills it. Null for any other state, in
+    /// direct mode, where a branch-only closure is never published, and in
+    /// every list, where it reads "not read here".
+    pub publication: Option<ClosurePublication>,
+}
+
+/// Where to open a pull request: a ticket's branch (`source`), the primary
+/// it targets (`target`), the forge the repository is on and the address
+/// that opens the request. `forge` is one of `bitbucket-cloud`,
+/// `bitbucket-data-center`, `github` and `gitlab`, null when the
+/// configuration names none; `url` is null when no address can be made.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestDto {
+    pub source: String,
+    pub target: String,
+    pub forge: Option<String>,
+    pub url: Option<String>,
+}
+
+impl From<&PullRequestLink> for PullRequestDto {
+    fn from(link: &PullRequestLink) -> Self {
+        Self {
+            source: link.source.clone(),
+            target: link.target.clone(),
+            forge: link.forge.map(|kind| kind.as_str().to_owned()),
+            url: link.url.clone(),
+        }
+    }
 }
 
 /// A ticket another ticket depends on or has as its parent. `state` is

@@ -57,6 +57,7 @@ fn document(path: &str, id: Option<&str>) -> ItemDto {
         parent: None,
         deps: Vec::new(),
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: None,
         source: None,

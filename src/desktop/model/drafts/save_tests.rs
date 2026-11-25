@@ -72,6 +72,7 @@ fn read(title: &str, body: &str) -> ItemDto {
         parent: None,
         deps: Vec::new(),
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some(body.to_owned()),
         source: Some("new source".to_owned()),

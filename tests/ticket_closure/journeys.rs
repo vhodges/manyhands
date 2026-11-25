@@ -407,6 +407,7 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
             state: ClosureState::Closed,
             closed_at,
             closed_by: Some(p.a.closed_by()),
+            publication: None,
         })
     );
     assert_eq!(oid(&p.b, MAIN)?, primary);

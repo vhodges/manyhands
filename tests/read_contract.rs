@@ -7,8 +7,8 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
-        DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
+        Accessibility, ChangeSource, ClosurePublication, ClosureState, ConfigurationState,
+        CycleKind, DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
         ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
         KeyPublicMetadataState, OperationAction, OperationAttributionDto, OperationFamily,
@@ -977,6 +977,25 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "item.schema.json",
             "closure.state",
             ClosureState::ALL.map(ClosureState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "closure.publication",
+            ClosurePublication::ALL
+                .map(ClosurePublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request.schema.json",
+            "forge",
+            [
+                ForgeKind::BitbucketCloud,
+                ForgeKind::BitbucketDataCenter,
+                ForgeKind::Github,
+                ForgeKind::Gitlab,
+            ]
+            .map(ForgeKind::as_str)
+            .to_vec(),
         ),
         (
             "item.schema.json",

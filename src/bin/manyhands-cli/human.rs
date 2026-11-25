@@ -1,9 +1,13 @@
 use super::render::{Human, field};
-use manyhands::repository::{
-    CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderListDto,
-    HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto,
-    KeyDto, KeyListDto, NewIdDto, OperationDto, OperationListDto, PlanDto, PollingStatusDto,
-    ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
+use manyhands::{
+    forge::PullRequestLink,
+    repository::{
+        CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto,
+        DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto,
+        ItemDtoKind, ItemListDto, KeyDto, KeyListDto, NewIdDto, OperationDto, OperationListDto,
+        PlanDto, PollingStatusDto, ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto,
+        RepositoryInspectionDto, RepositoryListDto,
+    },
 };
 
 fn text(stdout: String) -> Human {
@@ -347,6 +351,22 @@ pub fn item_show(data: &ItemDto) -> Human {
             optional(closure.closed_at.as_deref()),
             optional(closure.closed_by.as_deref())
         ));
+        if let Some(publication) = closure.publication {
+            output
+                .stdout
+                .push_str(&format!("Publication: {}\n", publication.as_str()));
+        }
+    }
+    if let Some(link) = &data.pull_request {
+        let link = PullRequestLink {
+            source: link.source.clone(),
+            target: link.target.clone(),
+            forge: None,
+            url: link.url.clone(),
+        };
+        output
+            .stdout
+            .push_str(&format!("{}\n", field(&link.human_line())));
     }
     output.stdout.push_str(&format!(
         "Context: {}\nBranch: {}\nWorktree: {}\nChanged at: {}\nIndex: {}\n",

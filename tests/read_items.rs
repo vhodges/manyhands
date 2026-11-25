@@ -6132,3 +6132,201 @@ fn closure_filter_closing_and_open() {
     assert_eq!(sorted(ClosureFilter::All), all);
     assert_git_transport_uninitialized();
 }
+
+// ---------------------------------------------------------------------
+// The pull request link and the publication: what a complete read of a
+// ticket adds, and no list does.
+// ---------------------------------------------------------------------
+
+use manyhands::repository::{ClosurePublication, PullRequestDto};
+
+/// The link this clone gave a ticket, as the registry holds it.
+fn given_link(ticket: &str) -> PullRequestDto {
+    PullRequestDto {
+        source: format!("manyhands/ticket/{ticket}"),
+        target: "main".to_owned(),
+        forge: Some("github".to_owned()),
+        url: Some(format!("https://github.com/example/repo/pull/new/{ticket}")),
+    }
+}
+
+/// Gives the item `id` of `kind` the link a build that creates a pull
+/// request gives it, as a row.
+fn give_link(data_directory: &Path, kind: &str, id: &str) {
+    let link = given_link(id);
+    let changed = index(data_directory)
+        .execute(
+            "INSERT INTO pull_request_links
+                 (repository_id, kind, item_ulid, source, target, forge, url, given_at)
+             SELECT id, ?1, ?2, ?3, ?4, ?5, ?6, 1 FROM repositories",
+            rusqlite::params![kind, id, link.source, link.target, link.forge, link.url],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+/// Stores the repository's mode as a refresh of its configuration does.
+fn store_mode(data_directory: &Path, integration: &str, remote: Option<&str>) {
+    let changed = index(data_directory)
+        .execute(
+            "UPDATE configuration_observations
+                SET integration = ?1, publication_remote = ?2",
+            rusqlite::params![integration, remote],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+/// The remote tracking ref of a ticket's branch, at a commit whose tree holds
+/// the ticket `source` as its only file, or no such ref.
+fn track_ticket(fixture: &support::TestRepository, id: &str, source: Option<&str>) {
+    let name = format!("refs/remotes/origin/manyhands/ticket/{id}");
+    let repository = &fixture.repository;
+    let Some(source) = source else {
+        if let Ok(mut reference) = repository.find_reference(&name) {
+            reference.delete().unwrap();
+        }
+        return;
+    };
+    // `.manyhands/tickets/<id>/ticket.md`, each directory the one entry.
+    let blob = repository.blob(source.as_bytes()).unwrap();
+    let mut entry = (blob, 0o100644, "ticket.md".to_owned());
+    for directory in [id, "tickets", ".manyhands"] {
+        let mut builder = repository.treebuilder(None).unwrap();
+        builder.insert(&entry.2, entry.0, entry.1).unwrap();
+        entry = (builder.write().unwrap(), 0o040000, directory.to_owned());
+    }
+    let mut builder = repository.treebuilder(None).unwrap();
+    builder.insert(&entry.2, entry.0, entry.1).unwrap();
+    let tree = repository.find_tree(builder.write().unwrap()).unwrap();
+    let signature =
+        git2::Signature::now("Manyhands Test", "manyhands-test@example.invalid").unwrap();
+    let commit = repository
+        .commit(None, &signature, &signature, "published", &tree, &[])
+        .unwrap();
+    repository
+        .reference(&name, commit, true, "fixture")
+        .unwrap();
+}
+
+fn publication(item: &ItemDto) -> Option<ClosurePublication> {
+    item.closure
+        .as_ref()
+        .expect("a ticket has a closure")
+        .publication
+}
+
+#[test]
+fn ticket_show_gives_the_link_and_the_publication() {
+    let (fixture, enabled) = closure_world(Primary::Open, Own::Closed);
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    let document = "docs/note.md";
+    write(root, document, &document_source(DOCUMENT_A, "Note", ""));
+    commit(&fixture, &[document], 2_000);
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+    let own = context_worktree(root, TICKET_A);
+    let ticket_file = ticket_path(TICKET_A);
+    let ticket_file = Path::new(&ticket_file);
+    // A is closing: closed in its own worktree only. B is open.
+    let a = || service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+    assert_eq!(a().closure.as_ref().unwrap().state, ClosureState::Closing);
+
+    // No link row: null. Direct mode: no publication, tracking ref or not.
+    assert_eq!(a().pull_request, None);
+    track_ticket(
+        &fixture,
+        TICKET_A,
+        Some(&ticket_source(TICKET_A, "Subject", OWN_CLOSURE)),
+    );
+    assert_eq!(publication(&a()), None);
+
+    // A link row: a complete read of the ticket gives it, a list never does,
+    // and nor does a document's read, whatever row it has.
+    give_link(data, "ticket", TICKET_A);
+    give_link(data, "document", DOCUMENT_A);
+    assert_eq!(a().pull_request, Some(given_link(TICKET_A)));
+    let by_path = service.show_path(&repo, Some(&own), ticket_file).unwrap();
+    assert_eq!(by_path.pull_request, Some(given_link(TICKET_A)));
+    let by_path = service.show_path(&repo, None, ticket_file).unwrap();
+    assert_eq!(by_path.pull_request, Some(given_link(TICKET_A)));
+    let b = service.show_item(&repo, &item_id(TICKET_B)).unwrap();
+    assert_eq!(b.pull_request, None);
+    let note = service.show_item(&repo, &item_id(DOCUMENT_A)).unwrap();
+    assert_eq!(note.pull_request, None);
+    let listed = all_tickets(service, &repo);
+    for item in &listed.items {
+        assert_eq!(item.pull_request, None, "list: {item:?}");
+        assert_eq!(item.closure.as_ref().and_then(|c| c.publication), None);
+    }
+    let documents = service.list_documents(&repo).unwrap();
+    assert!(
+        documents
+            .items
+            .iter()
+            .all(|item| item.pull_request.is_none())
+    );
+
+    // A pull-request repository: a closing ticket is published when the
+    // ticket at its branch's tracking ref holds the same closure, and
+    // pending when it holds another, none, or the ref is absent, or the
+    // repository names no publication remote.
+    let same = ticket_source(TICKET_A, "Subject", OWN_CLOSURE);
+    let other = ticket_source(
+        TICKET_A,
+        "Subject",
+        "closed_at: 2026-10-01T09:00:00Z\nclosed_by: Grace Hopper <grace@example.invalid>\n",
+    );
+    let open = ticket_source(TICKET_A, "Subject", "");
+    store_mode(data, "pull_request", Some("origin"));
+    for (what, tracked, wanted) in [
+        (
+            "the same closure",
+            Some(&same),
+            ClosurePublication::Published,
+        ),
+        ("another closure", Some(&other), ClosurePublication::Pending),
+        ("an open ticket", Some(&open), ClosurePublication::Pending),
+        ("no tracking ref", None, ClosurePublication::Pending),
+    ] {
+        track_ticket(&fixture, TICKET_A, tracked.map(String::as_str));
+        assert_eq!(publication(&a()), Some(wanted), "show: {what}");
+        let by_path = service.show_path(&repo, Some(&own), ticket_file).unwrap();
+        assert_eq!(publication(&by_path), Some(wanted), "show --path: {what}");
+        // The primary's copy is open, and says nothing of publication.
+        let primary = service.show_path(&repo, None, ticket_file).unwrap();
+        assert_eq!(publication(&primary), None, "primary copy: {what}");
+        let listed = all_tickets(service, &repo);
+        assert_eq!(publication(ticket(&listed, TICKET_A)), None, "list: {what}");
+    }
+    track_ticket(&fixture, TICKET_A, Some(&same));
+    store_mode(data, "pull_request", None);
+    assert_eq!(publication(&a()), Some(ClosurePublication::Pending));
+    store_mode(data, "pull_request", Some("origin"));
+    assert_eq!(publication(&a()), Some(ClosurePublication::Published));
+    // An open ticket has none.
+    assert_eq!(
+        publication(&service.show_item(&repo, &item_id(TICKET_B)).unwrap()),
+        None
+    );
+    store_mode(data, "direct", Some("origin"));
+    assert_eq!(publication(&a()), None);
+
+    // A closed ticket has none either.
+    let (fixture, enabled) = closure_world(Primary::Closed, Own::None);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    store_mode(
+        enabled.data_directory.path(),
+        "pull_request",
+        Some("origin"),
+    );
+    track_ticket(&fixture, TICKET_A, Some(&same));
+    let closed = enabled
+        .service
+        .show_item(&repo, &item_id(TICKET_A))
+        .unwrap();
+    assert_eq!(closed.closure.as_ref().unwrap().state, ClosureState::Closed);
+    assert_eq!(publication(&closed), None);
+    assert_git_transport_uninitialized();
+}

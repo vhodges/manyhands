@@ -619,6 +619,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "poll_retirement_targets",
             "primary_activity",
             "problems",
+            "pull_request_links",
             "registry_migrations",
             "remote_context_states",
             "remote_identity_confirmations",

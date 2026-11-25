@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull request link",
+  "description": "Where to open the pull request of a ticket's branch: source is the branch, target the primary it merges into, forge the kind of forge the repository is on, null when the configuration names none, and url the address that opens the request, null when none can be made. Null where a read has no link to give.",
+  "type": ["object", "null"],
+  "additionalProperties": false,
+  "required": ["source", "target", "forge", "url"],
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "forge": {
+      "type": ["string", "null"],
+      "enum": [
+        "bitbucket-cloud",
+        "bitbucket-data-center",
+        "github",
+        "gitlab",
+        null
+      ]
+    },
+    "url": {
+      "type": ["string", "null"]
+    }
+  }
+}

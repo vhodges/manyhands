@@ -55,6 +55,7 @@ fn content_item() -> ItemDto {
         parent: None,
         deps: vec![],
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some("\nRequested\t正文\r\n\u{1b}body without final newline".into()),
         source: Some("SOURCE_NOT_BODY".into()),
@@ -90,6 +91,7 @@ fn relationship_ticket() -> ItemDto {
             state: ClosureState::Open,
             closed_at: None,
             closed_by: None,
+            publication: None,
         }),
         readiness: Some(ReadinessDto {
             state: ReadinessState::Blocked,
@@ -317,6 +319,7 @@ fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconformi
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        publication: None,
     });
     let data = ItemListDto {
         items: vec![document, ticket, nonconforming_item()],
@@ -336,6 +339,57 @@ fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconformi
 }
 
 #[test]
+fn show_names_the_publication_and_the_pull_request_link_when_it_has_them() {
+    let mut item = content_item();
+    item.kind = ItemDtoKind::Ticket;
+    item.closure = Some(ClosureDto {
+        state: ClosureState::Closing,
+        closed_at: Some("2026-10-19T12:00:00Z".into()),
+        closed_by: Some("Ada".into()),
+        publication: Some(ClosurePublication::Pending),
+    });
+    let link = |url: Option<&str>| PullRequestDto {
+        source: "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FD0".into(),
+        target: "main".into(),
+        forge: Some("github".into()),
+        url: url.map(str::to_owned),
+    };
+    let lines = |item: &ItemDto| -> Vec<String> {
+        item_show(item)
+            .stdout
+            .lines()
+            .map(str::to_owned)
+            .take_while(|line| !line.is_empty())
+            .collect()
+    };
+    assert!(lines(&item).contains(&"Publication: pending".to_owned()));
+    assert!(
+        !lines(&item)
+            .iter()
+            .any(|line| line.contains("pull request"))
+    );
+
+    item.pull_request = Some(link(Some("https://github.com/o/r/pull/new/b")));
+    assert!(lines(&item).contains(&"pull request: https://github.com/o/r/pull/new/b".to_owned()));
+    item.pull_request = Some(link(None));
+    assert!(
+        lines(&item).contains(
+            &"open a pull request from manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FD0 into main"
+                .to_owned()
+        )
+    );
+    item.closure = Some(ClosureDto {
+        publication: None,
+        ..item.closure.unwrap()
+    });
+    assert!(
+        !lines(&item)
+            .iter()
+            .any(|line| line.starts_with("Publication"))
+    );
+}
+
+#[test]
 fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
     let mut item = content_item();
     item.kind = ItemDtoKind::Ticket;
@@ -347,6 +401,7 @@ fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        publication: None,
     });
     let output = item_show(&item);
     let (metadata, body) = output.stdout.split_once("\n\n").unwrap();

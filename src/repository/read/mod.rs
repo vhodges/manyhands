@@ -47,19 +47,20 @@ mod status;
 pub(crate) use admin::identity_dto;
 pub(crate) use credentials::stored_authority;
 pub use dto::{
-    Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
-    ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,
-    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderDto,
-    DocumentFolderListDto, ForgeDto, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
-    IdentitySource, IndexProblemDto, IndexState, IndexStateDto, IndexStatusDto, IndexStatusState,
-    InitialsSource, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto,
-    KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto,
-    OperationAction, OperationAttributionDto, OperationDto, OperationFamily, OperationListDto,
-    OperationNextAction, OperationOwner, PathObservationDto, PlanBatchDto, PlanDto, PollingOutcome,
-    PollingStatusDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
-    ReadinessReasonDto, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, RemoteDto,
-    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto,
-    UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
+    Accessibility, ChangeSource, ClosureDto, ClosurePublication, ClosureState, CommentDto,
+    CommentListDto, ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto,
+    DependencyDirection, DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto,
+    DocumentFolderDto, DocumentFolderListDto, ForgeDto, HostPinDto, HostPinListDto,
+    IdentityAvailability, IdentityDto, IdentitySource, IndexProblemDto, IndexState, IndexStateDto,
+    IndexStatusDto, IndexStatusState, InitialsSource, ItemContextDto, ItemContextKind, ItemDto,
+    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
+    KeyPublicMetadataState, NewIdDto, OperationAction, OperationAttributionDto, OperationDto,
+    OperationFamily, OperationListDto, OperationNextAction, OperationOwner, PathObservationDto,
+    PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto, ProblemDto, PublicKeyDto,
+    PullRequestDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto, ReadinessState,
+    RelationshipCheckDto, RelationshipRejectionDto, RemoteDto, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode,
+    UnplannableReasonDto, UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{

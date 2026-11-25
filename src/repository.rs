@@ -72,6 +72,7 @@ mod native_resolution;
 #[path = "repository/native_resolution/windows.rs"]
 mod native_resolution;
 mod promotion;
+mod pull_request_links;
 mod read;
 mod recovery;
 mod registration_removal;

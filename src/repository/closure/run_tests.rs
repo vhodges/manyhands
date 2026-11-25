@@ -1537,6 +1537,7 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
                     .unwrap()
             ),
             closed_by: Some(CLOSED_BY.into()),
+            publication: None,
         })
     );
     let listed = f

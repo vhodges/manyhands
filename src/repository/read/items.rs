@@ -16,22 +16,28 @@ use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use super::{
-    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, DocumentFolderDto,
-    DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
-    ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto, ReadError, ReadinessState,
-    RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
+    ChangeSource, ClosureDto, ClosurePublication, ClosureState, DependencyDto, DependencyState,
+    DocumentFolderDto, DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto,
+    ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto,
+    PullRequestDto, ReadError, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto,
+    ResolvedRepository,
     graph::{MovedContexts, TicketGraph, TicketNode},
-    index_state, root_action,
+    index_state,
+    resolve::open_exactly,
+    root_action,
 };
 use crate::{
     canonical::{self, ItemId},
     repository::{
-        DirtyContexts, GuardedFile, RepositoryOperation, RepositoryService, activity_source_name,
-        authoring_kind_name, context_kind_name,
+        AuthoringKind, DirtyContexts, GuardedFile, RemoteRefPlan, RepositoryOperation,
+        RepositoryService, activity_source_name, authoring_kind_name,
+        closure::observe,
+        context_kind_name,
         discovery::{
             ContextKey, ContextObservation, ObservedCommentThread, ObservedItem, UnknownMetadata,
         },
         mutation::absent_token,
+        pull_request_links,
     },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
@@ -1474,6 +1480,7 @@ fn bare_item(
         parent: None,
         deps: Vec::new(),
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: None,
         source: None,
@@ -1508,12 +1515,111 @@ fn closure(
             state,
             closed_at: timestamp(primary.closed_at),
             closed_by: primary.closed_by.clone(),
+            publication: None,
         },
         _ => ClosureDto {
             state,
             closed_at,
             closed_by,
+            publication: None,
         },
+    }
+}
+
+/// What a complete read of a ticket adds to what the index lists: the pull
+/// request link this clone gave it, and, for a closing ticket in a
+/// pull-request repository, whether its closure is on the remote yet. A list
+/// reads the index only, and leaves both null.
+fn fill_complete_read(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    item: &mut ItemDto,
+) -> Result<(), ReadError> {
+    let (Some(id), ItemDtoKind::Ticket) = (item.id.as_deref(), item.kind) else {
+        return Ok(());
+    };
+    item.pull_request = pull_request_links::link_of(
+        connection,
+        repo.registration_id(),
+        authoring_kind_name(AuthoringKind::Ticket),
+        id,
+    )?
+    .as_ref()
+    .map(PullRequestDto::from);
+    let publication = match &item.closure {
+        Some(closure) if closure.state == ClosureState::Closing => {
+            publication_of(connection, repo, id, closure)?
+        }
+        _ => None,
+    };
+    if let Some(closure) = &mut item.closure {
+        closure.publication = publication;
+    }
+    Ok(())
+}
+
+/// Whether a closing ticket's closure is published: `published` when the
+/// ticket at the tracking ref of its branch on the publication remote holds
+/// the same closure, `pending` when it does not, or there is no such ref or
+/// remote, or the ref cannot be read. Null in direct mode, where a closure
+/// on the ticket's branch alone is never published.
+fn publication_of(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: &str,
+    closure: &ClosureDto,
+) -> Result<Option<ClosurePublication>, ReadError> {
+    let configuration: Option<(Option<String>, Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT integration, publication_remote, primary_branch
+               FROM configuration_observations
+              WHERE repository_id = ?1 AND state = 'valid'",
+            [repo.registration_id()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((Some(integration), remote, primary)) = configuration else {
+        return Ok(None);
+    };
+    if integration != canonical::Integration::PullRequest.as_str() {
+        return Ok(None);
+    }
+    let held = remote
+        .zip(primary)
+        .and_then(|(remote, primary)| RemoteRefPlan::from_configuration(&remote, &primary).ok())
+        .zip(id.parse::<ItemId>().ok())
+        .and_then(|(plan, id)| {
+            let tracking = plan.context(AuthoringKind::Ticket, &id);
+            tracked_closure(repo.root(), tracking.tracking_ref(), &id)
+        });
+    let shown = (closure.closed_at.clone(), closure.closed_by.clone());
+    Ok(Some(
+        if closure.closed_at.is_some() && held == Some(shown) {
+            ClosurePublication::Published
+        } else {
+            ClosurePublication::Pending
+        },
+    ))
+}
+
+/// The `closed_at` and `closed_by` of the ticket at the tracking ref
+/// `reference`, as a read presents them, or `None` when there is no such ref
+/// or ticket, or either cannot be read.
+fn tracked_closure(
+    root: &Path,
+    reference: &str,
+    id: &ItemId,
+) -> Option<(Option<String>, Option<String>)> {
+    let git = open_exactly(root).ok()?;
+    let commit = git.find_reference(reference).ok()?.peel_to_commit().ok()?;
+    let path = observe::ticket_path(id);
+    let held = observe::tree_ticket(&git, commit.tree_id(), &path, root).ok()??;
+    match canonical::parse_item(&path, std::str::from_utf8(&held.bytes).ok()?).ok()? {
+        canonical::CanonicalItem::Ticket(ticket) => Some((
+            ticket.closed_at.and_then(timestamp_string),
+            ticket.closed_by,
+        )),
+        _ => None,
     }
 }
 
@@ -2452,6 +2558,7 @@ impl RepositoryService {
                 },
             };
             item.observation = Some(observation);
+            fill_complete_read(connection, repo, &mut item)?;
             Ok(item)
         })
         .map_err(|error| {
@@ -2612,6 +2719,7 @@ impl RepositoryService {
                 }
             };
             item.observation = Some(observation);
+            fill_complete_read(connection, repo, &mut item)?;
             Ok(item)
         })
     }
