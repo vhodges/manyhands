@@ -609,6 +609,8 @@ pub fn select_through(
         Mutation::RemoteSelect(RemoteSelectInput {
             root: root.to_owned(),
             name: name.map(str::to_owned),
+            integration: None,
+            forge: None,
         }),
     );
     assert_eq!(selected.outcome, Outcome::Success, "{}", selected.message);

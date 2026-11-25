@@ -103,6 +103,8 @@ impl Intent {
             Self::RemoteSelect { root, name } => Mutation::RemoteSelect(RemoteSelectInput {
                 root: root.clone(),
                 name: name.clone(),
+                integration: None,
+                forge: None,
             }),
             Self::IndexRefresh { root } => {
                 Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() })

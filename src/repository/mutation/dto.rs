@@ -2729,6 +2729,18 @@ impl MutationDataDto {
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
             }
+            // A pull-request selection stores the setup it recorded, or the
+            // local commits that refused it, told apart by the tag.
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup") =>
+            {
+                SetupMutationDto::from_stored(stored).map(|data| Self::Setup(Box::new(data)))
+            }
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("primary_local_commits") =>
+            {
+                PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
+            }
             Command::RemoteAdd | Command::RemoteSelect | Command::RemoteRemove => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
             }

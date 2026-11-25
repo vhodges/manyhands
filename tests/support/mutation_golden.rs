@@ -173,6 +173,7 @@ pub const CASES: &[&str] = &[
     "remote_select_discovery_pending",
     "remote_select_invalid",
     "remote_select_noop",
+    "remote_select_setup_recorded",
     "repo_create",
     "repo_create_partial",
     "repo_create_preview",

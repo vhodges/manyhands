@@ -4670,3 +4670,121 @@ fn a_direct_enable_with_a_remote_writes_it_in_the_initialization_commit() {
         assert_eq!(plain.initializations(), 1, "{what}");
     }
 }
+
+/// A selection that turns pull-request mode on records its change and stops,
+/// owed, with the primary's configuration as it was; the commands that must
+/// wait for it do, the others carry on; the same request goes on from its
+/// record, and nothing is made twice (design Parts F and K).
+#[test]
+fn turning_pull_request_mode_on_without_a_key_records_a_change() {
+    use manyhands::{
+        canonical::Integration,
+        repository::{Mutation, RemoteSelectInput, RequestState, TicketCloseInput},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        items,
+        mutation::{REQUEST_1, REQUEST_2, World, execute_with},
+    };
+
+    let world = World::new();
+    world
+        .fixture
+        .repository
+        .remote("origin", NEVER_CONTACTED)
+        .unwrap();
+    let select = || {
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: world.root.clone(),
+            name: Some("origin".to_owned()),
+            integration: Some(Integration::PullRequest),
+            forge: None,
+        })
+    };
+    let configuration = || std::fs::read(world.root.join(canonical::CONFIG_PATH)).unwrap();
+    let head = world.primary_head();
+    let before_configuration = configuration();
+    let count = |sql: &str| {
+        items::index(world.data.path())
+            .query_row(sql, [], |row| row.get::<_, i64>(0))
+            .unwrap()
+    };
+
+    // The call records its change and stops. This target's process has not
+    // initialized the Git transport (that is one call before any thread, which
+    // a test harness cannot make), so the transport's first answer is its own
+    // `internal_error`; the stop for want of a selected key is the CLI's test,
+    // which runs a process that has (`tests/cli/remotes.rs`).
+    let stopped = execute_with(&world.service, REQUEST_1, select());
+    assert_eq!(
+        stopped.code,
+        ResultCode::InternalError,
+        "{}",
+        stopped.message
+    );
+    assert_eq!(stopped.outcome, Outcome::Partial);
+    let record = world.record(REQUEST_1).unwrap();
+    assert_eq!(record.state, RequestState::Accepted);
+    let data = serde_json::to_value(&stopped.data).unwrap();
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "recorded");
+    assert_eq!(data["kind"], "change");
+    assert_eq!(data["remote"], "origin");
+    assert_eq!(data["integration"], "pull_request");
+    assert_eq!(data["request_id"], REQUEST_1);
+    support::schema::check_published("setup_mutation.schema.json", &data).unwrap();
+    let setup_id = data["id"].as_str().unwrap().to_owned();
+    assert_eq!(data["branch"], format!("manyhands/setup/{setup_id}"));
+
+    // `repo inspect` shows the change; the primary's configuration, and
+    // HEAD, are as they were: nothing was committed.
+    let inspected = world.service.inspect_repository(&world.root).unwrap();
+    let setup = inspected.setup.expect("a setup is shown");
+    assert_eq!(
+        (
+            setup.id.as_str(),
+            setup.kind.as_str(),
+            setup.state.as_str(),
+            setup.request_id.as_str()
+        ),
+        (setup_id.as_str(), "change", "recorded", REQUEST_1)
+    );
+    assert_eq!(configuration(), before_configuration);
+    assert_eq!(world.primary_head(), head);
+
+    // `ticket close --prepare` waits for the setup, as the envelope's own
+    // code; `ticket save` carries on in the mode and on the remote it has.
+    let prepared = world
+        .service
+        .prepare(&Mutation::TicketClose(TicketCloseInput {
+            root: world.root.clone(),
+            id: items::item_id(items::TICKET_A),
+        }));
+    assert_eq!(
+        prepared.code,
+        ResultCode::SetupPending,
+        "{}",
+        prepared.message
+    );
+    let saved = execute_with(
+        &world.service,
+        REQUEST_2,
+        world.save(items::TICKET_A, &world.token(items::TICKET_A)),
+    );
+    assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+
+    // The same request again: the same answer, and nothing is recorded twice.
+    let again = execute_with(&world.service, REQUEST_1, select());
+    assert_eq!(again.code, ResultCode::InternalError, "{}", again.message);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(serde_json::to_value(&again.data).unwrap(), data);
+    assert_eq!(count("SELECT COUNT(*) FROM repository_setups"), 1);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM operation_records WHERE action = 'set_publication_remote'"),
+        1
+    );
+    assert_eq!(configuration(), before_configuration);
+}

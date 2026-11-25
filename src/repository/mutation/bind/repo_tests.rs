@@ -40,11 +40,11 @@ use crate::repository::mutation::{
     bind::{Binding, CallContext, Entered, Standing},
 };
 
-const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
-const R2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX2";
-const REMOTE_URL: &str = "ssh://git@example.invalid/team/repo.git";
+pub(in super::super) const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
+pub(in super::super) const R2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX2";
+pub(in super::super) const REMOTE_URL: &str = "ssh://git@example.invalid/team/repo.git";
 
-fn ada() -> CommitIdentity {
+pub(in super::super) fn ada() -> CommitIdentity {
     CommitIdentity {
         name: "Ada Example".into(),
         email: "ada@example.invalid".into(),
@@ -59,10 +59,11 @@ fn grace() -> CommitIdentity {
 }
 
 /// What a scripted call does, and returns.
-type Runs = dyn FnOnce(&RepositoryService, &Path, RequestId) -> Result<Published, SetupError>;
+pub(in super::super) type Runs =
+    dyn FnOnce(&RepositoryService, &Path, RequestId) -> Result<Published, SetupError>;
 
 /// What `publish_setup` does at one call.
-enum Step {
+pub(in super::super) enum Step {
     /// The setup is published: what `continue_setup` returns once it has
     /// recorded the remote's branch.
     Published,
@@ -76,13 +77,13 @@ enum Step {
 
 /// A session whose publishing is scripted, and that counts its calls. A
 /// call the script has no step for is a call the test did not expect.
-struct Scripted {
+pub(in super::super) struct Scripted {
     steps: RefCell<VecDeque<Step>>,
     calls: Cell<usize>,
 }
 
 impl Scripted {
-    fn new(steps: Vec<Step>) -> Self {
+    pub(in super::super) fn new(steps: Vec<Step>) -> Self {
         Self {
             steps: RefCell::new(steps.into()),
             calls: Cell::new(0),
@@ -90,17 +91,20 @@ impl Scripted {
     }
 
     /// A session that must not be asked to publish.
-    fn none() -> Self {
+    pub(in super::super) fn none() -> Self {
         Self::new(Vec::new())
     }
 
-    fn calls(&self) -> usize {
+    pub(in super::super) fn calls(&self) -> usize {
         self.calls.get()
     }
 }
 
 /// The setup the registry holds for the repository at `root`.
-fn read_setup(service: &RepositoryService, root: &Path) -> Option<SetupRecord> {
+pub(in super::super) fn read_setup(
+    service: &RepositoryService,
+    root: &Path,
+) -> Option<SetupRecord> {
     let db = open_registry(&service.registry_path, &mut |_| {}).unwrap();
     let id: Option<i64> = db
         .query_row(
@@ -113,7 +117,7 @@ fn read_setup(service: &RepositoryService, root: &Path) -> Option<SetupRecord> {
     record::read(&db, id?).unwrap()
 }
 
-fn branch_of(record: &SetupRecord) -> String {
+pub(in super::super) fn branch_of(record: &SetupRecord) -> String {
     format!("manyhands/setup/{}", record.setup_id)
 }
 
@@ -502,7 +506,7 @@ fn setup_data(record: &SetupRecord, state: &str) -> Value {
     })
 }
 
-fn transport(kind: SshTransportErrorKind) -> SetupError {
+pub(in super::super) fn transport(kind: SshTransportErrorKind) -> SetupError {
     SetupError::Transport(SshTransportError {
         root: PathBuf::from("/nowhere"),
         remote_name: "origin".into(),

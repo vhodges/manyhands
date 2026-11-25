@@ -1311,7 +1311,7 @@ impl RepoBinding {
             call.session.publish_setup(service, root, request_id)
         });
         match outcome {
-            Ok(outcome) => self.setup_ran(service, accepted, &root, outcome),
+            Ok(outcome) => setup_ran(service, accepted, &root, outcome),
             Err(error) => {
                 let blocker = error.blocker().cloned();
                 // A refusal before the recording is an enable's, settled as
@@ -1322,9 +1322,9 @@ impl RepoBinding {
                 // cannot be read, is owed whatever this call was: settled as a
                 // completed row is, it would be deleted, and its ID freed for a
                 // second setup.
-                if !recorded && !self.recorded_now(service, accepted) {
+                if !recorded && !recorded_now(service, accepted) {
                     let mut ran = self.stopped(service, accepted, &root, error.kind);
-                    if !self.recorded_now(service, accepted) {
+                    if !recorded_now(service, accepted) {
                         ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
                         return ran;
                     }
@@ -1339,89 +1339,6 @@ impl RepoBinding {
                     standing: Standing::Owed,
                 }
             }
-        }
-    }
-
-    /// Whether the request's own row is at `setup_recorded`, or cannot be
-    /// read: the request is then owed.
-    fn recorded_now(&self, service: &RepositoryService, accepted: &Accepted) -> bool {
-        match accepted.recorded_local_step(service) {
-            Ok(step) => step.is_some_and(|step| step.is(LocalStep::SetupRecorded)),
-            Err(()) => true,
-        }
-    }
-
-    /// What a pull-request enable that got as far as its recording answers
-    /// with, and what is left of its request (design K2).
-    fn setup_ran(
-        &self,
-        service: &RepositoryService,
-        accepted: &Accepted,
-        root: &Path,
-        outcome: SetupOutcome,
-    ) -> Ran {
-        match outcome {
-            SetupOutcome::Published(published) => {
-                let Some(data) = setup_data::of(service, root, Some(&published)) else {
-                    // Published, and its record cannot be read: the same
-                    // request answers it once it can.
-                    return Ran {
-                        answer: Answer::stopped(ResultCode::RecoveryRequired),
-                        standing: Standing::Owed,
-                    };
-                };
-                Ran {
-                    answer: Answer {
-                        // No commit: the setup commit is never on the
-                        // primary, so a replay checks nothing against it.
-                        effects: Effects {
-                            write: WriteEffect::Written,
-                            publication: PublicationEffect::Published,
-                            ..Effects::not_requested()
-                        },
-                        data: Some(data),
-                        ..Answer::stopped(ResultCode::Ok)
-                    },
-                    standing: Standing::Final,
-                }
-            }
-            SetupOutcome::Recorded { stop, authority } => {
-                // The host a transport stop is about, for the approval the
-                // stop is answered with: the setup's data names none.
-                let recovery = match (&authority, root.to_str()) {
-                    (Some(authority), Some(root)) => {
-                        outcome::host_action(stop, root, authority, accepted.request_id)
-                    }
-                    _ => Vec::new(),
-                };
-                Ran {
-                    answer: Answer {
-                        data: setup_data::of(service, root, None),
-                        recovery,
-                        // The registry rows and the record are durable
-                        // changes no effect shows.
-                        local_change: true,
-                        ..Answer::stopped(stop)
-                    },
-                    standing: Standing::Owed,
-                }
-            }
-            // The domain finished the request in the transaction that ended
-            // the setup: `settled` answers the stored envelope.
-            SetupOutcome::Ended(error) => Ran {
-                answer: Answer::stopped(error.code()),
-                standing: Standing::Final,
-            },
-            SetupOutcome::AnotherSetup => Ran {
-                answer: Answer::stopped(ResultCode::SetupPending),
-                standing: Standing::Final,
-            },
-            SetupOutcome::IdentityRequired => Ran {
-                answer: Answer::stopped(ResultCode::IdentityRequired),
-                standing: Standing::Stopped {
-                    journal: accepted.journal_row(service),
-                },
-            },
         }
     }
 
@@ -1989,6 +1906,97 @@ impl Confirmed for RepoBinding {
     }
 }
 
+/// Whether the request's own row is at `setup_recorded`, or cannot be
+/// read: the request is then owed.
+pub(super) fn recorded_now(service: &RepositoryService, accepted: &Accepted) -> bool {
+    match accepted.recorded_local_step(service) {
+        Ok(step) => step.is_some_and(|step| step.is(LocalStep::SetupRecorded)),
+        Err(()) => true,
+    }
+}
+
+/// What a pull-request enable that got as far as its recording answers
+/// with, and what is left of its request (design K2).
+pub(super) fn setup_ran(
+    service: &RepositoryService,
+    accepted: &Accepted,
+    root: &Path,
+    outcome: SetupOutcome,
+) -> Ran {
+    match outcome {
+        SetupOutcome::Published(published) => {
+            let Some(data) = setup_data::of(service, root, Some(&published)) else {
+                // Published, and its record cannot be read: the same
+                // request answers it once it can.
+                return Ran {
+                    answer: Answer::stopped(ResultCode::RecoveryRequired),
+                    standing: Standing::Owed,
+                };
+            };
+            Ran {
+                answer: Answer {
+                    // No commit: the setup commit is never on the
+                    // primary, so a replay checks nothing against it.
+                    effects: Effects {
+                        write: WriteEffect::Written,
+                        publication: PublicationEffect::Published,
+                        ..Effects::not_requested()
+                    },
+                    data: Some(data),
+                    ..Answer::stopped(ResultCode::Ok)
+                },
+                standing: Standing::Final,
+            }
+        }
+        SetupOutcome::Recorded { stop, authority } => {
+            // The host a transport stop is about, for the approval the
+            // stop is answered with: the setup's data names none.
+            let recovery = match (&authority, root.to_str()) {
+                (Some(authority), Some(root)) => {
+                    outcome::host_action(stop, root, authority, accepted.request_id)
+                }
+                _ => Vec::new(),
+            };
+            Ran {
+                answer: Answer {
+                    data: setup_data::of(service, root, None),
+                    recovery,
+                    // The registry rows and the record are durable
+                    // changes no effect shows.
+                    local_change: true,
+                    ..Answer::stopped(stop)
+                },
+                standing: Standing::Owed,
+            }
+        }
+        // The domain finished the request in the transaction that ended
+        // the setup: `settled` answers the stored envelope.
+        SetupOutcome::Ended(error) => Ran {
+            answer: Answer::stopped(error.code()),
+            standing: Standing::Final,
+        },
+        SetupOutcome::AnotherSetup => Ran {
+            answer: Answer::stopped(ResultCode::SetupPending),
+            standing: Standing::Final,
+        },
+        // A change's refusal: only a `remote select` meets it.
+        SetupOutcome::InTheWay { blocker } => Ran {
+            answer: Answer::stopped(ResultCode::RecoveryRequired).naming(
+                service,
+                root,
+                blocker.as_ref(),
+            ),
+            standing: Standing::Final,
+        },
+        SetupOutcome::IdentityRequired => Ran {
+            answer: Answer::stopped(ResultCode::IdentityRequired),
+            standing: Standing::Stopped {
+                journal: accepted.journal_row(service),
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 #[path = "repo_tests.rs"]
-mod tests;
+pub(super) mod tests;

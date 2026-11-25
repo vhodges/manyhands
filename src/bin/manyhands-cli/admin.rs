@@ -218,6 +218,19 @@ fn forge_setting(forge: &InputObject) -> Result<ForgeSetting, InputError> {
     })
 }
 
+/// The optional `integration` field: `direct` or `pull_request`.
+fn integration_mode(input: &InputObject) -> Result<Option<Integration>, InputError> {
+    match input.optional_string("integration")?.as_deref() {
+        None => Ok(None),
+        Some("direct") => Ok(Some(Integration::Direct)),
+        Some("pull_request") => Ok(Some(Integration::PullRequest)),
+        Some(_) => Err(InputError::InvalidValue {
+            field: "integration",
+            allowed: &["direct", "pull_request"],
+        }),
+    }
+}
+
 /// The input of `repo create`, or with `enable` of `repo enable`, which takes
 /// three fields more.
 fn repository_input(input: &InputObject, enable: bool) -> Result<RepositoryInput, InputError> {
@@ -244,17 +257,7 @@ fn repository_input(input: &InputObject, enable: bool) -> Result<RepositoryInput
             })
         })
         .transpose()?;
-    let integration = match input.optional_string("integration")?.as_deref() {
-        None => None,
-        Some("direct") => Some(Integration::Direct),
-        Some("pull_request") => Some(Integration::PullRequest),
-        Some(_) => {
-            return Err(InputError::InvalidValue {
-                field: "integration",
-                allowed: &["direct", "pull_request"],
-            });
-        }
-    };
+    let integration = integration_mode(input)?;
     Ok(RepositoryInput {
         primary_branch,
         identity,
@@ -436,13 +439,9 @@ pub fn remote_remove(
         session,
         spec,
         args,
-        |object| Ok(Some(object.string("name")?)),
-        |root, name| {
-            Mutation::RemoteRemove(RemoteRemoveInput {
-                root,
-                name: name.expect("required remote name"),
-            })
-        },
+        &["name"],
+        |object| object.string("name"),
+        |root, name| Mutation::RemoteRemove(RemoteRemoveInput { root, name }),
     )
 }
 
@@ -457,30 +456,50 @@ pub fn remote_select(
         session,
         spec,
         args,
-        |object| object.nullable_string("name"),
-        |root, name| Mutation::RemoteSelect(RemoteSelectInput { root, name }),
+        &["name", "integration", "forge"],
+        |object| {
+            let name = object.nullable_string("name")?;
+            let integration = integration_mode(object)?;
+            // Absent leaves the table as it is; null removes it.
+            let forge = object
+                .nullable_object("forge")?
+                .map(|forge| forge.map(|forge| forge_setting(&forge)).transpose())
+                .transpose()?;
+            Ok((name, integration, forge))
+        },
+        |root, (name, integration, forge)| {
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root,
+                name,
+                integration,
+                forge,
+            })
+        },
     )
 }
 
-fn remote_name(
+/// The input of `remote select` and `remote remove`: the fields `only` names,
+/// read by `read_fields` and built into the mutation by `build`.
+fn remote_name<T: Clone>(
     service: &RepositoryService,
     session: &mut Session,
     spec: &'static CommandSpec,
     args: &ArgMatches,
-    read_name: impl FnOnce(&InputObject) -> Result<Option<String>, InputError>,
-    build: impl Fn(PathBuf, Option<String>) -> Mutation,
+    only: &[&str],
+    read_fields: impl FnOnce(&InputObject) -> Result<T, InputError>,
+    build: impl Fn(PathBuf, T) -> Mutation,
 ) -> Output {
     let result = (|| {
         let flags = flags(session, spec, args)?;
         let object = input_object(session, spec, args, flags.request_id)?;
-        let name = object
-            .only(&["name"])
-            .and_then(|()| read_name(&object))
+        let fields = object
+            .only(only)
+            .and_then(|()| read_fields(&object))
             .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
         let root = mutation_root(session, spec, args, flags.request_id)?;
-        Ok((flags, name, root))
+        Ok((flags, fields, root))
     })();
-    let (flags, name, root) = match result {
+    let (flags, fields, root) = match result {
         Ok(values) => values,
         Err(out) => return out,
     };
@@ -490,7 +509,7 @@ fn remote_name(
         spec,
         flags,
         mutate::RETRYING,
-        &mut |_| build(root.clone(), name.clone()),
+        &mut |_| build(root.clone(), fields.clone()),
         &mut std::thread::sleep,
     )
 }

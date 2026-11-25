@@ -224,6 +224,8 @@ impl CacheLoss {
         Mutation::RemoteSelect(RemoteSelectInput {
             root: world.root.clone(),
             name: name.map(str::to_owned),
+            integration: None,
+            forge: None,
         })
     }
 

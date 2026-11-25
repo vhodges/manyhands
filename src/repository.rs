@@ -5688,6 +5688,17 @@ impl RepositoryService {
         &self,
         request: SetPublicationRemoteRequest,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
+        self.set_publication_remote_with(request, None)
+    }
+
+    /// `set_publication_remote`, with the `[forge]` table the same commit is
+    /// to leave: `None` leaves it as it is, `Some(None)` removes it,
+    /// `Some(Some(setting))` replaces it.
+    pub fn set_publication_remote_with(
+        &self,
+        request: SetPublicationRemoteRequest,
+        forge: Option<Option<&canonical::ForgeSetting>>,
+    ) -> Result<PublicationRemoteOutcome, RepositoryError> {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
@@ -5708,6 +5719,7 @@ impl RepositoryService {
         let effects = CallEffects::default();
         let result = self.set_publication_remote_recorded(
             request,
+            forge,
             repository,
             root.clone(),
             &mut lease,
@@ -5717,9 +5729,11 @@ impl RepositoryService {
         self.settle_rejected_lifecycle(&root, operation, record, &effects, result)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn set_publication_remote_recorded(
         &self,
         request: SetPublicationRemoteRequest,
+        forge: Option<Option<&canonical::ForgeSetting>>,
         repository: Repository,
         root: PathBuf,
         lease: &mut Option<RepositoryLease>,
@@ -5727,7 +5741,7 @@ impl RepositoryService {
         effects: &CallEffects,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
         let operation = RepositoryOperation::SetPublicationRemote;
-        let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
+        let ConfigurationInspection::Valid(config) = read_configuration_for(&root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
             return Err(RepositoryError::new(
@@ -5778,7 +5792,12 @@ impl RepositoryService {
             }
         }
         self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
-        if config.publication_remote == request.name {
+        // What the commit leaves: the remote and, when a forge is given, the
+        // `[forge]` table. With no forge this is the remote alone.
+        let mut intended = config.clone();
+        intended.publication_remote = request.name.clone();
+        setup::intent::apply_forge(&mut intended, forge);
+        if intended == config {
             // A selection already made may have stopped before its index
             // update, or come from a version that made none. The checks above
             // showed the file matches HEAD and the entry only lags behind it.
@@ -5838,8 +5857,7 @@ impl RepositoryService {
                 "configure user.name and user.email before changing the publication remote",
             ));
         };
-        config.publication_remote = request.name;
-        let source = canonical::serialize_repository_config(&config).map_err(|problem| {
+        let source = canonical::serialize_repository_config(&intended).map_err(|problem| {
             RepositoryError::new(
                 operation,
                 Some(root.clone()),

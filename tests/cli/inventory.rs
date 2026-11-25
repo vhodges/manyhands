@@ -153,7 +153,15 @@ const DATA: &[(&str, &[&str])] = &[
         "remote remove",
         &["blocked", "remote_removal_preview", "remote_mutation"],
     ),
-    ("remote select", &["blocked", "remote_mutation"]),
+    (
+        "remote select",
+        &[
+            "blocked",
+            "primary_local_commits",
+            "remote_mutation",
+            "setup_mutation",
+        ],
+    ),
     ("key generate", &["key_mutation"]),
     ("key import", &["key_mutation"]),
     ("key select", &["key_mutation"]),

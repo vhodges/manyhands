@@ -1063,6 +1063,8 @@ impl Fixture {
             Mutation::RemoteSelect(RemoteSelectInput {
                 root: root.to_owned(),
                 name: Some("origin".to_owned()),
+                integration: None,
+                forge: None,
             }),
         );
         assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);

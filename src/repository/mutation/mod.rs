@@ -45,7 +45,7 @@ use super::{
 mod bind;
 // Private shared-domain authority input, not a new mutation/DTO/CLI binding.
 pub(crate) use bind::Accepted;
-mod command;
+pub(crate) mod command;
 mod confirm;
 mod context;
 mod dto;

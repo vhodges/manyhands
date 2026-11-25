@@ -69,6 +69,43 @@ pub(crate) fn for_enable(
     })
 }
 
+/// The `[forge]` table of a setting.
+pub(crate) fn forge_table(setting: &ForgeSetting) -> toml::Value {
+    let mut table = toml::Table::new();
+    if let Some(kind) = setting.kind {
+        table.insert(
+            "kind".to_owned(),
+            toml::Value::String(kind.as_str().to_owned()),
+        );
+    }
+    if let Some(url) = &setting.web_url {
+        table.insert("web_url".to_owned(), toml::Value::String(url.clone()));
+    }
+    if let Some(url) = &setting.pull_request_url {
+        table.insert(
+            "pull_request_url".to_owned(),
+            toml::Value::String(url.clone()),
+        );
+    }
+    toml::Value::Table(table)
+}
+
+/// `config` with its `[forge]` table put as `forge` says: `None` leaves it,
+/// `Some(None)` removes it, `Some(Some(setting))` replaces it.
+pub(crate) fn apply_forge(config: &mut RepositoryConfig, forge: Option<Option<&ForgeSetting>>) {
+    match forge {
+        None => {}
+        Some(None) => {
+            config.unknown.remove("forge");
+        }
+        Some(Some(setting)) => {
+            config
+                .unknown
+                .insert("forge".to_owned(), forge_table(setting));
+        }
+    }
+}
+
 /// The file's table for the mode and the forge, not yet validated: the
 /// serializer does that, as for every configuration. A direct file is
 /// today's, with no mode key.
@@ -86,23 +123,7 @@ pub(crate) fn base_configuration(
         );
     }
     if let Some(setting) = forge_setting {
-        let mut table = toml::Table::new();
-        if let Some(kind) = setting.kind {
-            table.insert(
-                "kind".to_owned(),
-                toml::Value::String(kind.as_str().to_owned()),
-            );
-        }
-        if let Some(url) = &setting.web_url {
-            table.insert("web_url".to_owned(), toml::Value::String(url.clone()));
-        }
-        if let Some(url) = &setting.pull_request_url {
-            table.insert(
-                "pull_request_url".to_owned(),
-                toml::Value::String(url.clone()),
-            );
-        }
-        unknown.insert("forge".to_owned(), toml::Value::Table(table));
+        unknown.insert("forge".to_owned(), forge_table(setting));
     }
     RepositoryConfig {
         primary_branch: primary_branch.to_owned(),

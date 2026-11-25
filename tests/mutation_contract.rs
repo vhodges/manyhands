@@ -638,6 +638,8 @@ fn remote_select(world: &World, name: Option<&str>) -> Mutation {
     Mutation::RemoteSelect(RemoteSelectInput {
         root: world.root.clone(),
         name: name.map(str::to_owned),
+        integration: None,
+        forge: None,
     })
 }
 

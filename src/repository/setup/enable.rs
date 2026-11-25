@@ -69,6 +69,12 @@ pub(crate) enum SetupOutcome {
     Ended(SetupError),
     /// Another request's setup is recorded for the repository.
     AnotherSetup,
+    /// A close, a promotion or another selection is in a change's way
+    /// (design Part B, "Closing the races"): `recovery_required`, final, and
+    /// nothing was recorded. `blocker` names it, when it names an operation.
+    InTheWay {
+        blocker: Option<crate::repository::Blocker>,
+    },
     /// No identity to commit as: nothing was recorded.
     IdentityRequired,
 }
@@ -85,6 +91,30 @@ fn host_of(error: &SetupError) -> Option<String> {
     } else {
         format!("{}:{}", authority.host, authority.port)
     })
+}
+
+/// What publishing answered, as the outcome of a call that recorded its
+/// setup (design K2): the refusals end the setup, any other stop leaves it
+/// recorded.
+pub(super) fn outcome_of(published: Publishing) -> SetupOutcome {
+    match published {
+        None => SetupOutcome::Recorded {
+            stop: ResultCode::InternalError,
+            authority: None,
+        },
+        Some(Ok(published)) => SetupOutcome::Published(published),
+        Some(Err(error)) => match error {
+            SetupError::RemotePrimaryMissing
+            | SetupError::PrimaryHasLocalCommits { .. }
+            | SetupError::RemoteAlreadySetUp
+            | SetupError::ExternalChange
+            | SetupError::Ended(_) => SetupOutcome::Ended(error),
+            other => SetupOutcome::Recorded {
+                stop: other.code(),
+                authority: host_of(&other),
+            },
+        },
+    }
 }
 
 /// Where the checks and the recording left the call.
@@ -167,24 +197,7 @@ impl RepositoryService {
                 authority: None,
             });
         }
-        Ok(match publish(&root, setup.request_id) {
-            None => SetupOutcome::Recorded {
-                stop: ResultCode::InternalError,
-                authority: None,
-            },
-            Some(Ok(published)) => SetupOutcome::Published(published),
-            Some(Err(error)) => match error {
-                SetupError::RemotePrimaryMissing
-                | SetupError::PrimaryHasLocalCommits { .. }
-                | SetupError::RemoteAlreadySetUp
-                | SetupError::ExternalChange
-                | SetupError::Ended(_) => SetupOutcome::Ended(error),
-                other => SetupOutcome::Recorded {
-                    stop: other.code(),
-                    authority: host_of(&other),
-                },
-            },
-        })
+        Ok(outcome_of(publish(&root, setup.request_id)))
     }
 
     /// The checks, and the recording transaction. An outer `Err` is a
