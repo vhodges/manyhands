@@ -36,12 +36,12 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (a
 
 ### Cycle 01, vh-c2dtj: Pull-request setting, link builder and pull-only repo sync
 
-- [ ] `integration` and `[forge]` in the configuration, with `format_version = 2`
-- [ ] Forge recognition and the default mode
-- [ ] Link builder (the record of given links moved to Cycle 03)
-- [ ] Pull-only `repo sync`, and `primary_has_local_commits`
-- [ ] The repository's mode and forge shown in `repo inspect` and `repo list`
-- [ ] Reviewed and closed
+- [x] `integration` and `[forge]` in the configuration, with `format_version = 2`
+- [x] Forge recognition and the default mode
+- [x] Link builder (the record of given links moved to Cycle 03)
+- [x] Pull-only `repo sync`, and `primary_has_local_commits`
+- [x] The repository's mode and forge shown in `repo inspect` and `repo list`
+- [x] Reviewed and closed
 
 ### Cycle 02, vh-c97se: Onboarding an existing repository on a branch for a pull request
 
