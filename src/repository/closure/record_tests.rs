@@ -616,8 +616,34 @@ fn step_invariants_enforced() {
         close(&tx, &mut r);
         r.operation_id
     };
+    // A direct row at `complete`: a branch record's answer is not its.
+    let direct_complete = {
+        let op = OperationId::new();
+        tx.execute_batch(&format!(
+            "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,closure_kind,context_oid,base_oid,closed_at,closure_oid,integration_kind,integration_oid,publication_category) VALUES(1,'{op}','{}',x'{}','origin','complete',1,'record',{o1},{o2},{ts},{o3},'merged',{o1},'published')",
+            item_n(9),
+            "07".repeat(32),
+        ))
+        .unwrap();
+        op
+    };
+    // A refusal stored with no remote is still a readable row.
+    let abandoned_without_remote = branch_row(
+        &tx,
+        &item_n(10),
+        "close",
+        "abandoned",
+        &[
+            ("remote_name", "NULL"),
+            ("closure_kind", "'existing'"),
+            ("refusal_category", "'external_change'"),
+            ("answer_code", "'external_change'"),
+        ],
+    );
     // Every row above is accepted as it stands.
     for op in [
+        direct_complete,
+        abandoned_without_remote,
         close_record,
         close_existing,
         pending,
@@ -683,6 +709,16 @@ fn step_invariants_enforced() {
             "integration_mode='pull_request',consented_context_oid='1111111111111111111111111111111111111111'",
         ),
         (direct, "step='retired'", "updated_at=updated_at"),
+        (
+            direct_complete,
+            "answer_code='published'",
+            "updated_at=updated_at",
+        ),
+        (
+            abandoned_without_remote,
+            "step='complete'",
+            "answer_code='merged'",
+        ),
         // Cleanup steps belong to a direct close and a new branch.
         (
             close_record,
@@ -1788,8 +1824,8 @@ fn item_n(n: u8) -> String {
     )
 }
 /// A pull-request-mode record, straight in SQL: its writers land with the
-/// branch runner. `columns` are added to the row's identity columns, `{op}`
-/// in a value standing for the row's own operation ID.
+/// branch runner. `columns` are added to the row's identity columns (or
+/// replace one), `{op}` in a value standing for the row's own operation ID.
 fn branch_row(
     tx: &Transaction<'_>,
     item: &str,
@@ -1814,8 +1850,14 @@ fn branch_row(
         .map(|(name, value)| (name.to_owned(), value))
         .unzip();
     for (name, value) in columns {
-        names.push((*name).to_owned());
-        values.push(value.replace("{op}", &op.to_string()));
+        let value = value.replace("{op}", &op.to_string());
+        match names.iter().position(|n| n == name) {
+            Some(at) => values[at] = value,
+            None => {
+                names.push((*name).to_owned());
+                values.push(value);
+            }
+        }
     }
     tx.execute_batch(&format!(
         "INSERT INTO ticket_closures({}) VALUES({})",
@@ -2055,6 +2097,44 @@ fn branch_records_rebuild_and_keep_direct_rows() {
     let direct = read(&tx, ops[1]);
     assert_eq!(direct.written_commit(), Some(oid('3')));
     assert_eq!(direct.merged_context(), Some(oid('3')));
+    // A new branch builds its commit C at `confirmed`, before it retires the
+    // old branch (tip T): through the retirement the context head is T, from
+    // `closing` on it is C.
+    let built = [
+        ("closure_kind", "'record'"),
+        ("closed_at", ts),
+        ("closure_oid", &o3[..]),
+        ("retired_oid", &o4[..]),
+        ("pending_ref", "'refs/manyhands/closures/{op}'"),
+    ];
+    for (n, step) in [
+        "confirmed",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleted",
+        "retired",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let op = branch_row(&tx, &item_n(20 + n as u8), "new_branch", step, &built);
+        let r = read(&tx, op);
+        assert_eq!(r.merged_context(), Some(oid('4')), "new_branch at {step}");
+        assert_eq!(r.written_commit(), Some(oid('3')), "new_branch at {step}");
+    }
+    for (n, step) in ["closing", "publication_pending"].into_iter().enumerate() {
+        let mut columns = built.to_vec();
+        columns.extend([("context_oid", &o1[..]), ("base_oid", &o2[..])]);
+        if step == "publication_pending" {
+            columns.push(("publication_category", "'transport'"));
+        }
+        let op = branch_row(&tx, &item_n(30 + n as u8), "new_branch", step, &columns);
+        assert_eq!(
+            read(&tx, op).merged_context(),
+            Some(oid('3')),
+            "new_branch at {step}"
+        );
+    }
 }
 
 /// The fence's range (C1, C9): a direct record holds from `closing`; a

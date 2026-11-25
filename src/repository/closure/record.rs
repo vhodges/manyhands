@@ -262,15 +262,27 @@ impl ClosureRecord {
             self.closure_oid
         }
     }
-    /// The context commit integration merges: an adopted synchronization
-    /// over the checkpoint, else the commit the record wrote when there is
-    /// one, else the synchronized pre-closure context, else (a `new_branch`
-    /// before its commit) the retired branch tip.
+    /// The context head the record's cleanup and retirement hold the context
+    /// to. A direct record's: an adopted synchronization over the checkpoint,
+    /// else the checkpoint when one was written, else the synchronized
+    /// pre-closure context. A new branch builds its commit before it retires
+    /// the old branch, so through the retirement (`confirmed` to `retired`)
+    /// the head is the old branch's tip; from `closing` on, the commit it
+    /// wrote. Any other branch record's: the commit it wrote, else the
+    /// synchronized context.
     pub(in super::super) fn merged_context(&self) -> Option<Oid> {
+        use ClosureStep::*;
+        if self.action == ClosureAction::NewBranch
+            && matches!(
+                self.step,
+                Confirmed | WorktreeRemoving | WorktreeRemoved | BranchDeleted | Retired
+            )
+        {
+            return self.retired_oid;
+        }
         self.adopted_context_oid
             .or(self.written_commit())
             .or(self.context_oid)
-            .or(self.retired_oid)
     }
 }
 impl std::fmt::Debug for ClosureRecord {
@@ -650,6 +662,8 @@ fn validate_branch(r: &ClosureRecord) -> Result<(), RepositoryError> {
         || r.step == ContextSynchronized && new_branch
         || matches!(r.step, Retired | WorktreeRemoving | WorktreeRemoved | BranchDeleted)
             && !new_branch
+        // Defensive: a refusal stored at insertion with no remote must still
+        // read, or every `records()` read would fail on it.
         || r.remote_name.is_none() && r.step != Abandoned
         || synchronized && r.context_oid.is_none()
         || written && r.base_oid.is_none()
