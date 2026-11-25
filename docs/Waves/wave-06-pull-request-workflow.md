@@ -32,16 +32,16 @@ Each ticket is one Cycle with its own branch and worktree. Tick a ticket's last 
 
 ## Implementation Cycles
 
-Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycles 02, 03 and 04 depend on Cycle 01, Cycle 05 depends on Cycles 03 and 04, and Cycle 06 depends on Cycles 02 to 05.
+Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (approved 2026-11-24) adds no interim guard: close, promote and remote selection keep their direct behaviour in a pull-request repository until their own Cycles, and no release ships until Cycle 04. Cycles 02, 03 and 04 depend on Cycle 01, Cycle 05 depends on Cycles 03 and 04, and Cycle 06 depends on Cycles 02 to 05.
 
 ### Cycle 01, vh-c2dtj: Pull-request setting, link builder and pull-only repo sync
 
-- [ ] `integration` and `[forge]` in the configuration, with `format_version = 2`
-- [ ] Forge recognition and the default mode
-- [ ] Link builder, and the record of links this clone has given
-- [ ] Pull-only `repo sync`, and `primary_has_local_commits`
-- [ ] A guard against any commit to or push of the primary in pull-request mode
-- [ ] Reviewed and closed
+- [x] `integration` and `[forge]` in the configuration, with `format_version = 2`
+- [x] Forge recognition and the default mode
+- [x] Link builder (the record of given links moved to Cycle 03)
+- [x] Pull-only `repo sync`, and `primary_has_local_commits`
+- [x] The repository's mode and forge shown in `repo inspect` and `repo list`
+- [x] Reviewed and closed
 
 ### Cycle 02, vh-c97se: Onboarding an existing repository on a branch for a pull request
 
@@ -56,6 +56,7 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycles 02, 03 and 
 ### Cycle 03, vh-gy8gz: Ticket close in pull-request mode, the closing state and withdraw
 
 - [ ] Close records the closure, publishes and gives the link; `already_closing`
+- [ ] The record of given links and the JSON `pull_request` object (moved from Cycle 01)
 - [ ] The `closing` state, readiness, and the guard on the primary's copy only
 - [ ] `ticket withdraw-closure`, and the immutability change it needs
 - [ ] The two-clone race, and the closure-only recovery for a branch merged first
