@@ -159,7 +159,9 @@ impl RunObserver for Stages<'_> {
     fn event(&mut self, event: RunEvent) {
         let stage = match event {
             RunEvent::ChildStarting(ChildRole::Context) => ProgressStage::Connecting,
-            RunEvent::ChildStarting(ChildRole::Primary) => ProgressStage::Publishing,
+            RunEvent::ChildStarting(ChildRole::Primary | ChildRole::Publication) => {
+                ProgressStage::Publishing
+            }
             RunEvent::ChildSafePoint(ChildRole::Context, point) => match point {
                 RemoteOperationSafePoint::BeforeFetch => ProgressStage::Fetching,
                 RemoteOperationSafePoint::BeforeLocalUpdate => ProgressStage::UpdatingLocal,
@@ -176,7 +178,7 @@ impl RunObserver for Stages<'_> {
                 | RemoteOperationSafePoint::AfterPushVerification
                 | RemoteOperationSafePoint::BeforeDiscovery => return,
             },
-            RunEvent::ChildSafePoint(ChildRole::Primary, _) => return,
+            RunEvent::ChildSafePoint(ChildRole::Primary | ChildRole::Publication, _) => return,
             RunEvent::Recording if self.closure_exists => return,
             RunEvent::Recording => ProgressStage::Recording,
             RunEvent::Integrating => ProgressStage::Integrating,

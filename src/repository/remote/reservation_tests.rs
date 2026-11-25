@@ -4453,6 +4453,140 @@ fn child_fence_admits_closure_primary_only_while_integrated_or_publication_pendi
     );
 }
 
+/// A branch record's second slot is its publication child: allowed while
+/// `closing` and `publication_pending`, never for a direct record, and a
+/// branch record has no primary child.
+#[test]
+fn child_fence_admits_the_publication_child_only_while_a_branch_record_publishes() {
+    use crate::repository::{
+        SynchronizationTarget,
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::ChildRole,
+    };
+    let (_data, root, service) = fixture();
+    // A `confirmed` direct record made a pull-request close at `closing`, in
+    // SQL: its writers land with the branch runner.
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    let set = |sql: &str| {
+        state::with_transaction(&service, root.path(), |tx, _| {
+            tx.execute_batch(&format!(
+                "UPDATE ticket_closures SET {sql} WHERE operation_id='{op}'"
+            ))
+            .map_err(|_| state::recovery_required())
+        })
+        .unwrap();
+    };
+    let reads = |id_op: OperationId| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::read_record(tx, id, id_op).map(Option::unwrap)
+        })
+        .unwrap()
+    };
+    // Neither a direct record nor a branch record's `confirmed` has the slot.
+    let direct = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(closure::next_attempt(tx, id, op, ChildRole::Publication).map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(direct.unwrap_err(), RepositoryErrorKind::RecoveryRequired);
+    set(&format!(
+        "integration_mode='pull_request',step='closing',closure_kind='existing',context_oid='{}',base_oid='{}'",
+        "1".repeat(40),
+        "2".repeat(40)
+    ));
+    let branch = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(closure::next_attempt(tx, id, op, ChildRole::Primary).map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(
+        branch.unwrap_err(),
+        RepositoryErrorKind::RecoveryRequired,
+        "a branch record has no primary child"
+    );
+    let parent = state::with_transaction(&service, root.path(), |tx, id| {
+        closure::next_attempt(tx, id, op, ChildRole::Publication)
+    })
+    .unwrap();
+    let child = parent.primary_sync_id.expect("the second slot");
+    assert_eq!(parent.context_sync_id, None);
+    let execution = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    // Its request is the ticket context's, never the primary's.
+    execution
+        .validate_request(&context_request(
+            root.path(),
+            child,
+            crate::repository::AuthoringKind::Ticket,
+        ))
+        .unwrap();
+    for wrong in [
+        SynchronizationTarget::Primary,
+        context_request(
+            root.path(),
+            child,
+            crate::repository::AuthoringKind::Document,
+        )
+        .target,
+    ] {
+        let mut request =
+            context_request(root.path(), child, crate::repository::AuthoringKind::Ticket);
+        request.target = wrong;
+        assert_eq!(
+            execution.validate_request(&request).unwrap_err().kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+    }
+    let validate = |execution: &crate::repository::promotion::record::ChildExecution| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(execution.validate(tx, id, child).map_err(|e| e.kind))
+        })
+        .unwrap()
+    };
+    // The step the record is at decides; the SQL here is the writers' work.
+    let at = |step: &str, extra: &str| {
+        set(&format!("step='{step}'{extra}"));
+        assert_eq!(reads(op).step.name(), step);
+    };
+    at("closing", "");
+    assert_eq!(validate(&execution), Ok(()));
+    at("publication_pending", ",publication_category='transport'");
+    assert_eq!(validate(&execution), Ok(()));
+    // The primary slot's own role: the same child as a primary execution is refused.
+    let primary = closure::child_execution(&reads(op), ChildRole::Primary).unwrap();
+    assert_eq!(
+        validate(&primary),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    at("published", "");
+    assert_eq!(
+        validate(&execution),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    set("step='complete',answer_code='published'");
+    assert_eq!(
+        validate(&execution),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    for step in [ClosureStep::Confirmed, ClosureStep::ContextSynchronized] {
+        set(&format!("answer_code=NULL,step='{}'", step.name()));
+        assert_eq!(
+            validate(&execution),
+            Err(RepositoryErrorKind::OperationMismatch),
+            "{step:?}"
+        );
+    }
+    // A direct record's second slot is its primary child, never a publication one.
+    let (_data, root, service) = fixture();
+    let (parent, _) = close_primary_child(&service, root.path());
+    let wrong = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    let verdict = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(wrong
+            .validate(tx, id, parent.primary_sync_id.unwrap())
+            .map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(verdict, Err(RepositoryErrorKind::OperationMismatch));
+}
+
 /// A closure context attempt before it reserved is refused once the
 /// parent's cancellation is requested, and so is its primary attempt.
 #[test]
@@ -4541,10 +4675,12 @@ fn wording_child(
         let (parent, execution) = match role {
             ChildRole::Context => close_child(service, root),
             ChildRole::Primary => close_primary_child(service, root),
+            ChildRole::Publication => unreachable!("a wording row of a branch record's child"),
         };
         let child = match role {
             ChildRole::Context => parent.context_sync_id,
             ChildRole::Primary => parent.primary_sync_id,
+            ChildRole::Publication => unreachable!("a wording row of a branch record's child"),
         };
         return (execution, child.unwrap());
     }
@@ -4576,6 +4712,7 @@ fn wording_child(
     let child = match role {
         ChildRole::Context => parent.context_sync_id,
         ChildRole::Primary => parent.primary_sync_id,
+        ChildRole::Publication => unreachable!("a promotion has no publication child"),
     };
     (execution, child.unwrap())
 }
@@ -4632,6 +4769,7 @@ fn assert_child_fence_wording(
                 request.target = match role {
                     ChildRole::Context => SynchronizationTarget::Primary,
                     ChildRole::Primary => context_request(root.path(), child, authoring).target,
+                    ChildRole::Publication => unreachable!("a wording row of a publication child"),
                 };
                 execution.validate_request(&request).unwrap_err()
             }
@@ -4659,6 +4797,7 @@ fn assert_child_fence_wording(
                 let prefix = match role {
                     ChildRole::Context => "context",
                     ChildRole::Primary => "primary",
+                    ChildRole::Publication => unreachable!("a wording row of a publication child"),
                 };
                 let change = match *case {
                     "repository" | "operation" => None,

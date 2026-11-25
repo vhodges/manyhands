@@ -5,7 +5,7 @@ use crate::repository::{
     discovery::migrate_registry,
     promotion::{
         PromotionExpectation,
-        lifecycle::{LifecycleRecord, ParentStep},
+        lifecycle::{LifecycleRecord, ParentStep, RecordPath},
         record as promotion,
     },
     recovery,
@@ -87,12 +87,22 @@ fn rejected(tx: &Transaction<'_>, op: OperationId, assignment: &str) -> bool {
     refused
 }
 
+/// How many of the closure table's three migration markers are set.
+fn marker(db: &Connection) -> i64 {
+    db.query_row(
+        "SELECT count(*) FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1')",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
 #[test]
 fn migration_is_all_or_nothing_and_idempotent() {
     let mut db = db();
-    db.execute_batch("DROP TABLE ticket_closures; DELETE FROM registry_migrations WHERE name='cycle_10_ticket_closures';").unwrap();
+    db.execute_batch("DROP TABLE ticket_closures; DELETE FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1');").unwrap();
     // A failure anywhere in the migration leaves neither table, index nor marker.
-    db.execute_batch("CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='cycle_10_ticket_closures' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;").unwrap();
+    db.execute_batch("CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='wave_06_closure_modes_v1' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;").unwrap();
     assert!(migrate_registry(&mut db).is_err());
     let leftovers: i64 = db
         .query_row(
@@ -102,17 +112,11 @@ fn migration_is_all_or_nothing_and_idempotent() {
         )
         .unwrap();
     assert_eq!(leftovers, 0);
+    assert_eq!(marker(&db), 0);
     db.execute_batch("DROP TRIGGER marker_fault").unwrap();
     migrate_registry(&mut db).unwrap();
-    let marker = |db: &Connection| -> i64 {
-        db.query_row(
-            "SELECT count(*) FROM registry_migrations WHERE name='cycle_10_ticket_closures'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
-    };
-    assert_eq!(marker(&db), 1);
+    // A fresh registry is created at the newest layout and carries all three markers.
+    assert_eq!(marker(&db), 3);
     // A second run changes nothing.
     let changes = db.total_changes();
     let tx = db.transaction().unwrap();
@@ -120,7 +124,7 @@ fn migration_is_all_or_nothing_and_idempotent() {
     tx.commit().unwrap();
     migrate_registry(&mut db).unwrap();
     assert_eq!(db.total_changes(), changes);
-    assert_eq!(marker(&db), 1);
+    assert_eq!(marker(&db), 3);
     audit(&db).unwrap();
     // A half-created table, or a marked but missing one, fails closed.
     for marked in [false, true] {
@@ -244,7 +248,114 @@ fn steps_permit_only_designed_transitions() {
     );
     integrate(&tx, &mut e);
     assert_eq!(read(&tx, e.operation_id).step, ClosureStep::Integrated);
+
+    // A branch record has its own graph, per action (design Part D).
+    use ClosureStep::*;
+    let graph = |action: ClosureAction| -> Vec<(ClosureStep, ClosureStep)> {
+        let mut all = Vec::new();
+        for from in ALL_STEPS {
+            for to in ALL_STEPS {
+                if from.branch_permits(to, action) {
+                    all.push((from, to));
+                }
+            }
+        }
+        all
+    };
+    let steps_of = |action: ClosureAction, from: ClosureStep| -> Vec<ClosureStep> {
+        graph(action)
+            .into_iter()
+            .filter(|(f, t)| *f == from && *t != from)
+            .map(|(_, t)| t)
+            .collect()
+    };
+    for action in [ClosureAction::Close, ClosureAction::Withdraw] {
+        assert_eq!(
+            steps_of(action, Confirmed),
+            [ContextSynchronized, Abandoned]
+        );
+        assert_eq!(steps_of(action, ContextSynchronized), [Closing, Abandoned]);
+        assert_eq!(steps_of(action, Closing), [PublicationPending, Abandoned]);
+        assert_eq!(steps_of(action, PublicationPending), [Published, Complete]);
+        assert_eq!(steps_of(action, Published), [Complete]);
+        for terminal in [Complete, Abandoned, Superseded] {
+            assert!(steps_of(action, terminal).is_empty(), "{terminal:?}");
+            assert!(!terminal.branch_permits(terminal, action));
+        }
+        // No integration, no remote delete, no cleanup, never superseded.
+        for refused in [
+            (Closing, Integrating),
+            (Closing, Superseded),
+            (Closing, Published),
+            (Closing, Retired),
+            (ContextSynchronized, Integrating),
+            (PublicationPending, RemoteDeleted),
+            (PublicationPending, WorktreeRemoving),
+            (Published, RemoteDeleted),
+            (Confirmed, Superseded),
+            (BranchDeleted, Retired),
+        ] {
+            assert!(!refused.0.branch_permits(refused.1, action), "{refused:?}");
+        }
+    }
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, Confirmed),
+        [Closing, WorktreeRemoving, Abandoned]
+    );
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, WorktreeRemoving),
+        [WorktreeRemoved]
+    );
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, WorktreeRemoved),
+        [BranchDeleted]
+    );
+    // Q5: a retired branch's re-check may abandon from `branch_deleted`.
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, BranchDeleted),
+        [Retired, Abandoned]
+    );
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, Retired),
+        [Closing, Abandoned]
+    );
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, Closing),
+        [PublicationPending]
+    );
+    assert_eq!(
+        steps_of(ClosureAction::NewBranch, PublicationPending),
+        [Published, Complete]
+    );
+    assert_eq!(steps_of(ClosureAction::NewBranch, Published), [Complete]);
+    // A self loop is allowed on a live step.
+    assert!(Closing.branch_permits(Closing, ClosureAction::Close));
+    // `permits` itself is the direct graph's and never takes `retired`.
+    for step in ALL_STEPS {
+        assert!(
+            !ClosureStep::Retired.permits(step, true, Some(ClosureKind::Record)) || step == Retired
+        );
+        assert!(!step.permits(Retired, true, Some(ClosureKind::Record)) || step == Retired);
+    }
 }
+
+const ALL_STEPS: [ClosureStep; 15] = [
+    ClosureStep::Confirmed,
+    ClosureStep::ContextSynchronized,
+    ClosureStep::Closing,
+    ClosureStep::Integrating,
+    ClosureStep::Integrated,
+    ClosureStep::Published,
+    ClosureStep::PublicationPending,
+    ClosureStep::RemoteDeleted,
+    ClosureStep::WorktreeRemoving,
+    ClosureStep::WorktreeRemoved,
+    ClosureStep::BranchDeleted,
+    ClosureStep::Retired,
+    ClosureStep::Complete,
+    ClosureStep::Abandoned,
+    ClosureStep::Superseded,
+];
 
 #[test]
 fn closure_step_round_trips_through_parent_view() {
@@ -269,6 +380,17 @@ fn closure_step_round_trips_through_parent_view() {
         ParentStep::from(ClosureStep::Closing),
         ParentStep::ContextSynchronized
     );
+    // `retired` reads as `branch_deleted`, and writing that view back keeps it.
+    assert_eq!(
+        ParentStep::from(ClosureStep::Retired),
+        ParentStep::BranchDeleted
+    );
+    let mut retired = branch_record(ClosureAction::NewBranch, ClosureStep::Retired);
+    retired.set_step(ParentStep::BranchDeleted);
+    assert_eq!(retired.step, ClosureStep::Retired);
+    retired.step = ClosureStep::BranchDeleted;
+    retired.set_step(ParentStep::BranchDeleted);
+    assert_eq!(retired.step, ClosureStep::BranchDeleted);
 
     let mut db = db();
     let tx = db.transaction().unwrap();
@@ -431,6 +553,279 @@ fn step_invariants_enforced() {
         "publication_category=NULL",
     ] {
         assert!(rejected(&tx, op, missing), "publication_pending: {missing}");
+    }
+    drop(tx);
+
+    // The path columns: each CHECK of the v3 table refuses its bad row and
+    // accepts the twin that differs by the one thing it checks.
+    let mut db = self::db();
+    let tx = db.transaction().unwrap();
+    let ts = "'2023-11-14T22:13:20Z'";
+    let (o1, o2, o3, o5, o6) = (q('1'), q('2'), q('3'), q('5'), q('6'));
+    let written = |action: &str, step: &str, n: u8, extra: &[(&str, &str)]| {
+        let mut columns = vec![
+            ("closure_kind", "'record'"),
+            ("context_oid", &o1[..]),
+            ("base_oid", &o2[..]),
+            ("closed_at", ts),
+            ("closure_oid", &o3[..]),
+        ];
+        columns.extend_from_slice(extra);
+        branch_row(&tx, &item_n(n), action, step, &columns)
+    };
+    let existing = |action: &str, step: &str, n: u8, extra: &[(&str, &str)]| {
+        let mut columns = vec![
+            ("closure_kind", "'existing'"),
+            ("context_oid", &o1[..]),
+            ("base_oid", &o2[..]),
+        ];
+        columns.extend_from_slice(extra);
+        branch_row(&tx, &item_n(n), action, step, &columns)
+    };
+    let close_record = written("close", "closing", 1, &[]);
+    let close_existing = existing("close", "closing", 2, &[]);
+    let pending = existing(
+        "close",
+        "publication_pending",
+        3,
+        &[("publication_category", "'transport'")],
+    );
+    let withdraw = existing("withdraw", "closing", 4, &[("withdraw_oid", &o5[..])]);
+    let new_branch = written(
+        "new_branch",
+        "closing",
+        5,
+        &[
+            ("retired_oid", &o6[..]),
+            ("pending_ref", "'refs/manyhands/closures/{op}'"),
+        ],
+    );
+    let synchronized = existing("close", "context_synchronized", 6, &[]);
+    let complete = existing("close", "complete", 7, &[("answer_code", "'published'")]);
+    let direct = {
+        let mut r = begin_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(&item_n(8)),
+            digest(7),
+            Some("origin"),
+            ClosureKind::Record,
+        )
+        .unwrap();
+        close(&tx, &mut r);
+        r.operation_id
+    };
+    // Every row above is accepted as it stands.
+    for op in [
+        close_record,
+        close_existing,
+        pending,
+        withdraw,
+        new_branch,
+        synchronized,
+        complete,
+        direct,
+    ] {
+        assert!(!rejected(&tx, op, "updated_at=updated_at"), "{op}");
+    }
+    // (row, assignment the schema refuses, twin the schema and the read accept)
+    let checks: Vec<(OperationId, &str, &str)> = vec![
+        // The mode and the action are closed sets.
+        (
+            close_record,
+            "integration_mode='merge'",
+            "integration_mode='direct'",
+        ),
+        (close_record, "action='retire'", "action='close'"),
+        // Only a pull-request mode has a new branch.
+        (
+            new_branch,
+            "integration_mode='direct'",
+            "closure_kind='existing'",
+        ),
+        // A branch record never integrates.
+        (
+            close_record,
+            "integration_kind='merged'",
+            "integration_mode='direct',integration_kind='merged'",
+        ),
+        (
+            close_record,
+            "integration_oid='4444444444444444444444444444444444444444'",
+            "integration_mode='direct',integration_oid='4444444444444444444444444444444444444444'",
+        ),
+        (
+            close_record,
+            "step='integrating',integration_kind='merged'",
+            "integration_mode='direct',step='integrating',integration_kind='merged'",
+        ),
+        // A direct row carries no branch-only column and never `retired`.
+        (
+            direct,
+            "withdraw_oid='5555555555555555555555555555555555555555'",
+            "updated_at=updated_at",
+        ),
+        (
+            direct,
+            "retired_oid='6666666666666666666666666666666666666666'",
+            "updated_at=updated_at",
+        ),
+        (
+            direct,
+            "pending_ref='refs/manyhands/closures/x'",
+            "updated_at=updated_at",
+        ),
+        (direct, "answer_code='published'", "updated_at=updated_at"),
+        (
+            direct,
+            "consented_context_oid='1111111111111111111111111111111111111111'",
+            "integration_mode='pull_request',consented_context_oid='1111111111111111111111111111111111111111'",
+        ),
+        (direct, "step='retired'", "updated_at=updated_at"),
+        // Cleanup steps belong to a direct close and a new branch.
+        (
+            close_record,
+            "step='worktree_removing'",
+            "action='new_branch',step='worktree_removing'",
+        ),
+        (
+            close_existing,
+            "step='branch_deleted'",
+            "updated_at=updated_at",
+        ),
+        // A new branch has no synchronized-context step.
+        (synchronized, "action='new_branch'", "action='withdraw'"),
+        // `closing` per action.
+        (
+            close_existing,
+            "integration_mode='direct'",
+            "closed_at=NULL",
+        ),
+        (
+            close_existing,
+            "closure_kind='record'",
+            "closure_kind='existing'",
+        ),
+        (
+            close_record,
+            "closed_at=NULL,closure_oid=NULL",
+            "closure_kind='record'",
+        ),
+        (
+            withdraw,
+            "withdraw_oid=NULL",
+            "withdraw_oid='5555555555555555555555555555555555555555'",
+        ),
+        (
+            withdraw,
+            "closed_at='2023-11-14T22:13:20Z',closure_oid='3333333333333333333333333333333333333333'",
+            "updated_at=updated_at",
+        ),
+        (withdraw, "closure_kind='record'", "updated_at=updated_at"),
+        // `closed_at` without a record closure: only a new branch.
+        (
+            close_existing,
+            "closed_at='2023-11-14T22:13:20Z',closure_oid='3333333333333333333333333333333333333333'",
+            "updated_at=updated_at",
+        ),
+        (
+            new_branch,
+            "closed_at=NULL,closure_oid=NULL",
+            "closure_kind='existing'",
+        ),
+        // An adopted context is a direct record's.
+        (
+            close_record,
+            "adopted_context_oid='7777777777777777777777777777777777777777'",
+            "integration_mode='direct',adopted_context_oid='7777777777777777777777777777777777777777'",
+        ),
+        // `withdraw_oid`: only a withdraw, and not before `closing`.
+        (
+            close_existing,
+            "withdraw_oid='5555555555555555555555555555555555555555'",
+            "action='withdraw',withdraw_oid='5555555555555555555555555555555555555555'",
+        ),
+        (
+            withdraw,
+            "step='confirmed'",
+            "step='publication_pending',publication_category='transport'",
+        ),
+        // `retired_oid` and `pending_ref`: only a new branch.
+        (
+            close_record,
+            "retired_oid='6666666666666666666666666666666666666666'",
+            "updated_at=updated_at",
+        ),
+        (
+            close_record,
+            "pending_ref='refs/manyhands/closures/'||operation_id",
+            "updated_at=updated_at",
+        ),
+        (
+            new_branch,
+            "pending_ref='refs/manyhands/closures/other'",
+            "updated_at=updated_at",
+        ),
+        (
+            new_branch,
+            "step='complete',answer_code='published'",
+            "step='publication_pending',publication_category='transport'",
+        ),
+        // `answer_code`: its shape, and only at `complete` or `abandoned`.
+        (
+            complete,
+            "answer_code='Published'",
+            "answer_code='kept_published'",
+        ),
+        (complete, "answer_code='publish ed'", "answer_code='merged'"),
+        (complete, "answer_code=''", "answer_code='closed_elsewhere'"),
+        (complete, "answer_code=1", "answer_code='remote_changed'"),
+        (
+            complete,
+            "answer_code='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+            "answer_code='ticket_closed'",
+        ),
+        (
+            pending,
+            "answer_code='published'",
+            "step='complete',answer_code='published'",
+        ),
+        (
+            pending,
+            "step='complete'",
+            "step='complete',answer_code='existing'",
+        ),
+        // `consented_context_oid` is an OID.
+        (
+            close_record,
+            "consented_context_oid='nope'",
+            "consented_context_oid='1111111111111111111111111111111111111111'",
+        ),
+        (
+            close_record,
+            "consented_context_oid='0000000000000000000000000000000000000000'",
+            "consented_context_oid='1111111111111111111111111111111111111111'",
+        ),
+    ];
+    for (op, bad, twin) in checks {
+        assert!(schema_refuses(&tx, op, bad), "the schema accepts: {bad}");
+        assert!(!schema_refuses(&tx, op, twin), "the schema refuses: {twin}");
+        assert!(!rejected(&tx, op, twin), "the read refuses: {twin}");
+    }
+    // Rules the read enforces as well: the stored values, and a branch
+    // record's shape that no CHECK can see.
+    for (op, bad) in [
+        (complete, "answer_code='unknown_answer'"),
+        (pending, "publication_category='published'"),
+        (pending, "remote_name=NULL"),
+        (close_record, "step='retired'"),
+        (close_record, "context_oid=NULL"),
+        (close_record, "base_oid=NULL"),
+        (close_existing, "integration_kind='merged'"),
+        (new_branch, "cleanup_category='context_changed'"),
+    ] {
+        assert!(rejected(&tx, op, bad), "{bad}");
     }
 }
 
@@ -864,6 +1259,13 @@ fn no_closed_by_column_or_value() {
             "closed_at",
             "closure_oid",
             "adopted_context_oid",
+            "integration_mode",
+            "action",
+            "withdraw_oid",
+            "retired_oid",
+            "pending_ref",
+            "answer_code",
+            "consented_context_oid",
         ]
     );
     let tx = db.transaction().unwrap();
@@ -1318,8 +1720,8 @@ fn remote_deletion_required_unless_contained_without_tracking() {
     assert!(!local.remote_deletion_required());
 }
 
-/// A registry from before the widened mask CHECK is rebuilt once, keeping
-/// its rows, and then takes the new bit.
+/// A registry from before the widened mask CHECK, and before the path
+/// columns, is rebuilt twice, keeping its rows, and then takes the new bit.
 #[test]
 fn closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
     let mut db = db();
@@ -1339,34 +1741,419 @@ fn closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
         .unwrap()
     };
     let old = refuse(&tx, &refusal(ClosureBlocker::ContextDirty));
-    let sql: String = tx
-        .query_row(
-            "SELECT sql FROM sqlite_master WHERE name='ticket_closures'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    // The table as v1 left it: the v2 layout with the mask one bit narrower.
     tx.execute_batch(&format!(
-        "DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO before; {}; {INDEX}; INSERT INTO ticket_closures SELECT * FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name='closure_refusal_blockers_v2';",
-        sql.replace("4194303", "2097151")
+        "DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO before; {}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('closure_refusal_blockers_v2','wave_06_closure_modes_v1');",
+        SCHEMA_V2.replace("4194303", "2097151")
     ))
     .unwrap();
     assert!(
         tx.execute("UPDATE ticket_closures SET refusal_blockers=2097152", [])
             .is_err()
     );
+    assert_eq!(marker(&tx), 1);
     for _ in 0..2 {
         migrate(&tx).unwrap();
-        assert_eq!(read(&tx, old.operation_id).refusal, old.refusal);
-        let marked: i64 = tx
-            .query_row(
-                "SELECT count(*) FROM registry_migrations WHERE name='closure_refusal_blockers_v2'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(marked, 1);
+        let rebuilt = read(&tx, old.operation_id);
+        assert_eq!(rebuilt.refusal, old.refusal);
+        assert_eq!(rebuilt.path(), RecordPath::Direct);
+        // Both rebuilds ran once: all three markers, one each.
+        assert_eq!(marker(&tx), 3);
+        for name in ["closure_refusal_blockers_v2", "wave_06_closure_modes_v1"] {
+            let marked: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM registry_migrations WHERE name=?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(marked, 1, "{name}");
+        }
     }
     let new = refuse(&tx, &refusal(ClosureBlocker::HistoryUnresolved));
     assert_eq!(read(&tx, new.operation_id).refusal, new.refusal);
+}
+
+/// `digit` repeated as a quoted SQL OID literal.
+fn q(digit: char) -> String {
+    format!("'{}'", digit.to_string().repeat(40))
+}
+/// The `n`th test item: a valid ULID of its own.
+fn item_n(n: u8) -> String {
+    const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    format!(
+        "01ARZ3NDEKTSV4RRFFQ69G5F{}{}",
+        ALPHABET[usize::from(n / 32)] as char,
+        ALPHABET[usize::from(n % 32)] as char
+    )
+}
+/// A pull-request-mode record, straight in SQL: its writers land with the
+/// branch runner. `columns` are added to the row's identity columns, `{op}`
+/// in a value standing for the row's own operation ID.
+fn branch_row(
+    tx: &Transaction<'_>,
+    item: &str,
+    action: &str,
+    step: &str,
+    columns: &[(&str, &str)],
+) -> OperationId {
+    let op = OperationId::new();
+    let identity = [
+        ("repository_id", "1".to_owned()),
+        ("operation_id", format!("'{op}'")),
+        ("item_id", format!("'{item}'")),
+        ("expectation", format!("x'{}'", "07".repeat(32))),
+        ("remote_name", "'origin'".to_owned()),
+        ("step", format!("'{step}'")),
+        ("updated_at", "1".to_owned()),
+        ("integration_mode", "'pull_request'".to_owned()),
+        ("action", format!("'{action}'")),
+    ];
+    let (mut names, mut values): (Vec<String>, Vec<String>) = identity
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .unzip();
+    for (name, value) in columns {
+        names.push((*name).to_owned());
+        values.push(value.replace("{op}", &op.to_string()));
+    }
+    tx.execute_batch(&format!(
+        "INSERT INTO ticket_closures({}) VALUES({})",
+        names.join(","),
+        values.join(",")
+    ))
+    .unwrap();
+    op
+}
+/// Whether the schema alone refuses a change to a stored row. It is rolled back.
+fn schema_refuses(tx: &Transaction<'_>, op: OperationId, assignment: &str) -> bool {
+    tx.execute_batch("SAVEPOINT probe").unwrap();
+    let refused = tx
+        .execute(
+            &format!("UPDATE ticket_closures SET {assignment} WHERE operation_id=?1"),
+            [op.to_string()],
+        )
+        .is_err();
+    tx.execute_batch("ROLLBACK TO probe; RELEASE probe")
+        .unwrap();
+    refused
+}
+/// A record in memory, as decoded from a pull-request row.
+fn branch_record(action: ClosureAction, step: ClosureStep) -> ClosureRecord {
+    ClosureRecord {
+        repository_id: 1,
+        operation_id: OperationId::new(),
+        item_id: item(ITEM),
+        expectation: digest(7),
+        remote_name: Some("origin".to_owned()),
+        step,
+        context_attempt: 0,
+        context_sync_id: None,
+        primary_attempt: 0,
+        primary_sync_id: None,
+        base_oid: None,
+        context_oid: None,
+        integration_oid: None,
+        integration_kind: None,
+        remote_context_oid: None,
+        publication: None,
+        cleanup: None,
+        cancel_requested: false,
+        updated_at: 1,
+        refusal: None,
+        closure_kind: Some(ClosureKind::Existing),
+        closed_at: None,
+        closure_oid: None,
+        adopted_context_oid: None,
+        integration_mode: Integration::PullRequest,
+        action,
+        withdraw_oid: None,
+        retired_oid: None,
+        pending_ref: None,
+        answer_code: None,
+        consented_context_oid: None,
+    }
+}
+
+/// P7. A registry from before the path columns rebuilds once, every row
+/// reading as the direct close it always was, and a second run changes
+/// nothing; a pull-request row then stores and reads back.
+#[test]
+fn branch_records_rebuild_and_keep_direct_rows() {
+    let mut db = db();
+    db.execute_batch(&format!(
+        "DROP INDEX ticket_closures_unfinished; DROP TABLE ticket_closures; {SCHEMA_V2}; {INDEX}; DELETE FROM registry_migrations WHERE name='wave_06_closure_modes_v1';"
+    ))
+    .unwrap();
+    // Direct rows at four steps, as the older layout stored them.
+    let (o1, o2, o3, o4) = (q('1'), q('2'), q('3'), q('4'));
+    let ts = "'2023-11-14T22:13:20Z'";
+    let steps = [
+        ("confirmed", String::new()),
+        (
+            "closing",
+            format!(
+                ",closure_kind,context_oid,base_oid,closed_at,closure_oid) VALUES(1,'{{op}}','{{item}}',x'{{blob}}','origin','closing',1,'record',{o1},{o2},{ts},{o3}"
+            ),
+        ),
+        (
+            "integrating",
+            format!(
+                ",closure_kind,context_oid,base_oid,closed_at,closure_oid,integration_kind) VALUES(1,'{{op}}','{{item}}',x'{{blob}}','origin','integrating',1,'record',{o1},{o2},{ts},{o3},'merged'"
+            ),
+        ),
+        (
+            "complete",
+            format!(
+                ",closure_kind,context_oid,base_oid,closed_at,closure_oid,integration_kind,integration_oid,publication_category) VALUES(1,'{{op}}','{{item}}',x'{{blob}}','origin','complete',1,'record',{o1},{o2},{ts},{o3},'merged',{o4},'published'"
+            ),
+        ),
+    ];
+    let mut ops = Vec::new();
+    for (n, (step, tail)) in steps.iter().enumerate() {
+        let op = OperationId::new();
+        let blob = "07".repeat(32);
+        let item = item_n(n as u8);
+        let sql = if tail.is_empty() {
+            format!(
+                "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,closure_kind) VALUES(1,'{op}','{item}',x'{blob}','origin','{step}',1,'record')"
+            )
+        } else {
+            let tail = tail
+                .replace("{op}", &op.to_string())
+                .replace("{item}", &item)
+                .replace("{blob}", &blob);
+            format!(
+                "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at{tail})"
+            )
+        };
+        db.execute_batch(&sql).unwrap();
+        ops.push(op);
+    }
+    let dump = |db: &Connection| -> Vec<Vec<rusqlite::types::Value>> {
+        let mut q = db
+            .prepare(&format!(
+                "SELECT {V2_COLUMNS} FROM ticket_closures ORDER BY operation_id"
+            ))
+            .unwrap();
+        let count = q.column_count();
+        q.query_map([], |row| {
+            (0..count)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    let before = dump(&db);
+    assert_eq!(before.len(), 4);
+    migrate_registry(&mut db).unwrap();
+    // One rebuild: the same rows, each a direct close, and the marker once.
+    assert_eq!(dump(&db), before);
+    let modes: Vec<(String, String)> = db
+        .prepare("SELECT integration_mode,action FROM ticket_closures")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(modes.len(), 4);
+    assert!(
+        modes
+            .iter()
+            .all(|(mode, action)| mode == "direct" && action == "close")
+    );
+    let marked: i64 = db
+        .query_row(
+            "SELECT count(*) FROM registry_migrations WHERE name='wave_06_closure_modes_v1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(marked, 1);
+    for op in &ops {
+        let r = read_record(&db, 1, *op).unwrap().unwrap();
+        assert_eq!(r.integration_mode, Integration::Direct);
+        assert_eq!(r.action, ClosureAction::Close);
+        assert_eq!(r.path(), RecordPath::Direct);
+        assert_eq!(
+            (
+                r.withdraw_oid,
+                r.retired_oid,
+                r.pending_ref,
+                r.answer_code,
+                r.consented_context_oid
+            ),
+            (None, None, None, None, None)
+        );
+    }
+    // A second run changes nothing.
+    let changes = db.total_changes();
+    migrate_registry(&mut db).unwrap();
+    assert_eq!(db.total_changes(), changes);
+    assert_eq!(dump(&db), before);
+    audit(&db).unwrap();
+    // The one-unfinished-row index came with the rebuild.
+    let tx = db.transaction().unwrap();
+    assert!(
+        tx.execute_batch(&format!(
+            "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,step,updated_at,closure_kind) VALUES(1,'{}','{}',x'{}','confirmed',1,'record')",
+            OperationId::new(),
+            item_n(0),
+            "07".repeat(32)
+        ))
+        .is_err()
+    );
+    // A pull-request row at `publication_pending` stores and reads back.
+    let op = branch_row(
+        &tx,
+        &item_n(9),
+        "close",
+        "publication_pending",
+        &[
+            ("closure_kind", "'existing'"),
+            ("context_oid", &o1),
+            ("base_oid", &o2),
+            ("publication_category", "'transport'"),
+            ("consented_context_oid", &o1),
+        ],
+    );
+    let r = read(&tx, op);
+    assert_eq!(r.path(), RecordPath::Branch);
+    assert_eq!(
+        (r.integration_mode, r.action, r.step),
+        (
+            Integration::PullRequest,
+            ClosureAction::Close,
+            ClosureStep::PublicationPending
+        )
+    );
+    assert_eq!(r.consented_context_oid, Some(oid('1')));
+    assert_eq!(r.written_commit(), None);
+    assert!(!r.effect_written());
+    assert!(!r.supersedable());
+    // `written_commit` is the closure for a close and the withdraw for a withdraw.
+    let withdraw = branch_row(
+        &tx,
+        &item_n(10),
+        "withdraw",
+        "closing",
+        &[
+            ("closure_kind", "'existing'"),
+            ("context_oid", &o1),
+            ("base_oid", &o2),
+            ("withdraw_oid", &q('5')),
+        ],
+    );
+    let r = read(&tx, withdraw);
+    assert_eq!(r.action, ClosureAction::Withdraw);
+    assert_eq!(r.written_commit(), Some(oid('5')));
+    assert_eq!(r.merged_context(), Some(oid('5')));
+    assert_eq!(r.written_checkpoint(), Some(oid('5')));
+    // A direct record's commit is its closure, as ever.
+    let direct = read(&tx, ops[1]);
+    assert_eq!(direct.written_commit(), Some(oid('3')));
+    assert_eq!(direct.merged_context(), Some(oid('3')));
+}
+
+/// The fence's range (C1, C9): a direct record holds from `closing`; a
+/// branch record holds from `closing` too (from `confirmed` for a new
+/// branch with a built commit) until it is finished.
+#[test]
+fn written_closure_unfinished_covers_branch_records_by_step() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let (o1, o2, o3) = (q('1'), q('2'), q('3'));
+    let ts = "'2023-11-14T22:13:20Z'";
+    let held = |n: u8| written_closure_unfinished(&tx, 1, &item(&item_n(n))).unwrap();
+    let existing = |action: &str, step: &str, n: u8, extra: &[(&str, &str)]| {
+        let mut columns = vec![
+            ("closure_kind", "'existing'"),
+            ("context_oid", &o1[..]),
+            ("base_oid", &o2[..]),
+        ];
+        columns.extend_from_slice(extra);
+        branch_row(&tx, &item_n(n), action, step, &columns);
+    };
+    let mut n = 0;
+    let mut row = |action: &str, step: &str, extra: &[(&str, &str)], expected: bool| {
+        n += 1;
+        existing(action, step, n, extra);
+        assert_eq!(held(n), expected, "{action} at {step}");
+    };
+    row("close", "confirmed", &[], false);
+    row("close", "context_synchronized", &[], false);
+    row("close", "closing", &[], true);
+    row(
+        "close",
+        "publication_pending",
+        &[("publication_category", "'transport'")],
+        true,
+    );
+    row("close", "published", &[], true);
+    row(
+        "close",
+        "complete",
+        &[("answer_code", "'published'")],
+        false,
+    );
+    row(
+        "close",
+        "abandoned",
+        &[
+            ("refusal_category", "'external_change'"),
+            ("answer_code", "'external_change'"),
+        ],
+        false,
+    );
+    row("withdraw", "closing", &[("withdraw_oid", &q('5'))], true);
+    row(
+        "withdraw",
+        "publication_pending",
+        &[
+            ("withdraw_oid", &q('5')),
+            ("publication_category", "'transport'"),
+        ],
+        true,
+    );
+    // A new branch holds once its commit is built, even before `closing`.
+    let built: &[(&str, &str)] = &[("closed_at", ts), ("closure_oid", &o3[..])];
+    for (step, columns, expected) in [
+        ("confirmed", &[][..], false),
+        ("confirmed", built, true),
+        ("worktree_removing", built, true),
+        ("retired", built, true),
+    ] {
+        n += 1;
+        let mut all = vec![("closure_kind", "'record'")];
+        all.extend_from_slice(columns);
+        branch_row(&tx, &item_n(n), "new_branch", step, &all);
+        assert_eq!(held(n), expected, "new_branch at {step} with {columns:?}");
+    }
+    // The direct range is unchanged.
+    for (step, expected) in [("confirmed", false), ("context_synchronized", false)] {
+        n += 1;
+        let op = OperationId::new();
+        tx.execute_batch(&format!(
+            "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,step,updated_at,closure_kind{}) VALUES(1,'{op}','{}',x'{}','{step}',1,'record'{})",
+            if step == "confirmed" { "" } else { ",context_oid" },
+            item_n(n),
+            "07".repeat(32),
+            if step == "confirmed" { String::new() } else { format!(",{o1}") }
+        ))
+        .unwrap();
+        assert_eq!(held(n), expected, "direct at {step}");
+    }
+    for step in ["integrating", "published", "branch_deleted"] {
+        n += 1;
+        let op = OperationId::new();
+        tx.execute_batch(&format!(
+            "INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,step,updated_at,closure_kind,context_oid,base_oid,closed_at,closure_oid,integration_kind,integration_oid,publication_category) VALUES(1,'{op}','{}',x'{}','{step}',1,'record',{o1},{o2},{ts},{o3},'merged',{o1},'published')",
+            item_n(n),
+            "07".repeat(32),
+        ))
+        .unwrap();
+        assert!(held(n), "direct at {step}");
+    }
 }

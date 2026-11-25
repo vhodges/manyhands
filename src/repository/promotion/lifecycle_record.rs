@@ -4,7 +4,7 @@
 //! and completion. Each table's own module keeps its schema, step graph,
 //! invariants, insert and save. A statement here differs between the tables
 //! only in the table name and the lifecycle's own action and kind.
-use super::lifecycle::{LifecycleKind, LifecycleRecord, LifecycleRefusal, ParentStep};
+use super::lifecycle::{LifecycleKind, LifecycleRecord, LifecycleRefusal, ParentStep, RecordPath};
 use crate::{
     canonical::ItemId,
     repository::{
@@ -12,7 +12,7 @@ use crate::{
         RemoteOperationTarget, RepositoryError, RepositoryErrorKind, RepositoryOperation,
         RepositoryService,
         cleanup::{self, RetirementEvidence},
-        closure::record::ClosureRecord,
+        closure::record::{ClosureRecord, ClosureStep},
         lifecycle_contexts, mark_registered_lifecycle_contexts_dirty,
         promotion::record::PromotionRecord,
         remote::{
@@ -266,6 +266,11 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// A closure record's own step, which the runner's `ParentStep` view
+    /// folds (`closing`, `retired`): a promotion has none.
+    fn closure_step(&self) -> Option<ClosureStep> {
+        None
+    }
     /// Whether a new request may supersede this unfinished record: only a
     /// cleanup stop of the kinds `begin_record` replaces.
     fn supersedable(&self) -> bool;
@@ -451,22 +456,41 @@ pub(in super::super) fn supersede<R: ParentRecord>(
 pub(in super::super) enum ChildRole {
     Context,
     Primary,
+    /// A branch record's second child: the publication of its context, in
+    /// the slot a direct record's primary child has.
+    Publication,
 }
-/// A context child only from `confirmed`, a primary child only from
-/// `integrated` or `publication_pending`, for every parent kind.
-fn child_allowed(step: ParentStep, role: ChildRole) -> bool {
-    match role {
-        ChildRole::Context => step == ParentStep::Confirmed,
-        ChildRole::Primary => matches!(
-            step,
+/// The role of a record's second slot: the primary child of a direct
+/// record, the publication child of a branch record.
+fn second_role(path: RecordPath) -> ChildRole {
+    match path {
+        RecordPath::Direct => ChildRole::Primary,
+        RecordPath::Branch => ChildRole::Publication,
+    }
+}
+/// A context child only from `confirmed`, a direct record's primary child
+/// only from `integrated` or `publication_pending`, and a branch record's
+/// publication child only from `closing` or `publication_pending`.
+fn child_allowed(facts: &ParentFacts, role: ChildRole) -> bool {
+    match (facts.path, role) {
+        (_, ChildRole::Context) => facts.step == ParentStep::Confirmed,
+        (RecordPath::Direct, ChildRole::Primary) => matches!(
+            facts.step,
             ParentStep::Integrated | ParentStep::PublicationPending
         ),
+        (RecordPath::Branch, ChildRole::Publication) => matches!(
+            facts.closure_step,
+            Some(ClosureStep::Closing | ClosureStep::PublicationPending)
+        ),
+        (RecordPath::Direct, ChildRole::Publication) | (RecordPath::Branch, ChildRole::Primary) => {
+            false
+        }
     }
 }
 fn attempt_of<R: ParentRecord>(r: &R, role: ChildRole) -> (u32, Option<OperationId>) {
     match role {
         ChildRole::Context => (r.context_attempt(), r.context_sync_id()),
-        ChildRole::Primary => (r.primary_attempt(), r.primary_sync_id()),
+        ChildRole::Primary | ChildRole::Publication => (r.primary_attempt(), r.primary_sync_id()),
     }
 }
 
@@ -478,15 +502,19 @@ pub(in super::super) struct ParentFacts {
     context: (u32, Option<OperationId>),
     primary: (u32, Option<OperationId>),
     step: ParentStep,
+    path: RecordPath,
+    closure_step: Option<ClosureStep>,
     cancel_requested: bool,
 }
 impl ParentFacts {
-    fn of<R: ParentRecord>(r: R) -> Self {
+    fn of<R: ParentRecord>(r: &R) -> Self {
         Self {
             expectation: r.expectation_bytes(),
-            context: attempt_of(&r, ChildRole::Context),
-            primary: attempt_of(&r, ChildRole::Primary),
+            context: attempt_of(r, ChildRole::Context),
+            primary: attempt_of(r, ChildRole::Primary),
             step: r.step(),
+            path: r.path(),
+            closure_step: r.closure_step(),
             cancel_requested: r.cancel_requested(),
             item_id: r.item_id().clone(),
         }
@@ -499,10 +527,10 @@ impl ParentFacts {
     ) -> Result<Option<Self>, RepositoryError> {
         Ok(match kind {
             LifecycleKind::DocumentPromotion => {
-                read_record::<PromotionRecord>(db, id, parent)?.map(Self::of)
+                read_record::<PromotionRecord>(db, id, parent)?.map(|r| Self::of(&r))
             }
             LifecycleKind::TicketClosure => {
-                read_record::<ClosureRecord>(db, id, parent)?.map(Self::of)
+                read_record::<ClosureRecord>(db, id, parent)?.map(|r| Self::of(&r))
             }
         })
     }
@@ -560,7 +588,7 @@ impl ChildExecution {
         let matches = match (&self.role, &request.target) {
             (ChildRole::Primary, crate::repository::SynchronizationTarget::Primary) => true,
             (
-                ChildRole::Context,
+                ChildRole::Context | ChildRole::Publication,
                 crate::repository::SynchronizationTarget::Context { kind, item_id },
             ) => *kind == self.kind.authoring() && item_id == &self.item,
             _ => false,
@@ -583,7 +611,7 @@ impl ChildExecution {
             .ok_or_else(|| fence_mismatch(self.kind))?;
         let (attempt, child) = match self.role {
             ChildRole::Context => parent.context,
-            ChildRole::Primary => parent.primary,
+            ChildRole::Primary | ChildRole::Publication => parent.primary,
         };
         if parent.item_id != self.item
             || parent.expectation != self.expectation
@@ -598,7 +626,7 @@ impl ChildExecution {
         if record.as_ref().is_some_and(|r| r.authority.is_some()) {
             return Ok(());
         }
-        if !child_allowed(parent.step, self.role) || (parent.cancel_requested && record.is_none()) {
+        if !child_allowed(&parent, self.role) || (parent.cancel_requested && record.is_none()) {
             return Err(fence_mismatch(self.kind));
         }
         Ok(())
@@ -652,7 +680,7 @@ pub(in super::super) fn next_attempt<R: ParentRecord>(
     role: ChildRole,
 ) -> Result<R, RepositoryError> {
     let r = read_record::<R>(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if !child_allowed(r.step(), role) {
+    if !child_allowed(&ParentFacts::of(&r), role) {
         return Err(state::recovery_required());
     }
     match child_state(tx, &r, role)? {
@@ -675,7 +703,7 @@ fn mint_attempt<R: ParentRecord>(
 ) -> Result<R, RepositoryError> {
     let (column, count) = match role {
         ChildRole::Context => ("context_sync_id", "context_attempt"),
-        ChildRole::Primary => ("primary_sync_id", "primary_attempt"),
+        ChildRole::Primary | ChildRole::Publication => ("primary_sync_id", "primary_attempt"),
     };
     let attempt = attempt_of(r, role)
         .0
@@ -768,7 +796,8 @@ pub(in super::super) fn remote_identity_of<R: ParentRecord>(
     for r in bindings::<R>(db, op)? {
         let expected = if r.operation_id() == op {
             R::KIND.action()
-        } else if r.context_sync_id() == Some(op) {
+        } else if r.context_sync_id() == Some(op) || r.path() == RecordPath::Branch {
+            // A branch record's second slot publishes its context.
             RemoteOperationAction::SynchronizeContext
         } else {
             RemoteOperationAction::SynchronizePrimary
@@ -912,7 +941,7 @@ pub(in super::super) fn audit<R: ParentRecord>(db: &Connection) -> Result<(), Re
                 validate_remote_identity(db, id, r.operation_id(), &remote.target, remote.priority)
                     .map_err(|_| state::recovery_required())?;
             }
-            for role in [ChildRole::Context, ChildRole::Primary] {
+            for role in [ChildRole::Context, second_role(r.path())] {
                 child_state(db, &r, role).map_err(|_| state::recovery_required())?;
             }
             let local_children=db.prepare("SELECT root_path,action,coalesce(target,''),operation_ulid FROM operation_records WHERE operation_ulid IN (?1,?2)").and_then(|mut q|q.query_map(params![context,primary],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|state::recovery_required())?;

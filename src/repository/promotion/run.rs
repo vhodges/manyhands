@@ -975,7 +975,7 @@ impl<L: Lifecycle> SynchronizationObserver for CancellationObserver<'_, L> {
 fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
     match role {
         ChildRole::Context => r.context_sync_id(),
-        ChildRole::Primary => r.primary_sync_id(),
+        ChildRole::Primary | ChildRole::Publication => r.primary_sync_id(),
     }
 }
 /// A cancellation that stops the parent lets its stopped child go, or the
@@ -1134,7 +1134,7 @@ fn synchronization_target(
 ) -> SynchronizationTarget {
     match role {
         ChildRole::Primary => SynchronizationTarget::Primary,
-        ChildRole::Context => SynchronizationTarget::Context {
+        ChildRole::Context | ChildRole::Publication => SynchronizationTarget::Context {
             kind: kind.authoring(),
             item_id: item.clone(),
         },

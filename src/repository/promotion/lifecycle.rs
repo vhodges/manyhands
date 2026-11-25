@@ -167,6 +167,15 @@ pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
     }
 }
 
+/// Which tail of the runner a record takes. A promotion and a direct close
+/// integrate into the primary; a branch record (a pull-request close) never
+/// does, and publishes its context instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum RecordPath {
+    Direct,
+    Branch,
+}
+
 /// Exactly the parent fields the runner reads and writes.
 pub(in super::super) trait LifecycleRecord: Clone {
     type Expectation;
@@ -178,6 +187,10 @@ pub(in super::super) trait LifecycleRecord: Clone {
     fn remote_name(&self) -> Option<&str>;
     fn step(&self) -> ParentStep;
     fn set_step(&mut self, step: ParentStep);
+    /// Every record is direct but a closure's branch record.
+    fn path(&self) -> RecordPath {
+        RecordPath::Direct
+    }
     fn context_sync_id(&self) -> Option<OperationId>;
     fn primary_sync_id(&self) -> Option<OperationId>;
     fn base_oid(&self) -> Option<Oid>;

@@ -12,6 +12,7 @@ use crate::repository::{
     PromotionPathChange, PromotionPublication, RepositoryError, RepositoryService,
     SynchronizationError,
     keys::{SessionCredentialProvider, SessionCredentials},
+    remote::state,
     transport::{HostApproval, SshTransportError},
 };
 use git2::Oid;
@@ -57,6 +58,80 @@ pub enum ClosureBlocker {
     IdentityRequired,
     /// Last, so the stored blocker masks keep their bits.
     HistoryUnresolved,
+}
+
+/// What a closure record does to the ticket. With the integration mode it
+/// is the record's path: `(direct, close)` is a direct record, every other
+/// pair a branch record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClosureAction {
+    Close,
+    Withdraw,
+    NewBranch,
+}
+impl ClosureAction {
+    pub(in super::super) fn name(self) -> &'static str {
+        match self {
+            Self::Close => "close",
+            Self::Withdraw => "withdraw",
+            Self::NewBranch => "new_branch",
+        }
+    }
+    pub(in super::super) fn parse(text: &str) -> Result<Self, RepositoryError> {
+        match text {
+            "close" => Ok(Self::Close),
+            "withdraw" => Ok(Self::Withdraw),
+            "new_branch" => Ok(Self::NewBranch),
+            _ => Err(state::recovery_required()),
+        }
+    }
+}
+
+/// How a finished branch record answers, stored as its `answer_code`. The
+/// first nine are what a completed record answers after its publication
+/// child; the rest are what an abandoned one answers with its refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BranchAnswer {
+    Merged,
+    ClosedElsewhere,
+    RemoteBranchDeleted,
+    TicketClosed,
+    RemoteChanged,
+    Existing,
+    Published,
+    KeptPublished,
+    WithdrawnSince,
+    AlreadyClosed,
+    AlreadyClosing,
+    ExternalChange,
+    ReconfirmationRequired,
+    ContextRemoteBranchDeleted,
+    ContextHistoryUnresolved,
+    ContextTicketClosed,
+}
+impl BranchAnswer {
+    /// The stored value; any other text is recovery.
+    pub(in super::super) fn parse(text: &str) -> Result<Self, RepositoryError> {
+        match text {
+            "merged" => Ok(Self::Merged),
+            "closed_elsewhere" => Ok(Self::ClosedElsewhere),
+            "remote_branch_deleted" => Ok(Self::RemoteBranchDeleted),
+            "ticket_closed" => Ok(Self::TicketClosed),
+            "remote_changed" => Ok(Self::RemoteChanged),
+            "existing" => Ok(Self::Existing),
+            "published" => Ok(Self::Published),
+            "kept_published" => Ok(Self::KeptPublished),
+            "withdrawn_since" => Ok(Self::WithdrawnSince),
+            "already_closed" => Ok(Self::AlreadyClosed),
+            "already_closing" => Ok(Self::AlreadyClosing),
+            "external_change" => Ok(Self::ExternalChange),
+            "reconfirmation_required" => Ok(Self::ReconfirmationRequired),
+            "context_remote_branch_deleted" => Ok(Self::ContextRemoteBranchDeleted),
+            "context_history_unresolved" => Ok(Self::ContextHistoryUnresolved),
+            "context_ticket_closed" => Ok(Self::ContextTicketClosed),
+            _ => Err(state::recovery_required()),
+        }
+    }
 }
 
 /// The 32-byte consent digest of a ticket closure. Its `Debug` never shows
