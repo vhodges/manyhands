@@ -2753,7 +2753,138 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::mutation::migrate_request_tables(connection)?;
     // Retirement authority joins remote, local and request journals. None of
     // those companion tables may be queried before all three have migrated.
-    super::context_retirement::record::migrate(connection)
+    super::context_retirement::record::migrate(connection)?;
+    migrate_pull_request_mode(connection)
+}
+
+/// The marker of the pull-request mode migration's one-time marks.
+const PULL_REQUEST_MODE_MARKER: &str = "wave_06_pull_request_mode_v1";
+
+/// The columns the pull-request mode needs: a valid configuration's mode
+/// and `[forge]` keys, as `persist_configuration` stores them, and whether a
+/// remote operation is pull-only, which its reservation stores.
+const PULL_REQUEST_MODE_COLUMNS: [(&str, &str, &str); 5] = [
+    ("configuration_observations", "integration", "TEXT"),
+    ("configuration_observations", "forge_kind", "TEXT"),
+    ("configuration_observations", "forge_web_url", "TEXT"),
+    (
+        "configuration_observations",
+        "forge_pull_request_url",
+        "TEXT",
+    ),
+    (
+        "remote_operation_records",
+        "pull_only",
+        "INTEGER NOT NULL DEFAULT 0 CHECK(pull_only IN (0,1))",
+    ),
+];
+
+/// The trigger that keeps an operation's mode as its reservation stored it,
+/// as `remote_poll_kind_immutable` keeps a poll's kind, and the statement
+/// that creates it.
+const PULL_ONLY_TRIGGER: (&str, &str) = (
+    "remote_pull_only_immutable",
+    "CREATE TRIGGER remote_pull_only_immutable BEFORE UPDATE OF pull_only ON remote_operation_records BEGIN SELECT RAISE(ABORT,'immutable pull only'); END",
+);
+
+/// Adds the pull-request mode's columns and trigger to a registry that
+/// lacks them, and marks every registration's primary context dirty once.
+///
+/// Configuration rows stored before the columns existed hold null in them,
+/// which reads as direct with no forge. A refresh re-persists the
+/// configuration only with the primary context, and observes only contexts
+/// that are dirty or changed, so each primary is marked dirty, in the same
+/// transaction; the marker records that this was done, and a registry that
+/// carries it is not marked again. Operation rows stored before `pull_only`
+/// read 0, direct.
+///
+/// What is added is decided by the schema, not by the marker: a registry
+/// that holds the marker and lost a column or the trigger (a table made
+/// again by a build that did not know them) gets them back.
+///
+/// A registry that has everything is only read, so opening it takes no
+/// write lock. One that lacks anything is migrated in a transaction that
+/// takes the write lock before it looks again, as `migrate_item_read_schema`
+/// does.
+fn migrate_pull_request_mode(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if missing_pull_request_mode(connection)?.is_none() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    if let Some(missing) = missing_pull_request_mode(&transaction)? {
+        for statement in &missing.statements {
+            transaction
+                .execute_batch(statement)
+                .map_err(RepositoryError::sqlite)?;
+        }
+        if !missing.marked {
+            transaction
+                .execute("UPDATE contexts SET dirty = 1 WHERE item_id IS NULL", [])
+                .map_err(RepositoryError::sqlite)?;
+            transaction
+                .execute(
+                    "INSERT INTO registry_migrations (name) VALUES (?1)",
+                    [PULL_REQUEST_MODE_MARKER],
+                )
+                .map_err(RepositoryError::sqlite)?;
+        }
+    }
+    transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// What the pull-request mode migration has left to do.
+struct MissingPullRequestMode {
+    /// The statements that add what the registry lacks, in the order to run
+    /// them: the columns first, since the trigger is on one of them.
+    statements: Vec<String>,
+    /// Whether the registry carries the marker.
+    marked: bool,
+}
+
+/// What the registry lacks of the pull-request mode, or `None` when it has
+/// everything.
+fn missing_pull_request_mode(
+    connection: &Connection,
+) -> Result<Option<MissingPullRequestMode>, RepositoryError> {
+    let mut statements = Vec::new();
+    for (table, column, definition) in PULL_REQUEST_MODE_COLUMNS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                [table, column],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            statements.push(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ));
+        }
+    }
+    let (trigger, statement) = PULL_ONLY_TRIGGER;
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1)",
+            [trigger],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    if !exists {
+        statements.push(statement.to_owned());
+    }
+    let marked: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name = ?1)",
+            [PULL_REQUEST_MODE_MARKER],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(
+        (!statements.is_empty() || !marked)
+            .then_some(MissingPullRequestMode { statements, marked }),
+    )
 }
 
 /// The columns the item reads need: who closed a ticket, an item's unknown
@@ -3351,6 +3482,363 @@ mod tests {
             column_names(&connection, "operation_records").contains(&"owed_contexts".to_owned())
         );
         assert_eq!(context_basis_markers(&connection), 1);
+    }
+
+    /// The configuration the pull-request mode migration test refreshes: a
+    /// pull-request repository with every forge key set.
+    const PULL_REQUEST_CONFIGURATION: &str = "format_version = 2
+primary_branch = \"main\"
+publication_remote = \"origin\"
+integration = \"pull_request\"
+
+[forge]
+kind = \"bitbucket-data-center\"
+web_url = \"https://git.example.com/bitbucket\"
+pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
+";
+
+    /// The finished synchronization the older build left in the journal.
+    const FINISHED_OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+
+    /// The item whose context the older build stored for another
+    /// registration.
+    const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    /// A registration enabled and refreshed by this build, at a root in a
+    /// directory of its own, whose configuration is
+    /// `PULL_REQUEST_CONFIGURATION`. The temporary directories go last.
+    fn refreshed_pull_request_repository() -> (
+        crate::repository::RepositoryService,
+        PathBuf,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        use crate::repository::{
+            EnableRepositoryRequest, OperationId, RefreshOutcome, RefreshRepositoryRequest,
+            RepositoryService,
+        };
+        let parent = std::env::temp_dir().canonicalize().unwrap();
+        let directory = tempfile::tempdir_in(&parent).unwrap();
+        let data = tempfile::tempdir_in(&parent).unwrap();
+        let root = directory.path().to_owned();
+        let mut options = RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repository = Repository::init_opts(&root, &options).unwrap();
+        let mut config = repository.config().unwrap();
+        config.set_str("user.name", "Fixture").unwrap();
+        config
+            .set_str("user.email", "fixture@example.invalid")
+            .unwrap();
+        fs::write(root.join("fixture.txt"), "fixture\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("fixture.txt")).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::new("Test", "test@example.invalid", &Time::new(1, 0)).unwrap();
+        repository
+            .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+            .unwrap();
+        index.write().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .enable(EnableRepositoryRequest {
+                root: root.clone(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        write_config(&root, PULL_REQUEST_CONFIGURATION);
+        checkpoint(&repository, Path::new(canonical::CONFIG_PATH), 2);
+        let outcome = service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        assert!(
+            matches!(outcome, RefreshOutcome::Refreshed { .. }),
+            "{outcome:?}"
+        );
+        (service, root, directory, data)
+    }
+
+    /// What the build before the pull-request mode left: no mode or forge
+    /// columns on the configuration rows, no `pull_only` on the operation
+    /// rows and no trigger to keep it, and no marker. Dropping what is there
+    /// keeps the helper valid on any tree.
+    fn registry_without_pull_request_mode(connection: &Connection) {
+        connection
+            .execute_batch("DROP TRIGGER IF EXISTS remote_pull_only_immutable")
+            .unwrap();
+        for (table, column) in [
+            ("configuration_observations", "integration"),
+            ("configuration_observations", "forge_kind"),
+            ("configuration_observations", "forge_web_url"),
+            ("configuration_observations", "forge_pull_request_url"),
+            ("remote_operation_records", "pull_only"),
+        ] {
+            if column_names(connection, table)
+                .iter()
+                .any(|name| name == column)
+            {
+                connection
+                    .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                    .unwrap();
+            }
+        }
+        connection
+            .execute(
+                "DELETE FROM registry_migrations WHERE name = 'wave_06_pull_request_mode_v1'",
+                [],
+            )
+            .unwrap();
+    }
+
+    fn pull_request_mode_markers(connection: &Connection) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations
+                  WHERE name = 'wave_06_pull_request_mode_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// The mark of every stored context, by its registration and item ID.
+    fn context_marks(connection: &Connection) -> BTreeMap<(i64, Option<String>), i64> {
+        connection
+            .prepare("SELECT repository_id, item_id, dirty FROM contexts")
+            .unwrap()
+            .query_map([], |row| Ok(((row.get(0)?, row.get(1)?), row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// `(integration, forge_kind, forge_web_url, forge_pull_request_url)` of
+    /// the valid configuration stored for `registration`.
+    type ModeColumns = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+
+    fn stored_mode(connection: &Connection, registration: i64) -> ModeColumns {
+        connection
+            .query_row(
+                "SELECT integration, forge_kind, forge_web_url, forge_pull_request_url
+                   FROM configuration_observations
+                  WHERE repository_id = ?1 AND state = 'valid'",
+                [registration],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap()
+    }
+
+    fn assert_pull_request_mode_columns_once(connection: &Connection) {
+        for (table, column) in [
+            ("configuration_observations", "integration"),
+            ("configuration_observations", "forge_kind"),
+            ("configuration_observations", "forge_web_url"),
+            ("configuration_observations", "forge_pull_request_url"),
+            ("remote_operation_records", "pull_only"),
+        ] {
+            assert_eq!(
+                column_names(connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        assert_eq!(
+            object_count(connection, "trigger", "remote_pull_only_immutable"),
+            1
+        );
+    }
+
+    // A registry from the build before the pull-request mode gains the mode
+    // and forge columns, null until the next refresh fills them, and the
+    // operation's mode, direct for every row it already holds and fixed once
+    // written. Each registration's primary is marked once, so that the next
+    // refresh stores its configuration again; an item context is not.
+    #[test]
+    fn pull_request_mode_migration_adds_columns_once_and_refills() {
+        let (service, root, _directory, data) = refreshed_pull_request_repository();
+        let path = data.path().join(crate::repository::REGISTRY_FILE);
+        let older = open_registry(&path, &mut |_| {}).unwrap();
+        registry_without_pull_request_mode(&older);
+        let registration: i64 = older
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap();
+        // The older build's rows: a finished synchronization of the primary,
+        // and a second registration with a primary and an item context.
+        let operation = |id: &str, pull_only: Option<i64>| {
+            format!(
+                "INSERT INTO remote_operation_records (
+                    repository_id, operation_ulid, configuration_generation, remote_name,
+                    primary_branch, primary_ref, primary_tracking_ref, local_branch, action,
+                    priority, phase, created_at, updated_at, outcome{}
+                 ) VALUES ({registration}, '{id}', 0, 'origin', 'main', 'refs/heads/main',
+                           'refs/remotes/origin/main', 'main', 'synchronize_primary', 'manual',
+                           'completed', 1, 2, 'completed'{})",
+                pull_only.map_or("", |_| ", pull_only"),
+                pull_only.map_or(String::new(), |value| format!(", {value}")),
+            )
+        };
+        older
+            .execute_batch(&operation(FINISHED_OPERATION, None))
+            .unwrap();
+        older
+            .execute(
+                "INSERT INTO repositories (root_path, enabled_at, accessibility, refresh_required)
+                 VALUES ('/elsewhere', 1, 'accessible', 0)",
+                [],
+            )
+            .unwrap();
+        let elsewhere = older.last_insert_rowid();
+        older
+            .execute(
+                "INSERT INTO contexts (repository_id, kind, worktree_path)
+                 VALUES (?1, 'unverified', '/elsewhere')",
+                [elsewhere],
+            )
+            .unwrap();
+        older
+            .execute(
+                "INSERT INTO contexts (repository_id, kind, worktree_path, item_id)
+                 VALUES (?1, 'active', '/elsewhere/.manyhands/worktrees/a', ?2)",
+                rusqlite::params![elsewhere, ITEM],
+            )
+            .unwrap();
+        let marks = |primary: i64, other: i64| {
+            BTreeMap::from([
+                ((registration, None), primary),
+                ((elsewhere, None), other),
+                ((elsewhere, Some(ITEM.to_owned())), 0),
+            ])
+        };
+        assert!(
+            !column_names(&older, "configuration_observations").contains(&"integration".into())
+        );
+        assert!(!column_names(&older, "remote_operation_records").contains(&"pull_only".into()));
+        assert_eq!(pull_request_mode_markers(&older), 0);
+        assert_eq!(context_marks(&older), marks(0, 0));
+        drop(older);
+
+        // Migrating the registry, as opening it through the service does.
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+
+        assert_pull_request_mode_columns_once(&connection);
+        assert_eq!(pull_request_mode_markers(&connection), 1);
+        // The row the older build stored holds no mode or forge yet.
+        assert_eq!(
+            stored_mode(&connection, registration),
+            (None, None, None, None)
+        );
+        // Every registration's primary reads dirty, and nothing else.
+        assert_eq!(context_marks(&connection), marks(1, 1));
+        // The finished operation was direct, and stays so.
+        let pull_only = |connection: &Connection| -> i64 {
+            connection
+                .query_row(
+                    "SELECT pull_only FROM remote_operation_records WHERE operation_ulid = ?1",
+                    [FINISHED_OPERATION],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(pull_only(&connection), 0);
+        for refused in [
+            "UPDATE remote_operation_records SET pull_only = 1 WHERE operation_ulid = ?1",
+            "UPDATE remote_operation_records SET pull_only = 0 WHERE operation_ulid = ?1",
+        ] {
+            assert!(
+                connection.execute(refused, [FINISHED_OPERATION]).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(pull_only(&connection), 0);
+        // An operation is pull-only or not, and nothing else.
+        let error = connection
+            .execute_batch(&operation("01ARZ3NDEKTSV4RRFFQ69G5FB1", Some(2)))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("CHECK constraint failed"),
+            "{error}"
+        );
+
+        // The next refresh stores the configuration again, with its mode and
+        // forge.
+        let outcome = service
+            .refresh_repository(crate::repository::RefreshRepositoryRequest {
+                root: root.clone(),
+                operation_id: crate::repository::OperationId::new(),
+            })
+            .unwrap();
+        assert!(
+            matches!(outcome, crate::repository::RefreshOutcome::Refreshed { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            stored_mode(&connection, registration),
+            (
+                Some("pull_request".to_owned()),
+                Some("bitbucket-data-center".to_owned()),
+                Some("https://git.example.com/bitbucket".to_owned()),
+                Some("https://git.example.com/bitbucket/compare?source={source}".to_owned()),
+            )
+        );
+        assert_eq!(context_marks(&connection), marks(0, 1));
+
+        // A second opening adds nothing and marks nothing again.
+        drop(connection);
+        let mut again = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut again).unwrap();
+        assert_pull_request_mode_columns_once(&again);
+        assert_eq!(pull_request_mode_markers(&again), 1);
+        assert_eq!(context_marks(&again), marks(0, 1));
+    }
+
+    // A registry that is marked but lost the operation's mode, its trigger
+    // and a forge column (tables made again by a build that did not know
+    // them) gets them back, and no context is marked again: the schema
+    // decides what is added, and the marker only the one-time marks.
+    #[test]
+    fn a_marked_registry_that_lost_the_pull_request_mode_schema_gets_it_back_unmarked() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');",
+            )
+            .unwrap();
+        let clean = BTreeMap::from([((1, None), 0)]);
+        assert_eq!(pull_request_mode_markers(&connection), 1);
+        assert_eq!(context_marks(&connection), clean);
+        // The trigger goes before the column it is on.
+        connection
+            .execute_batch(
+                "DROP TRIGGER remote_pull_only_immutable;
+                 ALTER TABLE remote_operation_records DROP COLUMN pull_only;
+                 ALTER TABLE configuration_observations DROP COLUMN forge_kind;",
+            )
+            .unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+
+        assert_pull_request_mode_columns_once(&connection);
+        assert_eq!(pull_request_mode_markers(&connection), 1);
+        assert_eq!(context_marks(&connection), clean);
     }
 
     #[test]
@@ -4460,7 +4948,7 @@ mod tests {
     fn missing_or_malformed_configuration_is_unverified_but_keeps_documents() {
         for config in [
             None,
-            Some("format_version = 2\nprimary_branch = \"main\"\n"),
+            Some("format_version = 3\nprimary_branch = \"main\"\n"),
         ] {
             let (directory, repository) = repository_on_main();
             if let Some(config) = config {
@@ -4690,7 +5178,7 @@ mod tests {
         let (directory, repository) = repository_on_main();
         write_config(
             directory.path(),
-            "format_version = 2\nprimary_branch = \"main\"\n",
+            "format_version = 3\nprimary_branch = \"main\"\n",
         );
         let worktree = active_worktree(
             &repository,

@@ -1085,7 +1085,7 @@ fn inspect_invalid_configuration_preserves_its_validation_problem_and_source_byt
     let service = RepositoryService::open_at(data.path()).unwrap();
     let fixture = support::born_repository();
     let path = fixture.root.join(canonical::CONFIG_PATH);
-    let source = "format_version = 2\nprimary_branch = \"main\"\n";
+    let source = "format_version = 3\nprimary_branch = \"main\"\n";
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, source).unwrap();
     let expected = canonical::parse_repository_config(source).unwrap_err();
@@ -1875,6 +1875,68 @@ fn publication_selection_commits_only_canonical_configuration_changes() {
         service.set_publication_remote(publication_request(&fixture.root, None)),
         Ok(PublicationRemoteOutcome::Changed { .. })
     ));
+}
+
+#[test]
+fn publication_remote_selection_keeps_mode_and_forge() {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    for name in ["origin", "backup"] {
+        service
+            .add_remote(add_remote_request(
+                &fixture.root,
+                name,
+                "git@example.invalid:project.git",
+            ))
+            .unwrap();
+    }
+    // The committed blob must be canonical, so it is the serializer's output.
+    let mut config = canonical::parse_repository_config(
+        "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n\n[forge]\nkind = \"bitbucket-cloud\"\nextra = true\n",
+    )
+    .unwrap();
+    let expected_forge = config.forge();
+    assert!(expected_forge.is_some());
+    let source = canonical::serialize_repository_config(&config).unwrap();
+    assert!(source.starts_with("format_version = 2\n"));
+    support::commit_tracked_configuration(&fixture, &source);
+
+    assert!(matches!(
+        service.set_publication_remote(publication_request(&fixture.root, Some("backup"))),
+        Ok(PublicationRemoteOutcome::Changed { .. })
+    ));
+    let committed = String::from_utf8(head_configuration(&fixture.repository)).unwrap();
+    assert!(committed.starts_with("format_version = 2\n"), "{committed}");
+    let reparsed = canonical::parse_repository_config(&committed).unwrap();
+    assert_eq!(reparsed.publication_remote.as_deref(), Some("backup"));
+    assert_eq!(reparsed.integration(), canonical::Integration::PullRequest);
+    assert_eq!(reparsed.forge(), expected_forge);
+    config.publication_remote = Some("backup".into());
+    assert_eq!(reparsed, config);
+    assert_eq!(
+        reparsed.unknown["forge"]["extra"],
+        toml::Value::Boolean(true)
+    );
+
+    // Clearing the remote of a pull-request repository is refused, and the
+    // committed configuration stays as it was.
+    let mut index = fixture.repository.index().unwrap();
+    index
+        .add_path(std::path::Path::new(canonical::CONFIG_PATH))
+        .unwrap();
+    index.write().unwrap();
+    let before = head_configuration_oid(&fixture.repository);
+    let head = support::head_commit(&fixture.repository).unwrap();
+    let error = service
+        .set_publication_remote(publication_request(&fixture.root, None))
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidConfiguration);
+    assert_eq!(head_configuration_oid(&fixture.repository), before);
+    assert_eq!(support::head_commit(&fixture.repository).unwrap(), head);
 }
 
 #[test]
@@ -3428,7 +3490,7 @@ fn enable_invalid_configuration_with_supplied_identity_preserves_all_state() {
     let fixture = support::repository_without_local_identity();
     support::commit_tracked_configuration(
         &fixture,
-        "format_version = 2\nprimary_branch = \"main\"\n",
+        "format_version = 3\nprimary_branch = \"main\"\n",
     );
     let before = repository_snapshot(&fixture.repository, &fixture.root);
     let index_before = support::index_bytes(&fixture.repository);

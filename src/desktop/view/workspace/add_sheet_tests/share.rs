@@ -102,6 +102,8 @@ fn canned(root: &Path, configured: Option<&str>) -> RepositoryInspectionDto {
             primary_branch: set_up.then(|| "main".to_owned()),
             publication_remote: configured.map(str::to_owned),
             problems: Vec::new(),
+            integration: set_up.then(|| "direct".to_owned()),
+            forge: None,
         },
         identity_state: IdentityAvailability::Available,
         remotes: vec![remote("origin", SSH, true), remote("backup", HTTPS, false)],

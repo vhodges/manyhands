@@ -348,6 +348,7 @@ fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reo
                 &RemoteOperationTarget::for_poll(&plan()),
                 RemoteOperationPriority::Poll,
                 kind,
+                false,
                 123,
             )?;
             tx.execute(
@@ -461,7 +462,7 @@ fn review_completed_state() -> (
     let op = crate::repository::OperationId::new();
     with_transaction(&service,root.path(),|tx,id|{
         configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
-        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
+        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),false,123)?;
         tx.execute("UPDATE remote_operation_records SET phase='completed',completed_step='before_discovery',outcome='completed',updated_at=124,poll_completed_at=124,poll_next_eligible_at=424",[]).unwrap();
         replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().primary().clone()),kind:None,item_id:None,disposition:super::super::poll::PollDisposition::Current,before_oid:Some(ADVERTISED.parse().unwrap()),after_oid:Some(ADVERTISED.parse().unwrap())}],124)
     }).unwrap();
@@ -1016,7 +1017,7 @@ fn task6_local_history_unknown_context_also_exposes_its_latest_disposition() {
         configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
         tx.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(?1,'active','manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV','/local-context','01ARZ3NDEKTSV4RRFFQ69G5FAV')",[id]).unwrap();
         let op=crate::repository::OperationId::new();
-        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
+        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),false,123)?;
         replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().context(AuthoringKind::Ticket,&ITEM.parse().unwrap())),kind:Some(AuthoringKind::Ticket),item_id:Some(ITEM.parse().unwrap()),disposition:super::super::poll::PollDisposition::HistoryUnknown,before_oid:None,after_oid:None}],123)
     }).unwrap();
     let snapshot = with_transaction(&service, root.path(), |tx, id| read_snapshot(tx, id)).unwrap();
@@ -1044,6 +1045,7 @@ fn task6_disposition_schema_upgrade_rollback_corruption_and_privacy() {
                 &RemoteOperationTarget::for_poll(&plan()),
                 RemoteOperationPriority::Poll,
                 Some(PollKind::Update),
+                false,
                 123,
             )?;
             replace_poll_dispositions(
@@ -1229,6 +1231,7 @@ fn materialization_state_fixture() -> (
             &RemoteOperationTarget::for_poll(&plan()),
             RemoteOperationPriority::Poll,
             Some(PollKind::Update),
+            false,
             123,
         )?;
         insert_materialization(

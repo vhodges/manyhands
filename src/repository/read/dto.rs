@@ -125,14 +125,28 @@ pub struct RepositorySummaryDto {
     pub problem_count: u64,
 }
 
-/// `primary_branch` and `publication_remote` are set only when `state` is
-/// `valid`; `problems` is empty unless it is `invalid`.
+/// `primary_branch`, `publication_remote` and `integration` are set only
+/// when `state` is `valid`; `problems` is empty unless it is `invalid`.
+/// `integration` is `"direct"` or `"pull_request"`, and null for a mode this
+/// build does not know. `forge` is the configured `[forge]` setting, null
+/// when there is none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ConfigurationDto {
     pub state: ConfigurationState,
     pub primary_branch: Option<String>,
     pub publication_remote: Option<String>,
     pub problems: Vec<ProblemDto>,
+    pub integration: Option<String>,
+    pub forge: Option<ForgeDto>,
+}
+
+/// The `[forge]` setting as configured: each part a string or null. `kind`
+/// is null when the setting names none, or a kind this build does not know.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ForgeDto {
+    pub kind: Option<String>,
+    pub web_url: Option<String>,
+    pub pull_request_url: Option<String>,
 }
 
 /// `never_refreshed` when nothing has been stored for the registration: no

@@ -28,7 +28,7 @@ manyhands-cli --json repo identity --repo <repo-root>
 manyhands-cli --json remote list --repo <repo-root>
 ```
 
-`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes, and on a build with the concurrent-writers change `data.operations` lists the unfinished operations (see [recovery](../manyhands-recovery/SKILL.md)). `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
+`repo inspect` works on a repository that is not registered: `data.registered` is false, `data.configuration.publication_remote` is the selected remote or null, `data.configuration.integration` is `direct` or `pull_request` (null unless the configuration is valid) and `data.configuration.forge` is `{kind, web_url, pull_request_url}` or null when there is no `[forge]` table (on a build with the pull-request setting, Wave 06 Cycle 01; `repo list` items carry the same two fields, and human `repo inspect` prints `Integration:` and, with a forge, `Forge:`), `data.identity_state` is `available` or `required`, `data.remotes` lists the remotes, and on a build with the concurrent-writers change `data.operations` lists the unfinished operations (see [recovery](../manyhands-recovery/SKILL.md)). `repo list` lists only registered repositories (`data.items[].root`, `accessibility`, `configuration`, `problem_count`). Neither shows an SSH key: the selected key is global, see [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
 ## `repo create` and `repo enable`
 
@@ -145,6 +145,16 @@ manyhands-cli --json --non-interactive remote remove --repo <repo-root> --input 
 ```
 
 After the person's OK, confirm with `--confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>` as for the other confirmed verbs.
+
+## Pull-request mode
+
+Not usable end to end yet. This describes the setting only, and pull-request mode is not usable end to end until close and promote support it: until then `ticket close` and `document promote` in a pull-request repository still merge into the primary and push it, as in direct mode, and the pull-request workflow that replaces that arrives in later Cycles of Wave 06. Do not put a repository people use into this mode yet, and do not suggest it. Only a build with the pull-request setting (Wave 06 Cycle 01) knows these keys; `v0.2.1` and earlier refuse a version 2 configuration, which is deliberate.
+
+`.manyhands/config.toml` holds two more keys. `integration` is `"direct"` or `"pull_request"`, spelled exactly; a missing key means direct, and any other value makes the configuration invalid (`invalid_configuration`). An optional `[forge]` table names the Git host: `kind` is one of `bitbucket-cloud`, `bitbucket-data-center`, `github` or `gitlab`, `web_url` and `pull_request_url` are absolute `https://` or `http://` URLs, and `pull_request_url` is a template that contains `{source}` and may contain `{target}`. A `[forge]` table needs a `kind` or a `pull_request_url`.
+
+`integration = "pull_request"` needs `format_version = 2` and a `publication_remote`. Version 2 is what makes a build without the setting refuse the repository instead of pushing its primary. A version 2 file in direct mode is accepted and written back as version 1, and any other version is invalid. `repo inspect` shows the configured setting, not a forge recognised from the remote.
+
+In a pull-request repository `repo sync` only pulls: it fast-forwards the primary and never merges or pushes it ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md)). That decides how a repository gets there. The configuration that switches the mode must already be on the remote's primary: committed and pushed while the repository was still direct, or merged through the forge. A local commit of the switch is refused by the next `repo sync` as `primary_has_local_commits` ([recovery](../manyhands-recovery/SKILL.md)), so never switch a checkout by committing the change on its primary and then syncing. No Manyhands command writes these keys yet, and you never edit `.manyhands/config.toml` yourself: the switch is the person's decision and their Git work, and your part is to say what is needed (from the contract, not run here).
 
 ## The order for a repository that will share
 

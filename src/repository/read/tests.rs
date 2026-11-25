@@ -417,6 +417,7 @@ fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
         Some("main".to_owned()),
         Some("origin".to_owned()),
         None,
+        admin::StoredMode::default(),
     ));
     // Valid without a primary branch is not a configuration.
     unknown(admin::stored_configuration(
@@ -424,17 +425,130 @@ fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
         None,
         Some("origin".to_owned()),
         None,
+        admin::StoredMode::default(),
     ));
     unknown(admin::stored_configuration(
         Some("invalid"),
         None,
         None,
         Some("some-later-code"),
+        admin::StoredMode::default(),
     ));
     unknown(admin::stored_configuration(
         Some("invalid"),
         None,
         None,
         None,
+        admin::StoredMode::default(),
     ));
+}
+
+// A valid row's mode and forge read as stored; one stored before the
+// columns existed holds a null mode and reads as direct, with no forge.
+#[test]
+fn a_valid_stored_configuration_reads_its_mode_and_forge() {
+    let text = |value: &str| Some(value.to_owned());
+    let template = "https://git.example.com/compare?source={source}";
+    let cases = [
+        (admin::StoredMode::default(), ("direct", None)),
+        (
+            admin::StoredMode {
+                forge_kind: text("github"),
+                ..admin::StoredMode::default()
+            },
+            ("direct", None),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("direct"),
+                ..admin::StoredMode::default()
+            },
+            ("direct", None),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("pull_request"),
+                forge_kind: text("bitbucket-cloud"),
+                ..admin::StoredMode::default()
+            },
+            ("pull_request", Some((text("bitbucket-cloud"), None, None))),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("direct"),
+                forge_pull_request_url: text(template),
+                ..admin::StoredMode::default()
+            },
+            ("direct", Some((None, None, text(template)))),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("pull_request"),
+                forge_kind: text("bitbucket-data-center"),
+                forge_web_url: text("https://git.example.com"),
+                forge_pull_request_url: text(template),
+            },
+            (
+                "pull_request",
+                Some((
+                    text("bitbucket-data-center"),
+                    text("https://git.example.com"),
+                    text(template),
+                )),
+            ),
+        ),
+    ];
+
+    for (index, (stored, (integration, forge))) in cases.into_iter().enumerate() {
+        assert_eq!(
+            stored.read(),
+            (integration.to_owned(), forge),
+            "case {index}"
+        );
+    }
+}
+
+// A mode or forge kind this build does not know, written by a later one,
+// reads as null, so the object satisfies the schema's enumerations; the
+// forge's other parts are kept in their own places.
+#[test]
+fn a_stored_mode_or_forge_kind_this_build_does_not_know_reads_as_null() {
+    let text = |value: &str| Some(value.to_owned());
+    let read = |stored| {
+        let configuration =
+            admin::stored_configuration(Some("valid"), text("main"), text("origin"), None, stored);
+        (configuration.integration, configuration.forge)
+    };
+
+    let (integration, forge) = read(admin::StoredMode {
+        integration: text("squash_request"),
+        forge_kind: text("sourcehut"),
+        forge_web_url: text("https://git.example.com"),
+        forge_pull_request_url: text("https://git.example.com/pr?source={source}"),
+    });
+    assert_eq!(integration, None);
+    assert_eq!(
+        forge,
+        Some(ForgeDto {
+            kind: None,
+            web_url: text("https://git.example.com"),
+            pull_request_url: text("https://git.example.com/pr?source={source}"),
+        })
+    );
+
+    let (integration, forge) = read(admin::StoredMode {
+        integration: text("pull_request"),
+        forge_kind: text("gitlab"),
+        forge_web_url: text("https://git.example.com"),
+        forge_pull_request_url: None,
+    });
+    assert_eq!(integration, text("pull_request"));
+    assert_eq!(
+        forge,
+        Some(ForgeDto {
+            kind: text("gitlab"),
+            web_url: text("https://git.example.com"),
+            pull_request_url: None,
+        })
+    );
 }
