@@ -143,6 +143,26 @@ fn unresolved_history_is_answered_with_the_repair_and_no_retry() {
     assert_eq!(ran.answer.code, ResultCode::Cancelled);
 }
 
+/// A ticket context's refused push (R-30) ends its operation as a cancelled
+/// one too, and is answered as itself: `ticket_closed`, not the caller's
+/// cancellation.
+#[test]
+fn a_ticket_closed_refusal_is_answered_as_itself() {
+    let ended = Ended::new();
+    let ran = ended.stopped(&SynchronizationError::TicketClosed);
+    assert_eq!(ran.answer.code, ResultCode::TicketClosed);
+    assert_ne!(ran.answer.code, ResultCode::Cancelled);
+    assert!(matches!(
+        ran.standing,
+        Standing::Stopped {
+            journal: Some(JournalRow::Final {
+                kind: FinalKind::Cancelled,
+                ..
+            })
+        }
+    ));
+}
+
 /// A pull-only refusal ends its operation as a cancelled one (design Part
 /// D), and is answered as itself: its own code, blocked, with no recovery
 /// action, every effect `not_requested` (`effects_so_far(Unknown)` would

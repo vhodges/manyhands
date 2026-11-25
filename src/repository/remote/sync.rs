@@ -4325,8 +4325,10 @@ impl RepositoryService {
     /// call of the same request, settles those, so the
     /// operation is cancelled and the reservation let go (as for a refused
     /// push). With a push intended an earlier call may have published, and
-    /// a lifecycle child belongs to its parent, which blocks on unresolved
-    /// history before it runs one: both are left as they are (`keep`). A
+    /// a lifecycle child belongs to its parent, which decides what becomes
+    /// of it (it blocks on unresolved history before it runs one, and lets
+    /// a child stopped by `TicketClosed` go): both are left as they are
+    /// (`keep`). A
     /// pull-only operation is never kept: it pushes nothing (decision 5).
     /// Should the ending fail, the operation is still pending and still
     /// holds the reservation, which either answer would deny, so the answer
@@ -4353,15 +4355,19 @@ impl RepositoryService {
         }
         error
     }
-    /// R-30's push decision: a ticket context does not push a head whose
-    /// ticket lacks the closure of the primary it fetched. Every path of a
+    /// The tail of a publishing synchronization, from R-30's push decision
+    /// to the push: a ticket context does not push a head whose ticket lacks
+    /// the closure of the primary it fetched. Every path of a
     /// synchronization that publishes ends at one candidate head, a merge
     /// prepared in this pass having been given that closure already, so a
     /// head that lacks it here is one nothing merged: a fast-forward, or a
-    /// head already integrated with the primary. It answers `TicketClosed`,
-    /// ending the operation as `ended_if_unresolved` does.
+    /// head already integrated with the primary, even one the remote holds.
+    /// It answers `TicketClosed` and never calls `push`, ending the
+    /// operation as `ended_if_unresolved` does. `push` is the push itself
+    /// (`push_call`; a test passes one that records its call), and its
+    /// error is ended the same way.
     #[allow(clippy::too_many_arguments)]
-    fn refuse_unclosed_push(
+    fn push_unless_unclosed(
         &self,
         root: &Path,
         owner: &RemoteReservation,
@@ -4370,9 +4376,11 @@ impl RepositoryService {
         target: &SynchronizationTarget,
         candidate: git2::Oid,
         primary: git2::Oid,
-    ) -> Result<(), SynchronizationError> {
+        push: impl FnOnce() -> Result<bool, SynchronizationError>,
+    ) -> Result<bool, SynchronizationError> {
         primary_closure_push_refusal(repository, target, candidate, primary)
-            .map_err(|error| self.ended_if_unresolved(root, owner, keep, error))
+            .map_err(|error| self.ended_if_unresolved(root, owner, keep, error))?;
+        push().map_err(|error| self.ended_if_unresolved(root, owner, keep, error))
     }
     /// The reservation of the operation `op`, a synchronization's or a
     /// lifecycle child's (`execution`). A new one (`new`: no row under its
@@ -7221,17 +7229,6 @@ impl RepositoryService {
         let candidate = evidence
             .local_oid
             .ok_or(SynchronizationError::RecoveryRequired)?;
-        // R-30: the one head every path above ends at, the plan's and a
-        // merge's alike, is not pushed without the primary's closure.
-        self.refuse_unclosed_push(
-            &root,
-            &owner,
-            keep,
-            &repository,
-            &request.target,
-            candidate,
-            primary.ok_or(SynchronizationError::PrimaryMissing)?,
-        )?;
         // With an open publication attempt, the old Push intent and its
         // checkpoint stay as recorded: this invocation's single push is
         // journaled in the attempt. A Push endpoint that no longer
@@ -7239,77 +7236,89 @@ impl RepositoryService {
         // local merge and the open attempt intact for a later deliberate
         // invocation, never a refetch/merge loop, a regenerated candidate or
         // a forced update.
-        let pushed = self.push_call(
-            &steps,
-            session,
-            observer,
+        // R-30: the one head every path above ends at, the plan's and a
+        // merge's alike, is not pushed without the primary's closure.
+        let primary = primary.ok_or(SynchronizationError::PrimaryMissing)?;
+        let pushed = self.push_unless_unclosed(
+            &root,
+            &owner,
+            keep,
+            &repository,
+            &request.target,
             candidate,
-            &mut evidence,
-            |push, evidence, call| {
-                if self.observation_configuration_in(call, &root, &plan)? != configuration {
-                    return Err(SynchronizationError::ExternalChange);
-                }
-                if push.is_none()
-                    && let Some(boundary) = push_absence_boundary
-                {
-                    return Err(boundary.error());
-                }
-                // R-15: a pull-only operation never pushes. The push
-                // endpoint holds the candidate, which is recorded as the
-                // ordinary call that pushes nothing records it, or the
-                // operation is refused with what that endpoint lacks.
-                if pull_only {
-                    pull_only_push_decision(&repository, candidate, push)?;
-                    if !publication_open {
+            primary,
+            || {
+                self.push_call(
+                    &steps,
+                    session,
+                    observer,
+                    candidate,
+                    &mut evidence,
+                    |push, evidence, call| {
+                        if self.observation_configuration_in(call, &root, &plan)? != configuration {
+                            return Err(SynchronizationError::ExternalChange);
+                        }
+                        if push.is_none()
+                            && let Some(boundary) = push_absence_boundary
+                        {
+                            return Err(boundary.error());
+                        }
+                        // R-15: a pull-only operation never pushes. The push
+                        // endpoint holds the candidate, which is recorded as the
+                        // ordinary call that pushes nothing records it, or the
+                        // operation is refused with what that endpoint lacks.
+                        if pull_only {
+                            pull_only_push_decision(&repository, candidate, push)?;
+                            if !publication_open {
+                                evidence.push_oid = Some(candidate);
+                                evidence.push_advertised_oid = push;
+                            }
+                            return Ok(None);
+                        }
+                        if publication_open {
+                            if push == Some(candidate) {
+                                return Ok(None);
+                            }
+                            // Fetch and Push are independent endpoints: only the
+                            // Push-direction advertisement decides whether an
+                            // ordinary update can apply.
+                            //
+                            // Known limit: when the Push endpoint is strictly AHEAD
+                            // of the candidate (the candidate is already contained
+                            // there, but a distinct Fetch endpoint does not yet show
+                            // that descendant), this is still `PushRejected` on
+                            // every invocation until Fetch catches up. Nothing is
+                            // pushed and nothing is claimed; a verified attempt must
+                            // equal the advertisement, and integrating Push-only
+                            // history is refused by design.
+                            if push.is_some()
+                                && push_intent_relation(&repository, candidate, push)?
+                                    != PushIntentRelation::Behind
+                            {
+                                return Err(SynchronizationError::PushRejected);
+                            }
+                            return Ok(Some(PushIntent::Attempt { advertised: push }));
+                        }
                         evidence.push_oid = Some(candidate);
                         evidence.push_advertised_oid = push;
-                    }
-                    return Ok(None);
-                }
-                if publication_open {
-                    if push == Some(candidate) {
-                        return Ok(None);
-                    }
-                    // Fetch and Push are independent endpoints: only the
-                    // Push-direction advertisement decides whether an
-                    // ordinary update can apply.
-                    //
-                    // Known limit: when the Push endpoint is strictly AHEAD
-                    // of the candidate (the candidate is already contained
-                    // there, but a distinct Fetch endpoint does not yet show
-                    // that descendant), this is still `PushRejected` on
-                    // every invocation until Fetch catches up. Nothing is
-                    // pushed and nothing is claimed; a verified attempt must
-                    // equal the advertisement, and integrating Push-only
-                    // history is refused by design.
-                    if push.is_some()
-                        && push_intent_relation(&repository, candidate, push)?
-                            != PushIntentRelation::Behind
-                    {
-                        return Err(SynchronizationError::PushRejected);
-                    }
-                    return Ok(Some(PushIntent::Attempt { advertised: push }));
-                }
-                evidence.push_oid = Some(candidate);
-                evidence.push_advertised_oid = push;
-                if push == Some(candidate) {
-                    return Ok(None);
-                }
-                if resumed == Some(Checkpoint::PushVerified) {
-                    return Err(SynchronizationError::RecoveryRequired);
-                }
-                if push.is_some_and(|oid| {
-                    !repository
-                        .graph_descendant_of(candidate, oid)
-                        .unwrap_or(false)
-                }) {
-                    return Err(SynchronizationError::PushRejected);
-                }
-                Ok(Some(PushIntent::Checkpoint { resumed }))
+                        if push == Some(candidate) {
+                            return Ok(None);
+                        }
+                        if resumed == Some(Checkpoint::PushVerified) {
+                            return Err(SynchronizationError::RecoveryRequired);
+                        }
+                        if push.is_some_and(|oid| {
+                            !repository
+                                .graph_descendant_of(candidate, oid)
+                                .unwrap_or(false)
+                        }) {
+                            return Err(SynchronizationError::PushRejected);
+                        }
+                        Ok(Some(PushIntent::Checkpoint { resumed }))
+                    },
+                )
             },
-        );
-        let pushed =
-            pushed.map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
+        )?;
         let authority = match (publication_open, pushed) {
             (true, false) => {
                 decision(self.prepare_synchronization_publication(

@@ -617,6 +617,19 @@ fn closure_only_conflicts_settle_with_the_remote_closure() {
                     .id();
                 let text =
                     String::from_utf8(repo.find_blob(blob).unwrap().content().to_vec()).unwrap();
+                // What each side changed in other paths survives the merge,
+                // the settled one included.
+                for (path, expected_text) in ours.2.iter().chain(theirs.2) {
+                    let held = repo
+                        .find_tree(tree)
+                        .unwrap()
+                        .get_path(Path::new(path))
+                        .ok()
+                        .map(|entry| repo.find_blob(entry.id()).unwrap().content().to_vec());
+                    if held.as_deref() != Some(expected_text.as_bytes()) {
+                        wrong.push(format!("{label}: {path} lost"));
+                    }
+                }
                 // The result's ticket is one of the fixtures, byte for byte.
                 ['N', 'A', 'B', 'T']
                     .into_iter()

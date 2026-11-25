@@ -19932,8 +19932,8 @@ mod primary_closure_in_a_ticket_context {
         assert_eq!(pass.repository.state(), git2::RepositoryState::Clean);
     }
 
-    /// G8, through R-30's push decision (`refuse_unclosed_push`), which the
-    /// plan path and the merging path both reach just before their push:
+    /// G8, through R-30's push decision (`push_unless_unclosed`), the tail the
+    /// plan path and the merging path both end in, from the refusal to the push:
     /// `promotion_test_drive_local_bound` runs only `integrate_divergence`
     /// and cannot. The local branch withdrew a closure and the fetched
     /// primary holds it, so nothing was merged to give it back: the head is
@@ -20013,26 +20013,41 @@ mod primary_closure_in_a_ticket_context {
                 "{case}: {decided:?}"
             );
         }
-        // An item sync ends, as unresolved history ends it; a lifecycle child
-        // is kept for its parent.
-        for keep in [false, true] {
+        // The tail of the synchronization, from the refusal to the push
+        // (`push_unless_unclosed`), with a push that records its calls: a
+        // refused head never reaches it. An item sync ends, as unresolved
+        // history ends it; a lifecycle child is kept for its parent. A head
+        // that holds the primary's closure is pushed once.
+        for (keep, refused) in [(false, true), (true, true), (false, false)] {
             let pass = ContextPass::new();
             let repository = &pass.repository;
             let closed_commit = child_path(repository, pass.main, PATH, closed.as_bytes());
             let withdraw = child_path(repository, closed_commit, PATH, withdrawn.as_bytes());
-            let refused = pass.service.refuse_unclosed_push(
+            let head = if refused { withdraw } else { closed_commit };
+            let pushes = std::cell::Cell::new(0);
+            let answer = pass.service.push_unless_unclosed(
                 pass.root.path(),
                 &pass.owner,
                 keep,
                 repository,
                 &pass.target,
-                withdraw,
+                head,
                 closed_commit,
+                || {
+                    pushes.set(pushes.get() + 1);
+                    Ok(true)
+                },
             );
-            assert!(
-                matches!(refused, Err(SynchronizationError::TicketClosed)),
-                "keep={keep}: {refused:?}"
-            );
+            if refused {
+                assert!(
+                    matches!(answer, Err(SynchronizationError::TicketClosed)),
+                    "keep={keep}: {answer:?}"
+                );
+                assert_eq!(pushes.get(), 0, "keep={keep}: the push is never called");
+            } else {
+                assert!(matches!(answer, Ok(true)), "{answer:?}");
+                assert_eq!(pushes.get(), 1, "a head that holds the closure is pushed");
+            }
             let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
             let other = SynchronizationTarget::Context {
                 kind: AuthoringKind::Ticket,
@@ -20043,10 +20058,11 @@ mod primary_closure_in_a_ticket_context {
                 .service
                 .reserve_remote_operation(pass.root.path(), OperationId::new(), &other)
                 .unwrap();
+            // Only a refusal that is not kept ends the operation.
             assert_eq!(
                 matches!(second, RemoteReservationOutcome::Reserved(_)),
-                !keep,
-                "keep={keep}"
+                refused && !keep,
+                "keep={keep} refused={refused}"
             );
         }
     }
