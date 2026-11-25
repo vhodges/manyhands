@@ -619,11 +619,13 @@ pub(in super::super) trait Lifecycle {
     /// What a publication child's result answers, or `None` when the stop
     /// stands and the record stays at `publication_pending`. `child` is
     /// `None` when no child ran, because the publication remote the record
-    /// was made for is not the one configured.
+    /// was made for is not the one configured. `primary` is the branch the
+    /// record runs by: the one its base recorded.
     fn branch_answer(
         service: &RepositoryService,
         request: &LifecycleRequest<Self::Expectation>,
         r: &Self::Record,
+        primary: &str,
         child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<Self::BranchFinish>, RepositoryError>;
     fn complete_branch(
@@ -1113,6 +1115,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         _service: &RepositoryService,
         _request: &LifecycleRequest<PromotionExpectation>,
         _r: &PromotionRecord,
+        _primary: &str,
         _child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<std::convert::Infallible>, RepositoryError> {
         Err(state::recovery_required())

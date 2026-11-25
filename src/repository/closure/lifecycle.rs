@@ -518,19 +518,17 @@ impl Lifecycle for TicketClosureLifecycle {
         _service: &RepositoryService,
         request: &LifecycleRequest<ClosureExpectation>,
         r: &ClosureRecord,
+        primary: &str,
         child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<BranchFinish>, RepositoryError> {
         let (repo, root) =
             canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
-        let recorded = run::recorded_config(&root, r)?;
-        let Some(answer) =
-            checkpoint::publication_answer(&repo, r, &recorded.primary_branch, child)?
-        else {
+        let Some(answer) = checkpoint::publication_answer(&repo, r, primary, child)? else {
             return Ok(None);
         };
         let config = match read_configuration(&root) {
             Ok(ConfigurationInspection::Valid(config)) => config,
-            _ => recorded,
+            _ => run::recorded_config(&root, r)?,
         };
         let remote = r
             .remote_name

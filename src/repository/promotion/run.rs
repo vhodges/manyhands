@@ -954,14 +954,17 @@ fn promote_branch<L: Lifecycle>(
             }
             // A stop with nothing written that only a new prepare gets past
             // (D6): the child is let go and the record ends with its code.
-            Err(ContextStop::Child(error)) if ends_context_child(&error) => {
-                let_go::<L>(service, request, r, ChildRole::Context, io)?;
+            Err(ContextStop::Child(error))
+                if ends_context_child(&error)
+                    && let_go::<L>(service, request, r, ChildRole::Context, io)? =>
+            {
                 L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
                     .map_err(mapped::<L::Error>)?;
                 *r = load::<L>(service, root, r.operation_id())?;
                 return Ok(refresh::<L>(service, root, r, false));
             }
-            // Any other stop: the child is left as it stands, kept or not,
+            // Any other stop, or an end whose child is retained (a conflict
+            // is the user's): the child is left as it stands, kept or not,
             // for the same request, and the record stays `confirmed`.
             Err(ContextStop::Child(error)) => {
                 return Err(L::Error::context_synchronization(error));
@@ -1050,9 +1053,18 @@ fn finish_branch<L: Lifecycle>(
     } else {
         None
     };
-    let answered =
-        L::branch_answer(service, request, r, result.as_ref()).map_err(mapped::<L::Error>)?;
-    let Some(finish) = answered else {
+    let answered = L::branch_answer(service, request, r, primary, result.as_ref())
+        .map_err(mapped::<L::Error>)?;
+    // A child that stopped, or none that ran, is let go before the record
+    // completes, or its row would hold the context (R-36). A retained child
+    // is not let go: its stop stands.
+    let gone = match &answered {
+        Some(_) if !matches!(result, Some(Ok(_))) => {
+            let_go::<L>(service, request, r, ChildRole::Publication, io)?
+        }
+        _ => true,
+    };
+    let (Some(finish), true) = (answered, gone) else {
         // The stop stands: the record keeps its step, with the category.
         let Some(Err(error)) = result else {
             return Err(L::Error::recovery_required());
@@ -1061,11 +1073,6 @@ fn finish_branch<L: Lifecycle>(
         save::<L>(service, root, r)?;
         return Err(L::Error::context_synchronization(Box::new(error)));
     };
-    // A child that stopped, or none that ran, is let go before the record
-    // completes, or its row would hold the context (R-36).
-    if !matches!(result, Some(Ok(_))) {
-        let_go::<L>(service, request, r, ChildRole::Publication, io)?;
-    }
     boundary(service, root, FailurePoint::BeforeCompletion)?;
     let (op, root_path) = (r.operation_id(), root.as_path());
     let completed = state::with_transaction(service, root_path, |tx, id| {
@@ -1305,15 +1312,16 @@ fn ends_context_child(error: &SynchronizationError) -> bool {
 /// Lets a stopped child go before its record ends or completes over it
 /// (R-36), or its row would hold the context: released when it has nothing
 /// to lose, otherwise cancelled and acknowledged. A child that is retained
-/// (a conflict, a resolution) is the user's, and is not let go: the call is
-/// `recovery_required` and the record stays unfinished.
+/// (a conflict, a resolution) is the user's, and is not let go: the answer is
+/// `false`, and the caller lets the child's own stop stand. `true` says the
+/// child is gone.
 fn let_go<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
     r: &L::Record,
     role: ChildRole,
     io: &mut impl PromotionIo,
-) -> Result<(), L::Error> {
+) -> Result<bool, L::Error> {
     let root = &request.root;
     release_child::<L>(service, request, r, role);
     let ended = |phase: RemoteOperationPhase| {
@@ -1336,9 +1344,10 @@ fn let_go<L: Lifecycle>(
             .map_err(mapped::<L::Error>)?;
     }
     match state {
-        ChildState::Absent | ChildState::Complete(_) => Ok(()),
-        ChildState::Unowned(stored) if ended(stored.phase) => Ok(()),
-        ChildState::Unowned(_) | ChildState::Retained(_) => Err(L::Error::recovery_required()),
+        ChildState::Absent | ChildState::Complete(_) => Ok(true),
+        ChildState::Unowned(stored) if ended(stored.phase) => Ok(true),
+        ChildState::Retained(_) => Ok(false),
+        ChildState::Unowned(_) => Err(L::Error::recovery_required()),
     }
 }
 /// Cancels a child's row and runs the acknowledgement, as a real child does at

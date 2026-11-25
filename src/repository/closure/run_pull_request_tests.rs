@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     canonical::Integration,
     repository::{
-        SynchronizationOutcome,
+        SynchronizationOutcome, SynchronizationStage,
         promotion::{
             lifecycle::{Lifecycle, LifecycleRequest},
             record::CleanupCategory,
@@ -1757,11 +1757,11 @@ fn d6_a_deleted_or_ended_context_child_abandons_with_its_code() {
         assert_eq!(p.f.context_oid(), context, "{case}");
         assert!(!p.held(), "{case}");
         assert_eq!(p.holder(), None, "{case}");
-        p.assert_primary_untouched(&io);
         // The same request again gives the same answer, and runs nothing.
         let children = io.children();
         assert_eq!(PullRequest::branch(p.run(req, &mut io)), outcome, "{case}");
         assert_eq!(io.children(), children, "{case}");
+        p.assert_primary_untouched(&io);
     }
 }
 
@@ -1872,6 +1872,11 @@ fn answer_table_chooses_each_row_in_order() {
         stopped_at_publication(p, req, io, SynchronizationError::Busy);
         configure(p, Some("other"), "main");
     }
+    // A pull-request configuration with no publication remote is not valid.
+    fn remote_removed(p: &PullRequest, req: &CloseTicketRequest, io: &mut PullRequestIo) {
+        stopped_at_publication(p, req, io, SynchronizationError::Busy);
+        configure(p, None, "main");
+    }
     fn primary_renamed(p: &PullRequest, req: &CloseTicketRequest, io: &mut PullRequestIo) {
         stopped_at_publication(p, req, io, SynchronizationError::Busy);
         configure(p, Some("origin"), "trunk");
@@ -1884,7 +1889,7 @@ fn answer_table_chooses_each_row_in_order() {
             "this is not a configuration {{{",
         );
     }
-    let rows: [(&str, Prepare, Script, BranchAnswer); 14] = [
+    let rows: [(&str, Prepare, Script, BranchAnswer, &str); 15] = [
         (
             "1 merged",
             nothing,
@@ -1893,6 +1898,7 @@ fn answer_table_chooses_each_row_in_order() {
                     .push((ChildRole::Publication, own_closure_on_primary(p)))
             },
             BranchAnswer::Merged,
+            "main",
         ),
         (
             "2 closed elsewhere",
@@ -1902,6 +1908,7 @@ fn answer_table_chooses_each_row_in_order() {
                     .push((ChildRole::Publication, another_closure_on_primary(p)))
             },
             BranchAnswer::ClosedElsewhere,
+            "main",
         ),
         (
             "3 remote branch deleted",
@@ -1914,6 +1921,7 @@ fn answer_table_chooses_each_row_in_order() {
                 ))
             },
             BranchAnswer::RemoteBranchDeleted,
+            "main",
         ),
         (
             "4 ticket closed",
@@ -1926,42 +1934,56 @@ fn answer_table_chooses_each_row_in_order() {
                 ))
             },
             BranchAnswer::TicketClosed,
+            "main",
         ),
         (
             "5 remote renamed",
             nothing,
             remote_renamed,
             BranchAnswer::RemoteChanged,
+            "main",
+        ),
+        (
+            "5 remote removed",
+            nothing,
+            remote_removed,
+            BranchAnswer::RemoteChanged,
+            "main",
         ),
         (
             "5 primary renamed",
             nothing,
             primary_renamed,
             BranchAnswer::RemoteChanged,
+            "trunk",
         ),
         (
             "5 no valid configuration",
             nothing,
             configuration_gone,
             BranchAnswer::RemoteChanged,
+            "main",
         ),
         (
             "5 publication remote missing",
             nothing,
             remote_missing,
             BranchAnswer::RemoteChanged,
+            "main",
         ),
         (
             "5 endpoint changed",
             nothing,
             endpoint_changed,
             BranchAnswer::RemoteChanged,
+            "main",
         ),
         (
             "5 configuration invalid",
             nothing,
             configuration_invalid,
             BranchAnswer::RemoteChanged,
+            "main",
         ),
         (
             "6 existing",
@@ -1975,8 +1997,15 @@ fn answer_table_chooses_each_row_in_order() {
             },
             unscripted,
             BranchAnswer::Existing,
+            "main",
         ),
-        ("7 published", nothing, unscripted, BranchAnswer::Published),
+        (
+            "7 published",
+            nothing,
+            unscripted,
+            BranchAnswer::Published,
+            "main",
+        ),
         (
             "8 kept published",
             nothing,
@@ -1985,6 +2014,7 @@ fn answer_table_chooses_each_row_in_order() {
                 io.drive = Some((ChildRole::Publication, published_by_another_clone(p, false)));
             },
             BranchAnswer::KeptPublished,
+            "main",
         ),
         (
             "9 withdrawn since",
@@ -1994,9 +2024,10 @@ fn answer_table_chooses_each_row_in_order() {
                 io.drive = Some((ChildRole::Publication, published_by_another_clone(p, true)));
             },
             BranchAnswer::WithdrawnSince,
+            "main",
         ),
     ];
-    for (case, prepare, script, answer) in rows {
+    for (case, prepare, script, answer, link) in rows {
         let p = PullRequest::new();
         prepare(&p);
         let req = p.request();
@@ -2009,11 +2040,7 @@ fn answer_table_chooses_each_row_in_order() {
         assert_eq!(r.answer_code, Some(answer), "{case}");
         p.assert_no_active_child(&r, case);
         // The link is into the primary the configuration names now.
-        p.assert_link_into(if case.contains("primary renamed") {
-            "trunk"
-        } else {
-            "main"
-        });
+        p.assert_link_into(link);
         assert!(!p.held(), "{case}");
         if answer == BranchAnswer::RemoteChanged {
             // Its commit is kept on the local branch, and nothing published.
@@ -2026,11 +2053,11 @@ fn answer_table_chooses_each_row_in_order() {
                 "{case}"
             );
         }
-        p.assert_primary_untouched(&io);
         // The same request again gives the same answer, and runs nothing.
         let children = io.children();
         assert_eq!(PullRequest::branch(p.run(req, &mut io)), outcome, "{case}");
         assert_eq!(io.children(), children, "{case}");
+        p.assert_primary_untouched(&io);
     }
 }
 
@@ -2056,11 +2083,55 @@ fn a_completed_publication_answers_by_its_child_under_a_changed_remote() {
     p.assert_primary_untouched(&io);
 }
 
-/// A retained conflict is the user's: a stop that would end the record cannot
-/// let it go, so the call is `recovery_required` and the record stays at
-/// `publication_pending` with its conflict.
+/// A retained conflict is the user's, and a row that would end the record
+/// cannot let it go: the child's own stop stands, with its category, and the
+/// record stays at `publication_pending` for the conflict verbs and the same
+/// request. The realistic case: the forge merged the closure while the
+/// conflict was retained, so the tracking primary holds it, and the child
+/// meets its conflict again.
 #[test]
-fn a_retained_child_is_not_let_go_and_the_record_stays_unfinished() {
+fn a_retained_conflict_stands_as_the_stop_when_the_tracking_primary_holds_the_closure() {
+    use crate::repository::promotion::record::PublicationCategory as P;
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let (child, local) = conflicted_publication(&p, &req, &mut io);
+    let target = io.inner.calls.borrow().children.last().unwrap().0.clone();
+    io.fetched
+        .push((ChildRole::Publication, own_closure_on_primary(&p)));
+    io.stops.push_back((
+        ChildRole::Publication,
+        SynchronizationError::ConflictPending {
+            target,
+            operation_id: child,
+            stage: SynchronizationStage::Context,
+        },
+        false,
+    ));
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(&result, Err(TicketClosureError::ContextSynchronization(e)) if matches!(**e, SynchronizationError::ConflictPending { .. })),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.publication, Some(P::Conflict));
+    assert_eq!(r.answer_code, None);
+    assert_eq!(r.primary_sync_id, Some(child));
+    assert!(p.held());
+    // Once the conflict is resolved, the same request answers by the row.
+    resolve(&p, child, local);
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Merged);
+    p.assert_no_active_child(&p.stored(&req), "resolved");
+    p.assert_primary_untouched(&io);
+}
+
+/// The same for a stop that would end the record by another row: a retained
+/// publication child that meets a deleted remote branch keeps that stop.
+#[test]
+fn a_retained_child_s_stop_stands_and_the_record_stays_unfinished() {
+    use crate::repository::promotion::record::PublicationCategory as P;
     let p = PullRequest::new();
     let req = p.request();
     let mut io = PullRequestIo::default();
@@ -2072,14 +2143,47 @@ fn a_retained_child_is_not_let_go_and_the_record_stays_unfinished() {
     ));
     let result = p.run(req.clone(), &mut io);
     assert!(
-        matches!(result, Err(TicketClosureError::RecoveryRequired)),
+        matches!(
+            result,
+            Err(TicketClosureError::ContextSynchronization(ref e)) if matches!(**e, SynchronizationError::RemoteContextDeleted)
+        ),
         "{result:?}"
     );
     let r = p.stored(&req);
     assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.publication, Some(P::RecoveryRequired));
     assert_eq!(r.answer_code, None);
     assert_eq!(r.primary_sync_id, Some(child));
     assert!(p.held());
+    p.assert_primary_untouched(&io);
+}
+
+/// A retained context child (D7's conflict) that then meets a D6 end keeps
+/// that stop too: the record stays `confirmed`, abandoned over nothing.
+#[test]
+fn a_retained_context_child_s_end_stands_and_the_record_stays_confirmed() {
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let (child, _) = conflicted_context(&p, &req, &mut io);
+    io.stops.push_back((
+        ChildRole::Context,
+        SynchronizationError::RemoteContextDeleted,
+        false,
+    ));
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(
+            result,
+            Err(TicketClosureError::ContextSynchronization(ref e)) if matches!(**e, SynchronizationError::RemoteContextDeleted)
+        ),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Confirmed);
+    assert_eq!(r.answer_code, None);
+    assert_eq!(r.context_sync_id, Some(child));
+    assert!(p.holder().is_some());
     p.assert_primary_untouched(&io);
 }
 
