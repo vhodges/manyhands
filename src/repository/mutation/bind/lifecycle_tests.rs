@@ -525,6 +525,20 @@ impl Session for Recorder {
     > {
         None
     }
+
+    fn verify_setup_transport(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::transport::VerifySshTransportRequest,
+        _: &crate::repository::transport::SetupScope,
+    ) -> Option<
+        Result<
+            crate::repository::transport::SshTransportVerified,
+            crate::repository::transport::SshTransportError,
+        >,
+    > {
+        None
+    }
 }
 
 /// D5 decision 11, L3, R-15: each step a run tells of is a stage. The

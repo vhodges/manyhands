@@ -37,7 +37,9 @@ use super::{
         promotion::{lifecycle::CancellationProbe, run::RunObserver},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
-        transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
+        transport::{
+            SetupScope, SshTransportError, SshTransportVerified, VerifySshTransportRequest,
+        },
     },
     bind::{Accepted, Binding, poll, sync},
     command::Command,
@@ -313,6 +315,16 @@ pub(crate) trait Session {
         service: &RepositoryService,
         request: VerifySshTransportRequest,
     ) -> Option<Result<SshTransportVerified, SshTransportError>>;
+
+    /// `verify_transport`, for the remote of a pending setup, which no
+    /// configuration file names yet; see
+    /// `RepositoryService::verify_setup_transport`.
+    fn verify_setup_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -469,6 +481,16 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.verify_ssh_transport(request, &mut credentials))
     }
+
+    fn verify_setup_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.verify_setup_transport(request, scope, &mut credentials))
+    }
     fn poll_once_retiring(
         &self,
         service: &RepositoryService,
@@ -569,6 +591,15 @@ impl Session for NoSession {
         &self,
         _service: &RepositoryService,
         _request: VerifySshTransportRequest,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
+        None
+    }
+
+    fn verify_setup_transport(
+        &self,
+        _service: &RepositoryService,
+        _request: VerifySshTransportRequest,
+        _scope: &SetupScope,
     ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }

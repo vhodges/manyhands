@@ -20,6 +20,61 @@ enum TransferAction {
     PushObjects,
     Push,
     Delete(git2::Oid),
+    /// The setup channel's four: its fetch of the primary into the base ref,
+    /// its push of the setup's branch, and the guarded delete of that branch.
+    /// The fourth, its observation, is `Observe`.
+    FetchSetupBase,
+    #[allow(dead_code)]
+    PushSetup(git2::Oid),
+    #[allow(dead_code)]
+    DeleteSetup(git2::Oid),
+}
+
+impl TransferAction {
+    /// A download whose tips are written by the call after it, with the
+    /// compare-and-swap of `write_tracking_tip`.
+    fn writes_tracking(self) -> bool {
+        matches!(self, Self::FetchTracking | Self::FetchSetupBase)
+    }
+    /// A transfer that sends commands to the remote.
+    fn sends_commands(self) -> bool {
+        matches!(
+            self,
+            Self::Push | Self::Delete(_) | Self::PushSetup(_) | Self::DeleteSetup(_)
+        )
+    }
+    /// The direction of the connection a setup transfer runs on.
+    fn setup_direction(self) -> Option<SshDirection> {
+        match self {
+            Self::FetchSetupBase => Some(SshDirection::Fetch),
+            Self::PushSetup(_) => Some(SshDirection::Push),
+            Self::DeleteSetup(_) => Some(SshDirection::Delete),
+            _ => None,
+        }
+    }
+}
+
+/// What a setup connection's advertisement holds of the two refs the setup
+/// channel reads: the remote's primary, and the setup's branch.
+// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SetupAdvertisement {
+    pub(crate) primary: Option<git2::Oid>,
+    pub(crate) setup: Option<git2::Oid>,
+}
+
+/// What one call's push of the setup's branch did. Neither is proof of the
+/// result: only `observe_setup_branch`, on a call of its own, is.
+// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SetupPush {
+    /// The call's advertisement had the branch at the commit already, and
+    /// nothing was sent.
+    AlreadyThere,
+    /// The guarded push was sent and returned.
+    Sent,
 }
 
 /// What one call's guarded delete did. Neither is proof of the result: only
@@ -430,12 +485,145 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         Ok(oid)
     }
 
+    /// The scope of a setup connection in `direction`. A connection whose
+    /// source is not a setup's, or runs in another direction, is refused
+    /// before anything is read or sent.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    fn setup_scope(&self, direction: SshDirection) -> Result<&'a SetupScope, SshTransportError> {
+        match &self.prepared.remote_source {
+            RemoteSource::Setup(scope) if self.context.direction == direction => Ok(scope),
+            RemoteSource::Setup(_) | RemoteSource::Configured => Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid)),
+        }
+    }
+
+    /// The one mapping of the setup channel in the connection's direction.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    fn setup_mapping(&self, direction: SshDirection) -> Result<String, SshTransportError> {
+        let mut mappings = setup_mappings(&self.prepared.remote_source, direction);
+        match (mappings.pop(), mappings.is_empty()) {
+            (Some(mapping), true) => Ok(mapping),
+            _ => Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid)),
+        }
+    }
+
+    /// On a fetch connection of a setup: fetches the remote's primary into
+    /// the setup's private base ref, never into the remote-tracking ref, so
+    /// that it cannot race a poll. The ref is written with
+    /// `write_tracking_tip`'s compare-and-swap. Gives back the connection's
+    /// advertisement of the primary and of the setup's branch; with no
+    /// primary advertised nothing is fetched.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    pub(crate) fn fetch_setup_base(&mut self) -> Result<SetupAdvertisement, SshTransportError> {
+        let scope = self.setup_scope(SshDirection::Fetch)?;
+        let mapping = self.setup_mapping(SshDirection::Fetch)?;
+        let advertised = self.fresh_advertisement()?;
+        let primary = setup_primary_ref(scope).ok_or_else(|| {
+            self.context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid)
+        })?;
+        let found = SetupAdvertisement {
+            primary: advertised_oid(&advertised, &primary),
+            setup: advertised_oid(&advertised, &scope.branch_ref()),
+        };
+        // An empty refspec list selects configured and default mappings in
+        // libgit2: never call a transfer with one.
+        if found.primary.is_some() {
+            self.transfer(&[mapping.as_str()], TransferAction::FetchSetupBase, None)?;
+        }
+        Ok(found)
+    }
+
+    /// On a push connection of a setup: pushes the setup's branch, without
+    /// force, as the one update from no ref to `commit`; `guard_create`
+    /// refuses anything else before a command is sent. The call's own
+    /// advertisement is read first: the branch already at `commit` sends
+    /// nothing, and the branch at another OID is refused as `PushRejected`.
+    /// A `PushRejected`, `TransportUnavailable` or `RemoteUnavailable` may
+    /// follow a refused guard or a command that reached the server, so the
+    /// outcome is read by `observe_setup_branch` on a call of its own.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    pub(crate) fn push_setup_branch(
+        &mut self,
+        commit: git2::Oid,
+    ) -> Result<SetupPush, SshTransportError> {
+        let scope = self.setup_scope(SshDirection::Push)?;
+        let mapping = self.setup_mapping(SshDirection::Push)?;
+        if commit.is_zero() {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
+        }
+        match advertised_oid(&self.fresh_advertisement()?, &scope.branch_ref()) {
+            Some(oid) if oid == commit => return Ok(SetupPush::AlreadyThere),
+            Some(_) => {
+                return Err(self.context.with_kind(SshTransportErrorKind::PushRejected));
+            }
+            None => {}
+        }
+        self.transfer(&[mapping.as_str()], TransferAction::PushSetup(commit), None)?;
+        Ok(SetupPush::Sent)
+    }
+
+    /// On a delete connection of a setup: one guarded command at most,
+    /// deleting the setup's branch while it is at `expected`
+    /// (`guard_delete`). As `delete_exact` does, it reads the call's
+    /// advertisement first and sends nothing for a branch that is absent.
+    /// The outcome of a sent delete, and of a refused or lost one, is read
+    /// by `observe_setup_branch` on a call of its own.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    pub(crate) fn delete_setup_branch(
+        &mut self,
+        expected: git2::Oid,
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        let scope = self.setup_scope(SshDirection::Delete)?;
+        let mapping = self.setup_mapping(SshDirection::Delete)?;
+        if expected.is_zero() {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
+        }
+        if advertised_oid(&self.fresh_advertisement()?, &scope.branch_ref()).is_none() {
+            return Ok(DeleteAttempt::Absent);
+        }
+        self.transfer(
+            &[mapping.as_str()],
+            TransferAction::DeleteSetup(expected),
+            None,
+        )?;
+        Ok(DeleteAttempt::Sent)
+    }
+
+    /// On a fetch connection of a setup, of its own: the setup's branch as
+    /// this call's fresh advertisement has it, which is the only evidence of
+    /// what a push or a delete left.
+    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+    #[allow(dead_code)]
+    pub(crate) fn observe_setup_branch(&mut self) -> Result<Option<git2::Oid>, SshTransportError> {
+        let scope = self.setup_scope(SshDirection::Fetch)?;
+        Ok(advertised_oid(
+            &self.fresh_advertisement()?,
+            &scope.branch_ref(),
+        ))
+    }
+
     fn validate_plan(
         &self,
         plan: &RemoteRefPlan,
         direction: SshDirection,
     ) -> Result<(), SshTransportError> {
-        if !plan_matches_configuration(plan, self.context) || direction != self.context.direction {
+        if !item_scope_allowed(&self.prepared.remote_source)
+            || !plan_matches_configuration(plan, self.context)
+            || direction != self.context.direction
+        {
             return Err(self
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
@@ -471,6 +659,24 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         scope: Option<(&RemoteRefPlan, &SynchronizationTarget)>,
         mut poll: Option<PollTransfer<'_>>,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        // A setup source carries the setup channel's one mapping in its
+        // direction and none of an item's; any other source carries none of
+        // the channel's.
+        let source = &self.prepared.remote_source;
+        let sourced = match action.setup_direction() {
+            Some(direction) => {
+                scope.is_none()
+                    && poll.is_none()
+                    && direction == self.context.direction
+                    && setup_mappings_match_scope(source, direction, refspecs)
+            }
+            None => action == TransferAction::Observe || item_scope_allowed(source),
+        };
+        if !sourced {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
+        }
         if let Some(poll) = poll.as_ref() {
             self.validate_plan(poll.plan, SshDirection::Fetch)?;
         }
@@ -500,8 +706,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         if (matches!(action, TransferAction::Delete(_))
             && (self.context.direction != SshDirection::Delete || scope.is_none()))
             || (action == TransferAction::Push && self.context.direction != SshDirection::Push)
-            || (action != TransferAction::Observe
-                && matches!(action, TransferAction::Push | TransferAction::Delete(_)) != push)
+            || (action != TransferAction::Observe && action.sends_commands() != push)
         {
             return Err(self
                 .context
@@ -555,7 +760,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         if poll.is_some() && refspecs.is_empty() {
             return Ok(poll_advertisement);
         }
-        let tracking_repository = if action == TransferAction::FetchTracking {
+        let tracking_repository = if action.writes_tracking() {
             Some(git2::Repository::open(&self.context.root).map_err(|_| {
                 self.context
                     .with_kind(SshTransportErrorKind::ProtocolFailure)
@@ -604,12 +809,22 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         let attempt = self.attempt;
         let mut callbacks =
             super::callbacks::build_callbacks(self.prepared, self.passphrase, self.agent, attempt);
-        if let TransferAction::Delete(expected) = action {
-            super::callbacks::guard_delete(
-                &mut callbacks,
-                refspecs[0].strip_prefix(':').unwrap(),
-                expected,
-            );
+        match action {
+            TransferAction::Delete(expected) | TransferAction::DeleteSetup(expected) => {
+                super::callbacks::guard_delete(
+                    &mut callbacks,
+                    refspecs[0].strip_prefix(':').unwrap(),
+                    expected,
+                );
+            }
+            TransferAction::PushSetup(commit) => {
+                super::callbacks::guard_create(
+                    &mut callbacks,
+                    refspecs[0].split_once(':').unwrap().1,
+                    commit,
+                );
+            }
+            _ => {}
         }
         callbacks.push_update_reference(|_, status| {
             if status.is_some() {
@@ -632,10 +847,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             let mut options = git2::FetchOptions::new();
             options.remote_callbacks(callbacks);
             options.update_fetchhead(false);
-            if matches!(
-                action,
-                TransferAction::FetchTracking | TransferAction::PushObjects
-            ) {
+            if action.writes_tracking() || action == TransferAction::PushObjects {
                 options.download_tags(git2::AutotagOption::None);
                 options.prune(git2::FetchPrune::Off);
             }
@@ -725,6 +937,13 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                             self.context.direction,
                             refspecs,
                         )
+                }
+                (None, None) if action == TransferAction::FetchSetupBase => {
+                    setup_mappings_match_scope(
+                        &self.prepared.remote_source,
+                        self.context.direction,
+                        refspecs,
+                    )
                 }
                 _ => false,
             };
@@ -865,6 +1084,69 @@ fn exact_mappings(
         }
         (SshDirection::Delete, SynchronizationTarget::Primary) => Vec::new(),
     }
+}
+
+/// The plan whose primary a setup fetches: the scope's names, valid as any
+/// configuration's are.
+fn setup_plan(scope: &SetupScope) -> Option<RemoteRefPlan> {
+    RemoteRefPlan::from_configuration(&scope.remote_name, &scope.primary_branch).ok()
+}
+
+/// The remote's primary ref a setup fetches.
+fn setup_primary_ref(scope: &SetupScope) -> Option<String> {
+    Some(setup_plan(scope)?.primary().remote_ref().to_owned())
+}
+
+/// The OID `name` has in an advertisement, if it is in it.
+// The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
+#[allow(dead_code)]
+fn advertised_oid(advertised: &[(String, git2::Oid)], name: &str) -> Option<git2::Oid> {
+    advertised
+        .iter()
+        .find(|(advertised, _)| advertised == name)
+        .map(|(_, oid)| *oid)
+}
+
+/// The one mapping the setup channel makes in `direction`, for a setup
+/// source: the fetch of the remote's primary into the setup's private base
+/// ref, the push of the setup's branch to itself, or the delete of that
+/// branch. A configured source, or a scope whose names make no valid plan,
+/// has none.
+fn setup_mappings(source: &RemoteSource, direction: SshDirection) -> Vec<String> {
+    let RemoteSource::Setup(scope) = source else {
+        return Vec::new();
+    };
+    let Some(primary) = setup_primary_ref(scope) else {
+        return Vec::new();
+    };
+    let branch = scope.branch_ref();
+    vec![match direction {
+        SshDirection::Fetch => format!("+{primary}:{}", scope.base_ref()),
+        SshDirection::Push => format!("{branch}:{branch}"),
+        SshDirection::Delete => format!(":{branch}"),
+    }]
+}
+
+/// Whether `mappings` are exactly the setup channel's one mapping in
+/// `direction`: no other ref, no force, no pattern and no second mapping.
+fn setup_mappings_match_scope(
+    source: &RemoteSource,
+    direction: SshDirection,
+    mappings: &[&str],
+) -> bool {
+    let expected = setup_mappings(source, direction);
+    !expected.is_empty()
+        && mappings.len() == expected.len()
+        && mappings
+            .iter()
+            .zip(&expected)
+            .all(|(mapping, expected)| mapping == expected)
+}
+
+/// Whether a call's source may carry an item's refs: a configured one only,
+/// so a setup call maps no item ref.
+fn item_scope_allowed(source: &RemoteSource) -> bool {
+    matches!(source, RemoteSource::Configured)
 }
 
 fn plan_matches_configuration(plan: &RemoteRefPlan, context: &SshTransportError) -> bool {
@@ -1079,6 +1361,134 @@ mod tests {
                 &[invalid]
             ));
         }
+    }
+    /// The setup channel maps one ref in each direction and nothing else: the
+    /// remote's primary into the setup's private base ref on a fetch, the
+    /// setup's branch on a push, and the same branch's delete. Each mapping
+    /// is accepted in its own direction only; a configured source maps no
+    /// setup ref, and a setup source no item ref.
+    #[test]
+    fn setup_mappings_name_only_the_setup_ref() {
+        const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+        let scope = |remote: &str, primary: &str| SetupScope {
+            setup_id: ItemId::from_str(ID).unwrap(),
+            remote_name: remote.into(),
+            primary_branch: primary.into(),
+            endpoint_digest: [7; 32],
+        };
+        let source = RemoteSource::Setup(scope("origin", "main"));
+        let fetch = format!("+refs/heads/main:refs/manyhands/setups/{ID}/base");
+        let push = format!("refs/heads/manyhands/setup/{ID}:refs/heads/manyhands/setup/{ID}");
+        let delete = format!(":refs/heads/manyhands/setup/{ID}");
+        let own = [
+            (SshDirection::Fetch, &fetch),
+            (SshDirection::Push, &push),
+            (SshDirection::Delete, &delete),
+        ];
+        for (direction, mapping) in own {
+            assert_eq!(
+                setup_mappings(&source, direction),
+                [mapping.as_str()],
+                "{direction:?}"
+            );
+        }
+        // Each mapping is accepted in its own direction and in no other.
+        for (direction, _) in own {
+            for (mapped, mapping) in own {
+                assert_eq!(
+                    setup_mappings_match_scope(&source, direction, &[mapping.as_str()]),
+                    direction == mapped,
+                    "{direction:?} {mapped:?}"
+                );
+            }
+        }
+        // Nothing else is accepted in any direction: another ref, a force, a
+        // pattern, another setup's ref, the primary, an item's ref, an empty
+        // or a doubled mapping, a second mapping beside the right one.
+        let other_branch = format!("refs/heads/manyhands/setup/{OTHER}");
+        let others = [
+            String::new(),
+            "+refs/heads/main:refs/remotes/origin/main".into(),
+            "refs/heads/main:refs/heads/main".into(),
+            "+refs/heads/main:refs/heads/main".into(),
+            ":refs/heads/main".into(),
+            format!("refs/heads/manyhands/setup/{ID}:refs/heads/main"),
+            format!("refs/heads/main:refs/heads/manyhands/setup/{ID}"),
+            format!("+{push}"),
+            format!("+:refs/heads/manyhands/setup/{ID}"),
+            format!("{other_branch}:{other_branch}"),
+            format!(":{other_branch}"),
+            format!("+refs/heads/main:refs/manyhands/setups/{OTHER}/base"),
+            format!("+refs/heads/other:refs/manyhands/setups/{ID}/base"),
+            format!("+refs/heads/main:refs/remotes/origin/manyhands/setup/{ID}"),
+            "refs/heads/manyhands/setup/*:refs/heads/manyhands/setup/*".into(),
+            ":refs/heads/manyhands/setup/*".into(),
+            format!(":refs/heads/manyhands/ticket/{ID}"),
+            format!(":refs/heads/manyhands/document/{ID}"),
+            format!("refs/heads/manyhands/ticket/{ID}:refs/heads/manyhands/ticket/{ID}"),
+        ];
+        for direction in [
+            SshDirection::Fetch,
+            SshDirection::Push,
+            SshDirection::Delete,
+        ] {
+            for mapping in &others {
+                assert!(
+                    !setup_mappings_match_scope(&source, direction, &[mapping.as_str()]),
+                    "{direction:?} {mapping}"
+                );
+            }
+            assert!(!setup_mappings_match_scope(&source, direction, &[]));
+        }
+        for (direction, mapping) in own {
+            let mapping = mapping.as_str();
+            assert!(!setup_mappings_match_scope(
+                &source,
+                direction,
+                &[mapping, mapping]
+            ));
+            assert!(!setup_mappings_match_scope(
+                &source,
+                direction,
+                &[mapping, "refs/heads/main:refs/heads/main"]
+            ));
+        }
+        // A configured source maps no setup ref, in any direction.
+        for (direction, mapping) in own {
+            assert!(setup_mappings(&RemoteSource::Configured, direction).is_empty());
+            assert!(!setup_mappings_match_scope(
+                &RemoteSource::Configured,
+                direction,
+                &[mapping.as_str()]
+            ));
+        }
+        // A setup source carries no item's refs, and a configured one does.
+        assert!(item_scope_allowed(&RemoteSource::Configured));
+        assert!(!item_scope_allowed(&source));
+        // A scope whose names are no valid plan maps nothing.
+        for invalid in [scope("bad name", "main"), scope("origin", "HEAD")] {
+            let source = RemoteSource::Setup(invalid);
+            for (direction, mapping) in own {
+                assert!(setup_mappings(&source, direction).is_empty());
+                assert!(!setup_mappings_match_scope(
+                    &source,
+                    direction,
+                    &[mapping.as_str()]
+                ));
+            }
+        }
+        // Another primary moves the fetch mapping and nothing else.
+        let moved = RemoteSource::Setup(scope("origin", "trunk"));
+        assert_eq!(
+            setup_mappings(&moved, SshDirection::Fetch),
+            [format!("+refs/heads/trunk:refs/manyhands/setups/{ID}/base")]
+        );
+        assert_eq!(setup_mappings(&moved, SshDirection::Push), [push.as_str()]);
+        assert_eq!(
+            setup_mappings(&moved, SshDirection::Delete),
+            [delete.as_str()]
+        );
     }
     fn tracking_commit(repository: &git2::Repository, message: &str) -> git2::Oid {
         let tree = repository.treebuilder(None).unwrap().write().unwrap();

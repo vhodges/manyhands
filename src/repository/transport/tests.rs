@@ -43,6 +43,7 @@ pub(super) fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
         },
         approval: None,
         registry: crate::repository::CallRegistry::new(),
+        remote_source: RemoteSource::Configured,
     }
 }
 
