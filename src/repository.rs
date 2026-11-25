@@ -441,6 +441,9 @@ pub struct RepositoryService {
     process_probe: Arc<dyn liveness::ProcessProbe>,
     /// How long a writer waits for a live holder of the row in its way.
     wait_policy: WaitPolicy,
+    /// How long a lifecycle waits for the repository lease before it is
+    /// `busy`; a test shortens it.
+    lease_wait: std::time::Duration,
     /// What that wait lets its time pass with.
     sleeper: Arc<dyn Sleeper>,
 }
@@ -4103,7 +4106,13 @@ impl RepositoryService {
         loop {
             // A lease that cannot be taken in time is waited for as the row
             // of a live holder is, when one is at work; see `waited`.
-            let begun = repository_lease(repository, root, operation).and_then(|lease| {
+            let begun = coordination::repository_lease_waiting(
+                repository,
+                root,
+                operation,
+                self.lease_wait,
+            )
+            .and_then(|lease| {
                 self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
                     .map(|record| (lease, record))
             });
@@ -5343,6 +5352,7 @@ impl RepositoryService {
             context_tree_validations: Mutex::new(ContextTreeValidations::default()),
             process_probe: Arc::new(liveness::SystemProbe),
             wait_policy: WaitPolicy::default(),
+            lease_wait: coordination::LEASE_TIMEOUT,
             sleeper: Arc::new(blocker::SystemSleeper),
         })
     }

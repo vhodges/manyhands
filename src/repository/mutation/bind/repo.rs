@@ -136,8 +136,10 @@ pub(crate) struct RepoBinding {
     /// before each domain call.
     acting: Option<CommitIdentity>,
     /// What the domain call does, worked out from the input and what was
-    /// observed: set with `acting`, before each call.
-    route: Route,
+    /// observed: set with `acting`, before each call. An enable that has none
+    /// is never run as a direct one: only a row that holds a step of its own
+    /// says what the request was.
+    route: Option<Route>,
 }
 
 /// What a request that finds no configuration does.
@@ -169,7 +171,7 @@ impl From<RepoCreateInput> for RepoBinding {
             integration: None,
             forge: None,
             acting: None,
-            route: Route::Direct,
+            route: Some(Route::Direct),
         }
     }
 }
@@ -195,7 +197,7 @@ impl From<RepoEnableInput> for RepoBinding {
             integration,
             forge,
             acting: None,
-            route: Route::Direct,
+            route: None,
         }
     }
 }
@@ -1134,10 +1136,29 @@ impl RepoBinding {
     fn call(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
         let root = accepted.root();
-        if self.verb == Verb::Enable
-            && let Route::Setup(intended) = &self.route
-        {
-            return self.call_setup(call, accepted, Some(intended), false);
+        if self.verb == Verb::Enable {
+            match &self.route {
+                Some(Route::Setup(intended)) => {
+                    return self.call_setup(call, accepted, Some(intended), false);
+                }
+                Some(Route::Direct) => {}
+                // No observation gave a route. A row that holds a step of an
+                // enable's own says it is a direct one; the setup's step goes
+                // on from its record; with none, nothing says what the request
+                // is, and it is never run as a direct enable: it is owed.
+                None => match accepted.recorded_local_step(service) {
+                    Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => {
+                        return self.call_setup(call, accepted, None, true);
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(()) => {
+                        return Ran {
+                            answer: Answer::stopped(ResultCode::RecoveryRequired),
+                            standing: Standing::Owed,
+                        };
+                    }
+                },
+            }
         }
         let through_enable = match self.verb {
             Verb::Enable => true,
@@ -1291,18 +1312,23 @@ impl RepoBinding {
         });
         match outcome {
             Ok(outcome) => self.setup_ran(service, accepted, &root, outcome),
-            // A refusal before the recording is an enable's, settled as one.
-            Err(error) if !recorded => {
-                let blocker = error.blocker().cloned();
-                let mut ran = self.stopped(service, accepted, &root, error.kind);
-                ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
-                ran
-            }
-            // From the recording on the request is owed: settled as a
-            // completed row is, it would be deleted, and its ID freed for a
-            // second setup.
             Err(error) => {
                 let blocker = error.blocker().cloned();
+                // A refusal before the recording is an enable's, settled as
+                // one. The row decides, as it stands when the call answers:
+                // another call of the request may have recorded the setup
+                // meanwhile (`stopped` reads the journal after the domain call
+                // returned), and a request that is recorded, or whose row
+                // cannot be read, is owed whatever this call was: settled as a
+                // completed row is, it would be deleted, and its ID freed for a
+                // second setup.
+                if !recorded && !self.recorded_now(service, accepted) {
+                    let mut ran = self.stopped(service, accepted, &root, error.kind);
+                    if !self.recorded_now(service, accepted) {
+                        ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
+                        return ran;
+                    }
+                }
                 let answer = Answer {
                     data: setup_data::of(service, &root, None),
                     ..Answer::stopped(outcome::repository_error_code(error.kind))
@@ -1313,6 +1339,15 @@ impl RepoBinding {
                     standing: Standing::Owed,
                 }
             }
+        }
+    }
+
+    /// Whether the request's own row is at `setup_recorded`, or cannot be
+    /// read: the request is then owed.
+    fn recorded_now(&self, service: &RepositoryService, accepted: &Accepted) -> bool {
+        match accepted.recorded_local_step(service) {
+            Ok(step) => step.is_some_and(|step| step.is(LocalStep::SetupRecorded)),
+            Err(()) => true,
         }
     }
 
@@ -1617,7 +1652,7 @@ impl Binding for RepoBinding {
             return Err(Answer::stopped(ResultCode::InvalidPath));
         }
         self.acting = self.acting_identity(&observed);
-        self.route = self.route_of(&observed);
+        self.route = Some(self.route_of(&observed));
         Ok(Prepared {
             family: Some(OperationFamily::Local),
             position: self.position(&observed),
@@ -1793,7 +1828,7 @@ impl Confirmed for RepoBinding {
             }
         };
         self.acting = self.acting_identity(&observed);
-        self.route = self.route_of(&observed);
+        self.route = Some(self.route_of(&observed));
         // A row that is pending is the domain's to end, also when the
         // repository was enabled as requested under it: nothing is
         // written then, and nothing is compared.

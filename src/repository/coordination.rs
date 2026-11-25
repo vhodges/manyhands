@@ -11,7 +11,7 @@ use git2::Repository;
 
 use super::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
 
-const LEASE_TIMEOUT: Duration = Duration::from_millis(250);
+pub(super) const LEASE_TIMEOUT: Duration = Duration::from_millis(250);
 const RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 pub(super) struct RepositoryLease(File);

@@ -34,7 +34,11 @@ use crate::{
     results::{CheckpointEffect, Envelope, Outcome, PublicationEffect, ResultCode, WriteEffect},
 };
 
-use crate::repository::mutation::Accepted;
+use super::RepoBinding;
+use crate::repository::mutation::{
+    Accepted,
+    bind::{Binding, CallContext, Entered, Standing},
+};
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
 const R2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX2";
@@ -316,7 +320,10 @@ impl World {
         drop(tree);
         repository.remote("origin", REMOTE_URL).unwrap();
         let data = tempfile::tempdir().unwrap();
-        let service = RepositoryService::open_at(data.path()).unwrap();
+        // No test waits out the lease's real timeout.
+        let service = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_lease_wait_for_testing(std::time::Duration::from_millis(1));
         Self {
             _local: local,
             _data: data,
@@ -1027,6 +1034,97 @@ fn l10_another_requests_record_refuses_the_domain_call() {
     );
 }
 
+// L11, K2, R-20: a call of a request that read its row pending, and answers
+// after another call of the same request recorded the setup. Its domain call
+// is refused, by a check, but the request is recorded by now: it is owed,
+// with the setup, and the same request goes on. Settled as a refusal before
+// the recording, from the row it reads after the call, it would be deleted,
+// and its ID freed for a second setup. (A call that waits for the lease on a
+// root registered beforehand has the same standing; this is that call's
+// answer, made after the recording, with no race to win.)
+fn l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed() {
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    let stopped = Scripted::new(vec![Step::Fail(|| SetupError::Busy)]);
+    assert_eq!(
+        w.run(R1, Some(confirmation), None, &stopped).code,
+        ResultCode::Busy
+    );
+    let setup = w.setup().unwrap();
+    // The worktree is not clean by the time the late call makes its checks.
+    let dirt = w.root.join("untracked.txt");
+    std::fs::write(&dirt, "not clean\n").unwrap();
+    let record = w.record(R1);
+    let accepted = Accepted::of_record(&record, record.attempt).unwrap();
+    let binding = RepoBinding::from(w.input(None));
+    let session = Scripted::none();
+    let call = CallContext {
+        service: &w.service,
+        session: &session,
+        confirmation: None,
+    };
+    let intended = crate::repository::setup::intent::for_enable(
+        "main",
+        Some("origin"),
+        Some(Integration::PullRequest),
+        None,
+        Some(REMOTE_URL),
+    )
+    .unwrap();
+
+    // It made its domain call as a first one: `recorded` was false.
+    let ran = binding.call_setup(&call, &accepted, Some(&intended), false);
+
+    assert_eq!(ran.answer.code, ResultCode::WorktreeNotClean);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(
+        serde_json::to_value(&ran.answer.data).unwrap(),
+        setup_data(&setup, "recorded")
+    );
+    assert_eq!(w.record(R1).state, RequestState::Accepted);
+    // The same request goes on from its record, once the worktree is as it was.
+    std::fs::remove_file(dirt).unwrap();
+    let again = Scripted::new(vec![Step::Published]);
+    let answer = w.run(R1, None, None, &again);
+    assert_eq!(answer.code, ResultCode::Ok, "{}", answer.message);
+    assert_eq!(w.record(R1).state, RequestState::Finished);
+    assert_eq!(data_of(&answer), setup_data(&setup, "published"));
+    w.assert_one_setup(&setup, "L11 refused");
+    w.assert_local_primary_untouched("L11 refused");
+}
+
+// R-Y: a binding that no observation gave a route is not run as a direct
+// enable. A request whose row is gone or has no step of its own, entered
+// again by `rerun` with no route, would otherwise commit "Initialize
+// Manyhands" on the primary.
+fn ry_a_binding_with_no_route_is_never_run_as_a_direct_enable() {
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    w.service
+        .set_registration_git_hook_for_testing(|| panic!("the process died before recording"));
+    let session = Scripted::none();
+    let crashed = catch_unwind(AssertUnwindSafe(|| {
+        w.run(R1, Some(confirmation), None, &session)
+    }));
+    assert!(crashed.is_err());
+    let record = w.record(R1);
+    let accepted = Accepted::of_record(&record, record.attempt).unwrap();
+    let binding = RepoBinding::from(w.input(None));
+    let call = CallContext {
+        service: &w.service,
+        session: &session,
+        confirmation: None,
+    };
+
+    let ran = binding.rerun(&call, &accepted, &Entered::Unfinished);
+
+    assert_eq!(ran.answer.code, ResultCode::RecoveryRequired);
+    assert!(matches!(ran.standing, Standing::Owed));
+    w.assert_local_primary_untouched("R-Y");
+    assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(w.record(R1).state, RequestState::Accepted);
+}
+
 // L13: `operation resume` of a setup request's operation.
 fn l13_resume_names_the_original_request() {
     let w = World::new();
@@ -1124,6 +1222,8 @@ fn the_enable_request_lifecycle_of_design_part_k() {
     races(false);
     races(true);
     l10_another_requests_record_refuses_the_domain_call();
+    l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed();
+    ry_a_binding_with_no_route_is_never_run_as_a_direct_enable();
     l13_resume_names_the_original_request();
     l14_an_unreadable_record_is_owed_not_the_direct_path();
 }
