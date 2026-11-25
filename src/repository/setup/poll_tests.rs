@@ -454,6 +454,18 @@ fn activation_leaves_the_repository_as_a_direct_enable_would() {
             kind == SetupKind::Enable,
             "{what}"
         );
+        // Today's poll of the current remote recorded an attempt, which the
+        // setup poll of a change leaves alone and a direct selection keeps: the
+        // repository's own, in both.
+        if kind == SetupKind::Change {
+            let own = "UPDATE remote_polling_state
+                          SET latest_attempt_at = 1799999000, next_eligible_at = 1799999300";
+            world.db().execute(own, []).unwrap();
+            rusqlite::Connection::open(direct_data.path().join(crate::repository::REGISTRY_FILE))
+                .unwrap()
+                .execute(own, [])
+                .unwrap();
+        }
         world.squash(&intended);
 
         let report = poll(&world, &mut stub).unwrap();

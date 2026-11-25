@@ -8,7 +8,7 @@ use super::{
     data as setup_data,
     lock::{self, Begun, Held},
     publish::SetupError,
-    record::{self, SetupRecord},
+    record::{self, SetupKind, SetupRecord},
 };
 use crate::{
     canonical,
@@ -170,13 +170,25 @@ fn finish_record(
     // remote selection takes. In the way, it stops and the next look
     // finishes it.
     let lifecycle = if on_another_remote(repository, record) {
-        match service.begin_lifecycle(
-            repository,
-            root,
-            RepositoryOperation::SetPublicationRemote,
-            lifecycle_operation_id(record),
-            &record.remote_name,
-        ) {
+        let begin = |operation_id| {
+            service.begin_lifecycle(
+                repository,
+                root,
+                RepositoryOperation::SetPublicationRemote,
+                operation_id,
+                &record.remote_name,
+            )
+        };
+        // A person may have abandoned the row a crash left under the stable
+        // ID, which spends the ID. The abandoned row is closed and no longer
+        // in the way, so the finish goes on under a fresh one.
+        let begun = match begin(lifecycle_operation_id(record)) {
+            Err(error) if error.kind == RepositoryErrorKind::OperationAbandoned => {
+                begin(OperationId::new())
+            }
+            other => other,
+        };
+        match begun {
             Ok(begun) => Some(begun),
             Err(error)
                 if matches!(
@@ -238,12 +250,13 @@ fn finish_record(
             }
         }
         record::delete(&tx, repository_id)?;
-        // The plan stored above is the new remote's, and an attempt the setup
-        // poll recorded against the old state would hold the first ordinary
-        // poll back until its next eligible time: they are cleared, as a
-        // repository registered by a direct enable and a selection has none,
-        // and the first poll is due at once.
-        if lifecycle.is_some() {
+        // A first-time setup's own poll recorded attempts (a change's records
+        // none, and the attempt of today's poll of its current remote is the
+        // repository's own, which a direct selection keeps). They would hold
+        // the first ordinary poll back until their next eligible time: they
+        // are cleared, as a repository registered by a direct enable and a
+        // selection has none, and the first poll is due at once.
+        if lifecycle.is_some() && record.kind == SetupKind::Enable {
             tx.execute(
                 "UPDATE remote_polling_state
                     SET latest_attempt_at = NULL, next_eligible_at = NULL
@@ -259,7 +272,14 @@ fn finish_record(
         {
             advance_after_observation(&tx, row.id, "completed", None, None)?;
         }
-        tx.commit().map_err(RepositoryError::sqlite)
+        let committed = tx.commit().map_err(RepositoryError::sqlite);
+        #[cfg(test)]
+        AFTER_COMMIT.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
+        committed
     })();
     if let Some((lease, lifecycle_record)) = lifecycle {
         match &ended {
@@ -278,13 +298,23 @@ fn finish_record(
     ended.map(|()| true)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Runs right after the record-deleting transaction commits, before
+    /// anything else of the finish: a test reads what a crash there would
+    /// leave.
+    pub(super) static AFTER_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// The operation the finish's lifecycle row runs under: the setup's own ULID.
 /// It is stable, so a finish that crashed between beginning its row and ending
 /// it leaves a row that the next look takes up as its own, and not one that
 /// every later look and every gated write finds in its way (`in_the_way`
 /// matches a row by its operation ID).
 pub(super) fn lifecycle_operation_id(record: &SetupRecord) -> OperationId {
-    OperationId::parse(&record.setup_id.to_string()).unwrap_or_default()
+    OperationId::parse(&record.setup_id.to_string())
+        .expect("a setup's ID is a ULID, which an operation ID is too")
 }
 
 /// Whether the setup's remote is not the publication remote the primary's

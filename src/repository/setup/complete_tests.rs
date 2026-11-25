@@ -318,13 +318,87 @@ fn a_crashed_finish_is_taken_up_by_the_next_look_and_a_finish_leaves_no_row_pend
     assert!(world.record().is_none());
     assert_eq!(world.request().state, RequestState::Finished);
     assert_eq!(pending(&world), 0, "nothing is left pending");
+}
 
-    // A finish with no crash leaves none either.
+/// The lifecycle row ends in the record-deleting transaction itself: what a
+/// crash right after that commit would leave is the record gone and the row
+/// completed, never a pending row with nothing left to finish it.
+#[test]
+fn the_finish_s_lifecycle_row_ends_in_the_transaction_that_deletes_the_record() {
     let clean = World::new(SetupKind::Enable, OTHER, true);
     let tip = clean.squash(&clean.record().unwrap().configuration);
     clean.pull(tip);
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let (db_path, root) = (
+        clean.data.path().join(crate::repository::REGISTRY_FILE),
+        clean.root.to_str().unwrap().to_owned(),
+    );
+    AFTER_COMMIT.with(|hook| {
+        let seen = seen.clone();
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let db = crate::repository::open_registry(&db_path, &mut |_| {}).unwrap();
+            let rows: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM operation_records WHERE state != 'completed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let setups: i64 = db
+                .query_row("SELECT COUNT(*) FROM repository_setups", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            *seen.borrow_mut() = Some((rows, setups, root));
+        }));
+    });
+
     assert!(finish_without_waiting(&clean));
-    assert_eq!(pending(&clean), 0);
+
+    let (pending, setups, _) = seen
+        .borrow()
+        .clone()
+        .expect("the hook ran after the commit");
+    assert_eq!(setups, 0, "the record was deleted by that commit");
+    assert_eq!(pending, 0, "and the lifecycle row was completed by it");
+}
+
+/// A crash between the finish's `begin_lifecycle` and its transaction leaves
+/// the row pending, and a person who abandons it (it is offered) spends its
+/// operation ID. The setup is still finished: the next look begins under a
+/// fresh one.
+#[test]
+fn an_abandoned_finish_row_does_not_strand_a_complete_setup() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let record = world.record().unwrap();
+    let begun = world
+        .service
+        .begin_lifecycle(
+            &world.git(),
+            &world.root,
+            RepositoryOperation::SetPublicationRemote,
+            lifecycle_operation_id(&record),
+            &record.remote_name,
+        )
+        .unwrap();
+    let row = begun.1.id;
+    drop(begun);
+    assert!(crate::repository::recovery::abandon_row(&world.db(), row).unwrap());
+
+    assert!(
+        finish_without_waiting(&world),
+        "the abandoned row is no bar"
+    );
+
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(
+        world.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0
+    );
 }
 
 /// The gate finishes a first-time setup and leaves the registration marked for
