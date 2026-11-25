@@ -250,10 +250,11 @@ fn preview<L: Lifecycle>(
     root: &Path,
     item: &ItemId,
     identity: Option<&ConfirmedCommitIdentity>,
+    record: Option<&L::Record>,
 ) -> Result<L::Preflight, RepositoryError> {
     L::preview(
         service,
-        L::preview_request(root.into(), item.clone(), identity),
+        L::preview_request(root.into(), item.clone(), identity, record),
     )
 }
 fn abandon<L: Lifecycle>(
@@ -502,6 +503,7 @@ fn promote_inner<L: Lifecycle>(
                 root.clone(),
                 request.item_id.clone(),
                 request.confirmed_identity.as_ref(),
+                None,
             ),
         )?;
         config = L::configuration(&observation).clone();
@@ -551,7 +553,7 @@ fn promote_inner<L: Lifecycle>(
                 request.operation_id,
                 &request.item_id,
                 request.expected,
-                config.publication_remote.as_deref(),
+                &config,
                 observed.as_ref(),
                 refusal,
             )?
@@ -674,6 +676,7 @@ fn promote_inner<L: Lifecycle>(
                     &root,
                     r.item_id(),
                     request.confirmed_identity.as_ref(),
+                    Some(&r),
                 )
                 .ok()
                 .and_then(|p| L::ready(p).ok())
@@ -728,6 +731,7 @@ fn promote_inner<L: Lifecycle>(
             &root,
             r.item_id(),
             request.confirmed_identity.as_ref(),
+            Some(&r),
         )?) {
             Ok(p) => p,
             _ => {

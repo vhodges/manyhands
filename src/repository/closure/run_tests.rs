@@ -32,6 +32,9 @@ use crate::repository::{
 use git2::Oid;
 use std::{cell::RefCell, fs, path::Path, rc::Rc};
 
+#[path = "run_pull_request_tests.rs"]
+mod pull_request;
+
 const CLOSED_BY: &str = "Fixture <fixture@example.invalid>";
 
 fn context_ref() -> String {

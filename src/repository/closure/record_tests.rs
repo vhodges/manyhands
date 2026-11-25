@@ -2237,3 +2237,94 @@ fn written_closure_unfinished_covers_branch_records_by_step() {
         assert!(held(n), "direct at {step}");
     }
 }
+
+/// A branch record begins with its path and the head its consent bound,
+/// replays by its operation, is never superseded, supersedes a direct
+/// record's supersedable cleanup stop, and a refusal is stored with the path
+/// it was made in.
+#[test]
+fn a_branch_record_begins_replays_and_is_refused_on_its_own_path() {
+    use crate::canonical::Integration;
+    let path = (Integration::PullRequest, ClosureAction::Close);
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let branch = |op: OperationId, item_text: &str, expectation: u8, kind| {
+        begin_branch_record(
+            &tx,
+            1,
+            op,
+            &item(item_text),
+            digest(expectation),
+            Some("origin"),
+            kind,
+            path,
+            Some(oid('5')),
+        )
+    };
+    let first = OperationId::new();
+    let r = branch(first, ITEM, 7, ClosureKind::Record).unwrap();
+    assert_eq!(r.step, ClosureStep::Confirmed);
+    assert_eq!(r.path(), RecordPath::Branch);
+    assert_eq!((r.integration_mode, r.action), path);
+    assert_eq!(r.consented_context_oid, Some(oid('5')));
+    assert_eq!(r.closure_kind, Some(ClosureKind::Record));
+    assert_eq!(r.answer_code, None);
+    // The same operation replays what is stored; another is busy.
+    assert!(branch(first, ITEM, 7, ClosureKind::Record).unwrap() == r);
+    assert_eq!(
+        kind_of(branch(OperationId::new(), ITEM, 7, ClosureKind::Record)),
+        RepositoryErrorKind::RepositoryBusy
+    );
+    // A direct record at a supersedable cleanup stop is superseded.
+    let mut old = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(OTHER),
+        digest(7),
+        None,
+        ClosureKind::Record,
+    )
+    .unwrap();
+    close(&tx, &mut old);
+    integrate(&tx, &mut old);
+    old.step = ClosureStep::PublicationPending;
+    old.publication = Some(PublicationCategory::NoPublicationRemote);
+    old.cleanup = Some(CleanupCategory::ContextChanged);
+    save_record(&tx, 1, &old).unwrap();
+    let new = branch(OperationId::new(), OTHER, 9, ClosureKind::Existing).unwrap();
+    assert_eq!(new.path(), RecordPath::Branch);
+    assert_eq!(read(&tx, old.operation_id).step, ClosureStep::Superseded);
+    // A refusal keeps the path of the request it refused, and no answer; a
+    // direct refusal keeps the direct path.
+    let third = item_n(3);
+    let refused = refuse_record_on(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(&third),
+        digest(7),
+        Some("origin"),
+        Some(ClosureKind::Record),
+        &Refusal::ExternalChange,
+        path,
+    )
+    .unwrap();
+    assert_eq!(refused.step, ClosureStep::Abandoned);
+    assert_eq!((refused.integration_mode, refused.action), path);
+    assert_eq!(refused.answer_code, None);
+    assert_eq!(refused.refusal, Some(Refusal::ExternalChange));
+    let fourth = item_n(4);
+    let direct = refuse_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(&fourth),
+        digest(7),
+        None,
+        None,
+        &Refusal::ExternalChange,
+    )
+    .unwrap();
+    assert_eq!(direct.path(), RecordPath::Direct);
+}

@@ -1,9 +1,13 @@
 use super::super::test_support::*;
 use super::*;
+use crate::repository::closure::{ClosureAction, record};
 use crate::repository::{
     AuthoringKind, AuthoringTarget, ContextIntent, DocumentDraft, ExpectedPathObservation,
-    LeaseKind, OperationId, PathChange, SaveDocumentRequest, coordination,
-    promotion::observe::PromotionChangeEntry,
+    LeaseKind, OperationId, PathChange, RemoteOperationAction, RemoteOperationTarget,
+    RemoteRefPlan, RemoteReservationOutcome, RepositoryErrorKind, SaveDocumentRequest,
+    coordination,
+    promotion::{observe::PromotionChangeEntry, record::ChildRole},
+    remote::state,
 };
 use std::{collections::BTreeMap, fs, net::TcpListener};
 
@@ -44,7 +48,7 @@ impl Fixture {
         }
     }
     fn observation(&self, when: OffsetDateTime) -> ClosureObservation {
-        match prepare_observation_at(&self.service, &self.request(None), when)
+        match prepare_observation_at(&self.service, &self.request(None), None, when)
             .unwrap()
             .observed
         {
@@ -129,7 +133,78 @@ impl Fixture {
         };
         db.execute("INSERT INTO comment_publication_bindings(operation_ulid,local_record_id,root_digest,kind,item_ulid,comment_ulid,synchronization_ulid,pre_checkpoint_oid) VALUES(?1,?2,zeroblob(32),'ticket',?3,?4,?5,?6)", rusqlite::params![OperationId::new().to_string(), local, ID, comment, synchronization.to_string(), self.base.to_string()]).unwrap();
     }
+    /// The configuration for pull-request mode, written where the
+    /// observation reads it. It is left uncommitted: pull-request mode does
+    /// not look at the primary's checkout.
+    fn pull_request(&self) {
+        write(&self.repo, ".manyhands/config.toml", PULL_REQUEST_CONFIG);
+    }
+    /// The ticket's context synchronization `operation`, reserved as a
+    /// manual one is.
+    fn reserve_context(&self, operation: OperationId) {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let frozen = self
+            .service
+            .observation_configuration(self.root.path(), &plan)
+            .unwrap();
+        crate::repository::remote::state::with_transaction(
+            &self.service,
+            self.root.path(),
+            |tx, id| {
+                crate::repository::remote::state::configure_endpoints(
+                    tx,
+                    id,
+                    &plan,
+                    &frozen.endpoint_digest(),
+                )
+            },
+        )
+        .unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            id(),
+        )
+        .unwrap();
+        assert!(matches!(
+            self.service
+                .reserve_remote_operation(self.root.path(), operation, &target)
+                .unwrap(),
+            RemoteReservationOutcome::Reserved(_)
+        ));
+    }
+    /// The blockers of a preview that is blocked.
+    fn blockers(&self) -> Vec<ClosureBlocker> {
+        match self.preview() {
+            TicketClosurePreflight::Blocked { blockers, .. } => blockers,
+            other => panic!("expected blocked: {other:?}"),
+        }
+    }
+    /// A commit on the original base whose ticket holds `closure`'s text.
+    fn closed_base(&self, malformed: bool) -> Oid {
+        let closed =
+            closed_ticket_bytes(&read(&self.repo, &ticket()), at(1_700_000_000), CLOSER).unwrap();
+        let bytes = if malformed {
+            String::from_utf8(closed)
+                .unwrap()
+                .lines()
+                .filter(|line| !line.starts_with("closed_by"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        } else {
+            String::from_utf8(closed).unwrap()
+        };
+        tree_commit(
+            &self.repo,
+            self.base,
+            &[(&ticket(), Some((bytes.as_bytes(), 0o100644)))],
+        )
+    }
 }
+
+const PULL_REQUEST_CONFIG: &str = "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
 
 // --- closed_ticket_bytes (C10, R-P1, R-T0-2) ---
 
@@ -1422,6 +1497,7 @@ fn closure_digest_golden_vector() {
         primary_oid: oid('a'),
         tracking_primary: None,
         tracking_context: None,
+        path: (Integration::Direct, ClosureAction::Close),
     };
     fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
         wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
@@ -1494,4 +1570,288 @@ fn existing_closure_ignores_identity_selection() {
         Err(r) => panic!("{:?}", r.blockers),
     };
     assert!(o.identity.is_none());
+}
+
+// --- the pull-request observation (Task 7, slice B) ---
+
+/// A repository in pull-request mode, with a remote: the tracking primary
+/// is the original base.
+fn pull_request_fixture() -> Fixture {
+    let f = Fixture::new(true);
+    f.pull_request();
+    f
+}
+
+/// Part D's situations in order, the blockers it keeps and drops, the busy
+/// answer for a synchronization that is not the record's own, and a digest
+/// of its own domain.
+#[test]
+fn pull_request_prepare_decides_the_situation_and_its_blockers() {
+    use crate::canonical::Integration;
+    let path = (Integration::PullRequest, ClosureAction::Close);
+
+    // Situation 5: the closure is recorded. Nothing integrates, so there is
+    // no change set and no cleanup, and the context child runs.
+    let f = pull_request_fixture();
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, path);
+    assert_eq!(f.ready().path(), path);
+    assert_eq!(o.base, f.base);
+    assert!(o.needs_context_child);
+    assert!(o.changes.is_empty());
+    assert_eq!(
+        o.cleanup,
+        PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        }
+    );
+    assert!(matches!(&o.closure, PlannedClosure::Record { closed_by } if closed_by == FIXTURE_BY));
+    // `closed_at` of a `record` closure is not bound; `closed_by` is.
+    let later = f.observation(at(1_800_000_000)).expectation;
+    assert_eq!(o.expectation, later);
+    f.repo
+        .config()
+        .unwrap()
+        .set_str("user.email", "changed@example.invalid")
+        .unwrap();
+    assert_ne!(f.observation(at(1_700_000_000)).expectation, o.expectation);
+
+    // The digest has a domain of its own: the same state, observed in direct
+    // mode, has another.
+    let direct = Fixture::new(true);
+    let direct_digest = direct.ready().expectation();
+    assert_eq!(
+        direct.ready().path(),
+        (Integration::Direct, ClosureAction::Close)
+    );
+    direct.pull_request();
+    assert_ne!(direct.ready().expectation(), direct_digest);
+
+    // Situation 1: the local primary's ticket holds a closure, or the
+    // tracking primary's does, a malformed one included.
+    let f = pull_request_fixture();
+    f.close_primary();
+    assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
+    for malformed in [false, true] {
+        let f = pull_request_fixture();
+        f.tracking("main", f.closed_base(malformed));
+        assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed], "{malformed}");
+    }
+
+    // Situation 4: the context's ticket holds a closure. It is recorded as
+    // it stands and needs no identity.
+    let f = pull_request_fixture();
+    f.close_context();
+    f.missing_identity();
+    let o = f.observation(at(1_700_000_000));
+    assert!(matches!(
+        &o.closure,
+        PlannedClosure::Existing { closed_at, closed_by }
+            if closed_at == "2023-11-14T22:13:20Z" && closed_by == CLOSER
+    ));
+    assert!(o.identity.is_none());
+    assert_eq!(o.path, path);
+
+    // Situation 5 needs an identity, which only a record closure does.
+    let f = pull_request_fixture();
+    f.missing_identity();
+    assert!(matches!(
+        f.preview(),
+        TicketClosurePreflight::Blocked { blockers, identity_configuration: Some(_) }
+            if blockers == [ClosureBlocker::IdentityRequired]
+    ));
+
+    // Situations 2 and 3, as the direct close has them until Task 9: a
+    // context whose remote branch was seen deleted, and no context.
+    let f = pull_request_fixture();
+    f.history("observed_published");
+    f.blocked(&[ClosureBlocker::RemoteContextDeleted]);
+    let f = pull_request_fixture();
+    fs::remove_dir_all(f.root.path().join(".manyhands/worktrees").join(ID)).unwrap();
+    f.repo
+        .find_branch(&format!("manyhands/ticket/{ID}"), git2::BranchType::Local)
+        .unwrap()
+        .delete()
+        .unwrap();
+    f.blocked(&[ClosureBlocker::ContextMissing]);
+
+    // What the pull-request close keeps: the context's own blockers, and a
+    // merge, rebase or cherry-pick in progress at the root, on whichever
+    // branch the root is.
+    let f = pull_request_fixture();
+    write(&f.context, "draft.txt", "draft\n");
+    f.blocked(&[ClosureBlocker::ContextDirty]);
+    let f = pull_request_fixture();
+    f.pending_conflict();
+    f.blocked(&[ClosureBlocker::ConflictPending]);
+    for other_branch in [false, true] {
+        let f = pull_request_fixture();
+        if other_branch {
+            let head = f.repo.find_commit(f.base).unwrap();
+            f.repo.branch("other", &head, false).unwrap();
+            f.repo.set_head("refs/heads/other").unwrap();
+        }
+        fs::write(f.repo.path().join("MERGE_HEAD"), format!("{}\n", f.base)).unwrap();
+        // The context's own check reads the common directory too.
+        f.blocked(&[
+            ClosureBlocker::ContextConflicted,
+            ClosureBlocker::PrimaryConflicted,
+        ]);
+    }
+
+    // What it drops, each shown blocked in direct mode first.
+    type Disturb = fn(&Fixture);
+    let dropped: [(ClosureBlocker, Disturb); 5] = [
+        (ClosureBlocker::PrimaryNotCheckedOut, |f| {
+            let head = f.repo.find_commit(f.base).unwrap();
+            f.repo.branch("other", &head, false).unwrap();
+            f.repo.set_head("refs/heads/other").unwrap();
+        }),
+        (ClosureBlocker::PrimaryDirty, |f| {
+            write(&f.repo, "ordinary.txt", "edited\n");
+        }),
+        (ClosureBlocker::PrimaryAheadOfRemote, |f| {
+            write(&f.repo, "ahead.txt", "ahead\n");
+            commit(&f.repo);
+        }),
+        (ClosureBlocker::ContextBehindRemote, |f| {
+            let tip = tree_commit(
+                &f.repo,
+                f.base,
+                &[("elsewhere.txt", Some((b"x", 0o100644)))],
+            );
+            f.repo
+                .reference(
+                    &format!("refs/remotes/origin/manyhands/ticket/{ID}"),
+                    tip,
+                    true,
+                    "fixture",
+                )
+                .unwrap();
+        }),
+        (ClosureBlocker::IntegrationConflict, |f| {
+            let primary = String::from_utf8(read(&f.repo, &ticket()))
+                .unwrap()
+                .replace("original body", "primary body");
+            write(&f.repo, &ticket(), primary);
+            let tip = commit(&f.repo);
+            f.tracking("main", tip);
+        }),
+    ];
+    for (blocker, disturb) in dropped {
+        let f = Fixture::new(true);
+        disturb(&f);
+        assert!(f.blockers().contains(&blocker), "direct {blocker:?}");
+        f.pull_request();
+        let preview = f.ready();
+        assert_eq!(preview.path(), path, "{blocker:?}");
+    }
+
+    // A synchronization of the ticket's context that is not the record's
+    // own is busy, naming it; once it is over, or when it is the record's
+    // own child, the prepare is not.
+    let f = pull_request_fixture();
+    let foreign = OperationId::new();
+    f.reserve_context(foreign);
+    let busy = f
+        .service
+        .preview_ticket_closure(f.request(None))
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(busy.kind, RepositoryErrorKind::RepositoryBusy);
+    assert_eq!(busy.blocker().map(|b| b.operation_id), Some(foreign));
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='cancelled',outcome='cancelled'",
+            [],
+        )
+        .unwrap();
+    f.ready();
+    let own = state::with_transaction(&f.service, f.root.path(), |tx, rid| {
+        let record = record::begin_branch_record(
+            tx,
+            rid,
+            OperationId::new(),
+            &id(),
+            ClosureExpectation::from_bytes([1; 32]),
+            Some("origin"),
+            record::ClosureKind::Record,
+            path,
+            Some(f.context_oid()),
+        )?;
+        record::next_attempt(tx, rid, record.operation_id, ChildRole::Context)
+    })
+    .unwrap();
+    f.reserve_context(own.context_sync_id.unwrap());
+    assert_eq!(f.ready().path(), path);
+}
+
+/// The pull-request digest's wire bytes, written out by hand: its domain,
+/// the action, the item, the two branches, the remote, the head and the
+/// closure effect, and nothing of the change set or the cleanup.
+#[test]
+fn pull_request_digest_wire_format() {
+    use crate::canonical::Integration;
+    let oid = |digit: char| Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+    let mut observation = ClosureObservation {
+        item_id: id(),
+        ticket_path: PathBuf::from(ticket()),
+        context_oid: oid('c'),
+        base: oid('b'),
+        remote: Some("origin".into()),
+        changes: Vec::new(),
+        closure: PlannedClosure::Record {
+            closed_by: CLOSER.into(),
+        },
+        integration: PlannedIntegration::MergeCommit,
+        needs_context_child: true,
+        cleanup: PlannedCleanup {
+            remote_branch: false,
+            worktree: false,
+            local_branch: false,
+        },
+        identity: None,
+        expectation: ClosureExpectation::from_bytes([0; 32]),
+        context_branch: format!("manyhands/ticket/{ID}"),
+        primary_branch: "main".into(),
+        primary_oid: oid('a'),
+        tracking_primary: Some(oid('b')),
+        tracking_context: None,
+        path: (Integration::PullRequest, ClosureAction::Close),
+    };
+    fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
+        wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        wire.extend_from_slice(bytes);
+    }
+    let mut wire = b"manyhands pull request closure v1".to_vec();
+    wire.push(0); // close
+    field(&mut wire, ID.as_bytes());
+    field(&mut wire, format!("manyhands/ticket/{ID}").as_bytes());
+    field(&mut wire, b"main");
+    wire.push(1); // a remote
+    field(&mut wire, b"origin");
+    wire.push(1); // a head
+    wire.extend_from_slice(oid('c').as_bytes());
+    wire.push(0); // record
+    field(&mut wire, CLOSER.as_bytes());
+    let digest = expectation(&observation).to_bytes();
+    assert_eq!(digest, *blake3::hash(&wire).as_bytes());
+    // The head is bound, and the tracking primary and the change set are not.
+    assert_eq!(
+        branch_expectation_with_head(&observation, Some(oid('c'))),
+        expectation(&observation)
+    );
+    assert_ne!(
+        branch_expectation_with_head(&observation, Some(oid('d'))),
+        expectation(&observation)
+    );
+    assert_ne!(
+        branch_expectation_with_head(&observation, None),
+        expectation(&observation)
+    );
+    observation.tracking_primary = Some(oid('e'));
+    observation.base = oid('e');
+    assert_eq!(expectation(&observation).to_bytes(), digest);
 }

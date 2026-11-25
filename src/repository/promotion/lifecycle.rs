@@ -400,6 +400,7 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<Self::ReplacementGuard, RepositoryError>;
     /// `observed` is the revalidated preview, `None` when the refusal came
     /// before any observation was made (a blocked or failed revalidation).
+    /// `config` is the configuration the revalidation observed with.
     #[allow(clippy::too_many_arguments)] // Promotion's refusal shape plus the observation.
     fn refuse_record(
         tx: &Transaction<'_>,
@@ -407,7 +408,7 @@ pub(in super::super) trait Lifecycle {
         op: OperationId,
         item: &ItemId,
         expectation: Self::Expectation,
-        remote: Option<&str>,
+        config: &RepositoryConfig,
         observed: Option<&Self::Preview>,
         refusal: &Self::Refusal,
     ) -> Result<Self::Record, RepositoryError>;
@@ -452,11 +453,14 @@ pub(in super::super) trait Lifecycle {
 
     // Observation.
     /// `identity` is the request's configuration-bound confirmation, which a
-    /// lifecycle whose consent binds an identity observes with.
+    /// lifecycle whose consent binds an identity observes with. `record` is
+    /// the record a continuation observes for, `None` for a new request: a
+    /// lifecycle whose observation has modes observes a record in its own.
     fn preview_request(
         root: PathBuf,
         item_id: ItemId,
         identity: Option<&ConfirmedCommitIdentity>,
+        record: Option<&Self::Record>,
     ) -> Self::PreviewRequest;
     fn preview(
         service: &RepositoryService,
@@ -821,11 +825,19 @@ impl Lifecycle for DocumentPromotionLifecycle {
         op: OperationId,
         item: &ItemId,
         expectation: PromotionExpectation,
-        remote: Option<&str>,
+        config: &RepositoryConfig,
         _observed: Option<&DocumentPromotionPreview>,
         refusal: &record::Refusal,
     ) -> Result<PromotionRecord, RepositoryError> {
-        record::refuse_record(tx, id, op, item, expectation, remote, refusal)
+        record::refuse_record(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            config.publication_remote.as_deref(),
+            refusal,
+        )
     }
     fn clear_cancellation(
         tx: &Transaction<'_>,
@@ -883,6 +895,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         root: PathBuf,
         item_id: ItemId,
         _identity: Option<&ConfirmedCommitIdentity>,
+        _record: Option<&PromotionRecord>,
     ) -> PreviewDocumentPromotionRequest {
         PreviewDocumentPromotionRequest { root, item_id }
     }

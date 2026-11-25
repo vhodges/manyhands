@@ -381,7 +381,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     fn observe(&self, service: &RepositoryService) -> Result<(PathBuf, i64, Observed), Answer> {
         let repository = resolve_root(service, &self.root)?;
         let root = repository.root().to_owned();
-        let observed = V::observe(service, &root, &self.id).map_err(refused)?;
+        let observed = V::observe(service, &root, &self.id).map_err(|error| {
+            // A synchronization of the item's context that is not an
+            // unfinished record's own is busy, naming it.
+            let blocker = error.blocker().cloned();
+            refused(error).naming(service, &root, blocker.as_ref())
+        })?;
         Ok((root, repository.registration_id(), observed))
     }
 

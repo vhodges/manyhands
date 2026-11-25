@@ -752,6 +752,32 @@ pub(in super::super) fn begin_record(
     remote: Option<&str>,
     kind: ClosureKind,
 ) -> Result<ClosureRecord, RepositoryError> {
+    begin_branch_record(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        kind,
+        (Integration::Direct, ClosureAction::Close),
+        None,
+    )
+}
+/// A branch record's `begin_record`: the same replay, supersession and
+/// `busy`, with the record's path and the head its consent bound.
+#[allow(clippy::too_many_arguments)] // `begin_record`'s, plus the path and the consented head.
+pub(in super::super) fn begin_branch_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: ClosureExpectation,
+    remote: Option<&str>,
+    kind: ClosureKind,
+    path: (Integration, ClosureAction),
+    consented: Option<Oid>,
+) -> Result<ClosureRecord, RepositoryError> {
     if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
     }
@@ -770,8 +796,8 @@ pub(in super::super) fn begin_record(
         remote,
         Some(kind),
         None,
-        (Integration::Direct, ClosureAction::Close),
-        None,
+        path,
+        consented,
     )
 }
 /// A refused new request is terminal from insertion. It can coexist with the
@@ -787,6 +813,31 @@ pub(in super::super) fn refuse_record(
     remote: Option<&str>,
     kind: Option<ClosureKind>,
     refusal: &Refusal,
+) -> Result<ClosureRecord, RepositoryError> {
+    refuse_record_on(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        kind,
+        refusal,
+        (Integration::Direct, ClosureAction::Close),
+    )
+}
+/// `refuse_record` for the path the refused request was made in.
+#[allow(clippy::too_many_arguments)] // `refuse_record`'s, plus the path.
+pub(in super::super) fn refuse_record_on(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: ClosureExpectation,
+    remote: Option<&str>,
+    kind: Option<ClosureKind>,
+    refusal: &Refusal,
+    path: (Integration, ClosureAction),
 ) -> Result<ClosureRecord, RepositoryError> {
     if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
@@ -805,7 +856,7 @@ pub(in super::super) fn refuse_record(
         remote,
         kind,
         Some(refusal),
-        (Integration::Direct, ClosureAction::Close),
+        path,
         None,
     )
 }

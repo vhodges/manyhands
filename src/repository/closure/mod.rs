@@ -1,7 +1,7 @@
 //! Confirmed ticket closure: its read-only preflight, its parent record, the
 //! closure checkpoint, and `close_ticket` over the one generic lifecycle
 //! runner (C3).
-use crate::canonical::ItemId;
+use crate::canonical::{Integration, ItemId};
 use crate::repository::promotion::{
     lifecycle::CancellationProbe,
     run::{RunObserver, Unobserved},
@@ -207,6 +207,7 @@ pub struct TicketClosurePreview {
     publication: PlannedPublication,
     cleanup: PlannedCleanup,
     expectation: ClosureExpectation,
+    path: (Integration, ClosureAction),
 }
 impl TicketClosurePreview {
     pub fn item_id(&self) -> &ItemId {
@@ -257,6 +258,11 @@ impl TicketClosurePreview {
     pub fn expectation(&self) -> ClosureExpectation {
         self.expectation
     }
+    /// The integration mode and action the closure runs as: `(direct,
+    /// close)` is today's closure, any other pair a branch record.
+    pub fn path(&self) -> (Integration, ClosureAction) {
+        self.path
+    }
 }
 impl fmt::Debug for TicketClosurePreview {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -268,6 +274,7 @@ impl fmt::Debug for TicketClosurePreview {
             .field("integration", &self.integration)
             .field("publication", &self.publication)
             .field("cleanup", &self.cleanup)
+            .field("path", &self.path)
             .finish_non_exhaustive()
     }
 }

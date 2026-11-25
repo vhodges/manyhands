@@ -2,14 +2,14 @@
 //! forwards to the closure's record, observation and checkpoint modules; the
 //! runner owns the order, the children, retry and cleanup.
 use super::{
-    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosureResult,
-    checkpoint,
+    CloseTicketRequest, ClosureAction, ClosureBlocker, ClosureExpectation, ClosureRecording,
+    PlannedClosure, PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome,
+    TicketClosureResult, checkpoint,
     observe::{self, ClosureObservation, PreparedClosureObservation},
     record::{self, ClosureKind, ClosureRecord},
 };
 use crate::{
-    canonical::{ItemId, RepositoryConfig},
+    canonical::{Integration, ItemId, RepositoryConfig},
     repository::{
         ConfirmedCommitIdentity, ExpectedConfiguration, IndexPending, OperationId,
         PlannedIntegration, PromotionCleanup, PromotionIntegration, PromotionPublication,
@@ -72,6 +72,17 @@ pub(in super::super) fn lifecycle_request(
         probe: None,
     }
 }
+
+/// What a closure's observation is asked for: the request, and the mode to
+/// observe in, `None` being the configuration's. A new request observes in
+/// the configuration's mode; a continuation of a record, in the record's.
+pub(in super::super) struct ClosurePreviewRequest {
+    pub(in super::super) request: PreviewTicketClosureRequest,
+    pub(in super::super) mode: Option<Integration>,
+}
+
+/// The path of a direct record, today's closure.
+const DIRECT: (Integration, ClosureAction) = (Integration::Direct, ClosureAction::Close);
 
 /// The closure effect a new record is inserted with: the observed one.
 fn kind_of(observation: &ClosureObservation) -> ClosureKind {
@@ -165,7 +176,7 @@ impl Lifecycle for TicketClosureLifecycle {
     type Preview = ClosureObservation;
     type Expectation = ClosureExpectation;
     type Preflight = Result<ClosureObservation, Vec<ClosureBlocker>>;
-    type PreviewRequest = PreviewTicketClosureRequest;
+    type PreviewRequest = ClosurePreviewRequest;
     type Observation = PreparedClosureObservation;
     type Refusal = record::Refusal;
     type ReplacementGuard = record::ReplacementGuard;
@@ -209,7 +220,20 @@ impl Lifecycle for TicketClosureLifecycle {
                 None => return Err(state::recovery_required()),
             },
         };
-        record::begin_record(tx, id, op, item, expectation, remote, kind)
+        match observed.map(|observation| observation.path) {
+            Some(path) if path != DIRECT => record::begin_branch_record(
+                tx,
+                id,
+                op,
+                item,
+                expectation,
+                remote,
+                kind,
+                path,
+                observed.map(|observation| observation.context_oid),
+            ),
+            _ => record::begin_record(tx, id, op, item, expectation, remote, kind),
+        }
     }
     fn replacement_guard(
         tx: &Transaction<'_>,
@@ -226,20 +250,20 @@ impl Lifecycle for TicketClosureLifecycle {
         op: OperationId,
         item: &ItemId,
         expectation: ClosureExpectation,
-        remote: Option<&str>,
+        config: &RepositoryConfig,
         observed: Option<&ClosureObservation>,
         refusal: &record::Refusal,
     ) -> Result<ClosureRecord, RepositoryError> {
-        record::refuse_record(
-            tx,
-            id,
-            op,
-            item,
-            expectation,
-            remote,
-            observed.map(kind_of),
-            refusal,
-        )
+        let remote = config.publication_remote.as_deref();
+        let kind = observed.map(kind_of);
+        // The refused request's own path: the observed one, else the
+        // configuration's, which a new request always observes in (R25).
+        match observed.map_or((config.integration(), ClosureAction::Close), |o| o.path) {
+            DIRECT => record::refuse_record(tx, id, op, item, expectation, remote, kind, refusal),
+            path => {
+                record::refuse_record_on(tx, id, op, item, expectation, remote, kind, refusal, path)
+            }
+        }
     }
     fn clear_cancellation(
         tx: &Transaction<'_>,
@@ -298,26 +322,32 @@ impl Lifecycle for TicketClosureLifecycle {
         root: PathBuf,
         item_id: ItemId,
         identity: Option<&ConfirmedCommitIdentity>,
-    ) -> PreviewTicketClosureRequest {
-        PreviewTicketClosureRequest {
-            root,
-            item_id,
-            confirmed_identity: identity.cloned(),
+        record: Option<&ClosureRecord>,
+    ) -> ClosurePreviewRequest {
+        ClosurePreviewRequest {
+            request: PreviewTicketClosureRequest {
+                root,
+                item_id,
+                confirmed_identity: identity.cloned(),
+            },
+            mode: record.map(|record| record.integration_mode),
         }
     }
     fn preview(
         service: &RepositoryService,
-        request: PreviewTicketClosureRequest,
+        request: ClosurePreviewRequest,
     ) -> Result<Result<ClosureObservation, Vec<ClosureBlocker>>, RepositoryError> {
-        Ok(observe::prepare_observation(service, &request)?
-            .observed
-            .map_err(|refusal| refusal.blockers))
+        Ok(
+            observe::prepare_observation_in(service, &request.request, request.mode)?
+                .observed
+                .map_err(|refusal| refusal.blockers),
+        )
     }
     fn prepare(
         service: &RepositoryService,
-        request: PreviewTicketClosureRequest,
+        request: ClosurePreviewRequest,
     ) -> Result<PreparedClosureObservation, RepositoryError> {
-        observe::prepare_observation(service, &request)
+        observe::prepare_observation_in(service, &request.request, request.mode)
     }
     fn configuration(observation: &PreparedClosureObservation) -> &RepositoryConfig {
         &observation.configuration
@@ -341,6 +371,19 @@ impl Lifecycle for TicketClosureLifecycle {
                 Err(record::Refusal::ExternalChange)
             }
             Err(blockers) => Err(record::Refusal::Blocked(blockers)),
+        }
+    }
+    /// A pull-request close writes no record until its runner exists: a
+    /// confirm whose consent holds stops here, before a record is inserted.
+    fn require_identity(
+        preview: &ClosureObservation,
+        _repository: &git2::Repository,
+        _confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), TicketClosureError> {
+        if preview.path == DIRECT {
+            Ok(())
+        } else {
+            Err(TicketClosureError::RecoveryRequired)
         }
     }
     fn refusal_error(refusal: &record::Refusal) -> TicketClosureError {
