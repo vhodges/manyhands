@@ -47,16 +47,16 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (a
 
 - [x] Decided: nothing works on this machine while the setup branch is unmerged (RFC decision 8)
 - [x] Decided: the publication remote selection goes in the setup commit
-- [ ] `repo enable` and Add repository can put the setup on its own branch and publish it, leaving the remote's primary unchanged
+- [ ] `repo enable` can put the setup on its own branch and publish it, leaving the remote's primary unchanged (Add repository moved to Cycle 06)
 - [ ] After the merge, the next poll brings the repository to the same state as a direct enable
 - [ ] Setting changes in an enabled repository go through a setup branch, with cancel and abandon
-- [ ] Tests with a local or `file://` remote
+- [ ] Tests: library and non-SSH integration tests, and one SSH case
 - [ ] Reviewed and closed
 
 ### Cycle 03, vh-gy8gz: Ticket close in pull-request mode, the closing state and withdraw
 
 - [ ] Close records the closure, publishes and gives the link; `already_closing`
-- [ ] The record of given links and the JSON `pull_request` object (moved from Cycle 01)
+- [ ] The record of given links (the `pull_request` object comes from Cycle 02)
 - [ ] The `closing` state, readiness, and the guard on the primary's copy only
 - [ ] `ticket withdraw-closure`, and the immutability change it needs
 - [ ] The two-clone race, and the closure-only recovery for a branch merged first
