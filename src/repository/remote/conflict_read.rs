@@ -338,6 +338,10 @@ struct Recorded {
     request_id: Option<String>,
     /// The merge metadata its merge left, as it recorded it.
     merge_metadata: Option<MergeMetadataEvidence>,
+    /// The primary side of the step's window, for the validators' closure
+    /// rule (R-12): a ticket context's pinned window's `primary_oid`, none
+    /// for a primary target or window zero.
+    primary_side: Option<git2::Oid>,
 }
 
 fn conflict(
@@ -501,6 +505,7 @@ fn lookup(
     };
     let merge_metadata =
         state::integration_merge_metadata(db, &record, step.window_number, step.intent.ordinal)?;
+    let primary_side = state::window_primary_side(db, &record, step.window_number)?;
     Ok(Lookup::Found(Box::new(Recorded {
         operation_id: synchronization,
         comment_operation_id,
@@ -511,6 +516,7 @@ fn lookup(
         resolution_attempted,
         request_id,
         merge_metadata,
+        primary_side,
     })))
 }
 
@@ -765,8 +771,14 @@ fn repair_accepted(root: &Path, recorded: &Recorded) -> Result<bool, ReadError> 
     {
         return Ok(false);
     }
-    validate::validates_external_integration(&repository, local, incoming, head.id())
-        .map_err(|error| read_error(error.into()))
+    validate::validates_external_integration(
+        &repository,
+        local,
+        incoming,
+        recorded.primary_side,
+        head.id(),
+    )
+    .map_err(|error| read_error(error.into()))
 }
 
 /// The cleanliness a restart requires of a repaired target, by its own

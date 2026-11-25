@@ -4012,8 +4012,13 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
             let objects = inspection_odb_inventory(&repository);
             let before = inspection_git_image(root.path());
             assert_eq!(
-                RepositoryService::validates_external_integration(&repository, &step, candidate)
-                    .unwrap(),
+                RepositoryService::validates_external_integration(
+                    &repository,
+                    &step,
+                    None,
+                    candidate
+                )
+                .unwrap(),
                 shape == "valid_code_control",
                 "{shape}"
             );
@@ -4693,6 +4698,43 @@ fn child_file(repo: &git2::Repository, parent: git2::Oid, name: &str, bytes: &[u
     let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
     repo.commit(None, &sig, &sig, "fixture", &tree, &[&parent])
         .unwrap()
+}
+
+/// A child of `parent` that adds the file at `path`, which may be nested.
+fn child_path(repo: &git2::Repository, parent: git2::Oid, path: &str, bytes: &[u8]) -> git2::Oid {
+    merge_path(repo, &[parent], path, bytes)
+}
+
+/// A commit with the parents given whose tree is the first parent's with the
+/// file at `path` set to `bytes`.
+fn merge_path(
+    repo: &git2::Repository,
+    parents: &[git2::Oid],
+    path: &str,
+    bytes: &[u8],
+) -> git2::Oid {
+    let parents = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).unwrap())
+        .collect::<Vec<_>>();
+    let tree = inspection_tree_insert(
+        repo,
+        &parents[0].tree().unwrap(),
+        path,
+        repo.blob(bytes).unwrap(),
+        0o100644,
+    );
+    let tree = repo.find_tree(tree).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    repo.commit(
+        None,
+        &sig,
+        &sig,
+        "fixture",
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    )
+    .unwrap()
 }
 
 /// number, previous intent, previous advertisement, disposition, phase, candidate.
@@ -11115,6 +11157,206 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
     }
 }
 
+/// R-12 through the production callers' side: a ticket context's pinned window
+/// gives the validators the fetched primary, a primary target gives none.
+mod ticket_context_closure_rule {
+    use super::*;
+
+    const PATH: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAV/ticket.md";
+
+    fn ticket(closed: bool, body: &str) -> String {
+        let closure = if closed {
+            "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"\n"
+        } else {
+            "status: \"open\"\n"
+        };
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Ticket\"\ntype: \"task\"\n{closure}---\n\n{body}\n"
+        )
+    }
+
+    /// Both validators, through the wrappers the callers use, for a result
+    /// merging `local` and `incoming` under the recorded window's primary
+    /// side: (resolution, external integration).
+    fn verdicts(
+        service: &RepositoryService,
+        root: &Path,
+        operation: OperationId,
+        repository: &git2::Repository,
+        step: &state::IntegrationStepEvidence,
+        result: &str,
+    ) -> (bool, bool) {
+        let primary_side = service
+            .synchronization_primary_side(root, operation, step.window_number)
+            .unwrap();
+        let (local, incoming) = (step.intent.local_oid, step.intent.incoming_oid);
+        let base = repository.merge_base(local, incoming).unwrap();
+        let blob_at = |commit: git2::Oid| {
+            repository
+                .find_commit(commit)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .get_path(Path::new(PATH))
+                .ok()
+                .map(|entry| entry.id())
+        };
+        let token = merge::ConflictPathToken {
+            observation: merge::ConflictObservation::for_testing([7; 32]),
+            ordinal: 0,
+            path: PATH.as_bytes().to_vec(),
+            base: blob_at(base),
+            base_mode: Some(0o100644),
+            local: blob_at(local),
+            local_mode: Some(0o100644),
+            incoming: blob_at(incoming),
+            incoming_mode: Some(0o100644),
+        };
+        let candidate = merge_path(repository, &[local, incoming], PATH, result.as_bytes());
+        (
+            RepositoryService::validates_resolution_sides(
+                repository,
+                &token,
+                primary_side,
+                result.as_bytes(),
+            )
+            .unwrap(),
+            RepositoryService::validates_external_integration(
+                repository,
+                step,
+                primary_side,
+                candidate,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A context-stage conflict of the pass's ticket context over three
+    /// commits that hold `closed` in every side.
+    fn context_step(pass: &ContextPass, closed: bool) -> state::IntegrationStepEvidence {
+        let base = child_path(
+            &pass.repository,
+            pass.main,
+            PATH,
+            ticket(closed, "base").as_bytes(),
+        );
+        let local = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "local").as_bytes(),
+        );
+        let incoming = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "incoming").as_bytes(),
+        );
+        state::IntegrationStepEvidence {
+            window_number: 1,
+            intent: state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Context,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: pass.repository.find_commit(local).unwrap().tree_id(),
+                baseline_index_digest: [0; 32],
+            },
+            phase: state::IntegrationStepPhase::ConflictPending,
+            candidate_oid: None,
+            result_oid: None,
+            observed_tree_oid: None,
+            conflict_digest: None,
+        }
+    }
+
+    #[test]
+    fn a_pinned_ticket_context_window_gives_the_fetched_primary_to_both_validators() {
+        // The fetched primary holds a closure: the result must keep exactly it.
+        let pass = ContextPass::with_primary_file(PATH, ticket(true, "primary").as_bytes());
+        let step = context_step(&pass, false);
+        let root = pass.root.path();
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 1)
+                .unwrap(),
+            Some(pass.primary_incoming)
+        );
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary closed, result closed: {result}"
+            );
+        }
+        // The fetched primary is open: a closure only the context holds is
+        // provisional and may be dropped.
+        let pass = ContextPass::new();
+        let step = context_step(&pass, true);
+        let root = pass.root.path();
+        for result in [false, true] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (true, true),
+                "primary open, result closed: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_primary_target_gives_no_primary_side_and_keeps_every_side_closure() {
+        let (root, _data, service, operation, _, _) = resolution_fixture(&[(
+            PATH,
+            &ticket(true, "base"),
+            &ticket(true, "local"),
+            &ticket(true, "incoming"),
+        )]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let step = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            state::integration_step(tx, record.id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        for window in [0, 1] {
+            assert_eq!(
+                service
+                    .synchronization_primary_side(root.path(), operation, window)
+                    .unwrap(),
+                None
+            );
+        }
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &service,
+                    root.path(),
+                    operation,
+                    &repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary target, result closed: {result}"
+            );
+        }
+    }
+}
+
 mod closure_conflict_classification {
     use super::*;
 
@@ -11477,7 +11719,7 @@ fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read
     for old in values {
         for new in values {
             assert_eq!(
-                validate::preserves_item_invariants(&comment(old), &comment(new)),
+                validate::preserves_item_invariants(&comment(old), &comment(new), None),
                 old == new,
                 "{old:?} -> {new:?}"
             );
@@ -13709,6 +13951,12 @@ struct ContextPass {
 
 impl ContextPass {
     fn new() -> Self {
+        Self::with_primary_file("remote-primary.txt", b"primary\n")
+    }
+
+    /// As `new`, with the fetched primary adding `primary_path` (which may be
+    /// nested) instead of the default file.
+    fn with_primary_file(primary_path: &str, primary_bytes: &[u8]) -> Self {
         let (root, data, service) = fixture();
         let primary_repository = git2::Repository::open(root.path()).unwrap();
         primary_repository
@@ -13733,7 +13981,7 @@ impl ContextPass {
         let repository = materialized_target(root.path(), "main", &target).unwrap();
         let local = repository.head().unwrap().target().unwrap();
         let context_incoming = child_file(&repository, main, "remote-context.txt", b"context\n");
-        let primary_incoming = child_file(&repository, main, "remote-primary.txt", b"primary\n");
+        let primary_incoming = child_path(&repository, main, primary_path, primary_bytes);
         let selected = target_ref(&plan, &target);
         for (reference, oid) in [
             (plan.primary().tracking_ref(), primary_incoming),

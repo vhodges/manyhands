@@ -715,6 +715,7 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
         &worker,
         local.id(),
         incoming.id(),
+        None,
         oid,
     )? {
         return Err(Fault::authority());
@@ -795,6 +796,7 @@ pub(super) fn validate_candidate_in(
                     git,
                     row.context_parent,
                     row.primary_parent,
+                    None,
                     oid,
                 )?
             {

@@ -4193,6 +4193,29 @@ pub(super) fn integration_window(
     Ok(Some(IntegrationWindowEvidence { number, intent }))
 }
 
+/// The primary side the integration validators check a ticket's closure
+/// against (R-12): the fetched primary a ticket context's pinned window
+/// froze. In its Context stage that is the window's `primary_oid`, and in its
+/// Primary stage the step's incoming commit, which is the same commit. A
+/// primary-target synchronization and window zero (the legacy envelope, which
+/// has no `primary_oid`) have none, and so keep the strict rule.
+pub(super) fn window_primary_side(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    window_number: u32,
+) -> Result<Option<Oid>, RepositoryError> {
+    if !record
+        .target
+        .item()
+        .is_some_and(|(kind, _)| kind == AuthoringKind::Ticket)
+    {
+        return Ok(None);
+    }
+    Ok(integration_window(connection, record, window_number)?
+        .and_then(|window| window.intent)
+        .map(|intent| intent.primary_oid))
+}
+
 /// Active orchestration reads only the newest pass and its two fixed slots.
 /// Historical compatibility lookups remain explicitly bound to window zero.
 pub(super) fn latest_integration_window(

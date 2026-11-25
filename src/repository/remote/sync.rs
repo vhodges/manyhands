@@ -3314,7 +3314,16 @@ fn reconcile_pending_candidate(
         if commit.parent_count() != 2
             || [commit.parent_id(0).ok(), commit.parent_id(1).ok()]
                 != [Some(step.intent.local_oid), Some(step.intent.incoming_oid)]
-            || !RepositoryService::validates_external_integration(&repository, &step, head)?
+            || !RepositoryService::validates_external_integration(
+                &repository,
+                &step,
+                service.synchronization_primary_side(
+                    root,
+                    owner.operation_id(),
+                    step.window_number,
+                )?,
+                head,
+            )?
         {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -3434,6 +3443,11 @@ fn reconcile_pending_candidate(
             || !RepositoryService::validates_external_integration(
                 &repository,
                 &step,
+                service.synchronization_primary_side(
+                    root,
+                    owner.operation_id(),
+                    step.window_number,
+                )?,
                 observed_head,
             )?
         {
@@ -4551,12 +4565,14 @@ impl RepositoryService {
     fn validates_resolution_sides(
         repository: &git2::Repository,
         token: &merge::ConflictPathToken,
+        primary_side: Option<git2::Oid>,
         bytes: &[u8],
     ) -> Result<bool, SynchronizationError> {
         validate::validates_resolution_sides(
             repository,
             &token.path,
             [token.base, token.local, token.incoming],
+            primary_side,
             bytes,
         )
         .map_err(Into::into)
@@ -4589,12 +4605,14 @@ impl RepositoryService {
     fn validates_external_integration(
         repository: &git2::Repository,
         step: &state::IntegrationStepEvidence,
+        primary_side: Option<git2::Oid>,
         candidate: git2::Oid,
     ) -> Result<bool, SynchronizationError> {
         validate::validates_external_integration(
             repository,
             step.intent.local_oid,
             step.intent.incoming_oid,
+            primary_side,
             candidate,
         )
         .map_err(Into::into)
@@ -4605,6 +4623,23 @@ impl RepositoryService {
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
         validate::canonical_tree_sources(repository, tree).map_err(Into::into)
+    }
+
+    /// The primary side of a recorded synchronization's window, for the
+    /// closure rule of the validators (R-12): given only in a ticket
+    /// context's pinned window, none for a primary target or window zero.
+    pub(in super::super) fn synchronization_primary_side(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        window_number: u32,
+    ) -> Result<Option<git2::Oid>, SynchronizationError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            state::window_primary_side(tx, &record, window_number)
+        })
+        .map_err(Into::into)
     }
 
     /// Inspect only the exact conflict retained by this synchronization. This
@@ -4894,8 +4929,13 @@ impl RepositoryService {
         let repository = Self::inspect_conflict_target(root, &target)?;
         // Retained candidates from an earlier process/version receive the same
         // all-side invariant gate before index/ref/retirement effects.
+        let primary_side = self.synchronization_primary_side(
+            root,
+            request.synchronization_id,
+            step.window_number,
+        )?;
         for (token, bytes) in &request.resolutions {
-            if !Self::validates_resolution_sides(&repository, token, bytes.bytes())? {
+            if !Self::validates_resolution_sides(&repository, token, primary_side, bytes.bytes())? {
                 return Ok(Some(merge::ResolveSynchronizationOutcome::ValidationFailed));
             }
         }
@@ -5293,6 +5333,11 @@ impl RepositoryService {
             return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
         }
         let preflight_repository = Self::inspect_conflict_target(&root, &inspection.target)?;
+        let primary_side = self.synchronization_primary_side(
+            &root,
+            request.synchronization_id,
+            request.observation.window_number,
+        )?;
         let mut supplied = std::collections::BTreeMap::new();
         for (token, bytes) in &request.resolutions {
             if token.observation != request.observation
@@ -5301,7 +5346,12 @@ impl RepositoryService {
             {
                 return Ok(merge::ResolveSynchronizationOutcome::ValidationFailed);
             }
-            if !Self::validates_resolution_sides(&preflight_repository, token, bytes.bytes())? {
+            if !Self::validates_resolution_sides(
+                &preflight_repository,
+                token,
+                primary_side,
+                bytes.bytes(),
+            )? {
                 return Ok(merge::ResolveSynchronizationOutcome::ValidationFailed);
             }
         }

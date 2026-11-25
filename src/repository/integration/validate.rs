@@ -196,14 +196,72 @@ pub(in super::super) fn canonical_item_id(item: &canonical::CanonicalItem) -> ca
     }
 }
 
+/// A ticket's closure compared by both fields, typed. None for an open ticket
+/// and for any other item.
+type Closure<'a> = Option<(time::OffsetDateTime, Option<&'a str>)>;
+
+fn closure_of(item: Option<&canonical::CanonicalItem>) -> Closure<'_> {
+    match item {
+        Some(canonical::CanonicalItem::Ticket(ticket)) => {
+            ticket.closed_at.map(|at| (at, ticket.closed_by.as_deref()))
+        }
+        _ => None,
+    }
+}
+
+/// The closure rule of a ticket context's remote synchronization (R-12), over
+/// the three sides at once. The result keeps the primary side's closure when
+/// the primary side holds one. Otherwise it may hold none, the local side's
+/// closure or the incoming side's, but not the base's alone: a closure held
+/// only by the context is provisional, because the pull request has not
+/// merged it into the primary.
+fn keeps_primary_closure_rule(
+    local: Option<&canonical::CanonicalItem>,
+    incoming: Option<&canonical::CanonicalItem>,
+    primary: Option<&canonical::CanonicalItem>,
+    result: &canonical::CanonicalItem,
+) -> bool {
+    let result = closure_of(Some(result));
+    let primary = closure_of(primary);
+    if primary.is_some() {
+        return result == primary;
+    }
+    result.is_none() || result == closure_of(local) || result == closure_of(incoming)
+}
+
+/// The item the primary side holds at `path`, none when it holds no canonical
+/// item there.
+fn primary_item(
+    repository: &git2::Repository,
+    primary_side: git2::Oid,
+    path: &Path,
+) -> Result<Option<canonical::CanonicalItem>, Error> {
+    let tree = repository
+        .find_commit(primary_side)
+        .and_then(|commit| commit.tree())
+        .map_err(|_| Error::RecoveryRequired)?;
+    Ok(tree.get_path(path).ok().and_then(|entry| {
+        repository.find_blob(entry.id()).ok().and_then(|blob| {
+            std::str::from_utf8(blob.content())
+                .ok()
+                .and_then(|text| canonical::parse_item(path, text).ok())
+        })
+    }))
+}
+
+/// `primary_side` is the fetched primary of a ticket context's pinned window,
+/// when there is one. A ticket's closure is then checked across all sides by
+/// `keeps_primary_closure_rule` instead of being kept per side.
 pub(in super::super) fn preserves_item_invariants(
     expected: &canonical::CanonicalItem,
     result: &canonical::CanonicalItem,
+    primary_side: Option<git2::Oid>,
 ) -> bool {
     match (expected, result) {
         (canonical::CanonicalItem::Document(_), canonical::CanonicalItem::Document(_)) => true,
         (canonical::CanonicalItem::Ticket(old), canonical::CanonicalItem::Ticket(new)) => {
-            old.closed_at.is_none()
+            primary_side.is_some()
+                || old.closed_at.is_none()
                 || (old.closed_at == new.closed_at && old.closed_by == new.closed_by)
         }
         (canonical::CanonicalItem::Comment(old), canonical::CanonicalItem::Comment(new)) => {
@@ -225,6 +283,7 @@ pub(in super::super) fn validates_resolution_sides(
     repository: &git2::Repository,
     path: &[u8],
     side_ids: [Option<git2::Oid>; 3],
+    primary_side: Option<git2::Oid>,
     bytes: &[u8],
 ) -> Result<bool, Error> {
     let Ok(text) = std::str::from_utf8(bytes) else {
@@ -237,7 +296,11 @@ pub(in super::super) fn validates_resolution_sides(
     if side_ids.iter().all(Option::is_none) {
         return Ok(false);
     }
-    for side_oid in side_ids.into_iter().flatten() {
+    let mut sides = [None, None, None];
+    for (position, side_oid) in side_ids.into_iter().enumerate() {
+        let Some(side_oid) = side_oid else {
+            continue;
+        };
         let blob = repository
             .find_blob(side_oid)
             .map_err(|_| Error::RecoveryRequired)?;
@@ -248,10 +311,21 @@ pub(in super::super) fn validates_resolution_sides(
             return Ok(false);
         };
         if canonical_item_id(&item) != canonical_item_id(&expected)
-            || !preserves_item_invariants(&expected, &item)
+            || !preserves_item_invariants(&expected, &item, primary_side)
         {
             return Ok(false);
         }
+        sides[position] = Some(expected);
+    }
+    if let Some(primary_side) = primary_side {
+        let primary = primary_item(repository, primary_side, path)?;
+        let [_, local, incoming] = &sides;
+        return Ok(keeps_primary_closure_rule(
+            local.as_ref(),
+            incoming.as_ref(),
+            primary.as_ref(),
+            &item,
+        ));
     }
     Ok(true)
 }
@@ -506,6 +580,7 @@ pub(in super::super) fn validates_external_integration(
     repository: &git2::Repository,
     local: git2::Oid,
     incoming: git2::Oid,
+    primary_side: Option<git2::Oid>,
     candidate: git2::Oid,
 ) -> Result<bool, Error> {
     let local = repository
@@ -565,6 +640,14 @@ pub(in super::super) fn validates_external_integration(
             })
         })
     };
+    let primary_tree = primary_side
+        .map(|oid| {
+            repository
+                .find_commit(oid)
+                .and_then(|commit| commit.tree())
+                .map_err(|_| Error::RecoveryRequired)
+        })
+        .transpose()?;
     let mut affected = BTreeSet::new();
     for path in changed {
         let result_item = parse(&result_tree, &path);
@@ -574,11 +657,24 @@ pub(in super::super) fn validates_external_integration(
                     return Ok(false);
                 };
                 if canonical_item_id(&old) != canonical_item_id(new)
-                    || !preserves_item_invariants(&old, new)
+                    || !preserves_item_invariants(&old, new, primary_side)
                 {
                     return Ok(false);
                 }
                 affected.insert(canonical_item_id(&old));
+            }
+        }
+        if let (Some(primary_tree), Some(result_item)) = (&primary_tree, &result_item) {
+            // `sides` is [base, local, incoming].
+            let local = parse(&sides[1], &path);
+            let incoming = parse(&sides[2], &path);
+            if !keeps_primary_closure_rule(
+                local.as_ref(),
+                incoming.as_ref(),
+                parse(primary_tree, &path).as_ref(),
+                result_item,
+            ) {
+                return Ok(false);
             }
         }
         if let Some(item) = result_item {
