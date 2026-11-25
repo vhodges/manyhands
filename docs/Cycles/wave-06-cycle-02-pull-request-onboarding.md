@@ -8,12 +8,13 @@ manyhands_kind: document
 
 Ticket: vh-c97se (`01M84H84WQYE8J2WJWEDGJ45W4`), branch `manyhands/ticket/01M84H84WQYE8J2WJWEDGJ45W4`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 02 design](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md). Plan: [Cycle 02 implementation plan](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-implementation.md).
 
-Status: **draft**, 2026-11-25, revision 2. Author: Claude. These three documents are Manyhands managed documents on their own branches (decision 9).
+Status: **draft**, 2026-11-25, revision 3. Author: Claude. These three documents are Manyhands managed documents on their own branches (decision 9).
 
 Revision history:
 
 - Revision 1 (Cycle document `8dce7517`, design `97443833`, plan `c014237b`): first draft.
-- Revision 2: two independent reviews of revision 1 (source and feasibility: 2 Blocking, 10 Important, 14 Minor; contract and consistency: 3 Blocking, 13 Important, 8 Minor) and the owner's decisions 10 to 14. Revision 2 has not yet been independently reviewed.
+- Revision 2 (Cycle document `e9ad0848`, design `98a0c019`, plan `efb04672`): two independent reviews of revision 1 (source and feasibility: 2 Blocking, 10 Important, 14 Minor; contract and consistency: 3 Blocking, 13 Important, 8 Minor) and the owner's decisions 10 to 14.
+- Revision 3: a scoped re-review of revision 2 (1 Blocking, 7 Important, 8 Minor) and an adversarial round (3 Blocking, 8 Important, 12 Minor), and decision 15. The request lifecycle of a setup is restated as required outcomes (design Part K), built test-first with design checkpoints. Revision 3 has not yet been independently reviewed.
 
 ## Purpose And Authority
 
@@ -46,10 +47,11 @@ Authorities, in order:
 4. The setup gate: while a setup is pending, the commands of design Part B answer the new code `setup_pending`.
 5. `repo list` and `repo inspect` show the pending setup and its link; the JSON `pull_request` object.
 6. Activation and completion: `poll once` activates a setup on another remote once its primary holds it, and any setup completes once the local primary holds it.
-7. `repo setup-cancel`: abandon a first-time setup, or cancel a change, deleting the remote setup branch only while it is at its published tip.
-8. Host trust for a setup on another remote: `host observe` and `host approve` use its remote.
-9. The desktop's minimum (decision 5): a setup-pending repository is polled, and its row says it is waiting.
-10. The amendments to the CLI contract and RFCs, the Wave document and the shipped skills.
+7. The request lifecycle of a setup: the same request continues it, and a request whose setup ended elsewhere never starts a second one (design Part K).
+8. `repo setup-cancel`: abandon a first-time setup, or cancel a change, deleting the remote setup branch only while it is at its published tip.
+9. Host trust for a setup on another remote: `host observe` and `host approve` use its remote.
+10. The desktop's minimum (decision 5): a setup-pending repository is polled, and its row says it is waiting.
+11. The amendments to the CLI contract and RFCs, the Wave document and the shipped skills.
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -88,21 +90,22 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
    - answers `remote_primary_missing` (blocked, exit 3, no recovery action) when the remote has no primary; `primary_has_local_commits` (Cycle 01's code and data, decision 7) when the local primary has commits the remote's primary lacks; `remote_already_set_up` (blocked, exit 3, no recovery action, decision 13) when the remote's primary already holds a configuration. Each ends the setup and finishes the request: no registration, record or branch is left (a supplied identity and the worktree exclusion stay);
    - otherwise commits the configuration and the remote selection in one commit, "Set up Manyhands", on `manyhands/setup/<ULID>` made from the remote's primary, publishes that branch, and answers `ok` with the setup and its `pull_request` object. The local primary and the root checkout do not change, and the remote's primary is not pushed.
 5. **(owner's eye)** A key, unlock, host or network stop after registration keeps the setup recorded, answers that stop, and leaves the request accepted: the same request continues it. `host observe` and `host approve` work on the pending repository, with its pending remote (decision 2).
-6. **(owner's eye)** While a first-time setup is pending, the commands of design Part B answer `setup_pending` (blocked, exit 3, recovery `repo.inspect`) before writing anything, on a first call, at acceptance and on a prepare. While a change is pending, `ticket close`, `document promote`, `remote select` and `repo enable` answer `setup_pending`, and other writes carry on in the current mode. Reads answer as for a registered repository without configuration.
+6. **(owner's eye)** While a first-time setup is pending, the commands of design Part B answer `setup_pending` (blocked, exit 3, recovery `repo.inspect`) before writing anything, on a first call, at acceptance and on a prepare. While any setup is pending, `ticket close`, `document promote`, `remote select`, `remote remove` and `repo enable` answer `setup_pending`; while a change is pending, other writes carry on in the current mode and on the current remote. Reads answer as for a registered repository without configuration.
 7. `repo list` and `repo inspect` report `setup`: null, or `{ id, kind, state, request_id, branch, remote, integration, pull_request }`, where `pull_request` is `{ source, target, forge, url }`. Human `repo inspect` names the setup and its state and prints the link; human `repo list` marks the repository.
 8. **(owner's eye)** `remote select` takes optional `integration` and `forge` (an object, or null to remove it). A direct repository that stays direct keeps today's commit on the primary. From direct mode, a change to pull-request mode may name any SSH remote (decision 12). A pull-request repository's change keeps its remote (`invalid_input` otherwise, decision 8). A setup-branch change, with the commit "Change Manyhands setup", is refused while a close or promote is unfinished or accepted (`recovery_required`), and when the remote's primary lacks a local primary commit (`primary_has_local_commits`) or no longer holds the configuration the change starts from (`external_change`). A change equal to the current configuration is `already_applied`. It stays unconfirmed.
-9. **(owner's eye)** `poll once` on a repository whose setup is on another remote (every first-time setup, and a change to a first or new remote) fetches that remote's primary and, when it holds the setup and the root checkout is on the primary, clean and not ahead, fast-forwards the local primary and completes the setup: the repository is registered as a direct enable plus remote selection would leave it, the local setup branch and the record are deleted, and the answer is `activated`, saying whether the merged configuration differs from the intended one (the merged one wins). Otherwise it answers why it is still waiting and changes nothing. A merge commit, a squash and a fast-forward each activate. Its data is a setup poll object; the poll data of an active repository does not change.
-10. Any pending setup completes when the local primary already holds it (a first-time setup: a valid configuration; a change: a configuration other than the one it began from), seen by the gate, by any `poll once`, or by the setup poll. The local setup branch and the record are deleted.
-11. **(owner's eye)** `repo setup-cancel` is a new confirmed verb with no input. It deletes the remote setup branch only while it is at the setup commit (kept, and said so, if someone pushed to it), deletes the local setup branch and the record, unregisters a first-time setup, and finishes the setup's own request as `cancelled`. It refuses with `recovery_required` when the setup has already reached the remote's primary. With no pending setup it is `already_applied`. `repo remove` keeps its contract: registry only, so it drops the record and leaves both setup branches.
-12. **(owner's eye)** No pull-request path commits to the local primary or pushes the primary. The only refs a setup pushes or deletes are its own `manyhands/setup/<ULID>`.
-13. Direct mode is unchanged: every existing answer, golden and test keeps its result, except the `setup` field and the named edits.
+9. **(owner's eye)** `poll once` on a repository whose setup is on another remote (every first-time setup, and a change to a first or new remote; for such a change, after today's poll of the current remote) fetches that remote's primary and, when it holds the setup and the root checkout is on the primary, clean and not ahead, fast-forwards the local primary and completes the setup: the repository is registered as a direct enable plus remote selection would leave it, the local setup branch and the record are deleted, and the answer is `activated`, saying whether the merged configuration differs from the intended one (the merged one wins). Otherwise it answers why it is still waiting and changes nothing. A merge commit, a squash and a fast-forward each activate. Its data is a setup poll object; the poll data of an active repository does not change.
+10. Any pending setup completes when the local primary (`refs/heads/<primary>`, not HEAD) already holds it: a valid configuration naming that primary, and for a change one other than the configuration it began from. The gate, the end of any `poll once` and the setup poll finish it, only while HEAD names the primary: the local setup branch and the record are deleted, and a setup on another remote is registered on its remote.
+11. **(owner's eye)** `repo setup-cancel` is a new confirmed verb with no input. It deletes the remote setup branch only while it is at the setup commit (kept, and said so, if someone pushed to it), deletes the local setup branch and the record, unregisters a first-time setup, and finishes the setup's own request as `cancelled`. A remote setup branch at another OID is kept, with no delete sent; a refused or lost delete answers `push_rejected`, retryable. It refuses with `recovery_required` when the setup has already reached the remote's primary. With no pending setup it is `already_applied`. `repo remove` keeps its registry-only contract, so it drops a finished setup's record and leaves both setup branches; it refuses with `recovery_required`, naming `repo setup-cancel`, while the setup's request is still accepted.
+12. **(owner's eye)** A setup request is continued by sending the same request again while its record exists. Once its setup ended elsewhere (cancelled, completed or refused) it answers `cancelled` or `already_applied`, finally, and never starts a second setup. A published setup's answer replays without a reachability check. `request cancel` does not reach a setup request; `repo setup-cancel` stops a setup.
+13. **(owner's eye)** No pull-request path commits to the local primary or pushes the primary. The only refs a setup pushes or deletes are its own `manyhands/setup/<ULID>`.
+14. Direct mode is unchanged: every existing answer, golden and test keeps its result, except the `setup` field and the named edits.
 
 ## Acceptance And Exit Evidence
 
 | # | Contract | Proof | Status |
 | --- | --- | --- | --- |
 | A1 | 1-3 | A table-driven library test of the intended configuration and mode, the input refusals, the clone rule and the direct path with a remote; the input schema tests, with `repo create` refusing the new fields | planned |
-| A2 | 4, 12 | Design Part D's required outcomes S1 to S10, each with its test; the commit builder's test that only the configuration changes | planned |
+| A2 | 4, 13 | Design Part D's required outcomes S1 to S12, each with its test; the commit builder's test that only the configuration changes | planned |
 | A3 | 5 | A non-SSH test: a pull-request enable that stops at `no_selected_key` leaves a recorded setup that `repo inspect` and `repo list` show, `host observe` answers `no_selected_key`, and the same request continues; the SSH case's host stop and approval | planned |
 | A4 | 6 | The exhaustive gate test over every command; first call, acceptance, prepare and re-entry; the race with a change; the `setup_pending` golden | planned |
 | A5 | 7 | Read tests and the four repository goldens with `setup`; human `repo inspect` and `repo list` tests | planned |
@@ -110,10 +113,11 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 | A7 | 9 | Design Part G's G1 to G7 in a library test with local repositories and a stubbed channel, for a merge commit, a squash and a fast-forward, including a crash after the fast-forward, and a comparison with a direct enable plus remote selection | planned |
 | A8 | 10 | A library test of completion for a merge commit, a squash and a fast-forward, by the gate and by a poll, and not before | planned |
 | A9 | 11 | A library test of cancel's outcomes and its crash; the non-SSH cancel of a recorded setup; the goldens | planned |
-| A10 | 4, 5, 8, 9, 11, 12 | The SSH case (design P14), decision 11: host stop and approval on the pending repository, `remote_primary_missing`, a published setup with the server's primary unchanged, a gated write, a squash on the server, activation, a change, `setup_pending` for close, cancel keeping a moved branch and deleting an unmoved one. Cycle 01's decision 6 (no push shown, in place of a refusing remote) meets the RFC's push evidence | planned |
-| A11 | 13 | The fast tier, the SSH case, and the `ssh_transport` and `remote_polling` targets, once at review-ready (decision 11) | planned |
-| A12 | Scope 9 | Desktop model and scheduler tests (design P13) | planned |
-| A13 | Scope 10 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs`, `tests/cli/skills.rs`, `tests/cli/inventory.rs` and `tests/cli/collaboration_exits.rs` pass | planned |
+| A10 | 4, 5, 8, 9, 11, 13 | The SSH case (design P15), decision 11: host stop and approval on the pending repository, `remote_primary_missing`, a published setup with the server's primary unchanged, a gated write, a squash on the server, activation, a change, `setup_pending` for close, cancel keeping a moved branch and deleting an unmoved one. Cycle 01's decision 6 (no push shown, in place of a refusing remote) meets the RFC's push evidence | planned |
+| A11 | 14 | The fast tier, the SSH case, and the `ssh_transport` and `remote_polling` targets, once at review-ready (decision 11) | planned |
+| A12 | Scope 10 | Desktop model and scheduler tests (design P14) | planned |
+| A13 | 12 | Design Part K's L1 to L12, each with its test (design P12) | planned |
+| A14 | Scope 11 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs`, `tests/cli/skills.rs`, `tests/cli/inventory.rs` and `tests/cli/collaboration_exits.rs` pass | planned |
 
 ## Product-Owner Decisions (2026-11-25)
 
@@ -127,10 +131,11 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 8. **Moving a pull-request repository to another remote is refused** (`invalid_input`), with a route by hand in the skill.
 9. **The three planning documents are Manyhands managed documents**, each on its own branch and published with `item sync`, so the owner can review them in the desktop app. This departs from the planning skill's rule that Cycle documents live on the ticket branch. The execution ledger stays on the ticket branch, and each document is promoted on its own after the ticket closes.
 10. **Extra tests the plan does not list are approved as needed.**
-11. **SSH coverage.** The setup is another path through the existing transport, so one SSH case covers it, and at review-ready the SSH tier is that case, `ssh_transport` (the shared connection code) and `remote_polling` (the poll), not every SSH-harness target. This departs from AGENTS.md's table for this Cycle; native CI runs every target after the merge. The owner asked to be told if something fundamental changes: the shared connection preparation gains a second source for the remote's name, with today's source unchanged (design Part C).
+11. **SSH coverage.** The setup is another path through the existing transport, so one SSH case covers it, and at review-ready the SSH tier is that case, `ssh_transport` (the shared connection code) and `remote_polling` (the poll), not every SSH-harness target. This departs from AGENTS.md's table for this Cycle; native CI runs every target after the merge. The owner asked to be told if something fundamental changes. Three shared paths change: the shared connection preparation gains a second source for the remote's name, with today's source unchanged (design Part C); the mutation boundary runs the setup gate on every command's first call, prepare and acceptance, which with no record is one registry read (design Part B; the fast tier runs every command through it); and the end of every `poll once` checks for a setup to complete, a no-op with no record (`remote_polling` runs at review-ready). AGENTS.md maps the last two to `mutation_remote` and six remote targets; this Cycle keeps decision 11's tier.
 12. **From direct mode, a change to pull-request mode may name any SSH remote**: a first remote, or a different one. The setup uses that remote, host trust and the setup poll read it from the record, and activation switches the repository to it, as today's direct remote change does. Decision 8's refusal stays for repositories already in pull-request mode.
 13. **A new code, `remote_already_set_up`**, answers a pull-request enable whose remote's primary already holds a configuration: blocked, no recovery action, and the skill says to update the checkout and enable again, which registers it as a clone.
 14. **Autonomy:** `repo setup-cancel` is show-then-wait; `remote select` with `integration` or `forge` is show-then-wait, because it publishes a branch and blocks close and promote; a plain `remote select` stays act-alone.
+15. **Edits to existing tests are approved**: the named edits and those Task 0's sweep finds, each logged with its reason; an edit that removes or weakens an assertion still stops for the owner.
 
 ## Known Limits
 
@@ -138,7 +143,7 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 - K-2: A corrupt registry replaced by an empty one loses a pending setup's record; the local setup branch stays. The skill says to delete the branch, and the remote one, by hand and enable again.
 - K-3: `poll once` does not report that a same-remote change completed; `repo inspect` shows `setup` null (design R-16).
 - K-4: Until Cycle 06, the desktop shows a waiting repository without a link action, and Add repository enables in direct mode only.
-- K-5: A setup refused at its fetch is ended and its request finished: a retry of the same request replays the refusal, and a new request tries afresh (design R-7).
+- K-5: A setup refused at its fetch is ended and its request finished: a retry of the same request replays the refusal, and a new request tries afresh (design R-7). After a crash between the ending and the request's settle, the retry answers `cancelled` instead (design L5).
 - K-6: One setup per clone, not per repository: two clones can each open a setup pull request. Whichever merges first completes both clones' setups; the other pull request and its remote branch are left, and the skill says to decline it.
 - K-7: Any move of the primary's configuration completes a pending change (design R-17): another clone's merged change, or an edit made outside Manyhands.
 - K-8: A remote setup branch that survives the merge is left in place; deleting it is Cycle 05's guarded step (RFC decision 22). The skill gives the route by hand meanwhile.
@@ -146,10 +151,14 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 - K-10: Until Cycles 03 and 04, pull-request mode is not usable end to end: close and promote still push the primary when no setup is pending.
 - K-11: Every teammate needs a build with Cycle 01 before a pull-request setup merges, because the configuration is version 2 (RFC decision 21).
 - K-12: An unborn HEAD cannot be enabled in pull-request mode (`wrong_branch`, design R-11).
+- K-13: A change on another remote needs that remote's primary to hold this repository's current configuration (a mirror of the current remote, or the remote the configuration was pushed to by hand); otherwise it answers `external_change`.
+- K-14: An older build sharing the data directory sees a setup-pending repository as registered without a configuration, and its `repo enable` would commit "Initialize Manyhands" on the primary. The skill says not to run an older build on such a repository; no release ships before Cycle 04.
+- K-15: A local setup branch kept because it moved holds a configuration, so after a first-time setup is cancelled the unregistered root answers `repository_not_registered` instead of `repository_not_enabled` until the branch is deleted.
+- K-16: `repo list`, which reads the index only, can show a complete setup as pending until the next refresh; `repo inspect` reads the local primary.
 
 ## Open Questions
 
-1. **Mechanical edits to existing tests.** Decision 10 approves extra tests. The plan also proposes that an edit to an existing test that Task 0's sweep finds, and that keeps every assertion's intent, be applied and logged as E-16 onwards with its reason, as Cycle 01's decisions 9 and 12 allowed; an edit that removes or weakens an assertion stops for the owner. The plan is written to that answer.
+1. **Decision 11's tier, with the fuller disclosure** (the gate in the mutation boundary and the end of every poll, as decision 11 now says). The plan keeps the tier; adding `mutation_remote` would cost about 49 minutes.
 
 ## Review Record
 
@@ -176,3 +185,9 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 | Review round 1 | Autonomy of the new and changed verbs | decision | Show then wait (decision 14) | Owner, 2026-11-25 |
 | Review round 1 | Re-entry of the setup request compares a digest that registration changes | ruling | Re-entry through the record and `LocalStep::SetupRecorded` (design Part E) | `bind/repo.rs` `Confirmed::row`; the digest binds `registered` |
 | Review round 1 | Completion missed by the desktop's direct poll and by a crash during activation | ruling | Completion is level-triggered (design R-17) | `desktop/services/mod.rs` calls `poll_publication_remote` |
+| Review round 1 | Mechanical edits to existing tests | decision | Approved (decision 15) | Owner, 2026-11-25 |
+| Review round 2, scoped re-review | 1 Blocking, 7 Important, 8 Minor | — | Resolved in revision 3; see the design's Review Record | revision 3 |
+| Review round 2, adversarial | 3 Blocking, 8 Important, 12 Minor | — | Resolved in revision 3; see the design's Review Record | revision 3 |
+| Review round 2 | Decision 11 named only the transport change | decision | The gate and the poll's end disclosed in decision 11; the tier is kept unless the owner says otherwise (open question 1) | scoped re-review finding 7 |
+| Review round 2 | A setup request's re-entry, replay and ending | ruling | Restated as required outcomes L1 to L12 (design Part K, R-19), built test-first | both round 2 reviews |
+| Review round 2 | `repo remove` while a setup request is accepted | ruling | It refuses, naming `repo setup-cancel` (design R-18) | `registration_removal.rs`: the accepted-request check runs only on the registry-only path |
