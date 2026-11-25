@@ -3,7 +3,7 @@ slug: vh-c2dtj
 id: 01M87683441PRAYQJQBQBG96YY
 title: 'Wave 06 Cycle 01: Pull-request setting, link builder and pull-only repo sync'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
