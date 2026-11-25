@@ -382,7 +382,8 @@ impl PollOnceBinding {
         // entered again takes the path the setup says now (L12). A registry
         // that cannot be read is no setup: the ordinary poll runs.
         match setup::poll::path_of(call.service, &accepted.root()) {
-            Ok(Some(SetupPollPath::Replace)) => Self::setup_poll(call, accepted),
+            Ok(Some(SetupPollPath::Replace)) => Self::setup_poll(call, accepted)
+                .unwrap_or_else(|| self.ordinary_call(call, accepted, restart)),
             Ok(Some(SetupPollPath::After)) => {
                 let ran = self.ordinary_call(call, accepted, restart);
                 Self::then_setup_poll(call, accepted, &ran);
@@ -398,7 +399,10 @@ impl PollOnceBinding {
     /// final: a stop is final and a new request polls again, as a poll's are
     /// (R-18). A `Stopped` standing would read the absent row as nothing in
     /// flight and delete the record, which could not then be replayed.
-    pub(super) fn setup_poll(call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+    /// `None` when the setup ended between the choice of the poll and the
+    /// lock: there is nothing to poll or recover, and the caller runs today's
+    /// poll.
+    pub(super) fn setup_poll(call: &CallContext<'_>, accepted: &Accepted) -> Option<Ran> {
         let answer =
             match call
                 .session
@@ -439,16 +443,17 @@ impl PollOnceBinding {
                             }
                         }
                         SetupPollError::Repository(error) => refused(error),
+                        SetupPollError::Gone => return None,
                         SetupPollError::Busy
                         | SetupPollError::RecoveryRequired
                         | SetupPollError::Registry(_) => Answer::stopped(code),
                     }
                 }
             };
-        Ran {
+        Some(Ran {
             answer,
             standing: Standing::Final,
-        }
+        })
     }
 
     /// A change on another remote: the setup poll follows today's poll of
@@ -467,7 +472,12 @@ impl PollOnceBinding {
             .poll_setup(call.service, &accepted.root(), accepted.request_id);
     }
 
-    fn ordinary_call(&self, call: &CallContext<'_>, accepted: &Accepted, restart: bool) -> Ran {
+    pub(super) fn ordinary_call(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        restart: bool,
+    ) -> Ran {
         let request = PollPublicationRemoteRequest {
             root: accepted.root(),
             operation_id: accepted.operation_id,

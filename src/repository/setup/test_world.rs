@@ -238,9 +238,30 @@ impl World {
             .with_clock_for_testing(std::sync::Arc::new(Fixed));
         let request_id = RequestId::new();
         let operation_id = OperationId::new();
+        // A change begins from an enabled repository with `origin` selected, as
+        // a direct enable and a selection leave it: its configuration blob
+        // and its stored plan. A first-time setup is registered with neither.
+        if kind == SetupKind::Change {
+            service
+                .reconcile_registration(
+                    &local,
+                    &root,
+                    crate::repository::RepositoryOperation::SetPublicationRemote,
+                )
+                .unwrap();
+        }
         let mut db = open_registry(&data.path().join(REGISTRY_FILE), &mut |_| {}).unwrap();
         let tx = db.transaction().unwrap();
-        let repository_id = register_setup_pending(&tx, &root).unwrap();
+        let repository_id = match kind {
+            SetupKind::Enable => register_setup_pending(&tx, &root).unwrap(),
+            SetupKind::Change => tx
+                .query_row(
+                    "SELECT id FROM repositories WHERE root_path = ?1",
+                    [root.to_str().unwrap()],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+        };
         record::insert(
             &tx,
             repository_id,
@@ -608,4 +629,49 @@ pub(crate) fn dump(db: &Connection, table: &str, skip: &[&str]) -> Vec<BTreeMap<
         .unwrap()
         .map(Result::unwrap)
         .collect()
+}
+
+/// A `ticket create`, the command a setup refuses while it is pending.
+pub(crate) fn create_ticket(
+    world: &World,
+) -> crate::results::Envelope<crate::repository::MutationDataDto> {
+    let mut session = crate::repository::keys::SessionCredentials::new(NoPassphrase);
+    world.service.execute(
+        crate::repository::MutationCall {
+            request_id: crate::repository::RequestId::new(),
+            confirmation: None,
+            mutation: crate::repository::Mutation::TicketCreate(
+                crate::repository::TicketCreateInput {
+                    root: world.root.clone(),
+                    id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap(),
+                    draft: crate::repository::TicketDraft {
+                        title: "A title".to_owned(),
+                        ticket_type: "task".to_owned(),
+                        status: "open".to_owned(),
+                        project: None,
+                        team: None,
+                        body: String::new(),
+                    },
+                    deps: Vec::new(),
+                    parent: None,
+                    initials: None,
+                },
+            ),
+        },
+        &mut session,
+        &mut crate::repository::NoProgress,
+        &crate::repository::CancellationToken::new(),
+    )
+}
+
+/// A session whose credentials are never asked for.
+struct NoPassphrase;
+
+impl crate::repository::keys::SessionCredentialProvider for NoPassphrase {
+    fn request_passphrase(
+        &mut self,
+        _: &crate::repository::keys::UnlockRequest,
+    ) -> crate::repository::keys::PassphraseResponse {
+        panic!("an activation asks for no passphrase")
+    }
 }

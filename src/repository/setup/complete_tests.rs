@@ -15,7 +15,7 @@ use crate::{
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         setup::{
             record::SetupKind,
-            test_world::{CURRENT, OTHER, PRIMARY, World, edited_configuration},
+            test_world::{CURRENT, OTHER, PRIMARY, World, create_ticket, edited_configuration},
         },
         transport::{SshDirection, SshTransportError, SshTransportErrorKind},
     },
@@ -279,4 +279,69 @@ fn the_end_of_a_poll_finishes_a_complete_setup() {
     assert!(world.record().is_none(), "finished at the end of the poll");
     assert_eq!(world.request().state, RequestState::Finished);
     assert_eq!(world.local_ref(&world.branch_ref()), None);
+}
+
+/// A crash between the finish's `begin_lifecycle` and the end of its
+/// transaction leaves its row pending. The row is the next look's own (the
+/// operation ID is the setup's), so the next look takes it up and finishes the
+/// setup; and a finish that succeeds leaves no pending row of any kind.
+#[test]
+fn a_crashed_finish_is_taken_up_by_the_next_look_and_a_finish_leaves_no_row_pending() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    // The state of a crash after the lifecycle began: its row pending, its
+    // lease gone with the process.
+    {
+        let record = world.record().unwrap();
+        let repository = world.git();
+        let begun = world
+            .service
+            .begin_lifecycle(
+                &repository,
+                &world.root,
+                RepositoryOperation::SetPublicationRemote,
+                lifecycle_operation_id(&record),
+                &record.remote_name,
+            )
+            .unwrap();
+        drop(begun);
+    }
+    let pending = |world: &World| {
+        world.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'")
+    };
+    assert_eq!(pending(&world), 1, "the crash left its row");
+
+    assert!(finish_without_waiting(&world), "the next look takes it up");
+
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(pending(&world), 0, "nothing is left pending");
+
+    // A finish with no crash leaves none either.
+    let clean = World::new(SetupKind::Enable, OTHER, true);
+    let tip = clean.squash(&clean.record().unwrap().configuration);
+    clean.pull(tip);
+    assert!(finish_without_waiting(&clean));
+    assert_eq!(pending(&clean), 0);
+}
+
+/// The gate finishes a first-time setup and leaves the registration marked for
+/// a refresh that activation's own refresh would have made. The command the
+/// gate was checking, and a read after it, still succeed.
+#[test]
+fn the_command_a_gate_finished_a_setup_for_runs_and_a_read_follows() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+
+    let created = create_ticket(&world);
+
+    assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    assert!(world.record().is_none(), "finished by the gate");
+    let inspected = world.service.inspect_repository(&world.root).unwrap();
+    assert!(inspected.registered);
+    assert!(inspected.setup.is_none());
 }

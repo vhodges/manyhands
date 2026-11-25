@@ -15,7 +15,7 @@ use crate::{
     repository::{
         OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
         RequestState, cache_write_guard, coordination::SetupLock, mutation::finish_setup_request,
-        remote::state,
+        recovery::advance_after_observation, remote::state,
     },
     results::ResultCode,
 };
@@ -61,7 +61,9 @@ pub(crate) fn is_complete(
 /// nothing to finish: no setup, one not complete, HEAD not on the primary,
 /// the lock held, or an operation in the way (the next look finishes it).
 pub(crate) fn finish(service: &RepositoryService, root: &Path) -> Result<bool, RepositoryError> {
-    finish_waiting(service, root, None)
+    // The wait for a held lock is the service's lease wait, which a test
+    // shortens (`with_lease_wait_for_testing`): no real time passes.
+    finish_waiting(service, root, Some(service.lease_wait))
 }
 
 /// `finish`, waiting `wait` for a held lock instead of the usual timeout, so
@@ -172,7 +174,7 @@ fn finish_record(
             repository,
             root,
             RepositoryOperation::SetPublicationRemote,
-            OperationId::new(),
+            lifecycle_operation_id(record),
             &record.remote_name,
         ) {
             Ok(begun) => Some(begun),
@@ -236,15 +238,33 @@ fn finish_record(
             }
         }
         record::delete(&tx, repository_id)?;
+        // The plan stored above is the new remote's, and an attempt the setup
+        // poll recorded against the old state would hold the first ordinary
+        // poll back until its next eligible time: they are cleared, as a
+        // repository registered by a direct enable and a selection has none,
+        // and the first poll is due at once.
+        if lifecycle.is_some() {
+            tx.execute(
+                "UPDATE remote_polling_state
+                    SET latest_attempt_at = NULL, next_eligible_at = NULL
+                  WHERE repository_id = ?1",
+                [repository_id],
+            )
+            .map_err(RepositoryError::sqlite)?;
+        }
+        // The lifecycle row ends in the same transaction, so that no crash
+        // after the commit leaves it pending with the record gone.
+        if let Some((_, row)) = &lifecycle
+            && row.id != 0
+        {
+            advance_after_observation(&tx, row.id, "completed", None, None)?;
+        }
         tx.commit().map_err(RepositoryError::sqlite)
     })();
     if let Some((lease, lifecycle_record)) = lifecycle {
         match &ended {
-            Ok(()) => service.complete_lifecycle(
-                root,
-                RepositoryOperation::SetPublicationRemote,
-                lifecycle_record,
-            )?,
+            // Its row ended in the transaction.
+            Ok(()) => {}
             // Nothing of this call's own is left: the row is closed, so the
             // next look begins afresh.
             Err(_) => service.discard_lifecycle(
@@ -256,6 +276,15 @@ fn finish_record(
         drop(lease);
     }
     ended.map(|()| true)
+}
+
+/// The operation the finish's lifecycle row runs under: the setup's own ULID.
+/// It is stable, so a finish that crashed between beginning its row and ending
+/// it leaves a row that the next look takes up as its own, and not one that
+/// every later look and every gated write finds in its way (`in_the_way`
+/// matches a row by its operation ID).
+pub(super) fn lifecycle_operation_id(record: &SetupRecord) -> OperationId {
+    OperationId::parse(&record.setup_id.to_string()).unwrap_or_default()
 }
 
 /// Whether the setup's remote is not the publication remote the primary's

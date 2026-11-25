@@ -92,6 +92,9 @@ pub enum SetupPollError {
     Busy,
     /// The setup cannot be read, or its remote is not where it was.
     RecoveryRequired,
+    /// The setup ended between the choice of the poll and the lock, so there
+    /// is nothing to poll: the caller takes the ordinary path.
+    Gone,
     Transport(SshTransportError),
     Repository(RepositoryError),
     Registry(ReadError),
@@ -103,7 +106,7 @@ impl SetupPollError {
         match self {
             Self::Cancelled => ResultCode::Cancelled,
             Self::Busy => ResultCode::Busy,
-            Self::RecoveryRequired => ResultCode::RecoveryRequired,
+            Self::RecoveryRequired | Self::Gone => ResultCode::RecoveryRequired,
             // As publishing answers them (ruling R-R): the setup's remote
             // changed or went under a record that is kept.
             Self::Transport(error) => match &error.kind {
@@ -300,7 +303,7 @@ impl RepositoryService {
             Begun::Held(held) => *held,
             // The setup ended elsewhere, and its request was finished in the
             // transaction that ended it.
-            Begun::Gone => return Err(SetupPollError::RecoveryRequired),
+            Begun::Gone => return Err(SetupPollError::Gone),
         };
         let root = lock::canonical_root(root)?;
         let operation = lock::operation_of(held.record.kind);

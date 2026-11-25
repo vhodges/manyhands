@@ -157,6 +157,35 @@ pub struct PullRequestDto {
     pub url: Option<String>,
 }
 
+impl PullRequestDto {
+    /// The link as a finished request stored it: a closed object of the four
+    /// keys, `forge` one of the known kinds or null, `url` a string or null.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let link = stored.as_object()?;
+        if link.len() != 4 {
+            return None;
+        }
+        let optional = |key: &str| match link.get(key)? {
+            serde_json::Value::Null => Some(None),
+            value => Some(Some(value.as_str()?.to_owned())),
+        };
+        let forge = optional("forge")?;
+        if let Some(forge) = &forge
+            && !crate::canonical::ForgeKind::ALL
+                .iter()
+                .any(|known| known.as_str() == forge)
+        {
+            return None;
+        }
+        Some(Self {
+            source: link.get("source")?.as_str()?.to_owned(),
+            target: link.get("target")?.as_str()?.to_owned(),
+            forge,
+            url: optional("url")?,
+        })
+    }
+}
+
 impl From<&crate::forge::PullRequestLink> for PullRequestDto {
     fn from(link: &crate::forge::PullRequestLink) -> Self {
         Self {

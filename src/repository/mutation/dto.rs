@@ -1138,22 +1138,8 @@ impl SetupMutationDto {
         {
             return None;
         }
-        let link = stored.get("pull_request")?.as_object()?;
-        if link.len() != 4 {
-            return None;
-        }
-        let optional = |key: &str| match link.get(key)? {
-            serde_json::Value::Null => Some(None),
-            value => Some(Some(value.as_str()?.to_owned())),
-        };
-        let forge = optional("forge")?;
-        if let Some(forge) = &forge
-            && !crate::canonical::ForgeKind::ALL
-                .iter()
-                .any(|known| known.as_str() == forge)
-        {
-            return None;
-        }
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
         Some(Self {
             r#type: SetupMutationType::Setup,
             id: text("id")?,
@@ -1163,12 +1149,7 @@ impl SetupMutationDto {
             branch: text("branch")?,
             remote: text("remote")?,
             integration,
-            pull_request: crate::repository::PullRequestDto {
-                source: link.get("source")?.as_str()?.to_owned(),
-                target: link.get("target")?.as_str()?.to_owned(),
-                forge,
-                url: optional("url")?,
-            },
+            pull_request,
         })
     }
 }
@@ -1242,34 +1223,15 @@ impl SetupPollDto {
                 Some(mode.to_owned())
             }
         };
-        let link = stored.get("pull_request")?.as_object()?;
-        if link.len() != 4 {
-            return None;
-        }
-        let optional = |key: &str| match link.get(key)? {
-            serde_json::Value::Null => Some(None),
-            value => Some(Some(value.as_str()?.to_owned())),
-        };
-        let forge = optional("forge")?;
-        if let Some(forge) = &forge
-            && !crate::canonical::ForgeKind::ALL
-                .iter()
-                .any(|known| known.as_str() == forge)
-        {
-            return None;
-        }
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
         Some(Self {
             r#type: SetupPollType::SetupPoll,
             setup_id: text("setup_id")?,
             outcome,
             integration,
             differs: stored.get("differs")?.as_bool()?,
-            pull_request: crate::repository::PullRequestDto {
-                source: link.get("source")?.as_str()?.to_owned(),
-                target: link.get("target")?.as_str()?.to_owned(),
-                forge,
-                url: optional("url")?,
-            },
+            pull_request,
         })
     }
 }

@@ -356,7 +356,9 @@ impl PollRetirementBinding {
         let ordinary = PollOnceBinding::from(PollOnceInput {
             root: self.root.clone(),
         });
-        let ran = ordinary.rerun(call, a, &Entered::Unfinished);
+        // Today's poll only: the caller (`rerun`) follows it with the setup
+        // poll of a change on another remote, once.
+        let ran = ordinary.ordinary_call(call, a, true);
         self.reported(call, a, ran)
     }
 }
@@ -409,7 +411,9 @@ impl Binding for PollRetirementBinding {
     /// row on the ordinary path, which answers `recovery_required` and is owed.
     fn run(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
         match repository::setup::poll::path_of(call.service, &a.root()) {
-            Ok(Some(SetupPollPath::Replace)) => PollOnceBinding::setup_poll(call, a),
+            Ok(Some(SetupPollPath::Replace)) => {
+                PollOnceBinding::setup_poll(call, a).unwrap_or_else(|| self.run_retiring(call, a))
+            }
             Ok(Some(SetupPollPath::After)) => {
                 let ran = self.run_retiring(call, a);
                 PollOnceBinding::then_setup_poll(call, a, &ran);
@@ -478,7 +482,11 @@ impl Binding for PollRetirementBinding {
     }
     fn rerun(&self, call: &CallContext<'_>, a: &Accepted, _entered: &Entered) -> Ran {
         match repository::setup::poll::path_of(call.service, &a.root()) {
-            Ok(Some(SetupPollPath::Replace)) => return PollOnceBinding::setup_poll(call, a),
+            Ok(Some(SetupPollPath::Replace)) => {
+                if let Some(ran) = PollOnceBinding::setup_poll(call, a) {
+                    return ran;
+                }
+            }
             Ok(Some(SetupPollPath::After)) => {
                 let ran = self.rerun_ordinary(call, a);
                 PollOnceBinding::then_setup_poll(call, a, &ran);

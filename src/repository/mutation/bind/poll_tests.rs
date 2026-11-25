@@ -18,8 +18,10 @@ use crate::{
         Mutation, MutationDataDto, PollOnceInput, ReadError, RemotePollError, RepositoryError,
         RepositoryService, RequestId, RequestState, SetupPollError, SetupPollOutcome,
         SetupPollReport,
-        mutation::{Accepted, progress::Session},
+        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        mutation::{Accepted, CancellationToken, progress::Session},
         open_registry,
+        promotion::lifecycle::CancellationProbe,
         promotion::run::RunObserver,
         setup::{
             publish::{Published, SetupError},
@@ -51,6 +53,9 @@ struct Scripted {
     log: RefCell<Vec<&'static str>>,
     /// What today's poll answers; the same each time it is asked.
     poll_once: Cell<bool>,
+    /// Today's poll is the domain's, over a synthetic fetch, as production
+    /// runs it; otherwise it answers `busy`.
+    real_poll: Cell<bool>,
 }
 
 impl Scripted {
@@ -59,11 +64,21 @@ impl Scripted {
             setup: RefCell::new(steps.into()),
             log: RefCell::new(Vec::new()),
             poll_once: Cell::new(true),
+            real_poll: Cell::new(false),
         }
     }
 
     fn log(&self) -> Vec<&'static str> {
         self.log.borrow().clone()
+    }
+}
+
+/// Credentials that are never asked for: the fetch is synthetic.
+struct NoPassphrase;
+
+impl SessionCredentialProvider for NoPassphrase {
+    fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
+        panic!("a synthetic fetch asks for no passphrase")
     }
 }
 
@@ -112,12 +127,21 @@ impl Session for Scripted {
 
     fn poll_once(
         &self,
-        _: &RepositoryService,
-        _: crate::repository::PollPublicationRemoteRequest,
-        _: RequestId,
+        service: &RepositoryService,
+        request: crate::repository::PollPublicationRemoteRequest,
+        asked_of: RequestId,
     ) -> Option<Result<crate::repository::RemotePollResult, RemotePollError>> {
         self.log.borrow_mut().push("poll_once");
         assert!(self.poll_once.get(), "today's poll was not expected");
+        if self.real_poll.get() {
+            let mut credentials = SessionCredentials::new(NoPassphrase);
+            let probe = CancellationProbe::new(CancellationToken::new(), asked_of);
+            return Some(service.poll_publication_remote_observed(
+                request,
+                &mut credentials,
+                probe,
+            ));
+        }
         // Another's short local work: a plain answer with no report to build.
         Some(Err(RemotePollError::Busy))
     }
@@ -356,6 +380,28 @@ fn a_setup_poll_rerun_takes_the_setup_path() {
     assert_eq!(answer.code, ResultCode::Busy, "today's poll's answer");
     assert_ne!(data_of(&answer)["type"], "setup_poll");
 
+    // A retiring request on a change on another remote, entered again: the
+    // setup poll follows today's poll once, not once in the ordinary rerun
+    // and again after it.
+    let world = World::new(SetupKind::Change, OTHER, true);
+    let first = Scripted::new(vec![]);
+    let owed = run(&world, &first, true);
+    assert_eq!(owed.code, ResultCode::InternalError);
+    assert_eq!(first.log(), ["poll_once_retiring"]);
+    assert_eq!(request_state(&world), Some(RequestState::Accepted));
+    let again = Scripted::new(vec![Step::Saw(SetupPollOutcome::WaitingForMerge)]);
+    let answer = run(&world, &again, true);
+    assert_eq!(answer.code, ResultCode::Busy, "today's poll's answer");
+    assert_eq!(again.log(), ["poll_once", "poll_setup"]);
+
+    // A setup that ended between the choice of the poll and the lock has
+    // nothing to poll and nothing to recover: today's poll runs.
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let session = Scripted::new(vec![Step::Fail(|| SetupPollError::Gone)]);
+    let answer = run(&world, &session, false);
+    assert_eq!(session.log(), ["poll_setup", "poll_once"]);
+    assert_eq!(answer.code, ResultCode::Busy, "today's poll's answer");
+
     // A change on the same remote: today's poll alone.
     let world = World::new(SetupKind::Change, CURRENT, true);
     let session = Scripted::new(vec![]);
@@ -432,4 +478,52 @@ fn the_setup_poll_s_stops_are_final() {
         assert_eq!(fresh.code, ResultCode::Ok, "{what}");
         assert_eq!(next.log(), ["poll_setup"], "{what}");
     }
+}
+
+/// A crash between a first-time setup's fast-forward and its finish leaves a
+/// setup the local primary holds, in a registration that is not reconciled
+/// yet. `poll once`, through the binding as production runs it, takes
+/// today's poll (`path_of` gives none for a complete setup): its answer is the
+/// poll's own, with no internal error, and the end of the poll finishes the
+/// setup.
+#[test]
+fn a_poll_after_a_crash_between_the_fast_forward_and_the_finish_ends_the_setup() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    crate::repository::remote::synthetic_fetch_error(SshTransportError {
+        root: world.root.clone(),
+        remote_name: OTHER.into(),
+        direction: SshDirection::Fetch,
+        selected_key_id: None,
+        authority: None,
+        kind: SshTransportErrorKind::TransportUnavailable,
+    });
+    let session = Scripted::new(vec![]);
+    session.real_poll.set(true);
+
+    let answer = run(&world, &session, false);
+
+    assert_eq!(
+        session.log(),
+        ["poll_once"],
+        "today's poll, not the setup poll"
+    );
+    assert_ne!(answer.code, ResultCode::InternalError, "{}", answer.message);
+    assert_eq!(
+        answer.code,
+        ResultCode::TransportUnavailable,
+        "{}",
+        answer.message
+    );
+    assert_eq!(request_state(&world), Some(RequestState::Finished));
+    // The end of the poll finished the setup, and its request.
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(world.local_ref(&world.branch_ref()), None);
+    assert_eq!(
+        world.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0
+    );
 }

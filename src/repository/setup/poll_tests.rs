@@ -11,12 +11,11 @@ use crate::{
     canonical::Integration,
     repository::{
         EnableRepositoryRequest, OperationId, RepositoryService, SetPublicationRemoteRequest,
-        mutation::Mutation,
         setup::{
             record::{self, SetupKind},
             test_world::{
                 CURRENT, NOW, OTHER, PRIMARY, SETUP, Stub, World, configuration, configuration_for,
-                dump,
+                create_ticket, dump,
             },
         },
         transport::SshTransportErrorKind,
@@ -380,171 +379,166 @@ fn the_merged_file_wins_over_the_intended_one() {
 /// After `Activated` the repository is registered as a direct enable plus a
 /// remote selection of the same configuration leaves it, and the setup is
 /// gone: its record, its local branch and the private ref. The setup's
-/// request, still accepted, is finished.
+/// request, still accepted, is finished. A first-time setup is compared with
+/// an enable and the selection of `origin`; a change on another remote, which
+/// begins from an enabled repository whose plan is `origin`'s, with an enable
+/// and the selections of `origin` and then `upstream`. Each is polled once
+/// before the merge, so that an attempt was recorded to be cleared.
 #[test]
 fn activation_leaves_the_repository_as_a_direct_enable_would() {
-    // A direct enable, then the selection of `origin`, as the merged file
-    // would be written.
-    let direct_data = tempfile::tempdir().unwrap();
-    let direct_root = tempfile::tempdir().unwrap();
-    let direct_root = direct_root.keep().canonicalize().unwrap();
-    {
-        let mut options = git2::RepositoryInitOptions::new();
-        options.initial_head(PRIMARY);
-        let repository = git2::Repository::init_opts(&direct_root, &options).unwrap();
-        let mut config = repository.config().unwrap();
-        config.set_str("user.name", "Fixture").unwrap();
-        config
-            .set_str("user.email", "fixture@example.invalid")
-            .unwrap();
-        std::fs::write(direct_root.join("README.md"), "readme").unwrap();
-        let mut index = repository.index().unwrap();
-        index.add_path(std::path::Path::new("README.md")).unwrap();
-        index.write().unwrap();
-        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
-        let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
-        repository
-            .commit(Some("HEAD"), &signature, &signature, "Base", &tree, &[])
-            .unwrap();
-        repository
-            .remote(CURRENT, "ssh://git@github.com/team/repo.git")
-            .unwrap();
-        // The setup world has the same two remotes.
-        repository
-            .remote(OTHER, "ssh://git@github.com/other/repo.git")
-            .unwrap();
-    }
-    let direct = RepositoryService::open_at(direct_data.path()).unwrap();
-    direct
-        .enable(EnableRepositoryRequest {
-            root: direct_root.clone(),
-            primary_branch: PRIMARY.into(),
-            identity: None,
-            operation_id: OperationId::new(),
-        })
-        .unwrap();
-    direct
-        .set_publication_remote(SetPublicationRemoteRequest {
-            root: direct_root.clone(),
-            name: Some(CURRENT.into()),
-            operation_id: OperationId::new(),
-        })
-        .unwrap();
-    let intended = std::fs::read(direct_root.join(crate::canonical::CONFIG_PATH)).unwrap();
-
-    // The setup, on a remote that is not the current one: a first-time
-    // setup is always on another remote.
-    let world = World::with_configuration(SetupKind::Enable, CURRENT, true, intended.clone());
-    let setup_commit = world.setup_commit();
-    world.squash(&intended);
-    let mut stub = world.stub();
-
-    let report = poll(&world, &mut stub).unwrap();
-
-    assert_eq!(report.outcome, SetupPollOutcome::Activated);
-    assert!(!report.differs);
-    // The setup is gone.
-    assert!(world.record().is_none());
-    assert_eq!(
-        world.local_ref(&world.branch_ref()),
-        None,
-        "the local branch"
-    );
-    assert_eq!(world.local_ref(&world.base_ref()), None, "the private ref");
-    assert_eq!(
-        world.remote_ref(&world.branch_ref()),
-        Some(setup_commit),
-        "the remote's branch is the forge's to delete"
-    );
-    // The remote-tracking ref of the setup's remote is the base.
-    assert_eq!(
-        world.local_ref(&format!("refs/remotes/{CURRENT}/{PRIMARY}")),
-        Some(world.remote_primary())
-    );
-    // The setup's request is finished, as its merged file is the intended
-    // one: `already_applied`, storing the setup.
-    let request = world.request();
-    assert_eq!(request.state, crate::repository::RequestState::Finished);
-    assert_eq!(
-        request.result.as_ref().unwrap().code,
-        ResultCode::AlreadyApplied
-    );
-
-    // The rows a direct enable and selection leave.
-    let db = world.db();
-    let direct_db =
-        rusqlite::Connection::open(direct_data.path().join(crate::repository::REGISTRY_FILE))
-            .unwrap();
-    for (table, skip) in [
-        (
-            "repositories",
-            &["id", "root_path", "enabled_at", "refreshed_at"][..],
-        ),
-        (
-            "configuration_observations",
-            &["id", "repository_id", "root_path", "observed_at"][..],
-        ),
-        ("remote_polling_state", &["repository_id"][..]),
+    for (kind, selections) in [
+        (SetupKind::Enable, vec![CURRENT]),
+        (SetupKind::Change, vec![CURRENT, OTHER]),
     ] {
+        let what = format!("{kind:?}");
+        let setup_remote = *selections.last().unwrap();
+        let direct_data = tempfile::tempdir().unwrap();
+        let direct_root = tempfile::tempdir().unwrap();
+        let direct_root = direct_root.keep().canonicalize().unwrap();
+        {
+            let mut options = git2::RepositoryInitOptions::new();
+            options.initial_head(PRIMARY);
+            let repository = git2::Repository::init_opts(&direct_root, &options).unwrap();
+            let mut config = repository.config().unwrap();
+            config.set_str("user.name", "Fixture").unwrap();
+            config
+                .set_str("user.email", "fixture@example.invalid")
+                .unwrap();
+            std::fs::write(direct_root.join("README.md"), "readme").unwrap();
+            let mut index = repository.index().unwrap();
+            index.add_path(std::path::Path::new("README.md")).unwrap();
+            index.write().unwrap();
+            let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+            let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+            repository
+                .commit(Some("HEAD"), &signature, &signature, "Base", &tree, &[])
+                .unwrap();
+            repository
+                .remote(CURRENT, "ssh://git@github.com/team/repo.git")
+                .unwrap();
+            // The setup world has the same two remotes.
+            repository
+                .remote(OTHER, "ssh://git@github.com/other/repo.git")
+                .unwrap();
+        }
+        let direct = RepositoryService::open_at(direct_data.path()).unwrap();
+        direct
+            .enable(EnableRepositoryRequest {
+                root: direct_root.clone(),
+                primary_branch: PRIMARY.into(),
+                identity: None,
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        for remote in &selections {
+            direct
+                .set_publication_remote(SetPublicationRemoteRequest {
+                    root: direct_root.clone(),
+                    name: Some((*remote).into()),
+                    operation_id: OperationId::new(),
+                })
+                .unwrap();
+        }
+        let intended = std::fs::read(direct_root.join(crate::canonical::CONFIG_PATH)).unwrap();
+
+        // The setup is on a remote that is not the current one.
+        let world = World::with_configuration(kind, setup_remote, true, intended.clone());
+        let setup_commit = world.setup_commit();
+        let mut stub = world.stub();
+        // Not merged yet: the poll waits, and a first-time setup records the
+        // attempt where the desktop reads it.
+        let waiting = poll(&world, &mut stub).unwrap();
+        assert_eq!(waiting.outcome, SetupPollOutcome::WaitingForMerge, "{what}");
         assert_eq!(
-            dump(&db, table, skip),
-            dump(&direct_db, table, skip),
-            "{table}"
+            attempt(&world).0.is_some(),
+            kind == SetupKind::Enable,
+            "{what}"
         );
-    }
+        world.squash(&intended);
 
-    // `repo inspect`, apart from the setup and the roots.
-    let mut after = world.service.inspect_repository(&world.root).unwrap();
-    let mut direct_inspection = direct.inspect_repository(&direct_root).unwrap();
-    assert!(after.setup.is_none());
-    for inspection in [&mut after, &mut direct_inspection] {
-        inspection.selected_path.clear();
-        inspection.root.clear();
-        inspection.operations.clear();
-    }
-    assert_eq!(
-        serde_json::to_value(&after).unwrap(),
-        serde_json::to_value(&direct_inspection).unwrap()
-    );
+        let report = poll(&world, &mut stub).unwrap();
 
-    // Writes are not refused: a ticket can be created.
-    let mut session = crate::repository::keys::SessionCredentials::new(NoPassphrase);
-    let created = world.service.execute(
-        crate::repository::MutationCall {
-            request_id: crate::repository::RequestId::new(),
-            confirmation: None,
-            mutation: Mutation::TicketCreate(crate::repository::TicketCreateInput {
-                root: world.root.clone(),
-                id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap(),
-                draft: crate::repository::TicketDraft {
-                    title: "A title".to_owned(),
-                    ticket_type: "task".to_owned(),
-                    status: "open".to_owned(),
-                    project: None,
-                    team: None,
-                    body: String::new(),
-                },
-                deps: Vec::new(),
-                parent: None,
-                initials: None,
-            }),
-        },
-        &mut session,
-        &mut crate::repository::NoProgress,
-        &crate::repository::CancellationToken::new(),
-    );
-    assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
-}
+        assert_eq!(report.outcome, SetupPollOutcome::Activated, "{what}");
+        assert!(!report.differs, "{what}");
+        // The setup is gone.
+        assert!(world.record().is_none(), "{what}");
+        assert_eq!(
+            world.local_ref(&world.branch_ref()),
+            None,
+            "{what}: the local branch"
+        );
+        assert_eq!(
+            world.local_ref(&world.base_ref()),
+            None,
+            "{what}: the private ref"
+        );
+        assert_eq!(
+            world.remote_ref(&world.branch_ref()),
+            Some(setup_commit),
+            "{what}: the remote's branch is the forge's to delete"
+        );
+        // The remote-tracking ref of the setup's remote is the base.
+        assert_eq!(
+            world.local_ref(&format!("refs/remotes/{setup_remote}/{PRIMARY}")),
+            Some(world.remote_primary()),
+            "{what}"
+        );
+        // The setup's request is finished, as its merged file is the intended
+        // one: `already_applied`, storing the setup.
+        let request = world.request();
+        assert_eq!(
+            request.state,
+            crate::repository::RequestState::Finished,
+            "{what}"
+        );
+        assert_eq!(
+            request.result.as_ref().unwrap().code,
+            ResultCode::AlreadyApplied,
+            "{what}"
+        );
 
-/// A session whose credentials are never asked for.
-struct NoPassphrase;
+        // The rows a direct enable and selections leave, the attempts of the
+        // earlier poll cleared.
+        let db = world.db();
+        let direct_db =
+            rusqlite::Connection::open(direct_data.path().join(crate::repository::REGISTRY_FILE))
+                .unwrap();
+        for (table, skip) in [
+            (
+                "repositories",
+                &["id", "root_path", "enabled_at", "refreshed_at"][..],
+            ),
+            (
+                "configuration_observations",
+                &["id", "repository_id", "root_path", "observed_at"][..],
+            ),
+            ("remote_polling_state", &["repository_id"][..]),
+        ] {
+            assert_eq!(
+                dump(&db, table, skip),
+                dump(&direct_db, table, skip),
+                "{what}: {table}"
+            );
+        }
 
-impl crate::repository::keys::SessionCredentialProvider for NoPassphrase {
-    fn request_passphrase(
-        &mut self,
-        _: &crate::repository::keys::UnlockRequest,
-    ) -> crate::repository::keys::PassphraseResponse {
-        panic!("an activation asks for no passphrase")
+        // `repo inspect`, apart from the setup and the roots.
+        let mut after = world.service.inspect_repository(&world.root).unwrap();
+        let mut direct_inspection = direct.inspect_repository(&direct_root).unwrap();
+        assert!(after.setup.is_none(), "{what}");
+        for inspection in [&mut after, &mut direct_inspection] {
+            inspection.selected_path.clear();
+            inspection.root.clear();
+            inspection.operations.clear();
+        }
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&direct_inspection).unwrap(),
+            "{what}"
+        );
+
+        // Writes are not refused: a ticket can be created.
+        let created = create_ticket(&world);
+        assert_eq!(created.code, ResultCode::Ok, "{what}: {}", created.message);
     }
 }
 
