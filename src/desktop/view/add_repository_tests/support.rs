@@ -76,6 +76,8 @@ pub(super) fn canned(root: &Path) -> RepositoryInspectionDto {
             primary_branch: None,
             publication_remote: None,
             problems: Vec::new(),
+            integration: None,
+            forge: None,
         },
         identity_state: IdentityAvailability::Available,
         remotes: Vec::new(),

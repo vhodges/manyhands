@@ -288,6 +288,11 @@ const REASONS: &[Row] = &[
         3,
         "A republish or abandon confirmation expires after ten minutes (src/repository/mutation/confirm.rs); the clock is the library's, which an isolated CLI child cannot advance, as C2 and C3 record.",
     ),
+    reason(
+        "primary_has_local_commits",
+        3,
+        "Only a pull-request repository refuses a local primary commit, and the C4 binary table has no pull-request repository: its publication remote must be SSH, so the case is the library's SSH case in tests/mutation_remote.rs, which writes the golden repo_sync_primary_has_local_commits.",
+    ),
     #[cfg(not(unix))]
     reason(
         "unlock_failed",
@@ -322,9 +327,9 @@ fn union() -> BTreeSet<&'static str> {
 #[test]
 fn the_c4_table_and_reasons_account_for_every_code_of_the_audit() {
     let library = union();
-    assert_eq!(library.len(), 48);
+    assert_eq!(library.len(), 49);
     let expected = set(library.iter().copied().chain(CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 50);
+    assert_eq!(expected.len(), 51);
     let covered = set(ROWS.iter().map(|row| row.code));
     let reasons = set(REASONS.iter().map(|row| row.code));
     assert_eq!(covered.len(), ROWS.len(), "a code appears twice");

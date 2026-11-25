@@ -72,6 +72,8 @@ publication remote are observed metadata, not an editable duplicate in SQLite.
 A missing, malformed, inaccessible, or unsupported configuration becomes a
 problem record with recovery guidance.
 
+Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the configuration observation also stores the repository's mode and forge, as four nullable text columns of `configuration_observations`: `integration`, `forge_kind`, `forge_web_url` and `forge_pull_request_url`. A valid configuration fills them (`integration` is `direct` or `pull_request`, and the forge columns are null without a `[forge]` table); any other configuration leaves them null. They are the configured setting, read from the file, and `repo list` reports them from the index. A valid row whose `integration` is null, written before the migration and not yet refreshed, reads as `direct` with no forge. One named, additive migration, marker `wave_06_pull_request_mode_v1`, adds the four columns, and marks every registration's primary context dirty, so that the next refresh re-observes each primary once and fills the columns. The same migration adds `pull_only` to `remote_operation_records`, which records whether a remote operation began pull-only (see the [Git workflow RFC](git-workflow-and-conflict-recovery.md#deliberate-primary-synchronization)); a row from before it reads as direct. The migration is one-way, as the registry's other migrations are. A build without it that refreshes a migrated registry writes the configuration row without the new columns and clears the dirty mark, so `repo list` shows the mode as direct with no forge until the primary next changes. `repo inspect` reads the file and is not affected.
+
 ## Context Discovery
 
 Each index-only refresh discovers:

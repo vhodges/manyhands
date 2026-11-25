@@ -102,6 +102,7 @@
             "merge_required",
             "remote_branch_deleted",
             "push_rejected",
+            "primary_has_local_commits",
             "no_selected_key",
             "key_unavailable",
             "key_rejected",

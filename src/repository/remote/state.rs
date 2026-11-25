@@ -6599,10 +6599,15 @@ pub(in super::super) fn insert_operation(
         target,
         priority,
         (target.action() == RemoteOperationAction::Poll).then_some(PollKind::Observe),
+        false,
         created_at,
     )
 }
 
+/// `insert_operation`, with the row's poll kind and its mode: `pull_only`
+/// is stored here, in the INSERT, and a trigger refuses any later change
+/// (R-11).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_operation_with_kind(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -6610,6 +6615,7 @@ pub(super) fn insert_operation_with_kind(
     target: &RemoteOperationTarget,
     priority: RemoteOperationPriority,
     poll_kind: Option<PollKind>,
+    pull_only: bool,
     created_at: i64,
 ) -> Result<i64, RepositoryError> {
     read_snapshot(transaction, repository_id)?;
@@ -6636,7 +6642,7 @@ pub(super) fn insert_operation_with_kind(
         PollKind::Observe => "observe",
         PollKind::Update => "update",
     });
-    transaction.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,phase,created_at,updated_at,poll_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'reserved',?15,?15,?16)",params![repository_id,operation_id.to_string(),policy.generation,target.remote_name(),plan.primary_branch(),target.primary_ref().remote_ref(),target.primary_ref().tracking_ref(),target.context_ref().map(RemoteRefTarget::remote_ref),target.context_ref().map(RemoteRefTarget::tracking_ref),target.item().map(|(kind,_)|match kind {AuthoringKind::Document=>"document",AuthoringKind::Ticket=>"ticket"}),target.item().map(|(_,id)|id.to_string()),target.local_branch(),action,priority,created_at,poll_kind]).map_err(|_| recovery_required())?;
+    transaction.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,context_ref,context_tracking_ref,kind,item_id,local_branch,action,priority,phase,created_at,updated_at,poll_kind,pull_only) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'reserved',?15,?15,?16,?17)",params![repository_id,operation_id.to_string(),policy.generation,target.remote_name(),plan.primary_branch(),target.primary_ref().remote_ref(),target.primary_ref().tracking_ref(),target.context_ref().map(RemoteRefTarget::remote_ref),target.context_ref().map(RemoteRefTarget::tracking_ref),target.item().map(|(kind,_)|match kind {AuthoringKind::Document=>"document",AuthoringKind::Ticket=>"ticket"}),target.item().map(|(_,id)|id.to_string()),target.local_branch(),action,priority,created_at,poll_kind,i64::from(pull_only)]).map_err(|_| recovery_required())?;
     let record_id = transaction.last_insert_rowid();
     if matches!(
         target.action(),
@@ -6645,6 +6651,25 @@ pub(super) fn insert_operation_with_kind(
         transaction.execute("INSERT INTO remote_integration_windows(operation_record_id,number,configuration_generation,owner_epoch,kind) VALUES(?1,0,?2,0,'legacy')", params![record_id, policy.generation]).map_err(|_| recovery_required())?;
     }
     Ok(record_id)
+}
+
+/// Whether the row `record_id` is pull-only, as its INSERT stored it.
+pub(super) fn read_pull_only(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<bool, RepositoryError> {
+    match connection
+        .query_row(
+            "SELECT pull_only FROM remote_operation_records WHERE id=?1",
+            [record_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| recovery_required())?
+    {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(recovery_required()),
+    }
 }
 
 struct StoredPolicy {

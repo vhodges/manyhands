@@ -3,11 +3,12 @@ mod support;
 use std::{fs, path::PathBuf, str::FromStr};
 
 use manyhands::canonical::{
-    CONFIG_PATH, CanonicalItem, InitialsProblem, ItemId, RELATIONSHIP_KEYS, RelationshipProblem,
-    RelationshipProblemCode, RepositoryConfig, SlugSettingsProblem, Ticket, TicketRelationships,
-    ValidationCode, compose_slug, derive_initials, is_valid_slug, normalize_initials,
-    normalized_slug, ordered_comment_threads, parse_item, parse_repository_config, serialize_item,
-    serialize_repository_config, short_code, slug_settings, ticket_relationships, validate_context,
+    CONFIG_PATH, CanonicalItem, ForgeKind, ForgeSetting, InitialsProblem, Integration, ItemId,
+    RELATIONSHIP_KEYS, RelationshipProblem, RelationshipProblemCode, RepositoryConfig,
+    SlugSettingsProblem, Ticket, TicketRelationships, ValidationCode, compose_slug,
+    derive_initials, is_valid_slug, normalize_initials, normalized_slug, ordered_comment_threads,
+    parse_item, parse_repository_config, serialize_item, serialize_repository_config, short_code,
+    slug_settings, ticket_relationships, validate_context,
 };
 use std::path::Path;
 
@@ -329,7 +330,7 @@ fn config_reports_structured_errors_for_invalid_input() {
             ValidationCode::InvalidField,
         ),
         (
-            "format_version = 2\nprimary_branch = \"main\"",
+            "format_version = 3\nprimary_branch = \"main\"",
             ValidationCode::InvalidField,
         ),
         ("format_version = 1", ValidationCode::MissingField),
@@ -358,6 +359,231 @@ fn config_reports_structured_errors_for_invalid_input() {
         assert_eq!(error.code, code, "{source}");
         assert!(!error.message.is_empty());
     }
+}
+
+#[test]
+fn repository_config_mode_and_forge_rules() {
+    const HEAD_1: &str = "format_version = 1\nprimary_branch = \"main\"\n";
+    const HEAD_2: &str = "format_version = 2\nprimary_branch = \"main\"\n";
+    const REMOTE: &str = "publication_remote = \"origin\"\n";
+    let accepted = [
+        (HEAD_1.to_owned(), Integration::Direct, None),
+        (HEAD_2.to_owned(), Integration::Direct, None),
+        (
+            format!("{HEAD_1}integration = \"direct\"\n"),
+            Integration::Direct,
+            None,
+        ),
+        (
+            format!("{HEAD_2}{REMOTE}integration = \"pull_request\"\n"),
+            Integration::PullRequest,
+            None,
+        ),
+        (
+            format!(
+                "{HEAD_2}{REMOTE}integration = \"pull_request\"\n[forge]\nkind = \"bitbucket-data-center\"\nweb_url = \"https://bitbucket.example.com\"\nextra = true\n"
+            ),
+            Integration::PullRequest,
+            Some(ForgeSetting {
+                kind: Some(ForgeKind::BitbucketDataCenter),
+                web_url: Some("https://bitbucket.example.com".into()),
+                pull_request_url: None,
+            }),
+        ),
+        (
+            format!(
+                "{HEAD_1}[forge]\npull_request_url = \"https://forge.example/new?from={{source}}\"\n"
+            ),
+            Integration::Direct,
+            Some(ForgeSetting {
+                kind: None,
+                web_url: None,
+                pull_request_url: Some("https://forge.example/new?from={source}".into()),
+            }),
+        ),
+        (
+            format!(
+                "{HEAD_1}[forge]\nkind = \"gitlab\"\nweb_url = \"http://gitlab.example.com\"\n"
+            ),
+            Integration::Direct,
+            Some(ForgeSetting {
+                kind: Some(ForgeKind::Gitlab),
+                web_url: Some("http://gitlab.example.com".into()),
+                pull_request_url: None,
+            }),
+        ),
+        (
+            format!("{HEAD_1}[forge]\nkind = \"github\"\n"),
+            Integration::Direct,
+            Some(ForgeSetting {
+                kind: Some(ForgeKind::Github),
+                web_url: None,
+                pull_request_url: None,
+            }),
+        ),
+    ];
+    for (source, integration, forge) in accepted {
+        let parsed = parse_repository_config(&source).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert_eq!(parsed.integration(), integration, "{source}");
+        assert_eq!(parsed.forge(), forge, "{source}");
+        let written = serialize_repository_config(&parsed).unwrap();
+        assert_eq!(
+            parse_repository_config(&written).unwrap(),
+            parsed,
+            "{source}"
+        );
+    }
+
+    let version_message = "unsupported format_version; expected 1 or 2";
+    let mode_message = "integration must be \"direct\" or \"pull_request\"";
+    let kind_message =
+        "forge.kind must be one of bitbucket-cloud, bitbucket-data-center, github, gitlab";
+    let web_url_message = "forge.web_url must be an absolute http or https URL";
+    let template_message = "forge.pull_request_url must contain {source}";
+    let template_url_message = "forge.pull_request_url must be an absolute http or https URL";
+    let refused = [
+        (
+            format!("{HEAD_1}{REMOTE}integration = \"pull_request\"\n"),
+            "integration = \"pull_request\" requires format_version = 2",
+        ),
+        (
+            format!("{HEAD_2}integration = \"pull_request\"\n"),
+            "integration = \"pull_request\" requires publication_remote",
+        ),
+        (
+            format!("{HEAD_2}{REMOTE}integration = \"Pull_Request\"\n"),
+            mode_message,
+        ),
+        (format!("{HEAD_2}{REMOTE}integration = 1\n"), mode_message),
+        (
+            "format_version = 3\nprimary_branch = \"main\"\n".into(),
+            version_message,
+        ),
+        (
+            "format_version = 0\nprimary_branch = \"main\"\n".into(),
+            version_message,
+        ),
+        (
+            format!("{HEAD_2}forge = \"github\"\n"),
+            "forge must be a table",
+        ),
+        (
+            format!("{HEAD_2}[forge]\n"),
+            "forge needs a kind or a pull_request_url",
+        ),
+        (
+            format!("{HEAD_2}[forge]\nweb_url = \"https://example.com\"\n"),
+            "forge needs a kind or a pull_request_url",
+        ),
+        (
+            format!("{HEAD_2}[forge]\nkind = \"GitHub\"\n"),
+            kind_message,
+        ),
+        (format!("{HEAD_2}[forge]\nkind = 1\n"), kind_message),
+        (
+            format!("{HEAD_2}[forge]\nkind = \"github\"\nweb_url = \"bitbucket.example.com\"\n"),
+            web_url_message,
+        ),
+        (
+            format!(
+                "{HEAD_2}[forge]\nkind = \"github\"\nweb_url = \"https://bitbucket example.com\"\n"
+            ),
+            web_url_message,
+        ),
+        (
+            format!("{HEAD_2}[forge]\nkind = \"github\"\nweb_url = \"https://\"\n"),
+            web_url_message,
+        ),
+        (
+            format!(
+                "{HEAD_2}[forge]\nkind = \"github\"\nweb_url = \"https://exa\\u0007mple.com\"\n"
+            ),
+            web_url_message,
+        ),
+        (
+            format!("{HEAD_2}[forge]\nkind = \"github\"\nweb_url = 3\n"),
+            web_url_message,
+        ),
+        (
+            format!("{HEAD_2}[forge]\npull_request_url = \"/new?from={{source}}\"\n"),
+            template_url_message,
+        ),
+        (
+            format!("{HEAD_2}[forge]\npull_request_url = \"https://forge.example/new\"\n"),
+            template_message,
+        ),
+    ];
+    for (source, message) in refused {
+        let error = parse_repository_config(&source).unwrap_err();
+        assert_eq!(error.code, ValidationCode::InvalidField, "{source}");
+        assert_eq!(error.message, message, "{source}");
+        assert_eq!(error.path.to_string_lossy(), CONFIG_PATH);
+    }
+
+    // The serializer applies the same rules to a hand-built configuration.
+    let mut built = parse_repository_config(HEAD_1).unwrap();
+    built.unknown.insert(
+        "integration".into(),
+        toml::Value::String("pull_request".into()),
+    );
+    assert_eq!(built.integration(), Integration::PullRequest);
+    let error = serialize_repository_config(&built).unwrap_err();
+    assert_eq!(error.code, ValidationCode::InvalidField);
+    assert_eq!(
+        error.message,
+        "integration = \"pull_request\" requires publication_remote"
+    );
+    built.unknown.insert(
+        "integration".into(),
+        toml::Value::String("Pull_Request".into()),
+    );
+    assert_eq!(built.integration(), Integration::Direct);
+    assert_eq!(
+        serialize_repository_config(&built).unwrap_err().message,
+        mode_message
+    );
+    built.unknown.remove("integration");
+    built
+        .unknown
+        .insert("forge".into(), toml::Value::Table(toml::Table::new()));
+    assert_eq!(built.forge(), None);
+    assert!(serialize_repository_config(&built).is_err());
+}
+
+#[test]
+fn repository_config_written_bytes() {
+    let direct = "format_version = 1\nprimary_branch = \"main\"\n";
+    let parsed = parse_repository_config(direct).unwrap();
+    assert_eq!(serialize_repository_config(&parsed).unwrap(), direct);
+
+    let version_two_direct =
+        parse_repository_config("format_version = 2\nprimary_branch = \"main\"\n").unwrap();
+    assert_eq!(
+        serialize_repository_config(&version_two_direct).unwrap(),
+        direct
+    );
+
+    let mut pull_request = parse_repository_config(direct).unwrap();
+    pull_request.publication_remote = Some("origin".into());
+    pull_request.unknown.insert(
+        "integration".into(),
+        toml::Value::String("pull_request".into()),
+    );
+    assert_eq!(
+        serialize_repository_config(&pull_request).unwrap(),
+        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+    );
+
+    let with_forge = "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n\n[forge]\nextra = true\nkind = \"github\"\n";
+    let parsed = parse_repository_config(with_forge).unwrap();
+    let written = serialize_repository_config(&parsed).unwrap();
+    assert_eq!(written, with_forge);
+    let reparsed = parse_repository_config(&written).unwrap();
+    assert_eq!(reparsed.forge().unwrap().kind, Some(ForgeKind::Github));
+    assert_eq!(
+        reparsed.unknown["forge"]["extra"],
+        toml::Value::Boolean(true)
+    );
 }
 
 #[test]
