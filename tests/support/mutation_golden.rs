@@ -204,6 +204,7 @@ pub const CASES: &[&str] = &[
     "repo_sync_key_unavailable",
     "repo_sync_no_selected_key",
     "repo_sync_poll_yielding",
+    "repo_sync_primary_has_local_commits",
     "repo_sync_publication_remote_required",
     "repo_sync_push_rejected",
     "repo_sync_recovery_required",
@@ -358,9 +359,9 @@ pub fn progress_fixture(name: &str) -> PathBuf {
 
 /// Checks an envelope against its fixture as `assert_contract` does, with
 /// what differs from run to run replaced: the repository's root, the
-/// commit and the operation ID of the envelope, and `replaced`.
-/// `data_schema` is the schema of the data the envelope carries, and
-/// `None` says it carries none.
+/// commit and the operation ID of the envelope, the local commits a
+/// pull-only refusal lists, and `replaced`. `data_schema` is the schema of
+/// the data the envelope carries, and `None` says it carries none.
 pub fn assert_contract_at(
     name: &str,
     root: &str,
@@ -377,6 +378,14 @@ pub fn assert_contract_at(
     ] {
         if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {
             placeholders.push((found, placeholder));
+        }
+    }
+    let local_commits = value
+        .pointer("/data/local_commits")
+        .and_then(|found| found.as_array());
+    for commit in local_commits.into_iter().flatten() {
+        if let Some(found) = commit.get("oid").and_then(|found| found.as_str()) {
+            placeholders.push((found, "<local-commit>"));
         }
     }
     assert_contract(

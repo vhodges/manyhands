@@ -688,11 +688,11 @@ force the path. The groups are:
 | --- | --- | --- | --- |
 | `comment add` | M + R + U + I + T + Y + A | 41 | Comment Submission, required outcomes; Exit Statuses |
 | `item sync` | M + R + U + I + T + Y | 37 | Merging Synchronization, required outcomes |
-| `repo sync` | M + R + U + T + Y | 37 | the same table |
+| `repo sync` | M + R + U + T + Y + `primary_has_local_commits` | 38 | the same table. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added. |
 | `item republish` | M + R + C + I + T + Y + `ticket_closed` | 42 | Republish, required outcomes; decision 17 |
 | `conflict show` | P + S + `repository_not_registered operation_not_found invalid_input` | 12 | Conflict Inspection, required outcomes; R-12 (`busy`). Amended 2026-10-30 by C4 (Task 0's review): this row read R and counted 13. A read answers a never-enabled root as `repository_not_registered` (`read/mod.rs`, `repository_error_code`), so `repository_not_enabled` is not one of its codes. The union is unchanged |
 | `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required` | 40 | Conflict Resolution steps 1–7; interrupted-resolution table |
-| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path` | 40 | Resume (R-20); `bind/resume.rs:104-483` |
+| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path primary_has_local_commits` | 41 | Resume (R-20); `bind/resume.rs:104-483`. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added, because a resume of a pull-only `repo sync` can answer it. |
 | `operation abandon` | M + R + C + `operation_not_found invalid_input already_applied recovery_required invalid_path` | 23 | `bind/abandon.rs:104-413` (unchanged); decision 6 |
 
 Notes on the sets, from the source:
@@ -737,12 +737,12 @@ operation's *local* row, not by its publication:
 
 #### C4 exit-coverage union
 
-The eight row sets expand to these **48 library codes**. `tests/cli/collaboration_exits.rs`
+The eight row sets expand to these **48 library codes** (49 since 2026-11-24; see the amendment below the block). `tests/cli/collaboration_exits.rs`
 (Task 13) asserts set equality with this block (R-27), mapping each code to a
 binary row or to an individually justified reason that no fixture reaches it.
 
 ```text
-already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding primary_has_local_commits publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
 ```
 
 Three exclusions, each deliberate:
@@ -757,6 +757,8 @@ Three exclusions, each deliberate:
   Task 2b adds it to this block with its reason, and Task 13 follows.
 - **`host_mismatch`, `request_not_found` and the key-registry codes.** Only the
   host-approval, request-read and key bindings return them.
+
+Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): `repo sync` can answer the new code `primary_has_local_commits` in a pull-request repository, so the block above now holds it, and the union is **49 library codes** and **51 CLI-inclusive codes**. `tests/cli/collaboration_exits.rs` counts 49 and 51, and records the code with a reason, because the C4 binary table has no pull-request repository. The code's golden is `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`, and the CLI contract's recovery tables hold its row.
 
 The CLI-only additions are unchanged from C3: `usage_error`, `invalid_input`,
 `invalid_id`, `invalid_path`, `cancelled` and `internal_error`. Only
@@ -809,7 +811,8 @@ relative to `src/repository/`.
   `schemas/input/v1/`: `comment_add` and `conflict_resolve`, with examples
   under `tests/fixtures/cli_input_v1/`.
 - **Codes.** The union above is unchanged: 48 library codes, 50 with the
-  CLI's own. `tests/cli/collaboration_exits.rs` reads it and asserts set
+  CLI's own (49 and 51 since 2026-11-24, as the amendment after the union
+  says). `tests/cli/collaboration_exits.rs` reads it and asserts set
   equality. Each code is reached through the binary by a C4 verb, or has a
   reason: `remote_unavailable` and `confirmation_expired`, and off Unix also
   `unlock_failed` and `original_request_required`.

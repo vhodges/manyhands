@@ -3,7 +3,14 @@
   "title": "Manyhands JSON v1 repository configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["state", "primary_branch", "publication_remote", "problems"],
+  "required": [
+    "state",
+    "primary_branch",
+    "publication_remote",
+    "problems",
+    "integration",
+    "forge"
+  ],
   "properties": {
     "state": {
       "type": "string",
@@ -19,6 +26,33 @@
       "type": "array",
       "items": {
         "$ref": "problem.schema.json"
+      }
+    },
+    "integration": {
+      "type": ["string", "null"],
+      "enum": ["direct", "pull_request", null]
+    },
+    "forge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["kind", "web_url", "pull_request_url"],
+      "properties": {
+        "kind": {
+          "type": ["string", "null"],
+          "enum": [
+            "bitbucket-cloud",
+            "bitbucket-data-center",
+            "github",
+            "gitlab",
+            null
+          ]
+        },
+        "web_url": {
+          "type": ["string", "null"]
+        },
+        "pull_request_url": {
+          "type": ["string", "null"]
+        }
       }
     }
   }
