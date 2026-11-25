@@ -3,14 +3,14 @@
 //! provisioned, and the exempt writes are not.
 use super::*;
 use crate::{
-    canonical::ItemId,
+    canonical::{Integration, ItemId},
     repository::{
         AuthoringKind, AuthoringTarget, ContextIntent, ContextProvisionOutcome, DocumentDraft,
-        EnableRepositoryRequest, ExpectedPathObservation, FailurePoint, LocalCheckpoint,
-        OperationId, REGISTRY_FILE, ReadError, RelationshipWrite, RepairItemRequest,
-        RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-        SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
-        TicketWriteOptions,
+        EnableRepositoryRequest, ExpectedPathObservation, FailurePoint, ItemRepublishInput,
+        ItemResolveHistoryInput, LocalCheckpoint, Mutation, OperationId, REGISTRY_FILE, ReadError,
+        RelationshipWrite, RepairItemRequest, RepositoryError, RepositoryErrorKind,
+        RepositoryOperation, RepositoryService, ResolveHistoryChoice, SaveDocumentRequest,
+        SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft, TicketWriteOptions,
     },
     results::ResultCode,
 };
@@ -185,6 +185,20 @@ impl Fixture {
     fn context(&self) -> Repository {
         self.prepare(OperationId::new()).unwrap();
         Repository::open(self.worktree(ID)).unwrap()
+    }
+    /// Commits the repository's configuration for `mode`, with a
+    /// publication remote so the bindings that need one reach the guard.
+    fn configure(&self, mode: Integration) {
+        let source = match mode {
+            Integration::Direct => {
+                "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+            }
+            Integration::PullRequest => {
+                "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+            }
+        };
+        write(&self.repo, ".manyhands/config.toml", source);
+        commit(&self.repo);
     }
     fn close_on_primary(&self) {
         write(&self.repo, &ticket_path(ID), source(ID, CLOSURE));
@@ -520,19 +534,19 @@ fn refused_error_maps_to_ticket_closed_result_code() {
 fn guard_reads_branch_tips_only() {
     let f = Fixture::new("");
     let item = id(ID);
-    require_ticket_open(&f.repo, "main", &item).unwrap();
+    require_ticket_open(&f.repo, "main", &item, Integration::Direct).unwrap();
     // A closed primary working tree is not the primary branch tip.
     write(&f.repo, &ticket_path(ID), source(ID, CLOSURE));
-    require_ticket_open(&f.repo, "main", &item).unwrap();
+    require_ticket_open(&f.repo, "main", &item, Integration::Direct).unwrap();
     commit(&f.repo);
     assert_eq!(
-        require_ticket_open(&f.repo, "main", &item)
+        require_ticket_open(&f.repo, "main", &item, Integration::Direct)
             .unwrap_err()
             .kind,
         RepositoryErrorKind::TicketClosed
     );
     // A primary branch that does not exist holds no closed copy.
-    require_ticket_open(&f.repo, "missing", &item).unwrap();
+    require_ticket_open(&f.repo, "missing", &item, Integration::Direct).unwrap();
     // One closure key alone closes, as for the closure observation.
     let other = id(OTHER);
     write(
@@ -542,7 +556,7 @@ fn guard_reads_branch_tips_only() {
     );
     commit(&f.repo);
     assert_eq!(
-        require_ticket_open(&f.repo, "main", &other)
+        require_ticket_open(&f.repo, "main", &other, Integration::Direct)
             .unwrap_err()
             .kind,
         RepositoryErrorKind::TicketClosed
@@ -579,4 +593,211 @@ fn save_document_with_ticket_target_provisions_nothing() {
     assert!(!f.worktree(ID).exists(), "no worktree is made");
     f.assert_primary_clean();
     assert_eq!(f.row(operation_id), rejected());
+}
+
+/// Where a ticket's closure fields are committed.
+#[derive(Clone, Copy, Debug)]
+enum ClosureAt {
+    Primary,
+    Branch,
+    Both,
+    Neither,
+}
+
+/// A repository in `mode` whose ticket has an editing context, with the
+/// closure committed where `at` says.
+fn closed_at(mode: Integration, at: ClosureAt) -> Fixture {
+    let f = Fixture::new("");
+    f.configure(mode);
+    let context = f.context();
+    if matches!(at, ClosureAt::Branch | ClosureAt::Both) {
+        write(&context, &ticket_path(ID), source(ID, CLOSURE));
+        commit(&context);
+    }
+    if matches!(at, ClosureAt::Primary | ClosureAt::Both) {
+        f.close_on_primary();
+    }
+    f
+}
+
+/// `ticket save`, slug assignment, `context prepare`, `comment add`,
+/// `item republish` and `item resolve-history` on a ticket: whether the
+/// guard refused each with `ticket_closed`. Each runs on a fixture of its
+/// own, since a write that goes through changes what the next one meets.
+fn refusals(mode: Integration, at: ClosureAt) -> Vec<(&'static str, bool)> {
+    let refused = |result: Result<(), RepositoryError>| match result {
+        Ok(()) => false,
+        Err(error) if error.kind == RepositoryErrorKind::TicketClosed => true,
+        Err(error) => panic!("refused for another reason: {error:?}"),
+    };
+    let binding_refused = |mutation: &dyn Fn(&Fixture) -> Mutation| {
+        let f = closed_at(mode, at);
+        f.service.prepare(&mutation(&f)).code == ResultCode::TicketClosed
+    };
+    vec![
+        (
+            "save",
+            refused(closed_at(mode, at).save(ContextIntent::Edit).map(|_| ())),
+        ),
+        (
+            "slug",
+            refused({
+                let f = closed_at(mode, at);
+                f.service
+                    .save_ticket_with(
+                        f.request(ID, ContextIntent::Edit, OperationId::new()),
+                        TicketWriteOptions {
+                            slug: Some("ab-1".into()),
+                            ..TicketWriteOptions::default()
+                        },
+                    )
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "prepare",
+            refused(closed_at(mode, at).prepare(OperationId::new()).map(|_| ())),
+        ),
+        (
+            "comment",
+            refused({
+                let f = closed_at(mode, at);
+                let operation_id = OperationId::new();
+                f.service
+                    .checkpoint_comment_locally(
+                        SubmitCommentRequest {
+                            target: f.target(ID, ContextIntent::Edit, operation_id),
+                            comment_id: id(COMMENT),
+                            parent_id: None,
+                            body: "A comment.\n".into(),
+                            expected_destination: ExpectedPathObservation::Missing,
+                        },
+                        None,
+                    )
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "republish",
+            binding_refused(&|f| {
+                Mutation::ItemRepublish(ItemRepublishInput {
+                    root: f.root.path().into(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(ID),
+                })
+            }),
+        ),
+        (
+            "resolve-history",
+            binding_refused(&|f| {
+                Mutation::ItemResolveHistory(ItemResolveHistoryInput {
+                    root: f.root.path().into(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(ID),
+                    choice: ResolveHistoryChoice::Publish,
+                })
+            }),
+        ),
+    ]
+}
+
+/// R-10: a closure on the local primary refuses every write in both modes;
+/// one on the ticket's branch refuses in direct mode only, since in a
+/// pull-request repository a closing ticket has its closure only there.
+#[test]
+fn the_guard_reads_the_primary_only_in_pull_request_mode() {
+    for mode in [Integration::Direct, Integration::PullRequest] {
+        for at in [
+            ClosureAt::Primary,
+            ClosureAt::Branch,
+            ClosureAt::Both,
+            ClosureAt::Neither,
+        ] {
+            let refused = match at {
+                ClosureAt::Primary | ClosureAt::Both => true,
+                ClosureAt::Branch => mode == Integration::Direct,
+                ClosureAt::Neither => false,
+            };
+            for (caller, answered) in refusals(mode, at) {
+                assert_eq!(
+                    answered, refused,
+                    "{caller} in {mode:?} with the closure at {at:?}"
+                );
+            }
+        }
+    }
+}
+
+const CLOSURE_MOVED: &str =
+    "closed_at: 2026-10-03T12:34:56Z\nclosed_by: Fixture <fixture@example.invalid>\n";
+const CLOSURE_BY_OTHER: &str =
+    "closed_at: 2026-10-02T12:34:56Z\nclosed_by: Other <other@example.invalid>\n";
+
+/// R-11: a save, in either mode, never changes `closed_at` or `closed_by`
+/// from what the context's head holds: a file edited by hand to add,
+/// change or drop them is refused with `invalid_input` and nothing is
+/// committed, and a save that leaves them alone keeps the head's.
+///
+/// A head with closure fields is reachable only in a pull-request
+/// repository: in direct mode the guard refuses such a branch first
+/// (`dirty_draft_cannot_hide_closure`).
+#[test]
+fn a_save_cannot_change_the_closure() {
+    // (mode, the closure the head holds, what the worktree file holds)
+    let rows = [
+        (Integration::Direct, "", CLOSURE),
+        (Integration::Direct, "", CLOSURE_MOVED),
+        (Integration::PullRequest, "", CLOSURE),
+        (Integration::PullRequest, CLOSURE, CLOSURE_MOVED),
+        (Integration::PullRequest, CLOSURE, CLOSURE_BY_OTHER),
+        (Integration::PullRequest, CLOSURE, ""),
+    ];
+    for (mode, head, edited) in rows {
+        let f = Fixture::new("");
+        f.configure(mode);
+        let context = f.context();
+        if !head.is_empty() {
+            write(&context, &ticket_path(ID), source(ID, head));
+            commit(&context);
+        }
+        let before = context.head().unwrap().target();
+        write(&context, &ticket_path(ID), source(ID, edited));
+        let operation_id = OperationId::new();
+
+        let error = f
+            .service
+            .save_ticket(f.request(ID, ContextIntent::Edit, operation_id))
+            .err()
+            .expect("the save was made");
+
+        let row = format!("{mode:?}, head {head:?}, file {edited:?}");
+        assert_eq!(error.kind, RepositoryErrorKind::InvalidItemSource, "{row}");
+        assert_eq!(error.operation, RepositoryOperation::SaveTicket, "{row}");
+        assert_eq!(
+            crate::repository::mutation::repository_error_code(error.kind),
+            ResultCode::InvalidInput,
+            "{row}"
+        );
+        assert_eq!(context.head().unwrap().target(), before, "{row}");
+        assert_eq!(f.row(operation_id), rejected(), "{row}");
+        assert_eq!(
+            read(&context, &ticket_path(ID)),
+            source(ID, edited).into_bytes(),
+            "{row}"
+        );
+    }
+
+    // A save of a closing ticket's title keeps the closure of the head.
+    let f = Fixture::new("");
+    f.configure(Integration::PullRequest);
+    let context = f.context();
+    write(&context, &ticket_path(ID), source(ID, CLOSURE));
+    commit(&context);
+    let mut request = f.request(ID, ContextIntent::Edit, OperationId::new());
+    request.draft.title = "Renamed".into();
+    let saved = checkpointed(f.service.save_ticket(request).unwrap());
+    assert_eq!(context.head().unwrap().target(), Some(saved));
+    let written = String::from_utf8(read(&context, &ticket_path(ID))).unwrap();
+    assert!(written.contains("title: Renamed\n"), "{written}");
+    assert!(written.contains(CLOSURE), "{written}");
 }

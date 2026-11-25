@@ -313,8 +313,13 @@ fn refuse_closed_ticket(
     else {
         return Ok(());
     };
-    ticket_guard::require_ticket_open(repository, &configuration.primary_branch, &target.item_id)
-        .map_err(|error| error.for_operation(operation, root))
+    ticket_guard::require_ticket_open(
+        repository,
+        &configuration.primary_branch,
+        &target.item_id,
+        configuration.integration(),
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
@@ -3279,6 +3284,18 @@ impl RepositoryService {
                     &context.root,
                     RepositoryErrorKind::InvalidPath,
                     "ticket ID does not match the selected target",
+                ));
+            }
+            // A save never changes the closure: a person who edits those
+            // fields by hand is refused, in both modes (R-11).
+            if ticket_guard::closure_differs_from_head(&repository, &ticket)
+                .map_err(|error| error.for_operation(operation, &context.root))?
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::InvalidItemSource,
+                    "a ticket save does not change the ticket's closure",
                 ));
             }
             if !record.is_new {

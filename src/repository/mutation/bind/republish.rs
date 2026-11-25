@@ -199,7 +199,13 @@ impl ItemRepublishBinding {
         let git = git2::Repository::open(&root)
             .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
         if self.kind == AuthoringKind::Ticket {
-            require_ticket_open(&git, &configuration.primary_branch, &self.id).map_err(refused)?;
+            require_ticket_open(
+                &git,
+                &configuration.primary_branch,
+                &self.id,
+                configuration.integration(),
+            )
+            .map_err(refused)?;
         }
         let branch_ref = context_names(&root, &self.kind, &self.id.to_string()).branch_ref;
         let local = match git.refname_to_id(&branch_ref) {
