@@ -31,6 +31,7 @@ use crate::{
         },
         remote::{state, sync},
         repository_lease,
+        transport::SshTransportErrorKind,
     },
 };
 use git2::Oid;
@@ -1138,29 +1139,73 @@ pub(in super::super) fn branch_step<E: LifecycleError>(
 }
 
 /// What a branch record answers after its publication child, by the table
-/// of its stop and its result (rows 6 to 9): whether the closure the child
-/// published is the record's own, another one, or none. `None` when the
-/// child's stop stands. This record's closure is the one it wrote, or the
-/// one the context already held.
+/// of its stop and its result, in its order: the tracking primary as the
+/// child left it (rows 1 and 2: whether the forge merged this closure or
+/// another, whatever the child answered), a deleted remote branch or a
+/// closed ticket (rows 3 and 4), a publication remote that changed or is
+/// gone (row 5), then, for a child that completed, whether the closure it
+/// published is the record's own, another one, or none (rows 6 to 9).
+/// `child` is `None` when none ran, because the remote is not the one the
+/// record was made for. `None` when the child's stop stands. This record's
+/// closure is the one it wrote, or the one the context already held; the
+/// tracking primary is the record's own remote's, at `primary`.
 pub(in super::super) fn publication_answer(
     repo: &git2::Repository,
     r: &ClosureRecord,
-    child: &Result<SynchronizationOutcome, SynchronizationError>,
+    primary: &str,
+    child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
 ) -> Result<Option<BranchAnswer>, RepositoryError> {
+    let path = ticket_path(&r.item_id);
+    let own_commit = match r.closure_kind {
+        Some(ClosureKind::Existing) => r.context_oid,
+        _ => r.written_commit(),
+    };
+    let own = own_commit.and_then(|commit| commit_closure_text(repo, commit, &path));
+    // Rows 1 and 2.
+    let tracking = r.remote_name.as_deref().and_then(|remote| {
+        repo.refname_to_id(&format!("refs/remotes/{remote}/{primary}"))
+            .ok()
+    });
+    if let Some(tracking) = tracking {
+        match commit_closure_text(repo, tracking, &path) {
+            Some(held) if Some(&held) == own.as_ref() => return Ok(Some(BranchAnswer::Merged)),
+            Some(_) => return Ok(Some(BranchAnswer::ClosedElsewhere)),
+            None if commit_names_closure(repo, tracking, &path) => {
+                return Ok(Some(BranchAnswer::ClosedElsewhere));
+            }
+            None => (),
+        }
+    }
     let head = match child {
-        Ok(SynchronizationOutcome::Published { oid, .. })
-        | Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => *oid,
-        // A stop stands, and a result with no head to read is the runner's
-        // to store: neither answers the record.
-        Err(_) | Ok(SynchronizationOutcome::PublishPending { .. }) => return Ok(None),
+        // Row 5: the child could not run.
+        None => return Ok(Some(BranchAnswer::RemoteChanged)),
+        Some(Ok(SynchronizationOutcome::Published { oid, .. }))
+        | Some(Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. })) => *oid,
+        Some(Err(SynchronizationError::RemoteContextDeleted)) => {
+            return Ok(Some(BranchAnswer::RemoteBranchDeleted));
+        }
+        Some(Err(SynchronizationError::TicketClosed)) => {
+            return Ok(Some(BranchAnswer::TicketClosed));
+        }
+        Some(Err(SynchronizationError::Transport(error)))
+            if matches!(
+                error.kind,
+                SshTransportErrorKind::PublicationRemoteMissing
+                    | SshTransportErrorKind::EndpointChanged
+                    | SshTransportErrorKind::ConfigurationInvalid
+            ) =>
+        {
+            return Ok(Some(BranchAnswer::RemoteChanged));
+        }
+        // Any other stop stands, and a result with no head to read is the
+        // runner's to store: neither answers the record.
+        Some(Err(_)) | Some(Ok(SynchronizationOutcome::PublishPending { .. })) => {
+            return Ok(None);
+        }
     };
     if r.closure_kind == Some(ClosureKind::Existing) {
         return Ok(Some(BranchAnswer::Existing));
     }
-    let path = ticket_path(&r.item_id);
-    let own = r
-        .written_commit()
-        .and_then(|commit| commit_closure_text(repo, commit, &path));
     Ok(Some(match commit_closure_text(repo, head, &path) {
         Some(published) if Some(&published) == own.as_ref() => BranchAnswer::Published,
         Some(_) => BranchAnswer::KeptPublished,

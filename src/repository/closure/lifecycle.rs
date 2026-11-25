@@ -476,16 +476,32 @@ impl Lifecycle for TicketClosureLifecycle {
         service: &RepositoryService,
         root: &Path,
         r: &ClosureRecord,
-        end: BranchEnd,
+        end: BranchEnd<'_>,
     ) -> Result<(), RepositoryError> {
-        let (refusal, answer) = match end {
-            BranchEnd::ContextGone => (
-                record::Refusal::ReconfirmationRequired,
-                BranchAnswer::ReconfirmationRequired,
-            ),
+        let answer = match end {
+            BranchEnd::ContextGone => BranchAnswer::ReconfirmationRequired,
+            BranchEnd::ContextChild(SynchronizationError::RemoteContextDeleted) => {
+                BranchAnswer::ContextRemoteBranchDeleted
+            }
+            BranchEnd::ContextChild(SynchronizationError::HistoryUnresolved) => {
+                BranchAnswer::ContextHistoryUnresolved
+            }
+            BranchEnd::ContextChild(SynchronizationError::TicketClosed) => {
+                BranchAnswer::ContextTicketClosed
+            }
+            // The runner ends a record only over the stops above.
+            BranchEnd::ContextChild(_) => return Err(state::recovery_required()),
         };
         state::with_transaction(service, root, |tx, id| {
-            record::abandon_branch_record(tx, id, r.operation_id, &refusal, answer, None, 0)
+            record::abandon_branch_record(
+                tx,
+                id,
+                r.operation_id,
+                &record::Refusal::ReconfirmationRequired,
+                answer,
+                None,
+                0,
+            )
         })
     }
     fn begin_publication(
@@ -496,20 +512,25 @@ impl Lifecycle for TicketClosureLifecycle {
         record::begin_publication(tx, id, op)
     }
     /// The answer, with the link the item is given: the context's branch
-    /// into the primary, from the configuration as it stands.
+    /// into the primary, from the configuration as it stands, or, when none
+    /// is valid, as the record's base holds it.
     fn branch_answer(
         _service: &RepositoryService,
         request: &LifecycleRequest<ClosureExpectation>,
         r: &ClosureRecord,
-        child: &Result<SynchronizationOutcome, SynchronizationError>,
+        child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<BranchFinish>, RepositoryError> {
         let (repo, root) =
             canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
-        let Some(answer) = checkpoint::publication_answer(&repo, r, child)? else {
+        let recorded = run::recorded_config(&root, r)?;
+        let Some(answer) =
+            checkpoint::publication_answer(&repo, r, &recorded.primary_branch, child)?
+        else {
             return Ok(None);
         };
-        let ConfigurationInspection::Valid(config) = read_configuration(&root)? else {
-            return Err(state::recovery_required());
+        let config = match read_configuration(&root) {
+            Ok(ConfigurationInspection::Valid(config)) => config,
+            _ => recorded,
         };
         let remote = r
             .remote_name

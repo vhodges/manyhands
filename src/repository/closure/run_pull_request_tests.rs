@@ -356,9 +356,12 @@ impl PullRequest {
         link_of(&db, repository, "ticket", ID).unwrap()
     }
     fn assert_link(&self) {
+        self.assert_link_into("main");
+    }
+    fn assert_link_into(&self, target: &str) {
         let link = self.link().expect("the item has its link");
         assert_eq!(link.source, format!("manyhands/ticket/{ID}"));
-        assert_eq!(link.target, "main");
+        assert_eq!(link.target, target);
         assert_eq!(
             linked_items_for_test(&self.f.db()),
             [("ticket".to_owned(), ID.to_owned())]
@@ -376,6 +379,31 @@ impl PullRequest {
             .iter()
             .find(|item| item.id.as_deref() == Some(ID))
             .and_then(|item| item.closure.as_ref().map(|closure| closure.state))
+    }
+    /// A child's row phase, when it has a row.
+    fn phase(&self, child: OperationId) -> Option<String> {
+        self.f
+            .db()
+            .query_row(
+                "SELECT phase FROM remote_operation_records WHERE operation_ulid=?1",
+                [child.to_string()],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+    /// No child of the record is left holding the context: each row it has is
+    /// ended.
+    fn assert_no_active_child(&self, r: &ClosureRecord, case: &str) {
+        for child in [r.context_sync_id, r.primary_sync_id].into_iter().flatten() {
+            let phase = self.phase(child);
+            assert!(
+                phase.as_ref().is_none_or(|phase| matches!(
+                    phase.as_str(),
+                    "completed" | "interrupted" | "cancelled" | "failed"
+                )),
+                "{case}: {child} is {phase:?}"
+            );
+        }
     }
     fn held(&self) -> bool {
         let db = self.f.db();
@@ -409,6 +437,10 @@ struct PullRequestIo {
     stops: VecDeque<(ChildRole, SynchronizationError, bool)>,
     /// One real local update, taken once: the role and the incoming commit.
     drive: Option<(ChildRole, Oid)>,
+    /// A kept stop also records what a child that stopped after its local
+    /// update has: something to lose, so that letting it go takes the
+    /// cancel-and-acknowledge path, not the release alone.
+    prepared: bool,
     primary_calls: usize,
 }
 impl PullRequestIo {
@@ -483,6 +515,21 @@ impl PromotionIo for PullRequestIo {
                         .unwrap(),
                     RemoteReservationOutcome::Reserved(_)
                 ));
+                if self.prepared {
+                    let oid = git2::Repository::open(&root)
+                        .unwrap()
+                        .refname_to_id("refs/heads/main")
+                        .unwrap();
+                    state::with_transaction(service, &root, |tx, _| {
+                        tx.execute(
+                            "UPDATE remote_operation_records SET phase='local_prepared',sync_checkpoint='local_prepared',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2 WHERE operation_ulid=?1",
+                            [req.operation_id.to_string(), oid.to_string()],
+                        )
+                        .map_err(|_| state::recovery_required())?;
+                        Ok(())
+                    })
+                    .unwrap();
+                }
             }
             return Err(error);
         }
@@ -1524,39 +1571,6 @@ fn a_context_branch_gone_after_its_child_abandons_as_reconfirmation_required() {
     p.assert_primary_untouched(&io.inner);
 }
 
-/// Until the stops of a publication that cannot be classified have their
-/// rows, a record that has its publication child, under a configuration that
-/// is not the record's or not valid, is `recovery_required` and unchanged.
-#[test]
-fn a_publication_under_a_configuration_that_moved_is_recovery_required_and_leaves_the_record() {
-    for (case, config) in [
-        ("invalid", "this is not a configuration {{{"),
-        (
-            "no remote",
-            "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\n",
-        ),
-    ] {
-        let p = PullRequest::new();
-        let req = p.request();
-        let mut io = PullRequestIo {
-            stops: VecDeque::from([(ChildRole::Publication, SynchronizationError::Busy, false)]),
-            ..PullRequestIo::default()
-        };
-        assert!(p.run(req.clone(), &mut io).is_err(), "{case}");
-        let before = format!("{:?}", p.stored(&req));
-        write(&p.f.repo, ".manyhands/config.toml", config);
-        let children = io.children();
-        let result = p.run(req.clone(), &mut io);
-        assert!(
-            matches!(result, Err(TicketClosureError::RecoveryRequired)),
-            "{case}: {result:?}"
-        );
-        assert_eq!(format!("{:?}", p.stored(&req)), before, "{case}");
-        assert_eq!(io.children(), children, "{case}");
-        p.assert_primary_untouched(&io);
-    }
-}
-
 /// A publication child that answers with nothing published (no head to read
 /// an answer from): `finish_branch` owns that case, and the record stays at
 /// `publication_pending` with its category, for the same request.
@@ -1622,4 +1636,471 @@ fn a_publication_that_published_nothing_is_recovery_required_and_the_same_reques
     let outcome = PullRequest::branch(p.run(req, &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Published);
     p.assert_primary_untouched(&io.inner);
+}
+
+// --- Slice D: the stops that end a record, and the answer table ----------
+
+/// A record whose first publication child stopped with `error`, its row kept
+/// and active: the record is at `publication_pending` for the same request.
+fn stopped_at_publication(
+    p: &PullRequest,
+    req: &CloseTicketRequest,
+    io: &mut PullRequestIo,
+    error: SynchronizationError,
+) {
+    io.stops.push_back((ChildRole::Publication, error, true));
+    let result = p.run(req.clone(), io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ContextSynchronization(_))),
+        "{result:?}"
+    );
+    assert_eq!(p.stored(req).step, ClosureStep::PublicationPending);
+}
+
+/// The closure the record writes, as the forge's merge of it would hold it on
+/// the primary.
+fn own_closure_on_primary(p: &PullRequest) -> Oid {
+    p.closed_commit_on(p.f.primary(), CLOCK, CLOSED_BY)
+}
+
+/// Another closure, on the primary.
+fn another_closure_on_primary(p: &PullRequest) -> Oid {
+    p.closed_commit_on(
+        p.f.primary(),
+        1_700_000_000,
+        "Remote <remote@example.invalid>",
+    )
+}
+
+/// What another clone published, over the context the record's closure was
+/// written on: its own closure, or the record's closure withdrawn after it
+/// was published.
+fn published_by_another_clone(p: &PullRequest, withdrawn: bool) -> Oid {
+    let ours = p.f.context_oid();
+    if withdrawn {
+        return p.open_commit_on(ours);
+    }
+    let parent = p.f.repo.find_commit(ours).unwrap().parent_id(0).unwrap();
+    p.closed_commit_on(parent, 1_700_000_000, "Remote <remote@example.invalid>")
+}
+
+/// The repository's configuration, as the working tree holds it now.
+fn configure(p: &PullRequest, remote: Option<&str>, primary: &str) {
+    let remote = remote
+        .map(|remote| format!("publication_remote = \"{remote}\"\n"))
+        .unwrap_or_default();
+    write(
+        &p.f.repo,
+        ".manyhands/config.toml",
+        format!(
+            "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"{primary}\"\n{remote}"
+        ),
+    );
+}
+
+/// D6: a context child that cannot get past its stop with nothing written (a
+/// deleted remote branch, an unresolved history, a closed ticket) is let go,
+/// and the record is abandoned with the child's own code, nothing written.
+#[test]
+fn d6_a_deleted_or_ended_context_child_abandons_with_its_code() {
+    type Stop = fn() -> SynchronizationError;
+    let table: [(&str, Stop, BranchAnswer); 3] = [
+        (
+            "deleted",
+            || SynchronizationError::RemoteContextDeleted,
+            BranchAnswer::ContextRemoteBranchDeleted,
+        ),
+        (
+            "unresolved",
+            || SynchronizationError::HistoryUnresolved,
+            BranchAnswer::ContextHistoryUnresolved,
+        ),
+        (
+            "closed",
+            || SynchronizationError::TicketClosed,
+            BranchAnswer::ContextTicketClosed,
+        ),
+    ];
+    for (case, error, answer) in table {
+        let p = PullRequest::new();
+        let req = p.request();
+        let context = p.f.context_oid();
+        // The row is kept: it holds the reservation until it is let go.
+        let mut io = PullRequestIo {
+            stops: VecDeque::from([(ChildRole::Context, error(), true)]),
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), answer, "{case}");
+        assert_eq!(outcome.checkpoint_oid(), None, "{case}");
+        assert_eq!(outcome.publication(), None, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Abandoned, "{case}");
+        assert_eq!(
+            r.refusal,
+            Some(record::Refusal::ReconfirmationRequired),
+            "{case}"
+        );
+        assert_eq!(r.answer_code, Some(answer), "{case}");
+        // The child's row ended: nothing to lose, so released without a
+        // connection.
+        let child = r.context_sync_id.expect("the child was minted");
+        assert_eq!(p.phase(child).as_deref(), Some("cancelled"), "{case}");
+        p.assert_no_active_child(&r, case);
+        assert!(
+            io.inner.calls.borrow().children.iter().all(|c| !c.2),
+            "{case}"
+        );
+        // Nothing was written, and nothing holds the ticket.
+        assert_eq!(r.closure_oid, None, "{case}");
+        assert_eq!(p.f.commits_in_odb(&close_subject()), 0, "{case}");
+        assert_eq!(p.f.context_oid(), context, "{case}");
+        assert!(!p.held(), "{case}");
+        assert_eq!(p.holder(), None, "{case}");
+        p.assert_primary_untouched(&io);
+        // The same request again gives the same answer, and runs nothing.
+        let children = io.children();
+        assert_eq!(PullRequest::branch(p.run(req, &mut io)), outcome, "{case}");
+        assert_eq!(io.children(), children, "{case}");
+    }
+}
+
+/// D11: a publication child that answers `remote_branch_deleted` after the
+/// closure is answered by the tracking primary as the child left it, and its
+/// child is let go first: by release when it has nothing to lose, by its
+/// cancellation's acknowledgement when it has something.
+#[test]
+fn d11_a_deleted_remote_branch_after_the_closure_answers_by_the_tracking_primary() {
+    type Fetched = Option<fn(&PullRequest) -> Oid>;
+    let table: [(&str, Fetched, bool, BranchAnswer); 4] = [
+        (
+            "this closure",
+            Some(own_closure_on_primary),
+            false,
+            BranchAnswer::Merged,
+        ),
+        (
+            "another closure",
+            Some(another_closure_on_primary),
+            false,
+            BranchAnswer::ClosedElsewhere,
+        ),
+        ("open", None, false, BranchAnswer::RemoteBranchDeleted),
+        (
+            "something to lose",
+            None,
+            true,
+            BranchAnswer::RemoteBranchDeleted,
+        ),
+    ];
+    for (case, fetched, prepared, answer) in table {
+        let p = PullRequest::new();
+        let req = p.request();
+        let mut io = PullRequestIo {
+            fetched: fetched
+                .map(|oid| vec![(ChildRole::Publication, oid(&p))])
+                .unwrap_or_default(),
+            stops: VecDeque::from([(
+                ChildRole::Publication,
+                SynchronizationError::RemoteContextDeleted,
+                true,
+            )]),
+            prepared,
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), answer, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(answer), "{case}");
+        // The child ended before the record completed, whichever way.
+        let child = r.primary_sync_id.expect("the child was minted");
+        assert_eq!(p.phase(child).as_deref(), Some("cancelled"), "{case}");
+        p.assert_no_active_child(&r, case);
+        let acknowledged = io
+            .inner
+            .calls
+            .borrow()
+            .children
+            .iter()
+            .any(|(_, op, restart)| *op == child && *restart);
+        assert_eq!(acknowledged, prepared, "{case}");
+        // Nothing was published, and the closure stays on the local branch.
+        assert_eq!(outcome.publication(), None, "{case}");
+        assert_eq!(outcome.checkpoint_oid(), r.closure_oid, "{case}");
+        assert_eq!(p.f.context_oid(), r.closure_oid.unwrap(), "{case}");
+        p.assert_link();
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// The answer table, row by row: each row is chosen by what the publication
+/// child and the tracking primary say, in the table's order, and the record
+/// completes with it, its link given and no child left holding the context.
+/// A row that follows a stopped child lets it go first (its row is kept).
+/// Rows 6 to 9 pin the answers of the child that completed.
+#[test]
+fn answer_table_chooses_each_row_in_order() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    type Prepare = fn(&PullRequest);
+    type Script = fn(&PullRequest, &CloseTicketRequest, &mut PullRequestIo);
+    fn nothing(_: &PullRequest) {}
+    fn unscripted(_: &PullRequest, _: &CloseTicketRequest, _: &mut PullRequestIo) {}
+    // Row 5's three transport kinds, each scripted as the child's stop.
+    fn remote_missing(_: &PullRequest, _: &CloseTicketRequest, io: &mut PullRequestIo) {
+        io.stops.push_back((
+            ChildRole::Publication,
+            transport(K::PublicationRemoteMissing),
+            true,
+        ));
+    }
+    fn endpoint_changed(_: &PullRequest, _: &CloseTicketRequest, io: &mut PullRequestIo) {
+        io.stops
+            .push_back((ChildRole::Publication, transport(K::EndpointChanged), true));
+    }
+    fn configuration_invalid(_: &PullRequest, _: &CloseTicketRequest, io: &mut PullRequestIo) {
+        io.stops.push_back((
+            ChildRole::Publication,
+            transport(K::ConfigurationInvalid),
+            true,
+        ));
+    }
+    // Row 5's runner check: the record's child stopped, and then the
+    // configuration moved.
+    fn remote_renamed(p: &PullRequest, req: &CloseTicketRequest, io: &mut PullRequestIo) {
+        stopped_at_publication(p, req, io, SynchronizationError::Busy);
+        configure(p, Some("other"), "main");
+    }
+    fn primary_renamed(p: &PullRequest, req: &CloseTicketRequest, io: &mut PullRequestIo) {
+        stopped_at_publication(p, req, io, SynchronizationError::Busy);
+        configure(p, Some("origin"), "trunk");
+    }
+    fn configuration_gone(p: &PullRequest, req: &CloseTicketRequest, io: &mut PullRequestIo) {
+        stopped_at_publication(p, req, io, SynchronizationError::Busy);
+        write(
+            &p.f.repo,
+            ".manyhands/config.toml",
+            "this is not a configuration {{{",
+        );
+    }
+    let rows: [(&str, Prepare, Script, BranchAnswer); 14] = [
+        (
+            "1 merged",
+            nothing,
+            |p, _, io| {
+                io.fetched
+                    .push((ChildRole::Publication, own_closure_on_primary(p)))
+            },
+            BranchAnswer::Merged,
+        ),
+        (
+            "2 closed elsewhere",
+            nothing,
+            |p, _, io| {
+                io.fetched
+                    .push((ChildRole::Publication, another_closure_on_primary(p)))
+            },
+            BranchAnswer::ClosedElsewhere,
+        ),
+        (
+            "3 remote branch deleted",
+            nothing,
+            |_, _, io| {
+                io.stops.push_back((
+                    ChildRole::Publication,
+                    SynchronizationError::RemoteContextDeleted,
+                    true,
+                ))
+            },
+            BranchAnswer::RemoteBranchDeleted,
+        ),
+        (
+            "4 ticket closed",
+            nothing,
+            |_, _, io| {
+                io.stops.push_back((
+                    ChildRole::Publication,
+                    SynchronizationError::TicketClosed,
+                    true,
+                ))
+            },
+            BranchAnswer::TicketClosed,
+        ),
+        (
+            "5 remote renamed",
+            nothing,
+            remote_renamed,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 primary renamed",
+            nothing,
+            primary_renamed,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 no valid configuration",
+            nothing,
+            configuration_gone,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 publication remote missing",
+            nothing,
+            remote_missing,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 endpoint changed",
+            nothing,
+            endpoint_changed,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 configuration invalid",
+            nothing,
+            configuration_invalid,
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "6 existing",
+            |p| {
+                let held = p.closed_commit_on(
+                    p.f.context_oid(),
+                    1_700_000_000,
+                    "Earlier <earlier@example.invalid>",
+                );
+                p.hold(held);
+            },
+            unscripted,
+            BranchAnswer::Existing,
+        ),
+        ("7 published", nothing, unscripted, BranchAnswer::Published),
+        (
+            "8 kept published",
+            nothing,
+            |p, req, io| {
+                stopped_at_publication(p, req, io, SynchronizationError::PushRejected);
+                io.drive = Some((ChildRole::Publication, published_by_another_clone(p, false)));
+            },
+            BranchAnswer::KeptPublished,
+        ),
+        (
+            "9 withdrawn since",
+            nothing,
+            |p, req, io| {
+                stopped_at_publication(p, req, io, SynchronizationError::PushRejected);
+                io.drive = Some((ChildRole::Publication, published_by_another_clone(p, true)));
+            },
+            BranchAnswer::WithdrawnSince,
+        ),
+    ];
+    for (case, prepare, script, answer) in rows {
+        let p = PullRequest::new();
+        prepare(&p);
+        let req = p.request();
+        let mut io = PullRequestIo::default();
+        script(&p, &req, &mut io);
+        let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), answer, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(answer), "{case}");
+        p.assert_no_active_child(&r, case);
+        // The link is into the primary the configuration names now.
+        p.assert_link_into(if case.contains("primary renamed") {
+            "trunk"
+        } else {
+            "main"
+        });
+        assert!(!p.held(), "{case}");
+        if answer == BranchAnswer::RemoteChanged {
+            // Its commit is kept on the local branch, and nothing published.
+            assert_eq!(outcome.publication(), None, "{case}");
+            assert_eq!(outcome.checkpoint_oid(), r.closure_oid, "{case}");
+            assert_eq!(p.f.context_oid(), r.closure_oid.unwrap(), "{case}");
+            assert_ne!(
+                p.f.repo.refname_to_id(&tracking_context_ref()).ok(),
+                r.closure_oid,
+                "{case}"
+            );
+        }
+        p.assert_primary_untouched(&io);
+        // The same request again gives the same answer, and runs nothing.
+        let children = io.children();
+        assert_eq!(PullRequest::branch(p.run(req, &mut io)), outcome, "{case}");
+        assert_eq!(io.children(), children, "{case}");
+    }
+}
+
+/// A child that completed published already: a configuration that moved
+/// since does not take its answer from it.
+#[test]
+fn a_completed_publication_answers_by_its_child_under_a_changed_remote() {
+    use crate::repository::FailurePoint;
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let failing = p.f.failing(FailurePoint::AfterPublication);
+    assert!(p.run_in(&failing, req.clone(), &mut io).is_err());
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Published);
+    configure(&p, Some("other"), "main");
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    assert!(matches!(
+        outcome.publication(),
+        Some(PromotionPublication::Published { .. })
+    ));
+    p.assert_primary_untouched(&io);
+}
+
+/// A retained conflict is the user's: a stop that would end the record cannot
+/// let it go, so the call is `recovery_required` and the record stays at
+/// `publication_pending` with its conflict.
+#[test]
+fn a_retained_child_is_not_let_go_and_the_record_stays_unfinished() {
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let (child, _) = conflicted_publication(&p, &req, &mut io);
+    io.stops.push_back((
+        ChildRole::Publication,
+        SynchronizationError::RemoteContextDeleted,
+        false,
+    ));
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::RecoveryRequired)),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.answer_code, None);
+    assert_eq!(r.primary_sync_id, Some(child));
+    assert!(p.held());
+    p.assert_primary_untouched(&io);
+}
+
+/// A failure after a completion still answers from the record the completion
+/// stored, as it does for every finished branch record.
+#[test]
+fn a_failure_after_a_stop_s_completion_answers_from_the_record() {
+    use crate::repository::FailurePoint;
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Publication,
+            SynchronizationError::RemoteContextDeleted,
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    let failing = p.f.failing(FailurePoint::AfterCompletion);
+    let outcome = PullRequest::branch(p.run_in(&failing, req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::RemoteBranchDeleted);
+    assert_eq!(p.stored(&req).step, ClosureStep::Complete);
+    p.assert_primary_untouched(&io);
 }

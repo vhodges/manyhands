@@ -193,10 +193,13 @@ pub(in super::super) enum BranchStep {
 
 /// Why a branch record ends before it publishes, when it is the runner that
 /// knows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in super::super) enum BranchEnd {
+#[derive(Clone, Copy, Debug)]
+pub(in super::super) enum BranchEnd<'a> {
     /// The context branch is gone after its child ran.
     ContextGone,
+    /// The context child stopped with an end it cannot get past, with
+    /// nothing written: its own error says which.
+    ContextChild(&'a SynchronizationError),
 }
 
 /// Exactly the parent fields the runner reads and writes.
@@ -604,7 +607,7 @@ pub(in super::super) trait Lifecycle {
         service: &RepositoryService,
         root: &Path,
         r: &Self::Record,
-        end: BranchEnd,
+        end: BranchEnd<'_>,
     ) -> Result<(), RepositoryError>;
     /// Mints the publication child and moves the record to `publication_pending`,
     /// in one transaction.
@@ -614,12 +617,14 @@ pub(in super::super) trait Lifecycle {
         op: OperationId,
     ) -> Result<Self::Record, RepositoryError>;
     /// What a publication child's result answers, or `None` when the stop
-    /// stands and the record stays at `publication_pending`.
+    /// stands and the record stays at `publication_pending`. `child` is
+    /// `None` when no child ran, because the publication remote the record
+    /// was made for is not the one configured.
     fn branch_answer(
         service: &RepositoryService,
         request: &LifecycleRequest<Self::Expectation>,
         r: &Self::Record,
-        child: &Result<SynchronizationOutcome, SynchronizationError>,
+        child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<Self::BranchFinish>, RepositoryError>;
     fn complete_branch(
         tx: &Transaction<'_>,
@@ -1093,7 +1098,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         _service: &RepositoryService,
         _root: &Path,
         _r: &PromotionRecord,
-        _end: BranchEnd,
+        _end: BranchEnd<'_>,
     ) -> Result<(), RepositoryError> {
         Err(state::recovery_required())
     }
@@ -1108,7 +1113,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         _service: &RepositoryService,
         _request: &LifecycleRequest<PromotionExpectation>,
         _r: &PromotionRecord,
-        _child: &Result<SynchronizationOutcome, SynchronizationError>,
+        _child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
     ) -> Result<Option<std::convert::Infallible>, RepositoryError> {
         Err(state::recovery_required())
     }

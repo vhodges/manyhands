@@ -428,6 +428,14 @@ fn run_observed<L: Lifecycle>(
     Ok(recovery::<L>(service, &root, &mut r))
 }
 fn recorded_primary<R: LifecycleRecord>(root: &Path, r: &R) -> Result<String, RepositoryError> {
+    Ok(recorded_config(root, r)?.primary_branch)
+}
+/// The configuration the record's base commit holds: what a record past its
+/// base is run by, whatever the live configuration says now.
+pub(in super::super) fn recorded_config<R: LifecycleRecord>(
+    root: &Path,
+    r: &R,
+) -> Result<RepositoryConfig, RepositoryError> {
     let repo = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
     let tree = repo
         .find_commit(r.base_oid().ok_or_else(state::recovery_required)?)
@@ -440,9 +448,7 @@ fn recorded_primary<R: LifecycleRecord>(root: &Path, r: &R) -> Result<String, Re
         .find_blob(entry.id())
         .map_err(|_| state::recovery_required())?;
     let source = std::str::from_utf8(blob.content()).map_err(|_| state::recovery_required())?;
-    Ok(crate::canonical::parse_repository_config(source)
-        .map_err(|_| state::recovery_required())?
-        .primary_branch)
+    crate::canonical::parse_repository_config(source).map_err(|_| state::recovery_required())
 }
 fn promote_inner<L: Lifecycle>(
     lifecycle: &L,
@@ -496,14 +502,22 @@ fn promote_inner<L: Lifecycle>(
             return Ok(recovery::<L>(service, &root, &mut validated));
         }
         // A branch record that has its publication child has no live
-        // configuration to publish by: it stops with the record unchanged,
-        // which a record that cannot be recovered here must not be given a
-        // cleanup category for.
+        // configuration to publish by: it completes with its commit kept on
+        // the local branch (R-35), by the primary its base recorded.
         if !configured
             && validated.path() == RecordPath::Branch
             && validated.primary_sync_id().is_some()
         {
-            return Err(L::Error::recovery_required());
+            let primary = recorded_primary(&root, &validated).map_err(mapped::<L::Error>)?;
+            return finish_branch::<L>(
+                service,
+                &request,
+                None,
+                &primary,
+                &mut validated,
+                io,
+                progress,
+            );
         }
     }
     let ConfigurationInspection::Valid(mut config) = read_configuration(&root)? else {
@@ -938,8 +952,17 @@ fn promote_branch<L: Lifecycle>(
                 *r = load::<L>(service, root, r.operation_id())?;
                 return Ok(refresh::<L>(service, root, r, false));
             }
-            // The child stopped: it is left as it stands, kept or not, for
-            // the same request, and the record stays `confirmed`.
+            // A stop with nothing written that only a new prepare gets past
+            // (D6): the child is let go and the record ends with its code.
+            Err(ContextStop::Child(error)) if ends_context_child(&error) => {
+                let_go::<L>(service, request, r, ChildRole::Context, io)?;
+                L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
+                    .map_err(mapped::<L::Error>)?;
+                *r = load::<L>(service, root, r.operation_id())?;
+                return Ok(refresh::<L>(service, root, r, false));
+            }
+            // Any other stop: the child is left as it stands, kept or not,
+            // for the same request, and the record stays `confirmed`.
             Err(ContextStop::Child(error)) => {
                 return Err(L::Error::context_synchronization(error));
             }
@@ -965,7 +988,9 @@ fn promote_branch<L: Lifecycle>(
 /// A branch record from its publication child on: the child mints, runs
 /// and, with its result, answers the record, which completes with that
 /// answer stored. A child that stops leaves the record at
-/// `publication_pending` for the same request.
+/// `publication_pending` for the same request, unless the stop is one the
+/// answer table ends the record over; a record whose remote is no longer
+/// the one it was made for runs no child, and ends the same way (R-35).
 fn finish_branch<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
@@ -981,14 +1006,8 @@ fn finish_branch<L: Lifecycle>(
         *r = state::with_transaction(service, root, |tx, id| L::begin_publication(tx, id, op))
             .map_err(mapped::<L::Error>)?;
     }
-    let remote_current = config.is_some_and(|config| {
-        config.primary_branch == primary && config.publication_remote.as_deref() == r.remote_name()
-    });
-    if !remote_current {
-        return Err(L::Error::recovery_required());
-    }
-    // A completed child comes first, whatever a cancellation says: it
-    // cannot be undone, and the child replays it.
+    // A completed child comes first, whatever the configuration or a
+    // cancellation says: it cannot be undone, and the child replays it.
     let completed = matches!(
         state::with_transaction(service, root, |tx, _| L::child_state(
             tx,
@@ -997,41 +1016,56 @@ fn finish_branch<L: Lifecycle>(
         )),
         Ok(ChildState::Complete(_))
     );
-    if !completed && cancelled::<L>(service, request, r)? {
-        return Err(publication_cancelled::<L>(service, request, r));
-    }
-    let result = child::<L>(service, request, r, ChildRole::Publication, io, progress);
-    let authority = match &result {
-        Ok(SynchronizationOutcome::Published { oid, .. }) => {
-            Some(state::SynchronizationAuthority::Published(*oid))
+    let remote_current = config.is_some_and(|config| {
+        config.primary_branch == primary && config.publication_remote.as_deref() == r.remote_name()
+    });
+    let result = if remote_current || completed {
+        if !completed && cancelled::<L>(service, request, r)? {
+            return Err(publication_cancelled::<L>(service, request, r));
         }
-        Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => {
-            Some(state::SynchronizationAuthority::AlreadyCurrent(*oid))
-        }
-        Ok(SynchronizationOutcome::PublishPending { .. }) => {
-            r.set_publication(Some(Pub::RecoveryRequired));
+        let result = child::<L>(service, request, r, ChildRole::Publication, io, progress);
+        let authority = match &result {
+            Ok(SynchronizationOutcome::Published { oid, .. }) => {
+                Some(state::SynchronizationAuthority::Published(*oid))
+            }
+            Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => {
+                Some(state::SynchronizationAuthority::AlreadyCurrent(*oid))
+            }
+            Ok(SynchronizationOutcome::PublishPending { .. }) => {
+                r.set_publication(Some(Pub::RecoveryRequired));
+                save::<L>(service, root, r)?;
+                return Err(L::Error::recovery_required());
+            }
+            Err(_) => None,
+        };
+        if let Some(authority) = authority {
+            remember_publication(r, &mut None, authority)
+                .map_err(|_| L::Error::recovery_required())?;
             save::<L>(service, root, r)?;
-            return Err(L::Error::recovery_required());
+            boundary(service, root, FailurePoint::AfterPublication)?;
+        } else if result.is_err() && cancelled::<L>(service, request, r)? {
+            return Err(publication_cancelled::<L>(service, request, r));
         }
-        Err(_) => None,
+        Some(result)
+    } else {
+        None
     };
-    if let Some(authority) = authority {
-        remember_publication(r, &mut None, authority).map_err(|_| L::Error::recovery_required())?;
-        save::<L>(service, root, r)?;
-        boundary(service, root, FailurePoint::AfterPublication)?;
-    } else if result.is_err() && cancelled::<L>(service, request, r)? {
-        return Err(publication_cancelled::<L>(service, request, r));
-    }
-    let answered = L::branch_answer(service, request, r, &result).map_err(mapped::<L::Error>)?;
+    let answered =
+        L::branch_answer(service, request, r, result.as_ref()).map_err(mapped::<L::Error>)?;
     let Some(finish) = answered else {
         // The stop stands: the record keeps its step, with the category.
-        let Err(error) = result else {
+        let Some(Err(error)) = result else {
             return Err(L::Error::recovery_required());
         };
         r.set_publication(Some(publication_error(&error)));
         save::<L>(service, root, r)?;
         return Err(L::Error::context_synchronization(Box::new(error)));
     };
+    // A child that stopped, or none that ran, is let go before the record
+    // completes, or its row would hold the context (R-36).
+    if !matches!(result, Some(Ok(_))) {
+        let_go::<L>(service, request, r, ChildRole::Publication, io)?;
+    }
     boundary(service, root, FailurePoint::BeforeCompletion)?;
     let (op, root_path) = (r.operation_id(), root.as_path());
     let completed = state::with_transaction(service, root_path, |tx, id| {
@@ -1257,6 +1291,87 @@ fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
         ChildRole::Primary | ChildRole::Publication => r.primary_sync_id(),
     }
 }
+/// The stops of a context child that `ended_if_unresolved` keeps for a
+/// lifecycle child, or that only `request cancel` lets go: with nothing
+/// written, they end a branch record (D6).
+fn ends_context_child(error: &SynchronizationError) -> bool {
+    matches!(
+        error,
+        SynchronizationError::RemoteContextDeleted
+            | SynchronizationError::HistoryUnresolved
+            | SynchronizationError::TicketClosed
+    )
+}
+/// Lets a stopped child go before its record ends or completes over it
+/// (R-36), or its row would hold the context: released when it has nothing
+/// to lose, otherwise cancelled and acknowledged. A child that is retained
+/// (a conflict, a resolution) is the user's, and is not let go: the call is
+/// `recovery_required` and the record stays unfinished.
+fn let_go<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    io: &mut impl PromotionIo,
+) -> Result<(), L::Error> {
+    let root = &request.root;
+    release_child::<L>(service, request, r, role);
+    let ended = |phase: RemoteOperationPhase| {
+        matches!(
+            phase,
+            RemoteOperationPhase::Cancelled
+                | RemoteOperationPhase::Interrupted
+                | RemoteOperationPhase::Failed
+                | RemoteOperationPhase::Completed
+        )
+    };
+    let mut state = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
+        .map_err(mapped::<L::Error>)?;
+    if let ChildState::Unowned(stored) = &state
+        && !ended(stored.phase)
+    {
+        acknowledge_cancellation::<L>(service, request, r, role, stored.operation_id, io)
+            .map_err(|_| L::Error::recovery_required())?;
+        state = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
+            .map_err(mapped::<L::Error>)?;
+    }
+    match state {
+        ChildState::Absent | ChildState::Complete(_) => Ok(()),
+        ChildState::Unowned(stored) if ended(stored.phase) => Ok(()),
+        ChildState::Unowned(_) | ChildState::Retained(_) => Err(L::Error::recovery_required()),
+    }
+}
+/// Cancels a child's row and runs the acknowledgement, as a real child does at
+/// its first safe point: the row ends. A cancellation acknowledgement may
+/// itself return `RecoveryRequired`; the durable state of the row, never that
+/// error, decides what comes next.
+fn acknowledge_cancellation<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    child: OperationId,
+    io: &mut impl PromotionIo,
+) -> Result<(), SynchronizationError> {
+    service.cancel_remote_operation(&request.root, child)?;
+    let ack = SynchronizeRemoteRequest {
+        root: request.root.clone(),
+        operation_id: child,
+        target: synchronization_target(L::KIND, role, r.item_id()),
+        approval: request.approval.clone(),
+        confirmed_identity: request.confirmed_identity.clone(),
+        restart: true,
+    };
+    let mut observer = CancellationObserver::<L> {
+        service,
+        request,
+        record: r,
+        progress: None,
+    };
+    let execution = L::child_execution(r, role)?;
+    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+    Ok(())
+}
 /// A cancellation that stops the parent lets its stopped child go, or the
 /// child's reservation would refuse what the caller does next. The
 /// guards and the end of its row are one transaction, in
@@ -1321,23 +1436,14 @@ fn child<L: Lifecycle>(
                         | RemoteOperationPhase::Interrupted
                         | RemoteOperationPhase::Failed
                 ) {
-                    service.cancel_remote_operation(root, stored.operation_id)?;
-                    let ack = SynchronizeRemoteRequest {
-                        root: root.clone(),
-                        operation_id: stored.operation_id,
-                        target: synchronization_target(L::KIND, role, r.item_id()),
-                        approval: request.approval.clone(),
-                        confirmed_identity: request.confirmed_identity.clone(),
-                        restart: true,
-                    };
-                    let mut observer = CancellationObserver::<L> {
+                    acknowledge_cancellation::<L>(
                         service,
                         request,
-                        record: &*r,
-                        progress: None,
-                    };
-                    let execution = L::child_execution(r, role)?;
-                    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+                        r,
+                        role,
+                        stored.operation_id,
+                        io,
+                    )?;
                 }
                 // A cancellation acknowledgement may itself return RecoveryRequired;
                 // durable ownership/terminal state, never that error, decides.
