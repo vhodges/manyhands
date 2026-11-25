@@ -12,14 +12,15 @@ id: "01M899G24CQRPHD33AY4J0RGNB"
 
 Ticket: vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`), branch `manyhands/ticket/01M87683QK8E34EYY8KS4VQG9Y`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 03 design](../plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md). Plan: [Cycle 03 implementation plan](../plans/2026-11-25-wave-06-cycle-03-pull-request-close-implementation.md).
 
-Status: **draft** (revision 4), for review and the owner's approval.
+Status: **draft** (revision 5), for the owner's approval.
 
 Revision history:
 
 - Revision 1 (`c5e335a2`): first draft, after the owner's decisions 1 to 7.
 - Revision 2 (`3207c728`): two independent reviews of revision 1 (source and feasibility: 5 Blocking, 14 Important, 15 Minor; contract and consistency: 5 Blocking, 15 Important, 19 Minor) and the owner's decisions 8 to 12.
 - Revision 3: a scoped re-review (2 Blocking, 15 Important, 26 Minor) and an adversarial round (6 Blocking, 10 Important, 6 Minor) of revision 2. The runner follows the direct close's lifecycle rules (child attempts, holds), and a clean merge keeps the primary's closure.
-- Revision 4: a third round on revision 3 (`d88896b8`; scoped re-review 1 Blocking, 6 Important, 13 Minor; adversarial 5 Blocking, 7 Important, 7 Minor), whose blockers were again in the separate runner. With the owner's decision 13 the pull-request close, withdraw and new branch become branch records of the existing ticket-closure lifecycle. Revision 4 is under a fourth review round.
+- Revision 4 (`953384fb`): a third round on revision 3 (`d88896b8`; scoped re-review 1 Blocking, 6 Important, 13 Minor; adversarial 5 Blocking, 7 Important, 7 Minor), whose blockers were again in the separate runner. With the owner's decision 13 the pull-request close, withdraw and new branch become branch records of the existing ticket-closure lifecycle.
+- Revision 5: a fourth round on revision 4 (source and feasibility 1 Blocking, 11 Important, 15 Minor; adversarial 3 Blocking, 9 Important, 7 Minor), whose findings were rules within the lifecycle's mode and the adaptations it needs; the rules are in the design's Parts D to F and the adaptations in its Design Checkpoint Obligations. Revision 5 has not been independently reviewed.
 
 ## Purpose And Authority
 
@@ -46,7 +47,7 @@ Authorities, in order:
 
 ## Scope
 
-1. The pull-request close: `ticket close` in a pull-request repository previews and runs the runner's `record` action (design Part D), with `already_closing`, and a merged branch whose remote branch survives closes in place.
+1. The pull-request close: `ticket close` in a pull-request repository previews and runs a branch record of the ticket-closure lifecycle (design Part D), with `already_closing`, and a merged branch whose remote branch survives closes in place.
 2. The closing state in every read: `closure.state`, `deps[].state` and `parent.state` `closing`, readiness and `closing_dependency`, the queries that leave closing tickets out, `ticket list --closure closing`, and `closure.publication` in `ticket show` (Parts A and C).
 3. The guards per mode, the save check and the immutability change (Part B).
 4. `ticket withdraw-closure` (Part E).
@@ -68,7 +69,7 @@ Authorities, in order:
 - vh-c97se: this Cycle reuses its `pull_request` schema and DTO in the shape `{ source, target, forge, url }` (decision 5); `setup_pending` for close and withdraw goes to whichever lands second.
 - vh-rphcs: the link record `pull_request_links`, `ItemDto.pull_request` and the `pull_request_link` preview effect exist for documents to reuse; the close's data type is close's own.
 - vh-ssepw: both retirement paths delete the link record; `closing` is derived from the primary's copy; the merged-first close of a surviving branch is in place, so Cycle 05's surviving-branch deletion is only for cleanup after a merge.
-- vh-p7st2: the desktop maps `closing` to open, offers "Close ticket" (answering `already_closing`), shows a generic preview for the new path, words the new operation "Pull request close", and has no Withdraw action yet.
+- vh-p7st2: the desktop maps `closing` to open, offers "Close ticket" (answering `already_closing`), shows a generic preview for the new path, lists a branch record as a `close` operation, and has no Withdraw action yet.
 - The Wave 06 document: Cycle 03's checklist (design D-9).
 
 ## Required Contract
@@ -79,7 +80,7 @@ Authorities, in order:
 4. **(owner's eye)** The pull-request close, withdraw and the new branch are modes of the existing ticket-closure lifecycle (decision 13), with its rules: a step that stops on its synchronization answers as `item sync` answers that stop and leaves the close unfinished; the same request continues it; `request cancel` and Ctrl-C answer `cancelled` and leave it unfinished (decision 8); a new request's prepare is held by it; and a close that cannot continue before its commit is abandoned with nothing written. Once its commit is written, an unfinished close holds the ticket against every other writer, the poll and every other synchronization of the ticket, while its own publication goes on. Once the closure is recorded and before it is published, `ticket show` reads the ticket `closing` with `publication` `pending`.
 5. **(owner's eye)** A ticket whose branch's copy holds a closure that the primary's copy does not hold reads `closing`, in both modes; one whose primary's copy holds a closure reads `closed`. `closure.state`, `deps[].state` and `parent.state` can be `closing`. A closing ticket counts as open for its dependents, which are blocked with the new reason `closing_dependency`. `ticket ready`, `ticket blocked`, `ticket plan` and `ticket critical-path` leave closing tickets themselves out (decision 9). `ticket list --closure open` includes them, and `--closure closing` selects only them.
 6. In a pull-request repository the closed-ticket guard refuses only when the local primary's copy holds a closure: comments, saves, slug assignment, context prepare, republish and resolve-history are allowed on a closing ticket. Direct mode keeps today's guard. In both modes a save whose `closed_at` or `closed_by` would differ from the branch head's is refused with `invalid_input`.
-7. **(owner's eye)** `ticket withdraw-closure --id <ULID>` is confirmed like close, in either mode. It synchronizes, commits the ticket without `closed_at` and `closed_by`, and publishes the branch. It answers `already_applied` when the branch holds no closure (decision 11), `ticket_closed` when the primary holds it, and `recovery_required` while an unfinished close or withdraw holds the ticket.
+7. **(owner's eye)** `ticket withdraw-closure --id <ULID>` is confirmed like close, in either mode, with a publication remote. It synchronizes, commits the ticket without `closed_at` and `closed_by`, and publishes the branch. It answers `already_applied` when neither the branch nor its remote copy holds a closure (decision 11), `ticket_closed` when the primary holds it (also when the forge merged it while the withdraw ran), and `recovery_required` while an unfinished close or withdraw holds the ticket.
 8. In a remote synchronization of a ticket context, a closure that the stage's fetched primary holds is immutable: a resolution or an external integration must keep it, a clean merge result that does not hold it is given it, and a head that lacks it is never published (`ticket_closed`), whatever the merge style. A closure the primary does not hold may be dropped or replaced by a side's closure, never resurrected from the base alone. Every other synchronization keeps today's rule.
 9. **(owner's eye)** When the only conflict of a ticket context's synchronization is two different closures in the ticket's file and the fetched primary holds no closure of the ticket, the synchronization settles it itself by keeping the remote branch's closure (decision 2).
 10. **(owner's eye)** In a pull-request repository close takes the new-branch path for a ticket whose context's remote branch was observed deleted, and for a ticket with no context. It retires the old context (or the remote history) locally, makes the ticket's branch from the tracking primary with one commit holding only the closure (keeping a provisional closure the old context held), publishes it and answers with the link. The preview lists every entry of the old branch that the primary does not hold. Nothing on the remote is deleted or replaced.
@@ -103,7 +104,7 @@ Authorities, in order:
 | A9 | 11 | The merged-first branch with the remote branch kept: the close is in place and its only change against the primary is the closure | planned (Tasks 6, 7, 13) |
 | A10 | 10 | A ticket with no context closes through the new branch: never published, with deleted remote history, and with a surviving branch the primary holds | planned (Task 9) |
 | A11 | 1 | No primary write: every runner test asserts the local primary unchanged and that no synchronization targeted the primary; the SSH case shows the server's primary unchanged across close, close again, withdraw and close again, and writes the goldens (decision 11) | planned (Tasks 7 to 9, 14) |
-| A12 | 2 to 4, 13 | The required outcomes D1 to D21 and the answer table, W1 to W12, F1 to F15, and the record's rebuild | planned (Tasks 7 to 9, 11, 12) |
+| A12 | 2 to 4, 13 | The required outcomes D1 to D21 and the answer table, W1 to W14, F1 to F17, and the record's rebuild | planned (Tasks 7 to 9, 11, 12) |
 | A13 | 8 | The immutability rule for each validator: changed for a ticket context's pinned stages, today's for primary targets, local synchronizations and window 0; a clean merge keeps the primary's closure, and a fast-forward that lacks it is refused | planned (Tasks 3, 6) |
 | A14 | 3, 7, 12, 13 | Every registration: the code, the data, the link data, the preview, the blocker, the verb, the schemas, the enums, the goldens, the inventories, conformance and autonomy | planned (Tasks 4, 5, 10, 11, 14) |
 | A15 | 14 | The amended contracts and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | planned (Task 15) |
@@ -118,7 +119,7 @@ Nothing has been run. Every status above is planned.
 3. **A new data type for the pull-request close.** Direct-mode answers and their goldens stay as they are; `ticket close` (answering `already_closing`) and `ticket show` give the link again. Its part "`item sync`'s answer does not change" is replaced by decision 12.
 4. **`already_closing` is success, exit 0**, like `already_applied`: the closure is in place and a re-run returns the link.
 5. **The `pull_request` object is Cycle 02's** (from Cycle 02's planning): Cycle 02 adds `schemas/v1/pull_request.schema.json` and its DTO, used by enable and remote selection; this Cycle reuses them, and whichever lands second merges. The per-item record of given links stays this Cycle's; the setup's link lives in Cycle 02's setup record.
-6. **A surviving remote branch closes in place.** When the branch merged before close but its remote branch still exists, close records the closure on that branch after its synchronization merges the primary in. The new-branch recovery is used only when the remote branch is gone, so nothing on the remote is deleted or replaced. Chosen after planning found that no guarded remote replacement exists outside the direct close's cleanup (design Baseline Fact 11).
+6. **A surviving remote branch closes in place.** When the branch merged before close but its remote branch still exists, close records the closure on that branch after its synchronization merges the primary in. The new-branch recovery is used only when the remote branch is gone, so nothing on the remote is deleted or replaced. Chosen after planning found that no guarded remote replacement exists outside the direct close's cleanup (design Baseline Fact 16).
 7. **A ticket with no context closes through the new branch** in pull-request mode, in place of `context_missing`.
 8. **A stopped close is handled as the direct close's** (after review round 1): a step that stops holds the ticket, and the remote as any stopped synchronization does, until the same request runs again; `request cancel` and Ctrl-C answer `cancelled` and leave it unfinished; the CLI contract's cancellation rules stay as they are. This departs from the ticket's "No operation, lease or reservation outlives the close" for a close that stops partway, and from the RFC's "`item sync` finishes it": the same request finishes it.
 9. **Closing tickets are left out of `ticket ready`, `ticket blocked`, `ticket plan` and `ticket critical-path`** (after review round 1). They still count as open for their dependents and for `--closure open`.
@@ -138,12 +139,12 @@ Nothing has been run. Every status above is planned.
 - K-7: After a forge merge and before the local primary moves, the ticket reads `closing` while withdraw refuses it as closed (design R-27).
 - K-8: A direct close accepted before the repository switched to pull-request mode finishes in direct mode, and pushes the primary, as Cycle 01 decision 11 says for every operation.
 - K-10: While any closure record in the repository is unfinished, `context sync-local` of another item answers `recovery_required`, as it does today for a direct close.
-- K-11: After a withdraw whose publication was refused because the forge merged the closure meanwhile (design W9), the withdraw commit stays on the local branch; the ticket reads `closed`, and the branch is cleaned up after the merge as any other.
+- K-11: When the forge fast-forward-merges a closure while a withdraw of it runs (design W9), the withdraw's publication is refused and its commit stays on the local branch; with a merge commit or a squash, the withdraw's merge of the primary restores the closure and is published. Either way the answer is `ticket_closed`, the ticket reads `closed`, and the branch is cleaned up after the merge as any other. A forge merge after the publication child's fetch is not seen until the next synchronization (design R-30).
 - K-9: The primary's copy in a read is the root checkout's working tree: an uncommitted closure there reads `closed` while the guard, which reads the branch tips, treats the ticket as open; and with the root checked out on another branch, a read shows that branch's copy.
 
 ## Open Questions
 
-For the approval message: the named test edits E-2 to E-20 (E-16 approved in decision 11) and what Task 0's sweep finds; the new verb's delivery label `C5` and autonomy column (design R-28); and the execution method.
+For the approval message: the named test edits E-2 to E-23 (E-16 approved in decision 11) and what Task 0's sweep finds; the new verb's delivery label `C5` and autonomy column (design R-28); whether revision 5 needs a fifth review round; and the execution method.
 
 ## Review Record
 
@@ -154,9 +155,9 @@ For the approval message: the named test edits E-2 to E-20 (E-16 approved in dec
 | Planning | The answer's shape and the link's other sources | decision | A new data type (decision 3), amended by decision 12 | Owner, 2026-11-25 |
 | Planning | `already_closing`'s outcome | decision | Success, exit 0 (decision 4) | Owner, 2026-11-25 |
 | Planning | The `pull_request` schema is wanted by Cycles 02 and 03 | decision | Cycle 02's, reused (decision 5) | Owner, 2026-11-25, from Cycle 02's planning |
-| Planning | No guarded replacement of a remote branch exists | decision | A surviving branch closes in place (decision 6) | Design Baseline Fact 11 |
+| Planning | No guarded replacement of a remote branch exists | decision | A surviving branch closes in place (decision 6) | Design Baseline Fact 16 |
 | Planning | A ticket with no context in pull-request mode | decision | The new-branch path (decision 7) | Owner, 2026-11-25 |
-| Planning | The direct close's record forbids publishing the closure, and its children need that record | ruling | A separate runner and record (design R-1, R-3) | Design Baseline Fact 8 |
+| Planning | The direct close's record forbids publishing the closure, and its children need that record | ruling, superseded | A separate runner and record (revisions 1 to 3), replaced by decision 13 | Design Baseline Fact 8 |
 | Planning | A save could record a closure once a closing file passes the precheck | ruling | The save check (design R-11) | Design Baseline Fact 6 |
 | Review round 1, source and feasibility | 5 Blocking, 14 Important, 15 Minor | — | All resolved in revision 2; see the design's Review Record | This revision |
 | Review round 1, contract and consistency | 5 Blocking, 15 Important, 19 Minor | — | All resolved in revision 2, with decisions 8 to 12 | This revision |
@@ -175,3 +176,5 @@ For the approval message: the named test edits E-2 to E-20 (E-16 approved in dec
 | Review round 3, adversarial | 5 Blocking, 7 Important, 7 Minor | — | Resolved in revision 4, with decision 13 | This revision |
 | Review round 3 | Revision 3's "supersede before a commit" was not the direct close's rule | correction | Abandon, as the direct close (design R-18) | `closure/record.rs` `supersedable`; `run.rs` `abandon` |
 | Review round 3 | Three rounds found the direct close's rules missing from the separate runner | decision | A mode of the lifecycle (decision 13) | Owner, 2026-11-25 |
+| Review round 4, source and feasibility | 1 Blocking, 11 Important, 15 Minor | — | Resolved in revision 5, not independently reviewed; see the design's Review Record | This revision |
+| Review round 4, adversarial | 3 Blocking, 9 Important, 7 Minor | — | Resolved in revision 5, not independently reviewed | This revision |
