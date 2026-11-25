@@ -7,8 +7,8 @@ use git2::{Config, ConfigLevel, Repository};
 use time::OffsetDateTime;
 
 use super::{
-    Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
-    IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
+    Accessibility, ConfigurationDto, ConfigurationState, ForgeDto, IdentityAvailability,
+    IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
     resolve::{at_root, open_exactly, selected_repository},
@@ -63,6 +63,84 @@ fn configuration_dto(
         primary_branch,
         publication_remote,
         problems: problem.map(configuration_problem).into_iter().collect(),
+        integration: None,
+        forge: None,
+    }
+}
+
+/// A valid configuration's object: `configuration_dto` with its mode and
+/// forge.
+fn valid_configuration_dto(
+    primary_branch: String,
+    publication_remote: Option<String>,
+    integration: Option<String>,
+    forge: Option<ForgeDto>,
+) -> ConfigurationDto {
+    ConfigurationDto {
+        integration,
+        forge,
+        ..configuration_dto(
+            ConfigurationState::Valid,
+            Some(primary_branch),
+            publication_remote,
+            None,
+        )
+    }
+}
+
+/// `value` when it is the contract spelling of a mode this build knows.
+fn known_integration(value: &str) -> Option<String> {
+    use canonical::Integration::{Direct, PullRequest};
+    [Direct.as_str(), PullRequest.as_str()]
+        .contains(&value)
+        .then(|| value.to_owned())
+}
+
+/// `value` when it is the contract spelling of a forge kind this build knows.
+fn known_forge_kind(value: &str) -> Option<String> {
+    use canonical::ForgeKind::{BitbucketCloud, BitbucketDataCenter, Github, Gitlab};
+    [
+        BitbucketCloud.as_str(),
+        BitbucketDataCenter.as_str(),
+        Github.as_str(),
+        Gitlab.as_str(),
+    ]
+    .contains(&value)
+    .then(|| value.to_owned())
+}
+
+/// The mode and `[forge]` columns of a stored configuration row:
+/// `persist_configuration` sets them for a valid configuration and leaves
+/// them null for any other row.
+#[derive(Default)]
+pub(super) struct StoredMode {
+    pub(super) integration: Option<String>,
+    pub(super) forge_kind: Option<String>,
+    pub(super) forge_web_url: Option<String>,
+    pub(super) forge_pull_request_url: Option<String>,
+}
+
+/// A stored forge: its kind, web URL and pull request URL template.
+pub(super) type StoredForge = (Option<String>, Option<String>, Option<String>);
+
+impl StoredMode {
+    /// What a valid row's columns read as: its mode, and its forge when it
+    /// has one. A valid row whose mode is null was stored before the columns
+    /// existed and not refreshed since. No build before them wrote either
+    /// key, so it reads as direct with no forge.
+    pub(super) fn read(self) -> (String, Option<StoredForge>) {
+        let Some(integration) = self.integration else {
+            return (canonical::Integration::Direct.as_str().to_owned(), None);
+        };
+        let forge = (self.forge_kind.is_some()
+            || self.forge_web_url.is_some()
+            || self.forge_pull_request_url.is_some())
+        .then_some((
+            self.forge_kind,
+            self.forge_web_url,
+            self.forge_pull_request_url,
+        ));
+        (integration, forge)
     }
 }
 
@@ -74,17 +152,27 @@ pub(super) fn stored_configuration(
     primary_branch: Option<String>,
     publication_remote: Option<String>,
     invalid_code: Option<&str>,
+    mode: StoredMode,
 ) -> ConfigurationDto {
     match (state, primary_branch) {
         (None | Some("missing"), _) => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        (Some("valid"), Some(primary_branch)) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(primary_branch),
-            publication_remote,
-            None,
-        ),
+        (Some("valid"), Some(primary_branch)) => {
+            let (integration, forge) = mode.read();
+            // A value a later build wrote, which this one does not know,
+            // reads as null, so the object always satisfies the schema.
+            valid_configuration_dto(
+                primary_branch,
+                publication_remote,
+                known_integration(&integration),
+                forge.map(|(kind, web_url, pull_request_url)| ForgeDto {
+                    kind: kind.and_then(|kind| known_forge_kind(&kind)),
+                    web_url,
+                    pull_request_url,
+                }),
+            )
+        }
         (Some("invalid"), _) => configuration_dto(
             ConfigurationState::Invalid,
             None,
@@ -105,12 +193,20 @@ fn inspected_configuration(configuration: ConfigurationInspection) -> Configurat
         ConfigurationInspection::Missing => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        ConfigurationInspection::Valid(configuration) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(configuration.primary_branch),
-            configuration.publication_remote,
-            None,
-        ),
+        ConfigurationInspection::Valid(configuration) => {
+            let integration = configuration.integration().as_str().to_owned();
+            let forge = configuration.forge().map(|forge| ForgeDto {
+                kind: forge.kind.map(|kind| kind.as_str().to_owned()),
+                web_url: forge.web_url,
+                pull_request_url: forge.pull_request_url,
+            });
+            valid_configuration_dto(
+                configuration.primary_branch,
+                configuration.publication_remote,
+                Some(integration),
+                forge,
+            )
+        }
         ConfigurationInspection::Invalid(problem) => configuration_dto(
             ConfigurationState::Invalid,
             None,
@@ -224,7 +320,11 @@ impl RepositoryService {
                         configuration.primary_branch,
                         configuration.publication_remote,
                         configuration.invalid_code,
-                        repositories.id
+                        repositories.id,
+                        configuration.integration,
+                        configuration.forge_kind,
+                        configuration.forge_web_url,
+                        configuration.forge_pull_request_url
                    FROM repositories
                    LEFT JOIN configuration_observations AS configuration
                      ON configuration.repository_id = repositories.id
@@ -255,6 +355,12 @@ impl RepositoryService {
                                 row.get(7)?,
                                 row.get(8)?,
                                 invalid_code.as_deref(),
+                                StoredMode {
+                                    integration: row.get(11)?,
+                                    forge_kind: row.get(12)?,
+                                    forge_web_url: row.get(13)?,
+                                    forge_pull_request_url: row.get(14)?,
+                                },
                             ),
                             index: index_state(
                                 refresh_required,

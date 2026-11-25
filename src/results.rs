@@ -649,6 +649,8 @@ result_codes! {
         "The published branch was deleted on the remote.";
     PushRejected => "push_rejected", Some(FailureClass::Blocked),
         "The remote rejected the push.";
+    PrimaryHasLocalCommits => "primary_has_local_commits", Some(FailureClass::Blocked),
+        "The local primary branch has commits the remote does not have.";
     NoSelectedKey => "no_selected_key", Some(FailureClass::Blocked),
         "No key is selected.";
     KeyUnavailable => "key_unavailable", Some(FailureClass::Blocked),

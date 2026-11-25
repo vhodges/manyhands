@@ -19,6 +19,8 @@ fn configuration() -> ConfigurationDto {
         primary_branch: Some("main".into()),
         publication_remote: Some("origin".into()),
         problems: vec![],
+        integration: Some("direct".into()),
+        forge: None,
     }
 }
 
@@ -632,6 +634,53 @@ fn repository_inspection_reports_registration_configuration_and_remotes() {
 }
 
 #[test]
+fn repository_inspection_names_mode_and_forge() {
+    let inspect = |integration: &str, forge: Option<ForgeDto>| {
+        repository_inspection(&RepositoryInspectionDto {
+            selected_path: "/repository".into(),
+            root: "/repository".into(),
+            registered: true,
+            head_branch: Some("main".into()),
+            local_branches: vec!["main".into()],
+            configuration: ConfigurationDto {
+                integration: Some(integration.into()),
+                forge,
+                ..configuration()
+            },
+            identity_state: IdentityAvailability::Available,
+            remotes: vec![],
+            operations: vec![],
+        })
+        .stdout
+    };
+    let forge = |kind: Option<&str>, template: Option<&str>| ForgeDto {
+        kind: kind.map(Into::into),
+        web_url: None,
+        pull_request_url: template.map(Into::into),
+    };
+
+    let cloud = inspect("pull_request", Some(forge(Some("bitbucket-cloud"), None)));
+    assert!(cloud.contains("Integration: pull_request\n"), "{cloud}");
+    assert!(cloud.contains("Forge: bitbucket-cloud\n"), "{cloud}");
+
+    let direct = inspect("direct", None);
+    assert!(direct.contains("Integration: direct\n"), "{direct}");
+    assert!(!direct.contains("Forge:"), "{direct}");
+
+    let template = inspect(
+        "direct",
+        Some(forge(
+            None,
+            Some("https://git.example.com/compare?source={source}"),
+        )),
+    );
+    assert!(
+        template.contains("Forge: https://git.example.com/compare?source={source}\n"),
+        "{template}"
+    );
+}
+
+#[test]
 fn identity_reports_sources_and_absent_values() {
     let data = IdentityDto {
         name: Some("A Name".into()),
@@ -979,7 +1028,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
             remotes: vec![remote],
             operations: Vec::new(),
         }),
-        11,
+        12,
         10,
     );
 }

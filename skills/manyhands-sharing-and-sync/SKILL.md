@@ -16,7 +16,7 @@ Everything in Manyhands is local until it is published. Sharing means pushing a 
 | What | Verb | What it does |
 | --- | --- | --- |
 | One item (a ticket or a document in progress) | `item sync --id <ITEM_ID>` | Fetches that item's branch from the remote, merges it with the local one, merges the local main branch into it, and pushes the item's branch. |
-| The main branch | `repo sync` | Fetches the main branch, brings it up to date, and pushes it. It does not touch item branches. |
+| The main branch | `repo sync` | Fetches the main branch, brings it up to date, and pushes it. It does not touch item branches. In a pull-request repository it only pulls: see "Pull-request repositories" below. |
 | Items other people started | `poll once` ([`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md)) | Fetches, and creates the local branch and worktree for an item you did not have. It never pushes or merges. |
 
 The verified behavior behind this table, from two clones of one remote:
@@ -40,6 +40,12 @@ manyhands-cli --json --non-interactive repo sync --repo <repo-root> --request-id
 
 An item has its own branch and worktree, and so its own sync result. To share "everything", list the items that have work in progress (`ticket list`, `document list`: an item with `context.kind` `active` has a branch) and run `item sync` once per item with its own `--request-id`, then `repo sync` for main. Read each answer on its own: one item can conflict while the others publish. Report per item, not as one result. A sync takes the repository's synchronization reservation, so a second sync meeting a live one waits for it, up to 5 seconds on a build with the change, and answers `busy` (see the table) if it is still running: send it again, or run them one after another. A build without the concurrent-writers change also needs a look at `operation list` between them ([CLI conventions](../manyhands-overview/references/cli-conventions.md), "Other writers in the repository", says how to tell the build).
 
+## Pull-request repositories
+
+In a repository whose configuration says `integration = "pull_request"` (`repo inspect` shows it as `data.configuration.integration`; [repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"), `repo sync` is pull-only on a build with the pull-request setting (Wave 06 Cycle 01). It fetches the main branch and fast-forwards a local one the remote is ahead of, and it never merges and never pushes it. It answers as a direct fast-forward-only sync does: `already_applied` (0) with `publication` `current`, never `published`. A local main branch with commits the remote lacks is refused with `primary_has_local_commits` (3), with nothing written, pushed or held: [recovery](../manyhands-recovery/SKILL.md), "Local commits on the primary of a pull-request repository". A sync keeps the mode it began with, so one started in direct mode and finished after the switch finishes as direct. `item sync`, `poll once` and a comment's publication are unchanged.
+
+Pull-request mode is not usable end to end until close and promote support it: `ticket close` and `document promote` still merge into the primary and push it, as in direct mode.
+
 ## Receiving: the usual order
 
 1. `poll once` to see what others published ([`manyhands-polling-and-index`](../manyhands-polling-and-index/SKILL.md)).
@@ -56,6 +62,7 @@ With no publication remote, `item sync` and `repo sync` answer `publication_remo
 | --- | --- | --- |
 | `ok` (0), `publication` `published` | Pushed. `integration` `complete` means it also merged something. | Done. |
 | `already_applied` (0), `noop` | Nothing to push, or only a fast-forward from the remote (see above). | Done. |
+| `primary_has_local_commits` (3) | A pull-request repository's `repo sync` found local commits on the main branch that the remote lacks. Nothing was pushed or held; `data.local_commits` lists up to 20. | Not yours to fix: tell the person, and see [recovery](../manyhands-recovery/SKILL.md), "Local commits on the primary of a pull-request repository". |
 | `recovery_required` (3), `data.conflict` | A merge conflicts. Nothing was lost; the sync stops until someone chooses. | "A conflict" below. |
 | `recovery_required` (3), `data.blocker` | An unfinished operation is in the way and its holder is not live (`live` `false`, or `null` for a legacy row with no host or pid). It is named: `operation_id`, `action`, `item_id`, `request_id`, `author`, `host`, `pid`, `started_at`. A new sync refused for an unanswered push of another operation names it and offers its abandon. | "A synchronization left unfinished" below. |
 | `remote_branch_deleted` (3) | The item's branch was published once and has since been deleted on the remote. | "A deleted branch" below. |
