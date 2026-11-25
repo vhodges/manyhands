@@ -18,7 +18,7 @@ use crate::{
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
         IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError, SynchronizationTarget,
+        SynchronizationError, SynchronizationOutcome, SynchronizationTarget,
         cleanup::RetirementEvidence,
         mutation::{CancellationToken, RequestId},
         remote::{reservation::RemoteReservation, state, sync},
@@ -28,6 +28,7 @@ use crate::{
 use git2::Oid;
 use rusqlite::{Connection, Transaction};
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 /// Which parent lifecycle a runner, child fence or reservation arm serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +122,9 @@ pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) approval: Option<HostApproval>,
     pub(in super::super) confirmed_identity: Option<ConfirmedCommitIdentity>,
     pub(in super::super) probe: Option<CancellationProbe>,
+    /// The time a record that stores one is given: the builders default it
+    /// to the wall clock, and a test injects its own.
+    pub(in super::super) clock: fn() -> OffsetDateTime,
 }
 
 /// The parent steps the runner branches on, shared by every lifecycle. A
@@ -176,6 +180,25 @@ pub(in super::super) enum RecordPath {
     Branch,
 }
 
+/// What a branch record's step 3 gave: the commit it records is written, or
+/// the record ended with its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchStep {
+    /// The record is at `closing`: its closure is as consented, and written
+    /// when it records one. Its publication child is next.
+    Closing,
+    /// The hook abandoned the record with its answer.
+    Finished,
+}
+
+/// Why a branch record ends before it publishes, when it is the runner that
+/// knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchEnd {
+    /// The context branch is gone after its child ran.
+    ContextGone,
+}
+
 /// Exactly the parent fields the runner reads and writes.
 pub(in super::super) trait LifecycleRecord: Clone {
     type Expectation;
@@ -190,6 +213,11 @@ pub(in super::super) trait LifecycleRecord: Clone {
     /// Every record is direct but a closure's branch record.
     fn path(&self) -> RecordPath {
         RecordPath::Direct
+    }
+    /// A finished branch record has the answer it gave stored, and answers
+    /// from it ever after. No other record has one.
+    fn answered(&self) -> bool {
+        false
     }
     fn context_sync_id(&self) -> Option<OperationId>;
     fn primary_sync_id(&self) -> Option<OperationId>;
@@ -373,6 +401,9 @@ pub(in super::super) trait Lifecycle {
     type ReplacementGuard: PartialEq;
     type Outcome;
     type Output;
+    /// What a branch record's publication answers with, read once and kept
+    /// whole until it is stored with the record's completion.
+    type BranchFinish: Clone;
     const KIND: LifecycleKind;
 
     // Record storage.
@@ -558,6 +589,46 @@ pub(in super::super) trait Lifecycle {
         let _ = (service, stage);
         Ok(None)
     }
+
+    // Branch records: no integration, a publication child in its place.
+    /// Step 3 of a branch record, under its own lease: what the record
+    /// consented to is written, or the record ends with its answer.
+    fn branch_step(
+        &self,
+        service: &RepositoryService,
+        request: &LifecycleRequest<Self::Expectation>,
+        r: &Self::Record,
+    ) -> Result<BranchStep, Self::Error>;
+    /// Abandons a record at `confirmed` with the answer `end` gives.
+    fn end_branch(
+        service: &RepositoryService,
+        root: &Path,
+        r: &Self::Record,
+        end: BranchEnd,
+    ) -> Result<(), RepositoryError>;
+    /// Mints the publication child and moves the record to `publication_pending`,
+    /// in one transaction.
+    fn begin_publication(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<Self::Record, RepositoryError>;
+    /// What a publication child's result answers, or `None` when the stop
+    /// stands and the record stays at `publication_pending`.
+    fn branch_answer(
+        service: &RepositoryService,
+        request: &LifecycleRequest<Self::Expectation>,
+        r: &Self::Record,
+        child: &Result<SynchronizationOutcome, SynchronizationError>,
+    ) -> Result<Option<Self::BranchFinish>, RepositoryError>;
+    fn complete_branch(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        finish: &Self::BranchFinish,
+    ) -> Result<(), RepositoryError>;
+    fn branch_outcome(r: &Self::Record, publication: Option<PromotionPublication>)
+    -> Self::Outcome;
 
     // Outcome.
     fn outcome(
@@ -785,6 +856,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
     type ReplacementGuard = record::ReplacementGuard;
     type Outcome = DocumentPromotionOutcome;
     type Output = DocumentPromotionResult;
+    type BranchFinish = std::convert::Infallible;
     const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;
 
     fn read_record(
@@ -1007,6 +1079,52 @@ impl Lifecycle for DocumentPromotionLifecycle {
         _stage: &mut LeasedIntegration<'_, PromotionRecord>,
     ) -> Result<PreIntegration, DocumentPromotionError> {
         Ok(PreIntegration::None)
+    }
+    /// A promotion record is always direct: the runner never asks.
+    fn branch_step(
+        &self,
+        _service: &RepositoryService,
+        _request: &LifecycleRequest<PromotionExpectation>,
+        _r: &PromotionRecord,
+    ) -> Result<BranchStep, DocumentPromotionError> {
+        Err(DocumentPromotionError::RecoveryRequired)
+    }
+    fn end_branch(
+        _service: &RepositoryService,
+        _root: &Path,
+        _r: &PromotionRecord,
+        _end: BranchEnd,
+    ) -> Result<(), RepositoryError> {
+        Err(state::recovery_required())
+    }
+    fn begin_publication(
+        _tx: &Transaction<'_>,
+        _id: i64,
+        _op: OperationId,
+    ) -> Result<PromotionRecord, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    fn branch_answer(
+        _service: &RepositoryService,
+        _request: &LifecycleRequest<PromotionExpectation>,
+        _r: &PromotionRecord,
+        _child: &Result<SynchronizationOutcome, SynchronizationError>,
+    ) -> Result<Option<std::convert::Infallible>, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    fn complete_branch(
+        _tx: &Transaction<'_>,
+        _id: i64,
+        _op: OperationId,
+        finish: &std::convert::Infallible,
+    ) -> Result<(), RepositoryError> {
+        match *finish {}
+    }
+    fn branch_outcome(
+        _r: &PromotionRecord,
+        _publication: Option<PromotionPublication>,
+    ) -> DocumentPromotionOutcome {
+        unreachable!("a promotion record is always direct")
     }
     fn outcome(
         r: &PromotionRecord,

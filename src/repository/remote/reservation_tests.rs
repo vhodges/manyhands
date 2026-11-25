@@ -4587,6 +4587,110 @@ fn child_fence_admits_the_publication_child_only_while_a_branch_record_publishes
     assert_eq!(verdict, Err(RepositoryErrorKind::OperationMismatch));
 }
 
+/// The closure hold on the ticket's context lets through its own branch
+/// record's publication child and nothing else of the ticket's context: not
+/// a synchronization with no execution, not a direct record's, and not an
+/// attempt the record has since replaced.
+#[test]
+fn closure_hold_lets_through_only_its_own_publication_child() {
+    use crate::repository::{
+        AuthoringKind,
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::ChildRole,
+    };
+    let (_data, root, service) = fixture();
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    state::with_transaction(&service, root.path(), |tx, _| {
+        tx.execute_batch(&format!(
+            "UPDATE ticket_closures SET integration_mode='pull_request',step='closing',closure_kind='existing',context_oid='{}',base_oid='{}' WHERE operation_id='{op}'",
+            "1".repeat(40),
+            "2".repeat(40)
+        ))
+        .map_err(|_| state::recovery_required())
+    })
+    .unwrap();
+    let next = || {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::next_attempt(tx, id, op, ChildRole::Publication)
+        })
+        .unwrap()
+    };
+    let stale = closure::child_execution(&next(), ChildRole::Publication).unwrap();
+    // The record replaces its unrun attempt, and publishes under the new one.
+    let parent = next();
+    state::with_transaction(&service, root.path(), |tx, _| {
+        tx.execute_batch(&format!(
+            "UPDATE ticket_closures SET step='publication_pending' WHERE operation_id='{op}'"
+        ))
+        .map_err(|_| state::recovery_required())
+    })
+    .unwrap();
+    let child = parent.primary_sync_id.unwrap();
+    let own = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    let target = context_sync_target(AuthoringKind::Ticket);
+    let holds = |execution: Option<&crate::repository::promotion::record::ChildExecution>| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure_holds_context(tx, id, &target, execution)
+        })
+        .unwrap()
+    };
+    assert!(holds(None), "nothing else of the context passes");
+    assert!(!holds(Some(&own)), "its own publication child does");
+    // The reserve caller: the child reserves, and a synchronization that is
+    // no child is refused by the hold, as an attempt the record replaced is
+    // refused by the fence before it.
+    assert!(matches!(
+        service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service
+            .reserve_promotion_child(root.path(), child, &target, &stale, true)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert!(matches!(
+        service
+            .reserve_promotion_child(root.path(), child, &target, &own, true)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    // The restart caller passes it too, where a stale attempt cannot.
+    assert!(!matches!(
+        service
+            .restart_promotion_child(root.path(), child, &target, &own)
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service
+            .restart_promotion_child(root.path(), child, &target, &stale)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    // A direct record holds the context against every execution.
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    assert_eq!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::read_record(tx, id, parent.operation_id)
+        })
+        .unwrap()
+        .map(|r| r.step),
+        Some(ClosureStep::Integrated)
+    );
+    let held = state::with_transaction(&service, root.path(), |tx, id| {
+        closure_holds_context(tx, id, &target, Some(&execution))
+    })
+    .unwrap();
+    assert!(held, "a direct holder refuses every execution");
+}
+
 /// A closure context attempt before it reserved is refused once the
 /// parent's cancellation is requested, and so is its primary attempt.
 #[test]

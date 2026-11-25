@@ -3,17 +3,17 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::canonical::ItemId;
+use crate::{canonical::ItemId, results::ResultCode};
 
 use super::super::super::{
     super::{
-        AuthoringKind, CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording,
-        DocumentPromotionError, DocumentPromotionOutcome, DocumentPromotionPreflight,
-        DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind, OperationId, PathChange,
-        PlannedCleanup, PlannedClosure, PlannedIntegration, PlannedPublication,
-        PreviewDocumentPromotionRequest, PreviewTicketClosureRequest, PromoteDocumentRequest,
-        PromotionBlocker, PromotionCleanup, PromotionCleanupPending, PromotionExpectation,
-        PromotionIntegration, PromotionPathChange, PromotionPublication,
+        AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureBlocker,
+        ClosureExpectation, ClosureRecording, DocumentPromotionError, DocumentPromotionOutcome,
+        DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind,
+        OperationId, PathChange, PlannedCleanup, PlannedClosure, PlannedIntegration,
+        PlannedPublication, PreviewDocumentPromotionRequest, PreviewTicketClosureRequest,
+        PromoteDocumentRequest, PromotionBlocker, PromotionCleanup, PromotionCleanupPending,
+        PromotionExpectation, PromotionIntegration, PromotionPathChange, PromotionPublication,
         PromotionPublicationPending, PromotionRemoteDeletionCategory,
         PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
@@ -77,6 +77,18 @@ pub(in super::super::super) struct Reached {
     pub(super) index_pending: bool,
 }
 
+/// What a call that did not stop answers: how far an operation got that
+/// reached primary, or how a pull-request close answered.
+pub(in super::super::super) enum Called {
+    Reached(Reached),
+    /// A branch record's answer, whatever it was. `index_pending` is the
+    /// domain's own: its refresh is yet to run.
+    Branch {
+        outcome: BranchClosureOutcome,
+        index_pending: bool,
+    },
+}
+
 /// What stopped an operation before it could report that, of either verb.
 pub(in super::super::super) enum Stop {
     Repository(RepositoryError),
@@ -124,7 +136,7 @@ pub(in super::super::super) trait LifecycleVerb {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>>;
+    ) -> Option<Result<Called, Stop>>;
 
     fn parent(
         service: &RepositoryService,
@@ -308,7 +320,7 @@ impl LifecycleVerb for Promote {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>> {
+    ) -> Option<Result<Called, Stop>> {
         let result = session.promote_document(
             service,
             PromoteDocumentRequest {
@@ -324,11 +336,11 @@ impl LifecycleVerb for Promote {
         )?;
         Some(match result {
             Ok(DocumentPromotionResult::Complete(outcome)) => {
-                Ok(promotion_reached(&outcome, false))
+                Ok(Called::Reached(promotion_reached(&outcome, false)))
             }
-            Ok(DocumentPromotionResult::IndexPending(pending)) => {
-                Ok(promotion_reached(&pending.authoritative, true))
-            }
+            Ok(DocumentPromotionResult::IndexPending(pending)) => Ok(Called::Reached(
+                promotion_reached(&pending.authoritative, true),
+            )),
             Err(error) => Err(match error {
                 DocumentPromotionError::Repository(error) => Stop::Repository(error),
                 DocumentPromotionError::Transport(error) => Stop::Transport(error),
@@ -412,7 +424,7 @@ impl LifecycleVerb for Close {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>> {
+    ) -> Option<Result<Called, Stop>> {
         let result = session.close_ticket(
             service,
             CloseTicketRequest {
@@ -427,10 +439,21 @@ impl LifecycleVerb for Close {
             progress,
         )?;
         Some(match result {
-            Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),
-            Ok(TicketClosureResult::IndexPending(pending)) => {
-                Ok(closure_reached(&pending.authoritative, true))
+            Ok(TicketClosureResult::Complete(outcome)) => {
+                Ok(Called::Reached(closure_reached(&outcome, false)))
             }
+            Ok(TicketClosureResult::IndexPending(pending)) => Ok(Called::Reached(closure_reached(
+                &pending.authoritative,
+                true,
+            ))),
+            Ok(TicketClosureResult::Branch(outcome)) => Ok(Called::Branch {
+                outcome,
+                index_pending: false,
+            }),
+            Ok(TicketClosureResult::BranchIndexPending(pending)) => Ok(Called::Branch {
+                outcome: pending.authoritative,
+                index_pending: true,
+            }),
             Err(error) => Err(match error {
                 TicketClosureError::Repository(error) => Stop::Repository(error),
                 TicketClosureError::Transport(error) => Stop::Transport(error),
@@ -474,6 +497,32 @@ impl LifecycleVerb for Close {
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError> {
         promotion::unfinished_holder::<closure::record::ClosureRecord>(db, repository_id, id)
+    }
+}
+
+/// The code a branch record's answer gives (section 9.3). A reconfirmation
+/// the consent no longer holds for answers as an external change does.
+pub(super) fn branch_code(answer: BranchAnswer) -> ResultCode {
+    match answer {
+        BranchAnswer::Merged | BranchAnswer::Published | BranchAnswer::WithdrawnSince => {
+            ResultCode::Ok
+        }
+        BranchAnswer::Existing | BranchAnswer::KeptPublished | BranchAnswer::AlreadyClosing => {
+            ResultCode::AlreadyClosing
+        }
+        BranchAnswer::ClosedElsewhere
+        | BranchAnswer::TicketClosed
+        | BranchAnswer::AlreadyClosed
+        | BranchAnswer::ContextTicketClosed => ResultCode::TicketClosed,
+        BranchAnswer::RemoteBranchDeleted | BranchAnswer::ContextRemoteBranchDeleted => {
+            ResultCode::RemoteBranchDeleted
+        }
+        BranchAnswer::RemoteChanged | BranchAnswer::ContextHistoryUnresolved => {
+            ResultCode::RecoveryRequired
+        }
+        BranchAnswer::ExternalChange | BranchAnswer::ReconfirmationRequired => {
+            ResultCode::ExternalChange
+        }
     }
 }
 

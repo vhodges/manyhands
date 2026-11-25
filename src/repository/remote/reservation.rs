@@ -423,17 +423,30 @@ fn publication_intent(
 
 /// C1, C9: from `closing` until retirement a ticket context may hold its
 /// closure checkpoint, which a synchronization of that context would push to
-/// the remote context branch. Such a reservation or restart is `Busy`.
+/// the remote context branch. Such a reservation or restart is `Busy`: but for
+/// the publication child of the branch record that holds the context, which
+/// is the one synchronization that publishes the closure the record wrote.
+/// `execution` is the validated attempt of a lifecycle child, when this is one.
 fn closure_holds_context(
     tx: &Transaction<'_>,
     id: i64,
     target: &RemoteOperationTarget,
+    execution: Option<&crate::repository::promotion::record::ChildExecution>,
 ) -> Result<bool, RepositoryError> {
+    use crate::repository::promotion::lifecycle::{LifecycleKind, RecordPath};
     match target.item() {
         Some((crate::repository::AuthoringKind::Ticket, item))
             if target.action() == RemoteOperationAction::SynchronizeContext =>
         {
-            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+            Ok(
+                match crate::repository::closure::record::written_closure_holder(tx, id, item)? {
+                    None => false,
+                    Some((holder, RecordPath::Branch)) => !execution.is_some_and(|execution| {
+                        execution.is_publication_of(LifecycleKind::TicketClosure, holder)
+                    }),
+                    Some((_, RecordPath::Direct)) => true,
+                },
+            )
         }
         _ => Ok(false),
     }
@@ -1615,7 +1628,7 @@ impl RepositoryService {
                     &call,
                 )?;
             }
-            if closure_holds_context(tx, repository_id, target)? {
+            if closure_holds_context(tx, repository_id, target, execution)? {
                 return Ok(RemotePollReservationOutcome::Reservation(
                     RemoteReservationOutcome::Busy,
                 ));
@@ -3208,7 +3221,7 @@ impl RepositoryService {
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
-            if closure_holds_context(tx, id, target)? {
+            if closure_holds_context(tx, id, target, execution)? {
                 return Ok(RemoteReservationOutcome::Busy);
             }
             let foreign_conflict: bool = tx.query_row(

@@ -194,7 +194,7 @@ impl LifecycleVerb for Fixed {
         _expected: [u8; 32],
         _request_id: RequestId,
         _progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>> {
+    ) -> Option<Result<Called, Stop>> {
         None
     }
 
@@ -272,6 +272,8 @@ fn stopped_with(step: ParentStep, refusal: Option<Refusal<LifecycleBlocker>>, st
             publication: None,
             cancel_requested: false,
             children: [None, None],
+            path: RecordPath::Direct,
+            answered: false,
         });
     });
     let data = tempfile::tempdir().unwrap();
@@ -299,6 +301,151 @@ fn accepted() -> Accepted {
         },
         expected: None,
     }
+}
+
+/// A branch record's answer gives the code of the design's table, and the
+/// stored name of each reads back as the same answer.
+#[test]
+fn a_branch_answer_gives_its_code() {
+    use crate::repository::BranchAnswer as A;
+    for (answer, code, name) in [
+        (A::Merged, ResultCode::Ok, "merged"),
+        (A::Published, ResultCode::Ok, "published"),
+        (A::WithdrawnSince, ResultCode::Ok, "withdrawn_since"),
+        (A::Existing, ResultCode::AlreadyClosing, "existing"),
+        (
+            A::KeptPublished,
+            ResultCode::AlreadyClosing,
+            "kept_published",
+        ),
+        (
+            A::AlreadyClosing,
+            ResultCode::AlreadyClosing,
+            "already_closing",
+        ),
+        (
+            A::ClosedElsewhere,
+            ResultCode::TicketClosed,
+            "closed_elsewhere",
+        ),
+        (A::TicketClosed, ResultCode::TicketClosed, "ticket_closed"),
+        (A::AlreadyClosed, ResultCode::TicketClosed, "already_closed"),
+        (
+            A::ContextTicketClosed,
+            ResultCode::TicketClosed,
+            "context_ticket_closed",
+        ),
+        (
+            A::RemoteBranchDeleted,
+            ResultCode::RemoteBranchDeleted,
+            "remote_branch_deleted",
+        ),
+        (
+            A::ContextRemoteBranchDeleted,
+            ResultCode::RemoteBranchDeleted,
+            "context_remote_branch_deleted",
+        ),
+        (
+            A::RemoteChanged,
+            ResultCode::RecoveryRequired,
+            "remote_changed",
+        ),
+        (
+            A::ContextHistoryUnresolved,
+            ResultCode::RecoveryRequired,
+            "context_history_unresolved",
+        ),
+        (
+            A::ExternalChange,
+            ResultCode::ExternalChange,
+            "external_change",
+        ),
+        (
+            A::ReconfirmationRequired,
+            ResultCode::ExternalChange,
+            "reconfirmation_required",
+        ),
+    ] {
+        assert_eq!(branch_code(answer), code, "{name}");
+        assert_eq!(answer.name(), name);
+        assert_eq!(A::parse(name).unwrap(), answer);
+    }
+}
+
+/// A branch record's view: it is never integrated, whatever its step, and
+/// once it has answered, its request answers from the record, not from what
+/// ended it.
+#[test]
+fn a_branch_parent_view_is_never_integrated() {
+    let view = |step, path, answered, refusal| ParentView {
+        step,
+        refusal,
+        expectation: [0; 32],
+        item_id: ITEM.parse().unwrap(),
+        checkpoint: None,
+        integration: None,
+        integration_kind: None,
+        publication: None,
+        cancel_requested: false,
+        children: [None, None],
+        path,
+        answered,
+    };
+    let integrated =
+        |view: &ParentView<LifecycleBlocker>| parent_integrated(Path::new("/nowhere"), None, view);
+    for step in [ParentStep::PublicationPending, ParentStep::Complete] {
+        assert!(
+            integrated(&view(step, RecordPath::Direct, false, None)),
+            "{step:?}"
+        );
+        assert!(
+            !integrated(&view(step, RecordPath::Branch, false, None)),
+            "{step:?}"
+        );
+    }
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let binding = LifecycleBinding::<Fixed> {
+        root: PathBuf::from("/nowhere"),
+        id: ITEM.parse().unwrap(),
+        expected: None,
+        closure_exists: false,
+        verb: PhantomData,
+    };
+    let ended = |answered| {
+        binding.ended_answer(
+            &service,
+            Path::new("/nowhere"),
+            None,
+            &view(
+                ParentStep::Abandoned,
+                RecordPath::Branch,
+                answered,
+                Some(Refusal::ExternalChange),
+            ),
+        )
+    };
+    // The refusal alone says external change; an answered record's own
+    // answer is the domain's to give.
+    assert_eq!(
+        ended(false).map(|answer| answer.code),
+        Some(ResultCode::ExternalChange)
+    );
+    assert!(ended(true).is_none());
+    // A stop of an answered record is not its last word, as a complete
+    // parent's is not.
+    PARENT.with(|parent| {
+        *parent.borrow_mut() = Some(view(
+            ParentStep::Abandoned,
+            RecordPath::Branch,
+            true,
+            Some(Refusal::ExternalChange),
+        ));
+    });
+    let ran = binding.stopped(&service, &accepted(), Stop::Busy, true);
+    assert_eq!(ran.answer.code, ResultCode::Busy);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(ran.answer.recovery.len(), 1);
 }
 
 /// A stop is not stored because the parent has since completed.

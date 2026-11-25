@@ -31,9 +31,10 @@ mod bridges;
 mod cleanup;
 mod closure;
 pub use closure::{
-    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
-    TicketClosurePreview, TicketClosureResult,
+    BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction, ClosureBlocker,
+    ClosureExpectation, ClosureRecording, PlannedClosure, PreviewTicketClosureRequest,
+    TicketClosureError, TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview,
+    TicketClosureResult,
 };
 mod comment_publication;
 mod context_release;

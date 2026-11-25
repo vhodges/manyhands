@@ -2,35 +2,39 @@
 //! forwards to the closure's record, observation and checkpoint modules; the
 //! runner owns the order, the children, retry and cleanup.
 use super::{
-    CloseTicketRequest, ClosureAction, ClosureBlocker, ClosureExpectation, ClosureRecording,
-    PlannedClosure, PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome,
-    TicketClosureResult, checkpoint,
+    BranchAnswer, BranchClosureOutcome, BranchFinish, CloseTicketRequest, ClosureAction,
+    ClosureBlocker, ClosureExpectation, ClosureOutcome, ClosureRecording, PlannedClosure,
+    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosureResult,
+    checkpoint,
     observe::{self, ClosureObservation, PreparedClosureObservation},
     record::{self, ClosureKind, ClosureRecord},
 };
 use crate::{
     canonical::{Integration, ItemId, RepositoryConfig},
     repository::{
-        ConfirmedCommitIdentity, ExpectedConfiguration, IndexPending, OperationId,
-        PlannedIntegration, PromotionCleanup, PromotionIntegration, PromotionPublication,
-        RepositoryError, RepositoryService, SynchronizationError,
+        ConfigurationInspection, ConfirmedCommitIdentity, ExpectedConfiguration, IndexPending,
+        OperationId, PlannedIntegration, PromotionCleanup, PromotionIntegration,
+        PromotionPublication, RepositoryError, RepositoryOperation, RepositoryService,
+        SynchronizationError, SynchronizationOutcome, canonical_repository_root,
         cleanup::RetirementEvidence,
         keys::{SessionCredentialProvider, SessionCredentials},
         promotion::{
             integrate,
             lifecycle::{
-                CancellationProbe, LeasedIntegration, Lifecycle, LifecycleError, LifecycleKind,
-                LifecyclePreview, LifecycleRequest, PreIntegration,
+                BranchEnd, BranchStep, CancellationProbe, LeasedIntegration, Lifecycle,
+                LifecycleError, LifecycleKind, LifecyclePreview, LifecycleRequest, PreIntegration,
             },
             record::{ChildExecution, ChildRole, ChildState},
             run,
         },
+        read_configuration,
         remote::{reservation::RemoteReservation, state},
     },
 };
 use git2::Oid;
 use rusqlite::{Connection, Transaction};
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 pub(in super::super) fn close<P: SessionCredentialProvider>(
     service: &RepositoryService,
@@ -38,12 +42,14 @@ pub(in super::super) fn close<P: SessionCredentialProvider>(
     session: &mut SessionCredentials<P>,
     probe: Option<CancellationProbe>,
     progress: &mut dyn run::RunObserver,
+    clock: fn() -> OffsetDateTime,
 ) -> Result<TicketClosureResult, TicketClosureError> {
     run::run_lifecycle(
         &TicketClosureLifecycle,
         service,
         LifecycleRequest {
             probe,
+            clock,
             ..lifecycle_request(request)
         },
         session,
@@ -70,6 +76,7 @@ pub(in super::super) fn lifecycle_request(
         approval,
         confirmed_identity,
         probe: None,
+        clock: OffsetDateTime::now_utc,
     }
 }
 
@@ -180,8 +187,9 @@ impl Lifecycle for TicketClosureLifecycle {
     type Observation = PreparedClosureObservation;
     type Refusal = record::Refusal;
     type ReplacementGuard = record::ReplacementGuard;
-    type Outcome = TicketClosureOutcome;
+    type Outcome = ClosureOutcome;
     type Output = TicketClosureResult;
+    type BranchFinish = BranchFinish;
     const KIND: LifecycleKind = LifecycleKind::TicketClosure;
 
     fn read_record(
@@ -373,19 +381,6 @@ impl Lifecycle for TicketClosureLifecycle {
             Err(blockers) => Err(record::Refusal::Blocked(blockers)),
         }
     }
-    /// A pull-request close writes no record until its runner exists: a
-    /// confirm whose consent holds stops here, before a record is inserted.
-    fn require_identity(
-        preview: &ClosureObservation,
-        _repository: &git2::Repository,
-        _confirmation: Option<&ConfirmedCommitIdentity>,
-    ) -> Result<(), TicketClosureError> {
-        if preview.path == DIRECT {
-            Ok(())
-        } else {
-            Err(TicketClosureError::RecoveryRequired)
-        }
-    }
     fn refusal_error(refusal: &record::Refusal) -> TicketClosureError {
         match refusal {
             record::Refusal::Blocked(b) => TicketClosureError::Blocked(b.clone()),
@@ -461,13 +456,116 @@ impl Lifecycle for TicketClosureLifecycle {
         checkpoint::resume_written(service, stage)
     }
 
+    fn branch_step(
+        &self,
+        service: &RepositoryService,
+        request: &LifecycleRequest<ClosureExpectation>,
+        r: &ClosureRecord,
+    ) -> Result<BranchStep, TicketClosureError> {
+        checkpoint::branch_step(
+            service,
+            &request.root,
+            request.confirmed_identity.as_ref(),
+            (request.clock)(),
+            r,
+        )
+    }
+    /// A branch record ends with no link to give, so the time it would give
+    /// it at is not read.
+    fn end_branch(
+        service: &RepositoryService,
+        root: &Path,
+        r: &ClosureRecord,
+        end: BranchEnd,
+    ) -> Result<(), RepositoryError> {
+        let (refusal, answer) = match end {
+            BranchEnd::ContextGone => (
+                record::Refusal::ReconfirmationRequired,
+                BranchAnswer::ReconfirmationRequired,
+            ),
+        };
+        state::with_transaction(service, root, |tx, id| {
+            record::abandon_branch_record(tx, id, r.operation_id, &refusal, answer, None, 0)
+        })
+    }
+    fn begin_publication(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        record::begin_publication(tx, id, op)
+    }
+    /// The answer, with the link the item is given: the context's branch
+    /// into the primary, from the configuration as it stands.
+    fn branch_answer(
+        _service: &RepositoryService,
+        request: &LifecycleRequest<ClosureExpectation>,
+        r: &ClosureRecord,
+        child: &Result<SynchronizationOutcome, SynchronizationError>,
+    ) -> Result<Option<BranchFinish>, RepositoryError> {
+        let (repo, root) =
+            canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
+        let Some(answer) = checkpoint::publication_answer(&repo, r, child)? else {
+            return Ok(None);
+        };
+        let ConfigurationInspection::Valid(config) = read_configuration(&root)? else {
+            return Err(state::recovery_required());
+        };
+        let remote = r
+            .remote_name
+            .as_deref()
+            .ok_or_else(state::recovery_required)?;
+        Ok(Some(BranchFinish {
+            answer,
+            link: Some(checkpoint::branch_link(
+                &repo,
+                &config.primary_branch,
+                config.forge().as_ref(),
+                remote,
+                &r.item_id,
+            )),
+            given_at: (request.clock)().unix_timestamp(),
+        }))
+    }
+    fn complete_branch(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        finish: &BranchFinish,
+    ) -> Result<(), RepositoryError> {
+        record::complete_branch_record(
+            tx,
+            id,
+            op,
+            finish.answer,
+            finish.link.as_ref(),
+            finish.given_at,
+        )
+    }
+    fn branch_outcome(
+        r: &ClosureRecord,
+        publication: Option<PromotionPublication>,
+    ) -> ClosureOutcome {
+        ClosureOutcome::Branch(BranchClosureOutcome {
+            operation_id: r.operation_id,
+            action: r.action,
+            answer: r
+                .answer_code
+                .expect("a finished branch record has its answer"),
+            checkpoint_oid: r
+                .written_commit()
+                .filter(|_| r.step == record::ClosureStep::Complete),
+            publication,
+        })
+    }
+
     fn outcome(
         r: &ClosureRecord,
         integration: PromotionIntegration,
         publication: PromotionPublication,
         cleanup: PromotionCleanup,
-    ) -> TicketClosureOutcome {
-        TicketClosureOutcome {
+    ) -> ClosureOutcome {
+        ClosureOutcome::Direct(TicketClosureOutcome {
             operation_id: r.operation_id,
             closure: match r.closure_oid {
                 Some(checkpoint_oid) => ClosureRecording::Recorded { checkpoint_oid },
@@ -476,12 +574,22 @@ impl Lifecycle for TicketClosureLifecycle {
             integration,
             publication,
             cleanup,
+        })
+    }
+    fn complete(outcome: ClosureOutcome) -> TicketClosureResult {
+        match outcome {
+            ClosureOutcome::Direct(outcome) => TicketClosureResult::Complete(outcome),
+            ClosureOutcome::Branch(outcome) => TicketClosureResult::Branch(outcome),
         }
     }
-    fn complete(outcome: TicketClosureOutcome) -> TicketClosureResult {
-        TicketClosureResult::Complete(outcome)
-    }
-    fn index_pending(outcome: TicketClosureOutcome) -> TicketClosureResult {
-        TicketClosureResult::IndexPending(IndexPending::new(outcome))
+    fn index_pending(outcome: ClosureOutcome) -> TicketClosureResult {
+        match outcome {
+            ClosureOutcome::Direct(outcome) => {
+                TicketClosureResult::IndexPending(IndexPending::new(outcome))
+            }
+            ClosureOutcome::Branch(outcome) => {
+                TicketClosureResult::BranchIndexPending(IndexPending::new(outcome))
+            }
+        }
     }
 }

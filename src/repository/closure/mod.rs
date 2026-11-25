@@ -2,6 +2,7 @@
 //! closure checkpoint, and `close_ticket` over the one generic lifecycle
 //! runner (C3).
 use crate::canonical::{Integration, ItemId};
+use crate::forge::PullRequestLink;
 use crate::repository::promotion::{
     lifecycle::CancellationProbe,
     run::{RunObserver, Unobserved},
@@ -20,6 +21,7 @@ use std::{
     fmt,
     path::{Path, PathBuf},
 };
+use time::OffsetDateTime;
 
 pub(super) mod checkpoint;
 pub(super) mod lifecycle;
@@ -110,6 +112,27 @@ pub enum BranchAnswer {
     ContextTicketClosed,
 }
 impl BranchAnswer {
+    /// The stored value, which `parse` reads back.
+    pub(in super::super) fn name(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::ClosedElsewhere => "closed_elsewhere",
+            Self::RemoteBranchDeleted => "remote_branch_deleted",
+            Self::TicketClosed => "ticket_closed",
+            Self::RemoteChanged => "remote_changed",
+            Self::Existing => "existing",
+            Self::Published => "published",
+            Self::KeptPublished => "kept_published",
+            Self::WithdrawnSince => "withdrawn_since",
+            Self::AlreadyClosed => "already_closed",
+            Self::AlreadyClosing => "already_closing",
+            Self::ExternalChange => "external_change",
+            Self::ReconfirmationRequired => "reconfirmation_required",
+            Self::ContextRemoteBranchDeleted => "context_remote_branch_deleted",
+            Self::ContextHistoryUnresolved => "context_history_unresolved",
+            Self::ContextTicketClosed => "context_ticket_closed",
+        }
+    }
     /// The stored value; any other text is recovery.
     pub(in super::super) fn parse(text: &str) -> Result<Self, RepositoryError> {
         match text {
@@ -349,10 +372,63 @@ impl TicketClosureOutcome {
     }
 }
 
+/// A branch record's answer: a pull-request close never reaches the primary,
+/// so it has no integration or cleanup to report. `Debug` shows IDs, OIDs and
+/// categories only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchClosureOutcome {
+    operation_id: OperationId,
+    action: ClosureAction,
+    answer: BranchAnswer,
+    checkpoint_oid: Option<Oid>,
+    publication: Option<PromotionPublication>,
+}
+impl BranchClosureOutcome {
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    pub fn action(&self) -> ClosureAction {
+        self.action
+    }
+    pub fn answer(&self) -> BranchAnswer {
+        self.answer
+    }
+    /// The commit the record wrote on the context, for a record that
+    /// completed having written one: none for an abandoned record, which
+    /// leaves no commit behind, or for one that found its closure made.
+    pub fn checkpoint_oid(&self) -> Option<Oid> {
+        self.checkpoint_oid
+    }
+    /// The publication child's result, when that child completed.
+    pub fn publication(&self) -> Option<PromotionPublication> {
+        self.publication
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TicketClosureResult {
     Complete(TicketClosureOutcome),
     IndexPending(IndexPending<TicketClosureOutcome>),
+    /// A pull-request close, finished: whatever way it answered.
+    Branch(BranchClosureOutcome),
+    BranchIndexPending(IndexPending<BranchClosureOutcome>),
+}
+
+/// What the closure lifecycle's runner builds an outcome of: a direct
+/// close's, or a branch record's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) enum ClosureOutcome {
+    Direct(TicketClosureOutcome),
+    Branch(BranchClosureOutcome),
+}
+
+/// What a branch record's publication answers with: the answer, the link to
+/// give the item, and when it was given.
+#[derive(Clone)]
+pub(in super::super) struct BranchFinish {
+    pub(in super::super) answer: BranchAnswer,
+    pub(in super::super) link: Option<PullRequestLink>,
+    pub(in super::super) given_at: i64,
 }
 
 /// A refusal before the closure reached the primary. A written checkpoint
@@ -449,7 +525,14 @@ impl RepositoryService {
         request: CloseTicketRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        lifecycle::close(self, request, session, None, &mut Unobserved)
+        lifecycle::close(
+            self,
+            request,
+            session,
+            None,
+            &mut Unobserved,
+            OffsetDateTime::now_utc,
+        )
     }
     /// `close_ticket`, stopping at each safe point when `probe` says so, and
     /// telling `progress` of its steps (D5 decision 11).
@@ -459,8 +542,9 @@ impl RepositoryService {
         session: &mut SessionCredentials<P>,
         probe: CancellationProbe,
         progress: &mut dyn RunObserver,
+        clock: fn() -> OffsetDateTime,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        lifecycle::close(self, request, session, Some(probe), progress)
+        lifecycle::close(self, request, session, Some(probe), progress, clock)
     }
     /// Ask an unfinished closure to stop at its next safe point. `false` when
     /// no unfinished closure has this ID.

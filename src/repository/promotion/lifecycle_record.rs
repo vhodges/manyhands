@@ -579,6 +579,20 @@ fn fence_mismatch(kind: LifecycleKind) -> RepositoryError {
     mismatch(kind)
 }
 impl ChildExecution {
+    /// The slot this attempt runs in.
+    pub(in super::super) fn role(&self) -> ChildRole {
+        self.role
+    }
+    /// Whether this is the publication child of the branch record `parent`
+    /// of the lifecycle `kind`: the one synchronization of its ticket's
+    /// context the record's own hold lets through.
+    pub(in super::super) fn is_publication_of(
+        &self,
+        kind: LifecycleKind,
+        parent: OperationId,
+    ) -> bool {
+        self.role() == ChildRole::Publication && self.kind == kind && self.parent == parent
+    }
     pub(in super::super) fn validate_request(
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,

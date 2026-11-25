@@ -254,6 +254,9 @@ fn authoritative(result: TicketClosureResult) -> TicketClosureOutcome {
     match result {
         TicketClosureResult::Complete(o) => o,
         TicketClosureResult::IndexPending(p) => p.authoritative,
+        TicketClosureResult::Branch(_) | TicketClosureResult::BranchIndexPending(_) => {
+            panic!("a direct close answered as a branch record")
+        }
     }
 }
 /// Every ref and its target.

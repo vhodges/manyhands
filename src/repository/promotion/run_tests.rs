@@ -414,11 +414,18 @@ impl run::PromotionIo for FakeIo {
             repo.reference("refs/remotes/origin/main", oid, true, "fixture")
                 .unwrap();
         }
-        state::with_transaction(service, &req.root, |tx, id| {
-            execution.validate(tx,id,req.operation_id)?;
-            tx.execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',reconciliation_required=0,sync_checkpoint='discovery_pending',authoritative_kind=?3,authoritative_oid=?2,expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2 WHERE operation_ulid=?1", rusqlite::params![req.operation_id.to_string(), oid.to_string(),if self.already_current {"already_current"}else{"published"}]).map_err(|_| state::recovery_required())?;
-            Ok(())
-        }).unwrap();
+        complete_child_row(
+            service,
+            &req.root,
+            execution,
+            req.operation_id,
+            oid,
+            if self.already_current {
+                "already_current"
+            } else {
+                "published"
+            },
+        );
         if !self.already_current {
             local_effect(
                 service,
@@ -456,6 +463,22 @@ impl run::PromotionIo for FakeIo {
         local_effect(s, &req.root, "remote_delete");
         Ok(self.deletion.take().unwrap_or(DeleteObservation::Deleted))
     }
+}
+/// Completes the child's row with `oid` as its authority (`kind` is
+/// `published` or `already_current`), as a fixture child's end does.
+pub(in super::super) fn complete_child_row(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    execution: &record::ChildExecution,
+    operation: OperationId,
+    oid: Oid,
+    kind: &str,
+) {
+    state::with_transaction(service, root, |tx, id| {
+        execution.validate(tx,id,operation)?;
+        tx.execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',reconciliation_required=0,sync_checkpoint='discovery_pending',authoritative_kind=?3,authoritative_oid=?2,expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2 WHERE operation_ulid=?1", rusqlite::params![operation.to_string(), oid.to_string(), kind]).map_err(|_| state::recovery_required())?;
+        Ok(())
+    }).unwrap();
 }
 pub(super) fn local_effect(service: &RepositoryService, root: &std::path::Path, effect: &str) {
     state::with_transaction(service, root, |tx, _| {

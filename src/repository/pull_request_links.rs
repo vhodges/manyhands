@@ -32,6 +32,38 @@ pub(super) fn link_of(
         .optional()
 }
 
+/// Gives the item `item_id` of `kind` its link, or replaces the one it has,
+/// in the caller's transaction. The forge is stored under the name `link_of`
+/// reads it back by.
+pub(super) fn upsert_link(
+    connection: &Connection,
+    repository_id: i64,
+    kind: &str,
+    item_id: &str,
+    link: &PullRequestLink,
+    given_at: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO pull_request_links
+             (repository_id, kind, item_ulid, source, target, forge, url, given_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(repository_id, kind, item_ulid) DO UPDATE SET
+             source = excluded.source, target = excluded.target, forge = excluded.forge,
+             url = excluded.url, given_at = excluded.given_at",
+        rusqlite::params![
+            repository_id,
+            kind,
+            item_id,
+            link.source,
+            link.target,
+            link.forge.map(ForgeKind::as_str),
+            link.url,
+            given_at
+        ],
+    )?;
+    Ok(())
+}
+
 /// Deletes the link of an item, in the caller's transaction. An item with
 /// no link has nothing to delete.
 pub(super) fn delete_link(

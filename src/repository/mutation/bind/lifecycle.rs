@@ -54,14 +54,15 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ClosureRecording, OperationFamily, OperationId, PlannedClosure,
-            PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionCleanupPending,
-            PromotionIntegration, PromotionPublication, PromotionPublicationPending,
-            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService,
+            AuthoringKind, BranchClosureOutcome, ClosureRecording, OperationFamily, OperationId,
+            PlannedClosure, PlannedIntegration, PlannedPublication, PromotionCleanup,
+            PromotionCleanupPending, PromotionIntegration, PromotionPublication,
+            PromotionPublicationPending, PromotionRemoteDeletionCategory,
+            PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryOperation,
+            RepositoryService,
             promotion::{
                 ParentView,
-                lifecycle::ParentStep,
+                lifecycle::{ParentStep, RecordPath},
                 lifecycle_record::{ChildRole, Refusal},
                 record::{IntegrationKind, PublicationCategory},
                 run::{RunEvent, RunObserver},
@@ -92,9 +93,11 @@ use super::{
 
 #[path = "lifecycle_verb.rs"]
 mod verb;
+use verb::{
+    Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change, publication_pending,
+};
 pub(in super::super) use verb::{Close, LifecycleVerb, Promote};
 pub use verb::{DocumentPromoteInput, TicketCloseInput};
-use verb::{Observed, Reached, Stop, cleanup_pending, path_change, publication_pending};
 
 pub(in super::super) struct LifecycleBinding<V> {
     root: PathBuf,
@@ -608,6 +611,50 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// The answer of a pull-request close that finished, whatever way: its
+    /// code is the answer's, and it names what the record wrote and what its
+    /// publication did. Nothing reached primary.
+    fn branch_reached(&self, outcome: &BranchClosureOutcome, index_pending: bool) -> Ran {
+        let code = branch_code(outcome.answer());
+        // The index step is yet to run: only a close that answered `ok` says so.
+        let pending = index_pending && code == ResultCode::Ok;
+        let effects = Effects {
+            checkpoint: if outcome.checkpoint_oid().is_some() {
+                CheckpointEffect::Committed
+            } else {
+                CheckpointEffect::NotRequested
+            },
+            discovery: if index_pending {
+                DiscoveryEffect::Pending
+            } else {
+                DiscoveryEffect::Current
+            },
+            publication: match outcome.publication() {
+                Some(PromotionPublication::Published { oid: _ }) => PublicationEffect::Published,
+                Some(PromotionPublication::AlreadyCurrent { oid: _ }) => PublicationEffect::Current,
+                Some(PromotionPublication::Pending { reason: _ }) | None => {
+                    PublicationEffect::NotRequested
+                }
+            },
+            ..Effects::not_requested()
+        };
+        Ran {
+            answer: Answer {
+                effects,
+                ..Answer::stopped(if pending {
+                    ResultCode::DiscoveryPending
+                } else {
+                    code
+                })
+            },
+            standing: if pending {
+                Standing::Owed
+            } else {
+                Standing::Final
+            },
+        }
+    }
+
     /// The data of an answer that names what stands in the way.
     fn blocked_data(&self, blockers: Vec<LifecycleBlocker>) -> MutationDataDto {
         MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
@@ -685,7 +732,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         );
         // This call's stop is not the request's last word: the next call gets
         // the outcome the parent stored.
-        if view.step == ParentStep::Complete {
+        if view.step == ParentStep::Complete || view.answered {
             return Ran {
                 answer: Answer {
                     effects,
@@ -799,7 +846,11 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             )
         });
         let ran = match called {
-            Some(Ok(reached)) => self.reached(call.service, accepted, &reached),
+            Some(Ok(Called::Reached(reached))) => self.reached(call.service, accepted, &reached),
+            Some(Ok(Called::Branch {
+                outcome,
+                index_pending,
+            })) => self.branch_reached(&outcome, index_pending),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)
@@ -864,6 +915,11 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         primary: Option<&str>,
         parent: &ParentView<LifecycleBlocker>,
     ) -> Option<Answer> {
+        // A finished branch record answers from its stored answer, which the
+        // domain gives: whatever ended it, it is the run's to report.
+        if parent.answered {
+            return None;
+        }
         let effects = parent_effects(&V::KIND, service, root, primary, parent);
         let answer = match &parent.refusal {
             Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers))
@@ -1174,6 +1230,11 @@ fn parent_integrated(
     primary: Option<&str>,
     parent: &ParentView<LifecycleBlocker>,
 ) -> bool {
+    // A branch record never integrates: whatever its step, nothing reached
+    // primary.
+    if parent.path == RecordPath::Branch {
+        return false;
+    }
     match parent.step {
         ParentStep::Integrated
         | ParentStep::Published

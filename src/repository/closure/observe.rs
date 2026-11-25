@@ -488,24 +488,7 @@ fn pending_work(
         )
         .map_err(RepositoryError::sqlite)?;
     let synchronization = if branch {
-        tx.query_row(
-            "SELECT operation_ulid FROM remote_operation_records
-              WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2
-                AND phase NOT IN ('completed','interrupted','cancelled','failed')
-                AND operation_ulid NOT IN (
-                    SELECT context_sync_id FROM ticket_closures
-                     WHERE repository_id=?1 AND item_id=?2
-                       AND step NOT IN ('complete','abandoned','superseded') AND context_sync_id IS NOT NULL
-                    UNION
-                    SELECT primary_sync_id FROM ticket_closures
-                     WHERE repository_id=?1 AND item_id=?2
-                       AND step NOT IN ('complete','abandoned','superseded') AND primary_sync_id IS NOT NULL)
-              LIMIT 1",
-            rusqlite::params![repository_id, item_text],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(RepositoryError::sqlite)?
+        foreign_synchronization(tx, repository_id, item)?
     } else {
         None
     };
@@ -515,6 +498,45 @@ fn pending_work(
         synchronization,
         record_unfinished: branch && super::record::holds_new_requests(tx, repository_id, item)?,
     })
+}
+
+/// A live synchronization of the ticket's context that no unfinished closure
+/// record of it owns: the row's operation ID.
+pub(super) fn foreign_synchronization(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    item: &ItemId,
+) -> Result<Option<String>, RepositoryError> {
+    db.query_row(
+        "SELECT operation_ulid FROM remote_operation_records
+          WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2
+            AND phase NOT IN ('completed','interrupted','cancelled','failed')
+            AND operation_ulid NOT IN (
+                SELECT context_sync_id FROM ticket_closures
+                 WHERE repository_id=?1 AND item_id=?2
+                   AND step NOT IN ('complete','abandoned','superseded') AND context_sync_id IS NOT NULL
+                UNION
+                SELECT primary_sync_id FROM ticket_closures
+                 WHERE repository_id=?1 AND item_id=?2
+                   AND step NOT IN ('complete','abandoned','superseded') AND primary_sync_id IS NOT NULL)
+          LIMIT 1",
+        rusqlite::params![repository_id, item.to_string()],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(RepositoryError::sqlite)
+}
+
+/// The answer to a foreign synchronization of the ticket's context: busy,
+/// naming the row.
+pub(super) fn foreign_synchronization_busy(root: &Path, operation: &str) -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::Read,
+        Some(root.to_owned()),
+        RepositoryErrorKind::RepositoryBusy,
+        "another synchronization of the ticket's context is unfinished",
+    )
+    .with_blocker(Blocker::remote(operation))
 }
 
 /// A ticket file as one Git tree holds it.
@@ -1284,13 +1306,7 @@ fn branch_observation(
         .as_deref()
         .filter(|_| !pending.record_unfinished)
     {
-        return Err(RepositoryError::new(
-            RepositoryOperation::Read,
-            Some(root.to_owned()),
-            RepositoryErrorKind::RepositoryBusy,
-            "another synchronization of the ticket's context is unfinished",
-        )
-        .with_blocker(Blocker::remote(operation)));
+        return Err(foreign_synchronization_busy(root, operation));
     }
     // Situation 2, until Task 9.
     if config.publication_remote.is_some() && tracking_context.is_none() && !facts.not_ticket {
@@ -1445,7 +1461,10 @@ fn branch_expectation(o: &ClosureObservation) -> ClosureExpectation {
 /// context's head (or none) and the closure effect. A `record` closure's
 /// `closed_at` is never bound (C6). Nothing of the change set or the
 /// cleanup is bound: nothing integrates.
-fn branch_expectation_with_head(o: &ClosureObservation, head: Option<Oid>) -> ClosureExpectation {
+pub(super) fn branch_expectation_with_head(
+    o: &ClosureObservation,
+    head: Option<Oid>,
+) -> ClosureExpectation {
     let mut hash = blake3::Hasher::new();
     hash.update(PULL_REQUEST_CLOSURE_DIGEST_DOMAIN);
     hash.update(&[match o.path.1 {

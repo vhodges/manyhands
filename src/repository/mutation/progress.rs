@@ -447,7 +447,13 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.close_ticket_observed(request, &mut credentials, probe, progress))
+        Some(service.close_ticket_observed(
+            request,
+            &mut credentials,
+            probe,
+            progress,
+            time::OffsetDateTime::now_utc,
+        ))
     }
 
     fn poll_once(
