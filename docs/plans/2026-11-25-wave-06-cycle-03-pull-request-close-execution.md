@@ -86,6 +86,23 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 - **E-42** (Task 4, mechanical) `tests/mutation_replay.rs` about 442: `the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`'s `name.contains("request")` matched the new table; it excludes `pull_request_links` by name, intent unchanged.
 - Review: approved, no Critical or Important. Five Minor deferred (the preserving retirement branch has no test of its own; `tracked_closure` reads any failure as `pending`; `ForgeKind::parse` repeats a match in `canonical.rs`; `item_show` rebuilds a link from the DTO; E-42's predicate).
 
+## Task 5: The Code, The Effects And The Blocker
+
+- Commit `c38f5adc` (base `1e22fdc7`). E-5 run red first (`results::tests::result_codes_match_the_design_table_exactly`, `results::tests::result_code_messages_are_fixed`), then green with a new `way_out` row for `remote_context_unmaterialized` (red first), the `read_contract` enumeration test, both `every_result_code_has_a_*` tests (E-6, reason "golden written in Task 14"), the `human_admin` effect-phrase test and eight E-40 tests over `ResultCode::ALL`; `cargo check --features desktop-test-support --tests` and the static gates clean.
+- Review: approved, no Critical or Important. Two Minor deferred (the blocked schema's description names a `repo sync` way out the code does not route; no combination row in the way-out table).
+
+## Task 6: The Primary's Closure And Two Clones
+
+- Commits `beda6cab` and `b13a53c0` (base `c38f5adc`). New tests: `closure_replaced_bytes` helper test and `closure_only_conflicts_settle_with_the_remote_closure` (G1 to G7, `--lib repository::integration::tests`); `a_context_stage_settles_a_closure_only_conflict`, `a_primary_stage_keeps_the_primary_closure`, `a_fast_forward_that_drops_the_primary_closure_is_not_published` (G8) and `a_proven_merge_merges_the_primary_in_cleanly` (`--lib repository::remote::sync::tests`); `a_ticket_closed_refusal_is_answered_as_itself` (`--lib repository::mutation::bind::sync::tests`). G4 to G6 and the proven merge pin unchanged behaviour (exempt); the rest red first. `tests/comment_publication.rs` gained a mechanical `TicketClosed` arm (compiled, not run); `outcome_tests.rs` a row and a count (20 to 21).
+- The push decision is in `remote/sync.rs` `synchronize_remote_observed`, just before the push, on the one `candidate` every path reaches (the plan path, the merging path and both resumes): `push_unless_unclosed` runs `primary_closure_push_refusal` and only then the push it is given (ruling 7, ruling 12).
+- Ruling 11: the refusal also answers `ticket_closed` for a head already on the remote, which would otherwise answer `current` — a ticket whose fetched primary holds its closure is closed; the guard answers the same once the local primary moves (R-10), and K-11 expects `ticket_closed` under a fast-forward forge merge — an item sync of a closed ticket answers `ticket_closed`, not `current`.
+- Ruling 12: the refusal and the push are one function that takes the push as a parameter, tested with a recording push (never called when refused, called once otherwise) — no non-SSH driver of `synchronize_remote_observed_inner` exists, and the SSH budget is one case (Task 14) — a small refactor of the tail.
+- Review (Opus): behaviour correct by inspection; two Important test gaps (the ended item sync's answer, the production call site), fixed in round 1 and confirmed by a scoped re-review. Deferred Minor: `republish_reserved` (`remote/sync.rs` about 8653) pushes a ticket context's head without R-30's check; a kept `ticket_closed` item sync offers no way out (as `HistoryUnresolved`); a head with no canonical ticket at the path bypasses R-30; `NotPreserved` answers `recovery_required`; small duplications.
+
+## Task 7: Branch Records, The Pull-Request Close
+
+- Ruling 13: the design checkpoint (Step 4) is written before the tests (Step 2), by an Opus designer, and splits the task into commit-sized slices that Sonnet implementers then build test-first in order — the checkpoint precedes implementation either way, a changed approach would otherwise waste the D-row tests, and one implementer cannot hold the task's twenty-odd files — one hand-off per slice.
+
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
 ### Task 0 reference check, design sections Conventions, Baseline Facts 1-23, Parts A-C
