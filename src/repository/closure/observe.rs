@@ -1268,13 +1268,13 @@ fn branch_observation(
         Some(commit) if !facts.not_ticket => closure_at(repository, commit, &path, root),
         _ => Ok(FileClosure::Open),
     };
-    // Situation 1 decides: a ticket a primary has closed is `already_closed`
-    // and nothing after it is asked, whatever the context or the remote say.
+    // Situation 1 decides alone: a ticket a primary has closed is
+    // `already_closed` and nothing else, whatever the context, the remote or
+    // an earlier read say.
     if !matches!(closure_of(primary_oid)?, FileClosure::Open)
         || !matches!(closure_of(base)?, FileClosure::Open)
     {
-        blockers.insert(AlreadyClosed);
-        return Ok(Err(refusal_of(blockers, None)));
+        return Ok(Err(refusal_of(BTreeSet::from([AlreadyClosed]), None)));
     }
     // A synchronization of the context that is not an unfinished record's
     // own is `busy`, and names the row. While such a record holds the ticket

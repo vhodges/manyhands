@@ -1651,6 +1651,20 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
     f.close_primary();
     f.reserve_context(OperationId::new());
     assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
+    // It decides alone: what was gathered before it, a dirty context or a
+    // missing tracking primary, is not reported with it.
+    let f = pull_request_fixture();
+    f.close_primary();
+    write(&f.context, "draft.txt", "draft\n");
+    assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
+    let f = pull_request_fixture();
+    f.close_primary();
+    f.repo
+        .find_reference("refs/remotes/origin/main")
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(f.blockers(), [ClosureBlocker::AlreadyClosed]);
 
     // Situation 4: the context's ticket holds a closure. It is recorded as
     // it stands and needs no identity.
