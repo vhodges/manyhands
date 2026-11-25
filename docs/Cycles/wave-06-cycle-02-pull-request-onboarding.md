@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-c97se (`01M84H84WQYE8J2WJWEDGJ45W4`), branch `manyhands/ticket/01M84H84WQYE8J2WJWEDGJ45W4`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 02 design](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md). Plan: [Cycle 02 implementation plan](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-implementation.md).
 
-Status: **draft**, 2026-11-25, revision 4. Author: Claude. These three documents are Manyhands managed documents on their own branches (decision 9).
+Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, decisions 17 and 18). Author: Claude. These three documents are Manyhands managed documents on their own branches (decision 9).
 
 Revision history:
 
@@ -16,6 +16,7 @@ Revision history:
 - Revision 2 (Cycle document `e9ad0848`, design `98a0c019`, plan `efb04672`): two independent reviews of revision 1 (source and feasibility: 2 Blocking, 10 Important, 14 Minor; contract and consistency: 3 Blocking, 13 Important, 8 Minor) and the owner's decisions 10 to 14.
 - Revision 3 (Cycle document `71594c02`, design `4a1d899d`, plan `5882ae02`): a scoped re-review of revision 2 (1 Blocking, 7 Important, 8 Minor) and an adversarial round (3 Blocking, 8 Important, 12 Minor), and decision 15. The request lifecycle of a setup is restated as required outcomes (design Part K), built test-first with design checkpoints. 
 - Revision 4: a third round, a scoped re-review of revision 3 (0 Blocking, 5 Important, 11 Minor) and an adversarial round (2 Blocking, 8 Important, 7 Minor), all in the request lifecycle; decision 16. As the planning skill says after a third round in one mechanism, the lifecycle is not redesigned again: its rules K1 to K7 and outcomes L1 to L14 are the contract, built test-first with design checkpoints. Revision 4 has not been independently reviewed.
+- Approval, 2026-11-25: the owner approved revision 4 as written, with no further review round (decisions 17 and 18). Revision 4 stays without an independent review; its lifecycle is built test-first with the design checkpoints of Tasks 6 to 10.
 
 ## Purpose And Authority
 
@@ -138,6 +139,8 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 14. **Autonomy:** `repo setup-cancel` is show-then-wait; `remote select` with `integration` or `forge` is show-then-wait, because it publishes a branch and blocks close and promote; a plain `remote select` stays act-alone.
 15. **Edits to existing tests are approved**: the named edits and those Task 0's sweep finds, each logged with its reason; an edit that removes or weakens an assertion still stops for the owner.
 16. **`repo remove` always works on a setup-pending repository.** It keeps its registry-only contract (decision 4): it finishes the setup's unfinished request as `cancelled`, so the request can never start a second setup, drops the registration and the record, and leaves both setup branches for the person to delete by hand, even when the root folder is gone. For a pending change the person then runs `repo enable` again, which registers the repository as a clone. This is the way out of a setup whose remote can no longer be reached.
+17. **Approval (2026-11-25).** The owner approved the Cycle document, the design and the plan at revision 4 ("The three docs are approved"), and confirmed the tests ("Tests are confirmed"): decision 11's tier stands with the fuller disclosure, which settles the open question, and the named edits E-1 to E-15 are covered by decision 15. No fourth review round.
+18. **Execution (2026-11-25).** Implementation is authorized. It is subagent-driven: one implementer per task, on Sonnet 5.5 at high effort, then a fresh reviewer, with the orchestrator checking the design checkpoints against the source. Implementation approval does not cover merging, closing the ticket, promoting the documents or dispatching native CI; each needs its own go-ahead.
 
 ## Known Limits
 
@@ -161,7 +164,7 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 
 ## Open Questions
 
-1. **Decision 11's tier, with the fuller disclosure** (the gate in the mutation boundary and the end of every poll, as decision 11 now says). The plan keeps the tier; adding `mutation_remote` would cost about 49 minutes.
+None. The one open question, decision 11's tier with the fuller disclosure, was settled by decision 17: the tier stands.
 
 ## Review Record
 
@@ -198,3 +201,5 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 | Review round 3, adversarial | 2 Blocking, 8 Important, 7 Minor | — | Resolved in revision 4, not independently reviewed; see the design's Review Record | revision 4 |
 | Review round 3 | No way out of a setup whose remote cannot be reached | decision | `repo remove` always works (decision 16) | Owner, 2026-11-25 |
 | Review round 3 | The standing of a setup request's answers after recording | ruling | Every non-final answer `Owed` (design K2, R-20) | `settle.rs` deletes a request over a completed row |
+| Approval | The three documents at revision 4, and decision 11's tier with the fuller disclosure | decision | Approved as written; the tier stands (decision 17) | Owner, 2026-11-25 |
+| Approval | Execution method and authorization | decision | Subagent-driven, Sonnet 5.5 high implementers; implementation authorized (decision 18) | Owner, 2026-11-25 |
