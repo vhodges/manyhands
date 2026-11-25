@@ -672,6 +672,13 @@ fn synchronization_errors() -> Vec<(SynchronizationError, ResultCode)> {
             },
             Code::MergeRequired,
         ),
+        (
+            Error::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            Code::PrimaryHasLocalCommits,
+        ),
         (Error::PushRejected, Code::PushRejected),
         (Error::ExternalChange, Code::ExternalChange),
         (Error::RecoveryRequired, Code::RecoveryRequired),
@@ -697,9 +704,10 @@ fn synchronization_error_count(error: &SynchronizationError) -> usize {
         | Error::IdentityRequired { .. }
         | Error::ExternalResolutionRequired { .. }
         | Error::MergeRequired { .. }
+        | Error::PrimaryHasLocalCommits { .. }
         | Error::PushRejected
         | Error::ExternalChange
-        | Error::RecoveryRequired => 19,
+        | Error::RecoveryRequired => 20,
     }
 }
 
@@ -1520,6 +1528,7 @@ fn a_resume_is_never_offered_again_for_what_only_the_original_request_can_do() {
         ResultCode::UnlockRequired,
         ResultCode::MergeRequired,
         ResultCode::PushRejected,
+        ResultCode::PrimaryHasLocalCommits,
     ] {
         assert!(
             actions_of(Command::OperationResume, code, false).is_empty(),
@@ -1613,6 +1622,7 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
             ResultCode::MergeRequired,
             ResultCode::RemoteBranchDeleted,
             ResultCode::PushRejected,
+            ResultCode::PrimaryHasLocalCommits,
             ResultCode::NoSelectedKey,
             ResultCode::KeyRejected,
             ResultCode::UnlockRequired,
@@ -1839,6 +1849,12 @@ fn a_host_that_is_not_trusted_is_offered_its_approval_before_the_same_request() 
         let twice = with_host_action(actions, code, Some("/repository"), Some("example.test:22"));
         assert_eq!(names(&twice), [action, "request.retry"]);
     }
+    // A rejected push is not of a host and offers no action of its own:
+    // only its request, which holds its reservation, is offered itself. A
+    // pull-only refusal always ends its row, so it is never held, and with
+    // nothing held it offers nothing, as
+    // `a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_request`
+    // pins.
     assert_eq!(
         names(&offered(
             ResultCode::PushRejected,

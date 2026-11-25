@@ -50,7 +50,7 @@ pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
     ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,
     DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderDto,
-    DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
+    DocumentFolderListDto, ForgeDto, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
     IdentitySource, IndexProblemDto, IndexState, IndexStateDto, IndexStatusDto, IndexStatusState,
     InitialsSource, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto,
     KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto,

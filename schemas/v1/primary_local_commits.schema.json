@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 primary local commits data",
+  "description": "The data of a repo sync envelope, or of the envelope of an operation resume that took the operation of one up, refused with primary_has_local_commits: in a pull-request repository repo sync only fetches and fast-forwards the primary branch, and never merges or pushes it, and the local primary has commits the remote does not have. Nothing was published and every effect is not_requested. The operation is ended and the repository is not held, and no recovery action is offered: moving the commits to a branch of their own is Git work outside Manyhands. Sending the same request again answers the same, from its record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "local_commits", "complete"],
+  "properties": {
+    "type": {
+      "description": "The one value that tells this data apart.",
+      "type": "string",
+      "enum": ["primary_local_commits"]
+    },
+    "local_commits": {
+      "description": "The local primary's commits that the remote does not have, newest first: at most 20. Empty when the push endpoint is ahead of what was fetched.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["oid", "summary"],
+        "properties": {
+          "oid": {
+            "description": "The commit, in full: 40 hexadecimal characters.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "The first line of the commit's message. It is the author's text: a consumer escapes it as a field.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "complete": {
+      "description": "Whether local_commits lists every such commit. False when there are more than it lists.",
+      "type": "boolean"
+    }
+  }
+}

@@ -921,6 +921,212 @@ fn actual_commit_graph_rejections_preserve_ref_index_and_worktree_bytes() {
         Err(SynchronizationError::MergeRequired { .. })
     ));
 }
+/// The OIDs of a refusal's listed commits, in its order.
+fn listed(commits: &[(git2::Oid, String)]) -> Vec<git2::Oid> {
+    commits.iter().map(|(oid, _)| *oid).collect()
+}
+/// R-7: the commits of the local primary that the remote does not have,
+/// newest first, each with its summary line, at most 20; `complete` says
+/// whether that is all of them. Equal history lists none; a divergence
+/// lists only the local side.
+#[test]
+fn local_only_commits_lists_newest_first_and_caps_at_twenty() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    assert_eq!(
+        local_only_commits(&repo, base, base).unwrap(),
+        (Vec::new(), true),
+        "equal"
+    );
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let parent = repo.find_commit(base).unwrap();
+    let work = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "Local work\n\nIts body is not listed.\n",
+            &parent.tree().unwrap(),
+            &[&parent],
+        )
+        .unwrap();
+    let one = vec![(work, "Local work".to_owned())];
+    assert_eq!(
+        local_only_commits(&repo, work, base).unwrap(),
+        (one.clone(), true),
+        "one local commit"
+    );
+    let remote = child(&repo, base, b"remote\n");
+    assert_eq!(
+        local_only_commits(&repo, work, remote).unwrap(),
+        (one, true),
+        "diverged: only the local side"
+    );
+    let mut chain = vec![base];
+    for n in 1..=21 {
+        let next = child(&repo, *chain.last().unwrap(), format!("{n}\n").as_bytes());
+        chain.push(next);
+    }
+    let (twenty, complete) = local_only_commits(&repo, chain[20], base).unwrap();
+    assert_eq!(
+        listed(&twenty),
+        chain[1..=20].iter().rev().copied().collect::<Vec<_>>()
+    );
+    assert!(complete, "exactly twenty");
+    let (newest, complete) = local_only_commits(&repo, chain[21], base).unwrap();
+    assert_eq!(
+        listed(&newest),
+        chain[2..=21].iter().rev().copied().collect::<Vec<_>>(),
+        "the 20 newest, newest first"
+    );
+    assert!(newest.iter().all(|(_, summary)| summary == "fixture"));
+    assert!(!complete, "a 21st exists");
+}
+/// O3, O4, O8: after a plan, a pull-only operation on the primary goes on
+/// when its local primary is equal to the remote or only behind it, and is
+/// refused with the local primary's own commits when the plan would push
+/// (local ahead) or merge (diverged). A direct operation goes on in every
+/// case, as today, and so does a context target. The decision reads only
+/// the plan and the operation's stored mode, so a resumed operation whose
+/// local commits were there before a crash is refused the same way (O8).
+#[test]
+fn o3_o4_o8_pull_only_refuses_local_commits_after_a_plan() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    let remote = child(&repo, base, b"remote\n");
+    let local = child(&repo, base, b"local\n");
+    let ahead = child(&repo, local, b"local again\n");
+    let context = ticket_target("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    for (case, head, primary, refused) in [
+        ("equal", base, base, None),
+        ("remote ahead", base, remote, None),
+        ("local ahead", ahead, base, Some(vec![ahead, local])),
+        ("diverged", ahead, remote, Some(vec![ahead, local])),
+    ] {
+        let planned = graph_plan(
+            &repo,
+            &SynchronizationTarget::Primary,
+            head,
+            Some(primary),
+            None,
+            RemotePublicationEvidence::HistoryUnknown,
+        );
+        for pull_only in [true, false] {
+            let decided = pull_only_plan_refusal(
+                &repo,
+                pull_only,
+                &SynchronizationTarget::Primary,
+                head,
+                Some(primary),
+                &planned,
+            );
+            match (pull_only, &refused, decided) {
+                (
+                    true,
+                    Some(expected),
+                    Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }),
+                ) => {
+                    assert_eq!(listed(&commits), *expected, "{case}");
+                    assert!(
+                        commits.iter().all(|(_, summary)| summary == "fixture"),
+                        "{case}"
+                    );
+                    assert!(complete, "{case}");
+                }
+                (false, _, Ok(())) | (true, None, Ok(())) => {}
+                (_, _, other) => panic!("{case}, pull_only={pull_only}: {other:?}"),
+            }
+        }
+        // A context target is never pull-only: whatever its plan, it goes on.
+        let planned = graph_plan(
+            &repo,
+            &context,
+            head,
+            Some(primary),
+            Some(head),
+            RemotePublicationEvidence::ObservedPublished,
+        );
+        let decided = pull_only_plan_refusal(&repo, true, &context, head, Some(primary), &planned);
+        assert!(matches!(decided, Ok(())), "{case}: context: {decided:?}");
+    }
+}
+/// O9, O10: a pull-only operation's push call never pushes. A push
+/// endpoint that advertises the candidate is `AlreadyCurrent`; one behind
+/// it, beside it or advertising nothing refuses the operation, with the
+/// candidate's commits listed against the push endpoint's tip, or all of
+/// them, at most 20, when it advertises none: it lacks every one (R-15).
+/// One strictly ahead lacks none, and is refused with an empty list (a
+/// known limit: it cannot settle on a tip that is not its candidate). A
+/// pull-only operation settles `AlreadyCurrent` whatever its call would
+/// say, as on a resume after `PushVerified`, never `Published`; a direct
+/// operation settles as it does today.
+#[test]
+fn o9_o10_push_call_never_pushes_in_a_pull_only_operation() {
+    use state::SynchronizationAuthority as A;
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = child(&repo, base, b"first\n");
+    let candidate = child(&repo, first, b"candidate\n");
+    let beside = child(&repo, base, b"beside\n");
+    let past = child(&repo, candidate, b"past\n");
+    // The fixture's history is linear: the candidate's, newest first.
+    let mut history = vec![candidate];
+    while let Ok(parent) = repo
+        .find_commit(*history.last().unwrap())
+        .unwrap()
+        .parent_id(0)
+    {
+        history.push(parent);
+    }
+    assert!(history.len() < 20, "the fixture's history is short");
+    assert_eq!(
+        pull_only_push_decision(&repo, candidate, Some(candidate)).unwrap(),
+        A::AlreadyCurrent(candidate),
+        "the push endpoint holds the candidate"
+    );
+    for (case, advertised, expected) in [
+        ("behind", Some(base), vec![candidate, first]),
+        ("beside", Some(beside), vec![candidate, first]),
+        ("advertises none", None, history),
+        ("ahead", Some(past), vec![]),
+    ] {
+        let decided = pull_only_push_decision(&repo, candidate, advertised);
+        let Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }) = decided
+        else {
+            panic!("{case}: {decided:?}");
+        };
+        assert_eq!(listed(&commits), expected, "{case}");
+        assert!(complete, "{case}");
+    }
+    // Advertising none, a longer history is listed to its 20 newest.
+    let mut top = candidate;
+    let mut chain = Vec::new();
+    for n in 0..20 {
+        top = child(&repo, top, format!("{n}\n").as_bytes());
+        chain.push(top);
+    }
+    let Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }) =
+        pull_only_push_decision(&repo, top, None)
+    else {
+        panic!("a long history advertising none");
+    };
+    assert_eq!(
+        listed(&commits),
+        chain.iter().rev().copied().collect::<Vec<_>>()
+    );
+    assert!(!complete);
+    for authority in [A::Published(candidate), A::AlreadyCurrent(candidate)] {
+        assert_eq!(
+            pull_only_authority(true, authority),
+            A::AlreadyCurrent(candidate),
+            "{authority:?}"
+        );
+        assert_eq!(pull_only_authority(false, authority), authority);
+    }
+}
 #[test]
 fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
     let (root, _data, service) = fixture();
@@ -16750,6 +16956,8 @@ fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
 /// proof of an earlier generation, and an operation that intended a push,
 /// stay pending and resumable. Should the ending itself fail, the operation
 /// is still held, so the answer is `RecoveryRequired`, not `HistoryUnresolved`.
+/// A pull-only refusal, `PrimaryHasLocalCommits`, is ended the same way
+/// (design Part D, decision 5).
 #[test]
 fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
@@ -16792,6 +17000,29 @@ fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
             false,
             SynchronizationError::RecoveryRequired,
             false,
+        ),
+        (
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+            true,
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+        ),
+        (
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            true,
         ),
     ] {
         let data = fixture_tempdir();
@@ -18962,4 +19193,232 @@ fn a_restarted_sync_s_local_update_marks_its_context() {
         !service.contexts_indexed(root.path(), &[ContextKey::Primary]),
         "the primary is owed an indexing from the restart's update"
     );
+}
+
+/// A repository in pull-request mode whose publication remote is `origin`,
+/// with its plan configured as a refresh leaves it. A synchronization of it
+/// goes as far as its transport, which no key reaches.
+fn pull_request_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    origin_fixture(
+        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    )
+}
+
+/// `pull_request_fixture`, with `configuration` committed as the
+/// repository's configuration.
+fn origin_fixture(
+    configuration: &str,
+) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    let (root, data, service) = fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    repository
+        .remote("origin", "ssh://example.invalid/fixture.git")
+        .unwrap();
+    fs::write(root.path().join(".manyhands/config.toml"), configuration).unwrap();
+    commit_all(&repository);
+    service.configure_origin_plan_for_testing(root.path());
+    (root, data, service)
+}
+
+/// The `pull_only` its row's INSERT stored for `operation`.
+fn stored_pull_only(data: &Path, operation: OperationId) -> i64 {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT pull_only FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// O11, O12, O13 (R-11, R-14): in a pull-request repository, the
+/// synchronization's own new operation on the primary stores `pull_only`
+/// 1 in its INSERT, and in a direct-mode repository 0; an operation on a
+/// context, a poll, a lifecycle's
+/// primary child and the public `reserve_remote_operation` store 0. The
+/// read helper answers what the row stored, whatever the configuration
+/// says now: a pull-only operation stays pull-only after the repository
+/// goes back to direct mode, and a direct one stays direct in a
+/// pull-request repository. The stored value cannot be changed.
+#[test]
+fn o11_o12_o13_the_mode_is_inserted_once_and_read_back() {
+    use crate::repository::{
+        PromotionExpectation,
+        promotion::record::{self as promotion, ChildRole, IntegrationKind, PromotionStep},
+    };
+    let session = || SessionCredentials::new(NoPrompt);
+
+    // A new `repo sync`'s operation: its mode is the configuration's.
+    let (root, data, service) = pull_request_fixture();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let primary = request(root.path());
+    let result = service.synchronize_remote(primary.clone(), &mut session());
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), primary.operation_id), 1);
+    // Back to direct mode: the operation taken up again is still pull-only.
+    fs::write(
+        root.path().join(".manyhands/config.toml"),
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    )
+    .unwrap();
+    commit_all(&git2::Repository::open(root.path()).unwrap());
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .restart_remote_synchronization(
+            root.path(),
+            primary.operation_id,
+            &RemoteOperationTarget::for_primary_synchronization(&plan),
+        )
+        .unwrap()
+    else {
+        panic!("the pull-only operation taken up again")
+    };
+    assert!(
+        service
+            .synchronization_pull_only(root.path(), &owner)
+            .unwrap(),
+        "O11: stays pull-only"
+    );
+    // Never updated: the row keeps what its INSERT stored.
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE remote_operation_records SET pull_only = 0 WHERE operation_ulid = ?1",
+            [primary.operation_id.to_string()],
+        )
+        .is_err()
+    );
+    assert_eq!(stored_pull_only(data.path(), primary.operation_id), 1);
+
+    // The same operation in a direct-mode repository, with the mode left
+    // out or written, is direct.
+    for configuration in [
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        "format_version = 2\nintegration = \"direct\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    ] {
+        let (root, data, service) = origin_fixture(configuration);
+        let direct = request(root.path());
+        let result = service.synchronize_remote(direct.clone(), &mut session());
+        assert!(
+            matches!(result, Err(SynchronizationError::Transport(_))),
+            "{configuration}: {result:?}"
+        );
+        assert_eq!(
+            stored_pull_only(data.path(), direct.operation_id),
+            0,
+            "{configuration}"
+        );
+    }
+
+    // A direct operation in a pull-request repository stays direct.
+    let (root, data, service) = pull_request_fixture();
+    let direct = OperationId::new();
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .reserve_remote_operation(
+            root.path(),
+            direct,
+            &RemoteOperationTarget::for_primary_synchronization(&plan),
+        )
+        .unwrap()
+    else {
+        panic!("the public reservation")
+    };
+    assert_eq!(stored_pull_only(data.path(), direct), 0);
+    assert!(
+        !service
+            .synchronization_pull_only(root.path(), &owner)
+            .unwrap(),
+        "O12: stays direct"
+    );
+
+    // An `item sync`'s operation, of a context, is direct.
+    let (root, data, service) = pull_request_fixture();
+    let context = SynchronizeRemoteRequest {
+        target: materialize_local_context(&service, root.path()),
+        ..request(root.path())
+    };
+    let result = service.synchronize_remote(context.clone(), &mut session());
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), context.operation_id), 0);
+
+    // A promotion's primary child is direct, as close's is.
+    let (root, data, service) = pull_request_fixture();
+    let head = git2::Repository::open(root.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    let parent = state::with_transaction(&service, root.path(), |tx, id| {
+        let mut r = promotion::begin_record(
+            tx,
+            id,
+            OperationId::new(),
+            &"01ARZ3NDEKTSV4RRFFQ69G5FDC".parse().unwrap(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+        )?;
+        r.context_oid = Some(head);
+        r.step = PromotionStep::ContextSynchronized;
+        promotion::save_record(tx, id, &r)?;
+        r.base_oid = Some(head);
+        r.integration_kind = Some(IntegrationKind::Merged);
+        r.step = PromotionStep::Integrating;
+        promotion::save_record(tx, id, &r)?;
+        r.integration_oid = Some(head);
+        r.step = PromotionStep::Integrated;
+        promotion::save_record(tx, id, &r)?;
+        promotion::next_attempt(tx, id, r.operation_id, ChildRole::Primary)
+    })
+    .unwrap();
+    let execution = promotion::child_execution(&parent, ChildRole::Primary).unwrap();
+    let child = parent.primary_sync_id.unwrap();
+    let result = service.synchronize_promotion_child_observed(
+        SynchronizeRemoteRequest {
+            operation_id: child,
+            ..request(root.path())
+        },
+        &mut session(),
+        &mut Unobserved,
+        &execution,
+    );
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), child), 0);
+
+    // A poll is direct.
+    let (root, data, service) = pull_request_fixture();
+    let poll = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_poll(
+                root.path(),
+                poll,
+                &RemoteOperationTarget::for_poll(&plan),
+                RemoteOperationPriority::Poll,
+            )
+            .unwrap(),
+        reservation::RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(
+            _
+        ))
+    ));
+    assert_eq!(stored_pull_only(data.path(), poll), 0);
+    assert!(
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .execute(
+                "UPDATE remote_operation_records SET pull_only = 1 WHERE operation_ulid = ?1",
+                [poll.to_string()],
+            )
+            .is_err()
+    );
+    assert_eq!(stored_pull_only(data.path(), poll), 0);
 }

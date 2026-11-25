@@ -22,6 +22,8 @@ fn summary(root: &str, accessibility: Accessibility) -> RepositorySummaryDto {
             primary_branch: Some("main".to_owned()),
             publication_remote: None,
             problems: Vec::new(),
+            integration: Some("direct".to_owned()),
+            forge: None,
         },
         index: IndexStateDto {
             state: IndexState::NeverRefreshed,

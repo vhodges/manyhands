@@ -371,6 +371,10 @@ const CASES: &[ssh_harness::Case] = &[
     ),
     ("c4_conformance_item_sync", c4_conformance_item_sync),
     ("c4_conformance_repo_sync", c4_conformance_repo_sync),
+    (
+        "a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits",
+        a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits,
+    ),
     ("c4_conformance_comment_add", c4_conformance_comment_add),
 ];
 
@@ -785,7 +789,8 @@ fn call_before_the_stores_hold_anything(
     // synchronization's data: a host's, or a conflict's, by its tag. One
     // that took up a comment's publication carries the comment's, and one
     // of a local-context sync the gate's (R-20). One refused for another
-    // operation's unfinished row names that operation instead.
+    // operation's unfinished row names that operation instead. A pull-only
+    // refusal carries the local commits it lists.
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
@@ -796,6 +801,7 @@ fn call_before_the_stores_hold_anything(
             Some("synchronization_conflict") => CONFLICT_SCHEMA,
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
+            Some("primary_local_commits") => PRIMARY_LOCAL_COMMITS_SCHEMA,
             _ => SYNCHRONIZATION_SCHEMA,
         };
         schema::check_published(data_schema, &value["data"])
@@ -822,6 +828,7 @@ const SYNCHRONIZATION_SCHEMA: &str = "synchronization_mutation.schema.json";
 const CONFLICT_SCHEMA: &str = "synchronization_conflict_mutation.schema.json";
 const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
 const LOCAL_CONTEXT_SYNC_SCHEMA: &str = "local_context_sync_mutation.schema.json";
+const PRIMARY_LOCAL_COMMITS_SCHEMA: &str = "primary_local_commits.schema.json";
 const HOST_SCHEMA: &str = "host_mutation.schema.json";
 
 /// Checks an envelope against its golden fixture under
@@ -830,7 +837,8 @@ const HOST_SCHEMA: &str = "host_mutation.schema.json";
 /// carries none.
 ///
 /// What differs from run to run is replaced: the root, the operation, the
-/// commit, the server's address and the fingerprints of the keys in play.
+/// commit, the local commits a pull-only refusal lists, the server's
+/// address and the fingerprints of the keys in play.
 /// The server's port is also a number of the data, which no placeholder
 /// replaces: it is checked to be the server's, and the fixture holds 0.
 fn assert_golden(
@@ -4909,4 +4917,142 @@ fn c4_conformance_repo_sync() -> Result<(), FixtureError> {
 
 fn c4_conformance_comment_add() -> Result<(), FixtureError> {
     conformance_row("comment add")
+}
+
+/// A pull-request repository's `repo sync` only fetches and fast-forwards
+/// its primary (design Part D, O1, O2, O3 and O5), and a refusal of local
+/// commits holds nothing (decision 5). No non-SSH publication remote can be
+/// selected, and the property is that nothing reaches the server and
+/// nothing is held.
+fn a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits() -> Result<(), FixtureError> {
+    const DIRECT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW1";
+    const EQUAL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW2";
+    const BEHIND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW3";
+    const AHEAD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW4";
+    const ITEM_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW5";
+    const MAIN: &str = "refs/heads/main";
+    let mut w = World::plain_key()?;
+    approve(&w)?;
+    let repo = w.repo()?;
+    let served = |w: &World| fixed(w.bare()?.refname_to_id(MAIN));
+    // Whether the journal stored the operation of an answer as pull-only.
+    let pull_only = |w: &World, envelope: &Envelope<MutationDataDto>| {
+        let operation = envelope.operation_id.as_deref().ok_or(FixtureError)?;
+        fixed(w.db()?.query_row(
+            "SELECT pull_only FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation],
+            |row| row.get::<_, bool>(0),
+        ))
+    };
+
+    // The peer commits a pull-request configuration, the serializer's
+    // output, and pushes it; a direct-mode sync brings primary up to it, as
+    // a repository reaches pull-request mode (K-2).
+    let workdir = w.peer.workdir().ok_or(FixtureError)?;
+    let mut config = fixed(canonical::parse_repository_config(&fixed(
+        std::fs::read_to_string(workdir.join(".manyhands/config.toml")),
+    )?))?;
+    config.unknown.insert(
+        "integration".into(),
+        toml::Value::String("pull_request".into()),
+    );
+    let source = fixed(canonical::serialize_repository_config(&config))?;
+    let base = fixed(w.peer.refname_to_id(MAIN))?;
+    let configured = commit_path(&w.peer, base, ".manyhands/config.toml", source.as_bytes())?;
+    fixed(w.peer.reference(MAIN, configured, true, "fixture"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    let direct = execute(&w, DIRECT, repo_sync(&w));
+    assert_current(&direct);
+    assert!(!pull_only(&w, &direct)?);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, configured);
+
+    // O1: equal to the remote, the sync is current and holds nothing.
+    let updates = w.server.receive_updates().len();
+    let equal = execute(&w, EQUAL, repo_sync(&w));
+    assert_current(&equal);
+    assert!(pull_only(&w, &equal)?);
+    assert!(equal.data.is_none());
+    assert!(equal.recovery.is_empty());
+    assert!(!reserved(&w));
+
+    // O2: behind the remote, primary fast-forwards and nothing is pushed.
+    let incoming = commit_path(&w.peer, configured, "remote-ahead", b"remote-ahead")?;
+    fixed(w.peer.reference(MAIN, incoming, true, "fixture"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    // The peer's push is the one update since O1: O1 sent none.
+    let updates = updates + 1;
+    assert_eq!(w.server.receive_updates().len(), updates);
+    let forwarded = execute(&w, BEHIND, repo_sync(&w));
+    assert_current(&forwarded);
+    assert!(pull_only(&w, &forwarded)?);
+    assert!(forwarded.data.is_none());
+    assert!(forwarded.recovery.is_empty());
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, incoming);
+    assert_eq!(served(&w)?, incoming);
+    assert_eq!(w.server.receive_updates().len(), updates);
+    assert!(!reserved(&w));
+
+    // O3: ahead of the remote, the sync refuses and names the commit. The
+    // item synchronized last is made first, from primary as the server
+    // holds it.
+    w.context()?;
+    let local = commit_in(&w.root, MAIN, "local-ahead", b"local-ahead")?;
+    let refused = execute(&w, AHEAD, repo_sync(&w));
+    assert_eq!(refused.command, "repo sync");
+    assert_eq!(refused.request_id.as_deref(), Some(AHEAD));
+    assert_eq!(refused.code, ResultCode::PrimaryHasLocalCommits);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert!(refused.recovery.is_empty());
+    assert_eq!(
+        refused.data,
+        Some(MutationDataDto::PrimaryLocalCommits(
+            PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: vec![LocalCommitDto {
+                    oid: local.to_string(),
+                    summary: "owned fixture child".into(),
+                }],
+                complete: true,
+            }
+        ))
+    );
+    // Nothing reached the server, primary stayed where it was, and the
+    // operation is ended: nothing is held.
+    assert_eq!(served(&w)?, incoming);
+    assert_eq!(w.server.receive_updates().len(), updates);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, local);
+    assert!(pull_only(&w, &refused)?);
+    let operation = fixed(OperationId::parse(
+        refused.operation_id.as_deref().ok_or(FixtureError)?,
+    ))?;
+    assert_eq!(phase(&w, operation)?, "cancelled");
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, AHEAD).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+
+    // O5: the same request is answered from its record, with no transport.
+    let opened = connections(&w);
+    assert_eq!(execute(&w, AHEAD, repo_sync(&w)), refused);
+    assert_eq!(connections(&w), opened);
+
+    // Decision 5: the next synchronization is not busy, and runs.
+    let item = execute(&w, ITEM_SYNC, item_sync(&w));
+    assert_ne!(item.code, ResultCode::Busy);
+    assert_eq!(item.code, ResultCode::Ok);
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id(CONTEXT))?,
+        fixed(repo.refname_to_id(CONTEXT))?
+    );
+    assert_eq!(served(&w)?, incoming);
+
+    assert_golden(
+        &w,
+        "repo_sync_primary_has_local_commits",
+        Some(PRIMARY_LOCAL_COMMITS_SCHEMA),
+        &refused,
+    );
+    Ok(())
 }

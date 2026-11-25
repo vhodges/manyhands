@@ -2,6 +2,7 @@
 
 pub mod canonical;
 pub mod drafts;
+pub mod forge;
 pub mod repository;
 pub mod results;
 pub mod runtime;
