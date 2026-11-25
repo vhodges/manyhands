@@ -679,6 +679,7 @@ fn synchronization_errors() -> Vec<(SynchronizationError, ResultCode)> {
             },
             Code::PrimaryHasLocalCommits,
         ),
+        (Error::TicketClosed, Code::TicketClosed),
         (Error::PushRejected, Code::PushRejected),
         (Error::ExternalChange, Code::ExternalChange),
         (Error::RecoveryRequired, Code::RecoveryRequired),
@@ -705,9 +706,10 @@ fn synchronization_error_count(error: &SynchronizationError) -> usize {
         | Error::ExternalResolutionRequired { .. }
         | Error::MergeRequired { .. }
         | Error::PrimaryHasLocalCommits { .. }
+        | Error::TicketClosed
         | Error::PushRejected
         | Error::ExternalChange
-        | Error::RecoveryRequired => 20,
+        | Error::RecoveryRequired => 21,
     }
 }
 

@@ -231,7 +231,7 @@ fn keeps_primary_closure_rule(
 
 /// The item the primary side holds at `path`, none when it holds no canonical
 /// item there.
-fn primary_item(
+pub(super) fn primary_item(
     repository: &git2::Repository,
     primary_side: git2::Oid,
     path: &Path,

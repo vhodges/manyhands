@@ -217,6 +217,43 @@ fn closed_ticket_bytes_refusals() {
     );
 }
 
+/// R-30, Part G: replacing a closure gives what closing the open ticket with
+/// that closure gives, so every other field and the body stay as they were.
+#[test]
+fn closure_replaced_bytes_gives_the_closure_and_keeps_everything_else() {
+    for line_end in ["\n", "\r\n"] {
+        let source = hand_written(line_end);
+        let first = closed_ticket_bytes(source.as_bytes(), at(1_700_000_000), CLOSER).unwrap();
+        let other = "Other <other@example.invalid>";
+        let replaced = closure_replaced_bytes(&first, at(1_800_000_000), other).unwrap();
+        assert_eq!(
+            replaced,
+            closed_ticket_bytes(source.as_bytes(), at(1_800_000_000), other).unwrap(),
+            "{line_end:?}"
+        );
+        assert_ne!(replaced, first);
+        // An open ticket is given the closure, a closed one the same
+        // closure again unchanged.
+        assert_eq!(
+            closure_replaced_bytes(source.as_bytes(), at(1_700_000_000), CLOSER).unwrap(),
+            first
+        );
+        assert_eq!(
+            closure_replaced_bytes(&first, at(1_700_000_000), CLOSER).unwrap(),
+            first
+        );
+    }
+    assert_eq!(
+        closure_replaced_bytes(&[0xff, 0xfe], at(1_700_000_000), CLOSER),
+        Err(ClosureContentError::NotText)
+    );
+    let document = hand_written("\n").replace("\"ticket\"", "document");
+    assert_eq!(
+        closure_replaced_bytes(document.as_bytes(), at(1_700_000_000), CLOSER),
+        Err(ClosureContentError::NotATicket)
+    );
+}
+
 #[test]
 fn closed_by_text_is_name_and_angled_email() {
     assert_eq!(

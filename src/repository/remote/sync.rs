@@ -409,6 +409,12 @@ pub enum SynchronizationError {
         commits: Vec<(git2::Oid, String)>,
         complete: bool,
     },
+    /// A ticket context's head lacks the closure the primary it fetched
+    /// holds, and nothing was merged that could give it that closure
+    /// (R-30): it is not pushed. Terminal for an `item sync`, as
+    /// `HistoryUnresolved` is: the operation is ended and the reservation
+    /// let go. A lifecycle child is kept for its parent.
+    TicketClosed,
     PushRejected,
     ExternalChange,
     RecoveryRequired,
@@ -444,6 +450,7 @@ impl fmt::Display for SynchronizationError {
             Self::ExternalResolutionRequired { .. } => "external conflict resolution required",
             Self::MergeRequired { .. } => "merge required",
             Self::PrimaryHasLocalCommits { .. } => "primary has local commits",
+            Self::TicketClosed => "ticket closed",
             Self::PushRejected => "push rejected",
             Self::ExternalChange => "external change",
             Self::RecoveryRequired => "synchronization recovery required",
@@ -844,6 +851,37 @@ pub(in super::super) fn prepare_clean_merge_in(
     incoming: git2::Oid,
 ) -> Result<MergePreparation, SynchronizationError> {
     prepare::prepare_clean_merge_in(worker, path, local, incoming).map_err(Into::into)
+}
+
+/// A ticket context's merge, given the primary it fetched (R-30, Part G):
+/// `prepared` is `prepare_clean_merge`'s answer for `local` and `incoming`.
+/// Only a ticket context's has any effect; any other target's is as it is.
+fn keep_primary_closure(
+    path: &Path,
+    target: &SynchronizationTarget,
+    stage: merge::IntegrationStage,
+    local: git2::Oid,
+    incoming: git2::Oid,
+    primary: git2::Oid,
+    prepared: MergePreparation,
+) -> Result<MergePreparation, SynchronizationError> {
+    let SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id,
+    } = target
+    else {
+        return Ok(prepared);
+    };
+    prepare::keep_primary_closure(
+        path,
+        &crate::repository::closure::observe::ticket_path(item_id),
+        local,
+        incoming,
+        primary,
+        stage == merge::IntegrationStage::Context,
+        prepared,
+    )
+    .map_err(Into::into)
 }
 
 /// Import the objects the merge created and write its tree. An entry that was
@@ -3728,7 +3766,10 @@ fn integrate_divergence(
             &intent,
         )?;
         let prepared = if classification == merge::IntegrationDisposition::MergeRequired {
-            Some(prepare_clean_merge(&path, local, incoming)?)
+            let prepared = prepare_clean_merge(&path, local, incoming)?;
+            Some(keep_primary_closure(
+                &path, target, stage, local, incoming, primary, prepared,
+            )?)
         } else {
             None
         };
@@ -4254,10 +4295,34 @@ pub(in super::super) fn promotion_test_publication_plan(
     )
     .map(|_| ())
 }
+/// R-30: `TicketClosed` when `target` is a ticket context and `candidate`'s
+/// ticket does not hold the closure the fetched `primary`'s ticket holds.
+/// Any other target, and a primary that holds no closure, are not refused.
+fn primary_closure_push_refusal(
+    repository: &git2::Repository,
+    target: &SynchronizationTarget,
+    candidate: git2::Oid,
+    primary: git2::Oid,
+) -> Result<(), SynchronizationError> {
+    let SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id,
+    } = target
+    else {
+        return Ok(());
+    };
+    let ticket = crate::repository::closure::observe::ticket_path(item_id);
+    if prepare::lacks_primary_closure(repository, candidate, primary, &ticket)? {
+        Err(SynchronizationError::TicketClosed)
+    } else {
+        Ok(())
+    }
+}
 impl RepositoryService {
-    /// `error`, after ending the operation when it is `HistoryUnresolved`
-    /// or `PrimaryHasLocalCommits`: the owner's repair, or Git work outside
-    /// Manyhands, not a call of the same request, settles those, so the
+    /// `error`, after ending the operation when it is `HistoryUnresolved`,
+    /// `PrimaryHasLocalCommits` or `TicketClosed`: the owner's repair, Git
+    /// work outside Manyhands, or the forge's merge of the closure, not a
+    /// call of the same request, settles those, so the
     /// operation is cancelled and the reservation let go (as for a refused
     /// push). With a push intended an earlier call may have published, and
     /// a lifecycle child belongs to its parent, which blocks on unresolved
@@ -4277,6 +4342,7 @@ impl RepositoryService {
             error,
             SynchronizationError::HistoryUnresolved
                 | SynchronizationError::PrimaryHasLocalCommits { .. }
+                | SynchronizationError::TicketClosed
         ) && !keep
             && self
                 .request_synchronization_cancellation(root, owner)
@@ -4286,6 +4352,27 @@ impl RepositoryService {
             return SynchronizationError::RecoveryRequired;
         }
         error
+    }
+    /// R-30's push decision: a ticket context does not push a head whose
+    /// ticket lacks the closure of the primary it fetched. Every path of a
+    /// synchronization that publishes ends at one candidate head, a merge
+    /// prepared in this pass having been given that closure already, so a
+    /// head that lacks it here is one nothing merged: a fast-forward, or a
+    /// head already integrated with the primary. It answers `TicketClosed`,
+    /// ending the operation as `ended_if_unresolved` does.
+    #[allow(clippy::too_many_arguments)]
+    fn refuse_unclosed_push(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        keep: bool,
+        repository: &git2::Repository,
+        target: &SynchronizationTarget,
+        candidate: git2::Oid,
+        primary: git2::Oid,
+    ) -> Result<(), SynchronizationError> {
+        primary_closure_push_refusal(repository, target, candidate, primary)
+            .map_err(|error| self.ended_if_unresolved(root, owner, keep, error))
     }
     /// The reservation of the operation `op`, a synchronization's or a
     /// lifecycle child's (`execution`). A new one (`new`: no row under its
@@ -7134,6 +7221,17 @@ impl RepositoryService {
         let candidate = evidence
             .local_oid
             .ok_or(SynchronizationError::RecoveryRequired)?;
+        // R-30: the one head every path above ends at, the plan's and a
+        // merge's alike, is not pushed without the primary's closure.
+        self.refuse_unclosed_push(
+            &root,
+            &owner,
+            keep,
+            &repository,
+            &request.target,
+            candidate,
+            primary.ok_or(SynchronizationError::PrimaryMissing)?,
+        )?;
         // With an open publication attempt, the old Push intent and its
         // checkpoint stay as recorded: this invocation's single push is
         // journaled in the attempt. A Push endpoint that no longer

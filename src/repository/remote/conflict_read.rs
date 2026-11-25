@@ -846,6 +846,7 @@ fn read_error(error: SynchronizationError) -> ReadError {
         | SynchronizationError::IdentityRequired { .. }
         | SynchronizationError::MergeRequired { .. }
         | SynchronizationError::PrimaryHasLocalCommits { .. }
+        | SynchronizationError::TicketClosed
         | SynchronizationError::PushRejected => ReadError::new(ResultCode::InternalError),
     }
 }

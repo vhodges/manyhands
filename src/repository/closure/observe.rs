@@ -78,16 +78,7 @@ pub(in super::super) fn closed_ticket_bytes(
     closed_by: &str,
 ) -> Result<Vec<u8>, ClosureContentError> {
     use ClosureContentError::*;
-    let source = std::str::from_utf8(original).map_err(|_| NotText)?;
-    let id = canonical::front_matter(source)
-        .and_then(|values| values.get("id")?.as_str()?.parse::<ItemId>().ok())
-        .ok_or(NotATicket)?;
-    let path = ticket_path(&id);
-    let parse = |source: &str| match canonical::parse_item(&path, source) {
-        Ok(CanonicalItem::Ticket(ticket)) => Ok(ticket),
-        _ => Err(NotATicket),
-    };
-    let ticket = parse(source)?;
+    let (path, ticket) = parsed_ticket(original)?;
     if ticket.closed_at.is_some() || ticket.closed_by.is_some() {
         return Err(AlreadyClosed);
     }
@@ -97,18 +88,64 @@ pub(in super::super) fn closed_ticket_bytes(
     if closed_by.is_empty() || closed_by.contains('\0') {
         return Err(InvalidClosedBy);
     }
+    with_closure(&path, &ticket, closed_at, closed_by)
+}
+
+/// A ticket's bytes with its closure fields replaced (R-30, Part G): as
+/// `closed_ticket_bytes`, for a ticket that may already hold a closure. The
+/// ticket is parsed, given `closed_at` and `closed_by`, and serialized
+/// canonically, and every other parsed field, unknown key and the body must
+/// be as they were. The closure is given as it is read from another ticket,
+/// whatever it holds, so it is not validated as a new one is.
+pub(in super::super) fn closure_replaced_bytes(
+    original: &[u8],
+    closed_at: OffsetDateTime,
+    closed_by: &str,
+) -> Result<Vec<u8>, ClosureContentError> {
+    let (path, ticket) = parsed_ticket(original)?;
+    with_closure(&path, &ticket, closed_at, closed_by)
+}
+
+/// The ticket the bytes hold, with its canonical path.
+fn parsed_ticket(original: &[u8]) -> Result<(PathBuf, Ticket), ClosureContentError> {
+    use ClosureContentError::*;
+    let source = std::str::from_utf8(original).map_err(|_| NotText)?;
+    let id = canonical::front_matter(source)
+        .and_then(|values| values.get("id")?.as_str()?.parse::<ItemId>().ok())
+        .ok_or(NotATicket)?;
+    let path = ticket_path(&id);
+    let ticket = parse_ticket_at(&path, source)?;
+    Ok((path, ticket))
+}
+
+fn parse_ticket_at(path: &Path, source: &str) -> Result<Ticket, ClosureContentError> {
+    match canonical::parse_item(path, source) {
+        Ok(CanonicalItem::Ticket(ticket)) => Ok(ticket),
+        _ => Err(ClosureContentError::NotATicket),
+    }
+}
+
+/// `ticket` normalized, given the closure and serialized, which must read
+/// back as exactly that, and as `ticket` in every other field.
+fn with_closure(
+    path: &Path,
+    ticket: &Ticket,
+    closed_at: OffsetDateTime,
+    closed_by: &str,
+) -> Result<Vec<u8>, ClosureContentError> {
+    use ClosureContentError::*;
     let serialize = |ticket: &Ticket| {
         canonical::serialize_item(&CanonicalItem::Ticket(ticket.clone())).map_err(|_| NotPreserved)
     };
-    let normalized = parse(&serialize(&ticket)?).map_err(|_| NotPreserved)?;
-    if !preserved(&ticket, &normalized) {
+    let normalized = parse_ticket_at(path, &serialize(ticket)?).map_err(|_| NotPreserved)?;
+    if !preserved(ticket, &normalized) {
         return Err(NotPreserved);
     }
     let mut closed = normalized;
     closed.closed_at = Some(closed_at);
     closed.closed_by = Some(closed_by.to_owned());
     let bytes = serialize(&closed)?;
-    if parse(&bytes).map_err(|_| NotPreserved)? != closed {
+    if parse_ticket_at(path, &bytes).map_err(|_| NotPreserved)? != closed {
         return Err(NotPreserved);
     }
     Ok(bytes.into_bytes())

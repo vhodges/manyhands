@@ -1121,13 +1121,18 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
-        // The domain ends an operation on unresolved history, or on the
-        // local commits of a pull-only primary, as it ends a cancelled one,
-        // but neither is the caller's cancellation: the answer is the
-        // error's. The first names the repair; the second offers none.
+        // The domain ends an operation on unresolved history, on the local
+        // commits of a pull-only primary, or on a ticket closed on the
+        // primary (R-30), as it ends a cancelled one, but none is the
+        // caller's cancellation: the answer is the error's. The first names
+        // the repair; the others offer none.
         let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
-        let own_end =
-            unresolved || matches!(error, SynchronizationError::PrimaryHasLocalCommits { .. });
+        let own_end = unresolved
+            || matches!(
+                error,
+                SynchronizationError::PrimaryHasLocalCommits { .. }
+                    | SynchronizationError::TicketClosed
+            );
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
