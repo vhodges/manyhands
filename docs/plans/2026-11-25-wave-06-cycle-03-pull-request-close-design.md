@@ -12,7 +12,7 @@ id: "01M899G2HA7WTVW4EYZFTNBWW2"
 
 Cycle document: [Wave 06 Cycle 03](../Cycles/wave-06-cycle-03-pull-request-close.md). Ticket: vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md) and the Cycle document's Product-Owner Decisions.
 
-Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14).
+Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14), amended by decision 15 at Task 0.
 
 ## Intent And Approval Boundary
 
@@ -72,7 +72,7 @@ Facts 1 to 7 and 18 to 21 were read in the source by the planning research and c
 
 So `ClosureDto`'s rule holds: the fields are set exactly when the state is `closed` or `closing`. The fact is passed, per ID, wherever the state is needed: `closure()` for lists, `show` and `show --path`; `Targets::of`, `Targets::stored_node` and `Related::of`; `TicketFilter::matches`; and `TicketGraph`, for readiness, tree lines and the deps root. The derivation does not read the mode (decision 11).
 
-**Readiness (decision 9).** `TicketNode` keeps `closed`, now true only for `closed`, and gains `closing`. Every readiness decision reads `closed`, so a closing ticket counts as open for its dependents: an edge to a closing ticket gives `closing_dependency` in place of `open_dependency`, and tree lines and the deps root report `closing`. The queries leave closing tickets themselves out: `ticket ready`, `ticket blocked` and `ticket list --ready`/`--blocked` never list a closing ticket; `ticket plan` computes its batches with closing tickets as open nodes, then removes closing tickets from its batches and from `unplannable`, drops empty batches, and numbers the batches again from 1 after any filter (R-9); `ticket critical-path` gives closing tickets no length and leaves them out of its chain. A closing ticket's own `readiness` field is computed as an open ticket's. `tickets_made_ready` is unchanged.
+**Readiness (decision 9).** `TicketNode` keeps `closed`, now true only for `closed`, and gains `closing`. Every readiness decision reads `closed`, so a closing ticket counts as open for its dependents: an edge to a closing ticket gives `closing_dependency` in place of `open_dependency`, and tree lines and the deps root report `closing`. The queries leave closing tickets themselves out: `ticket ready`, `ticket blocked` and `ticket list --ready`/`--blocked` never list a closing ticket; `ticket plan` computes its batches with closing tickets as open nodes, then removes closing tickets from its batches and from `unplannable`, and drops empty batches, as a filter does: each batch keeps its number in the plan of every ticket (R-9, decision 15); `ticket critical-path` gives closing tickets no length and leaves them out of its chain. A closing ticket's own `readiness` field is computed as an open ticket's. `tickets_made_ready` is unchanged.
 
 **The filter.** `ClosureFilter` gains `Closing`. `Open` matches `open` and `closing`; `Closing` only `closing`; `Closed` only `closed`. The CLI's value parser takes `open|closed|closing|all`, `dispatch.rs` maps `closing` explicitly, and the help text says so.
 
@@ -355,7 +355,7 @@ This changes Wave 02 Cycle 10's C11 for provisional closures only.
 | # | Outcome | Proof |
 | --- | --- | --- |
 | P1 | Part A's derivation table in lists, `show` and `show --path`, with the fields shown; `deps[].state`, `parent.state` and tree lines `closing` | `tests/read_items.rs`, one table-driven test, beside `presentation_across_contexts` |
-| P2 | A dependent of a closing ticket is blocked with `closing_dependency` and ready once the primary's copy holds the closure; `ticket ready`, `blocked`, `list --ready`/`--blocked`, `plan` and `critical-path` leave a closing ticket out, with batches numbered from 1 and the longest chain kept | `tests/read_relationships.rs`, one table-driven test; a `graph_tests.rs` row for the critical path |
+| P2 | A dependent of a closing ticket is blocked with `closing_dependency` and ready once the primary's copy holds the closure; `ticket ready`, `blocked`, `list --ready`/`--blocked`, `plan` and `critical-path` leave a closing ticket out, with each batch keeping its number and the longest chain kept | `tests/read_relationships.rs`, one table-driven test; a `graph_tests.rs` row for the critical path |
 | P3 | `--closure open`, `closing`, `closed`, `all`; the parser, dispatch and help | `tests/read_items.rs`; `parse_tests.rs`; `tests/cli/content.rs`; the help goldens |
 | P4 | The guard per mode at every caller, the save check, comments and saves on a closing ticket | `src/repository/ticket_guard_tests.rs`, a table over the callers; `tests/mutation_bridges/context.rs` |
 | P5 | Part B's rule at the validators, with a pinned window; today's rule without one; R-30's rewrite and its refusal | `src/repository/integration/tests.rs`, tables; one row per validator through `sync_tests.rs`'s existing callers |
@@ -431,7 +431,7 @@ Each: decision — why — cost if wrong.
 - **R-6** The closing state is derived from the two copies in both modes, and the primary's closure, when its copy holds one, decides `closed` and is shown — the RFC (decision 11) — an interrupted direct close reads `closing` where it read `closed`.
 - **R-7** The primary's copy is the row at rank `PRIMARY_COPY`, normally the root's working tree — it is what the index stores — an uncommitted closure in the root reads `closed` while the guard reads the branch tips, and a root checked out on another branch shows that branch's copy (K-9).
 - **R-8** A new reason `closing_dependency` — the RFC says `ticket ready` and `ticket blocked` say so — one more enum value.
-- **R-9** `ticket plan` computes with closing tickets as open, removes them from batches and `unplannable` and renumbers after any filter; `ticket critical-path` gives them no length — decision 9 — a dependent of a closing ticket sits in a batch without its blocker shown.
+- **R-9** `ticket plan` computes with closing tickets as open, removes them from batches and `unplannable` as a filter removes tickets, each batch keeping its number (decision 15); `ticket critical-path` gives them no length — decision 9 — a dependent of a closing ticket sits in a batch without its blocker shown.
 - **R-10** The guard reads the configuration's mode at each call, and `context_release` stays direct — RFC — a repository switched to direct with a provisional closure on a branch refuses writes to that ticket until a direct close merges it.
 - **R-11** A save whose closure fields differ from the branch head's is refused with `invalid_input`, in both modes — the precheck no longer refuses a file that reads `closing` — a person who hand-edits those fields gets `invalid_input`.
 - **R-12** Immutability is checked across the three sides at the validators, against a ticket context's pinned stage's fetched primary; today's rule elsewhere — primary targets and local synchronizations pin today's rule (Baseline Fact 7) — a resolution made before a fetch may drop a closure the forge has merged; R-30 stops its publication.

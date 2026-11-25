@@ -20,7 +20,7 @@ id: "01M899G2Y5Q4H3SQSSJVFTCR3N"
 
 **Spec:** [Cycle 03 design](2026-11-25-wave-06-cycle-03-pull-request-close-design.md) (revision 5), under the [Cycle document](../Cycles/wave-06-cycle-03-pull-request-close.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
+Status: **approved** by the owner on 2026-11-25, at revision 5 (Cycle document decision 14), amended by decision 15 at Task 0. Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
 
 ## Global Constraints
 
@@ -112,7 +112,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 ## Task 1: The Closing State (Design Part A)
 
 **Files:**
-- Modify: `src/repository/read/dto.rs` (`ClosureState`, `DependencyState`, `ReadinessReasonCode`, and the documentation Part A names), `src/repository/read/items.rs` (the per-ID primary-copy closure, `closure()` with the shown fields, `Targets::of`, `Targets::stored_node`, `Related::of`, `Target`, `ClosureFilter`, `TicketFilter::matches` including `--ready`/`--blocked`, `read_path`), `src/repository/read/graph.rs` (`TicketNode`, `TicketGraph`'s lookup, `blockers`, the tree and root lines, `ticket_readiness`, the plan's removal and renumbering, the critical path's zero length), `plan.schema.json`'s and `dto.rs`'s documentation of batch numbers
+- Modify: `src/repository/read/dto.rs` (`ClosureState`, `DependencyState`, `ReadinessReasonCode`, and the documentation Part A names), `src/repository/read/items.rs` (the per-ID primary-copy closure, `closure()` with the shown fields, `Targets::of`, `Targets::stored_node`, `Related::of`, `Target`, `ClosureFilter`, `TicketFilter::matches` including `--ready`/`--blocked`, `read_path`), `src/repository/read/graph.rs` (`TicketNode`, `TicketGraph`'s lookup, `blockers`, the tree and root lines, `ticket_readiness`, the plan's removal of closing tickets, each batch keeping its number, the critical path's zero length), `plan.schema.json`'s and `dto.rs`'s documentation of batch numbers
 - Modify: `schemas/v1/item.schema.json`, `dependency.schema.json`, `dependency_tree_node.schema.json`, `readiness_reason.schema.json`
 - Modify: `src/bin/manyhands-cli/parse.rs`, `dispatch.rs`, `catalog.rs`
 - Modify: the desktop's exhaustive matches (design Baseline Fact 5), compile-level arms only
@@ -122,7 +122,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 **Interfaces:** Produces `ClosureState::Closing` (`"closing"`), `DependencyState::Closing` (`"closing"`), `ReadinessReasonCode::ClosingDependency` (`"closing_dependency"`), `ClosureFilter::Closing`, and a private per-ID fact, the closure of the primary's copy, that every reader of Part A takes.
 
 - [ ] **Step 1: Write the failing table test** `closure_state_follows_both_copies` in `tests/read_items.rs`, beside `presentation_across_contexts` and with its helpers: one row per line of design Part A's derivation table, asserting `closure.state` and the fields shown in `ticket list`, `ticket show` and `ticket show --path`, and, for a second ticket that depends on it and has it as `parent`, `deps[].state` and `parent.state`.
-- [ ] **Step 2: Write the failing readiness test** `a_closing_dependency_blocks_until_the_primary_holds_it` in `tests/read_relationships.rs`, beside `closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_observed_again` and with its helpers: B depends on A; with A closing, B is `blocked` with one `closing_dependency` reason naming A; `ticket ready`, `ticket blocked`, `ticket list --ready`, `ticket list --blocked`, `ticket plan` and `ticket critical-path` do not list A, the plan's batches are numbered from 1, and `unplannable` does not hold A; `ticket deps` lines read `closing`; with A's closure on the primary's copy too, B is ready and A `closed`. Add `critical_path_gives_closing_tickets_no_length` to `graph_tests.rs`.
+- [ ] **Step 2: Write the failing readiness test** `a_closing_dependency_blocks_until_the_primary_holds_it` in `tests/read_relationships.rs`, beside `closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_observed_again` and with its helpers: B depends on A; with A closing, B is `blocked` with one `closing_dependency` reason naming A; `ticket ready`, `ticket blocked`, `ticket list --ready`, `ticket list --blocked`, `ticket plan` and `ticket critical-path` do not list A, each listed batch keeps its number in the plan of every ticket (decision 15), and `unplannable` does not hold A; `ticket deps` lines read `closing`; with A's closure on the primary's copy too, B is ready and A `closed`. Add `critical_path_gives_closing_tickets_no_length` to `graph_tests.rs`.
 - [ ] **Step 3: Write the failing filter test** `closure_filter_closing_and_open` in `tests/read_items.rs`. Add the `closing` rows of E-3 to `parse_tests.rs` and `tests/cli/content.rs`.
 - [ ] **Step 4: Run, expect FAIL**, each by exact name. Record the red runs.
 - [ ] **Step 5: Implement** Part A. Apply E-2, E-3, E-16 and E-17; regenerate the three help goldens with `MANYHANDS_UPDATE_GOLDEN=1` for the tests that own them and read the diff.
