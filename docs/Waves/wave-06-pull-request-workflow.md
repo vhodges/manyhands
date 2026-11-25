@@ -55,11 +55,15 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (a
 
 ### Cycle 03, vh-gy8gz: Ticket close in pull-request mode, the closing state and withdraw
 
-- [ ] Close records the closure, publishes and gives the link; `already_closing`
+- [x] Decided: the pull-request close, withdraw and the new branch are modes of the existing ticket-closure lifecycle (Cycle 03 decision 13)
+- [x] Decided: a ticket whose branch merged before close closes in place while its remote branch survives, and through a new branch holding only the closure when that branch is gone or the ticket has no context (Cycle 03 decisions 1, 6 and 7)
+- [x] Decided: a closing ticket stays open for its dependents and is left out of `ticket ready`, `ticket blocked`, `ticket plan` and `ticket critical-path` (Cycle 03 decision 9)
+- [ ] Close records the closure, publishes and gives the link; `already_closing`; `item sync` gives the link too
 - [ ] The record of given links (the `pull_request` object comes from Cycle 02)
 - [ ] The `closing` state, readiness, and the guard on the primary's copy only
 - [ ] `ticket withdraw-closure`, and the immutability change it needs
 - [ ] The two-clone race, and the closure-only recovery for a branch merged first
+- [ ] Tests: library and non-SSH integration tests, and one SSH case
 - [ ] Reviewed and closed
 
 ### Cycle 04, vh-rphcs: Document promote in pull-request mode
