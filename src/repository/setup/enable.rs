@@ -410,6 +410,12 @@ impl RepositoryService {
                 Found::Another
             });
         }
+        // This call's own row recorded a setup already, and the setup has
+        // ended since: the request is over. It records nothing (design L11);
+        // publishing answers what became of it.
+        if recovery::recorded_a_setup(&tx, record.id)? {
+            return Ok(Found::Gone);
+        }
         let repository_id = register_setup_pending(&tx, root)?;
         record::insert(
             &tx,

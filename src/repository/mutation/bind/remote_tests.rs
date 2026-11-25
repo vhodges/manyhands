@@ -683,6 +683,42 @@ fn a_binding_that_cannot_tell_its_path_is_never_run_as_a_direct_selection() {
     assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
 }
 
+// Part B's race rule, through the binding: an accepted `ticket close` of the
+// repository is in a change's way. The change answers `recovery_required`,
+// finally: its request is finished, and nothing is recorded or published.
+fn an_accepted_close_is_in_the_way_of_a_change() {
+    let w = World::new(DIRECT_ORIGIN);
+    let configuration = w.base.configuration();
+    w.base.accept(RequestId::parse(R2).unwrap(), "ticket close");
+    let none = Scripted::none();
+
+    let answer = w.run(R1, w.pull_request(), &none);
+
+    assert_eq!(
+        answer.code,
+        ResultCode::RecoveryRequired,
+        "{}",
+        answer.message
+    );
+    assert_eq!(none.calls(), 0);
+    assert_eq!(w.record(R1).state, RequestState::Finished);
+    assert_eq!(
+        w.record(R1).result.as_ref().map(|result| result.code),
+        Some(ResultCode::RecoveryRequired)
+    );
+    assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0
+    );
+    w.base
+        .assert_primary_untouched("in the way", &configuration);
+    // The same request again is the stored answer, not a second look.
+    let again = w.run(R1, w.pull_request(), &none);
+    assert_eq!(again.code, ResultCode::RecoveryRequired);
+    assert_eq!(none.calls(), 0);
+}
+
 // L13: `operation resume` of a setup request's operation.
 fn l13_resume_names_the_original_request() {
     let w = World::new(DIRECT_ORIGIN);
@@ -835,6 +871,7 @@ fn the_select_request_lifecycle_of_design_part_k() {
     a_configuration_changed_before_the_recording_is_an_external_change();
     l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed();
     a_binding_that_cannot_tell_its_path_is_never_run_as_a_direct_selection();
+    an_accepted_close_is_in_the_way_of_a_change();
     l13_resume_names_the_original_request();
     l14_an_unreadable_record_is_owed_not_the_direct_path();
 }

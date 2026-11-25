@@ -5688,16 +5688,23 @@ impl RepositoryService {
         &self,
         request: SetPublicationRemoteRequest,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
-        self.set_publication_remote_with(request, None)
+        self.set_publication_remote_with(request, None, None)
     }
 
     /// `set_publication_remote`, with the `[forge]` table the same commit is
     /// to leave: `None` leaves it as it is, `Some(None)` removes it,
     /// `Some(Some(setting))` replaces it.
-    pub fn set_publication_remote_with(
+    ///
+    /// With a `guard`, the change the caller planned the call from is planned
+    /// again under the lease, on the configuration found there: anything but
+    /// a direct commit (or nothing to do) is an `external_change` and nothing
+    /// is committed, so that a request that is a pull-request one by its
+    /// intent never commits to the primary.
+    pub(crate) fn set_publication_remote_with(
         &self,
         request: SetPublicationRemoteRequest,
         forge: Option<Option<&canonical::ForgeSetting>>,
+        guard: Option<&setup::change::Change<'_>>,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
@@ -5720,6 +5727,7 @@ impl RepositoryService {
         let result = self.set_publication_remote_recorded(
             request,
             forge,
+            guard,
             repository,
             root.clone(),
             &mut lease,
@@ -5734,6 +5742,7 @@ impl RepositoryService {
         &self,
         request: SetPublicationRemoteRequest,
         forge: Option<Option<&canonical::ForgeSetting>>,
+        guard: Option<&setup::change::Change<'_>>,
         repository: Repository,
         root: PathBuf,
         lease: &mut Option<RepositoryLease>,
@@ -5797,7 +5806,27 @@ impl RepositoryService {
         let mut intended = config.clone();
         intended.publication_remote = request.name.clone();
         setup::intent::apply_forge(&mut intended, forge);
-        if intended == config {
+        let equal = intended == config;
+        // A request that is a direct one by its intent, planned from a
+        // configuration read before the lease, plans again from the one found
+        // here: a primary that turned pull request meanwhile (a sync took a
+        // collaborator's merged setup) is not committed over.
+        if !equal
+            && let Some(change) = guard
+            && !matches!(
+                setup::change::path_of(&config, change),
+                Ok(setup::change::ChangePath::Direct | setup::change::ChangePath::AlreadyApplied)
+            )
+        {
+            self.complete_lifecycle(&root, operation, record)?;
+            return Err(RepositoryError::new(
+                operation,
+                Some(root),
+                RepositoryErrorKind::ExternalChange,
+                "the configuration changed since the selection was planned",
+            ));
+        }
+        if equal {
             // A selection already made may have stopped before its index
             // update, or come from a version that made none. The checks above
             // showed the file matches HEAD and the entry only lags behind it.

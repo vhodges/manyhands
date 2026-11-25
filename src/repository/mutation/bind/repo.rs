@@ -1915,8 +1915,9 @@ pub(super) fn recorded_now(service: &RepositoryService, accepted: &Accepted) -> 
     }
 }
 
-/// What a pull-request enable that got as far as its recording answers
-/// with, and what is left of its request (design K2).
+/// What a pull-request setup that got as far as its recording answers with,
+/// and what is left of its request (design K2). It is shared: an enable's and
+/// a selection's setups end alike.
 pub(super) fn setup_ran(
     service: &RepositoryService,
     accepted: &Accepted,

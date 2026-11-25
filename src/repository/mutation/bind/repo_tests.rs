@@ -1240,3 +1240,79 @@ fn the_enable_request_lifecycle_of_design_part_k() {
     l13_resume_names_the_original_request();
     l14_an_unreadable_record_is_owed_not_the_direct_path();
 }
+
+/// Never a second setup (L11), for `repo enable`: a call that is stale,
+/// because its request recorded its setup and the setup ended meanwhile (a
+/// refusal at publishing, a cancel, a completion), finds its own row at
+/// `setup_recorded` and records nothing: publishing answers the request's
+/// stored envelope.
+#[test]
+fn a_stale_first_enable_never_records_a_second_setup() {
+    use crate::repository::setup::{
+        change::tests::{Never, end_the_setup},
+        enable::{SetupOutcome, SetupRequest},
+        publish::continue_setup,
+    };
+
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    let stopped = Scripted::new(vec![Step::Fail(|| SetupError::Busy)]);
+    assert_eq!(
+        w.run(R1, Some(confirmation), None, &stopped).code,
+        ResultCode::Busy
+    );
+    let record = w.record(R1);
+    let accepted = Accepted::of_record(&record, record.attempt).unwrap();
+    end_the_setup(&w.service, &w.root, RequestId::parse(R1).unwrap());
+    // The ending of a first-time setup takes the registration with it, as
+    // R-7's does.
+    open_registry(&w.service.registry_path, &mut |_| {})
+        .unwrap()
+        .execute("DELETE FROM repositories", [])
+        .unwrap();
+    assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    let intended = crate::repository::setup::intent::for_enable(
+        "main",
+        Some("origin"),
+        Some(Integration::PullRequest),
+        None,
+        Some(REMOTE_URL),
+    )
+    .unwrap();
+
+    let outcome = w
+        .service
+        .enable_with_setup(
+            crate::repository::EnableRepositoryRequest {
+                root: w.root.clone(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: accepted.operation_id,
+            },
+            SetupRequest {
+                request_id: RequestId::parse(R1).unwrap(),
+                prefix: None,
+                remote_name: "origin".into(),
+                intended: Some(intended),
+                recorded: false,
+            },
+            &|root, request_id| Some(continue_setup(&w.service, root, request_id, &mut Never)),
+        )
+        .unwrap();
+
+    assert!(
+        matches!(
+            &outcome,
+            SetupOutcome::Ended(SetupError::Ended(result))
+                if result.code == ResultCode::RemoteAlreadySetUp
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM repository_setups"),
+        0,
+        "no second record"
+    );
+    assert_eq!(w.count("SELECT COUNT(*) FROM repositories"), 0);
+    w.assert_local_primary_untouched("a stale first call");
+}

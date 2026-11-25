@@ -136,6 +136,9 @@ pub(crate) struct ChangeSetupRequest {
     pub(crate) root: PathBuf,
     pub(crate) operation_id: OperationId,
     pub(crate) request_id: RequestId,
+    /// The remote the request selects: the row's target, as the direct path
+    /// has it, whatever the record says.
+    pub(crate) name: Option<String>,
     /// What a first call records; a recorded request has none to give.
     pub(crate) planned: Option<Planned>,
     /// The request's own local row completed at `setup_recorded`: the setup
@@ -172,21 +175,7 @@ impl RepositoryService {
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
         registry_root_key(&root, operation)?;
-        // The row's target is the remote: a recorded request names it by its
-        // record.
-        let target = match &request.planned {
-            Some(planned) => planned
-                .intended
-                .configuration
-                .publication_remote
-                .clone()
-                .unwrap_or_default(),
-            None => read_record(self, &root)
-                .ok()
-                .flatten()
-                .map(|(_, record)| record.remote_name)
-                .unwrap_or_default(),
-        };
+        let target = request.name.clone().unwrap_or_default();
         let (lease, record) =
             self.begin_lifecycle(&repository, &root, operation, request.operation_id, &target)?;
         let effects = CallEffects::default();
@@ -403,6 +392,13 @@ impl RepositoryService {
             } else {
                 Found::Another
             });
+        }
+        // This call's own row recorded a setup already, and the setup has
+        // ended since (a refusal at publishing, a cancel, a completion): the
+        // request is over. It records nothing; publishing answers what became
+        // of it.
+        if recovery::recorded_a_setup(&tx, record.id)? {
+            return Ok(Found::Gone);
         }
         // Part B, "Closing the races": no unfinished close or promotion, and
         // no accepted close, promotion or selection but this request's own.

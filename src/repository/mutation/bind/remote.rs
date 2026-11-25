@@ -536,6 +536,7 @@ impl RemoteSelectBinding {
             root: root.clone(),
             operation_id: accepted.operation_id,
             request_id: accepted.request_id,
+            name: self.name.clone(),
             planned: planned.cloned(),
             recorded,
         };
@@ -663,6 +664,12 @@ impl save::Save for RemoteSelectBinding {
                 operation_id: accepted.operation_id,
             },
             self.forge.as_ref().map(Option::as_ref),
+            // Planned again under the lease, from the configuration found there.
+            Some(&Change {
+                name: self.name.as_deref(),
+                integration: self.integration,
+                forge: self.forge.as_ref().map(Option::as_ref),
+            }),
         );
         match result {
             Ok(outcome) => {

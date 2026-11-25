@@ -3457,6 +3457,26 @@ pub(super) fn complete_with_step(
     Ok(())
 }
 
+/// Whether the row `record_id` has completed at `setup_recorded`: the call
+/// that owns it has recorded its setup, whatever became of the record since.
+/// A call that is told so by `begin_or_reconcile` is not: it reads the step as
+/// none (`LocalStep::continued`), so a recording transaction asks here.
+pub(super) fn recorded_a_setup(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<bool, RepositoryError> {
+    let step: Option<String> = connection
+        .query_row(
+            "SELECT completed_step FROM operation_records WHERE id = ?1 AND state = 'completed'",
+            [record_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .flatten();
+    Ok(step.as_deref() == Some(LocalStep::SetupRecorded.as_str()))
+}
+
 /// Marks the pending row `record_id` as touched now: the heartbeat of a
 /// call that works under the row with no lease held and no index claim,
 /// as a rebuild does while it observes. Nothing else of the row changes,

@@ -9,7 +9,9 @@ use rusqlite::params;
 
 use super::{Change, ChangePath, ChangeSetupRequest, Planned, Refused, path_of};
 use crate::repository::setup::{
+    channel::SetupChannel,
     enable::SetupOutcome,
+    publish::{SetupError, continue_setup},
     record::{self, SetupKind},
 };
 use crate::{
@@ -19,6 +21,7 @@ use crate::{
         RepositoryErrorKind, RepositoryService, RequestId, SetPublicationRemoteRequest,
         open_registry,
         request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
+        transport::{SetupAdvertisement, SetupPush, SetupScope, SshTransportError},
     },
     results::ResultCode,
 };
@@ -499,6 +502,7 @@ impl World {
             root: self.root.clone(),
             operation_id: OperationId::new(),
             request_id: request,
+            name: planned.intended.configuration.publication_remote.clone(),
             planned: Some(planned),
             recorded: false,
         }
@@ -513,8 +517,13 @@ impl World {
     }
 
     pub(crate) fn accept(&self, request: RequestId, command: &str) {
+        self.accept_with(request, command, OperationId::new());
+    }
+
+    /// An accepted request of `command` whose one local operation is
+    /// `operation`.
+    pub(crate) fn accept_with(&self, request: RequestId, command: &str, operation: OperationId) {
         let scope = ScopeKey::for_repository(&self.root).unwrap();
-        let operation = OperationId::new();
         let digest =
             IntentDigest::builder(DigestSalt::Request(request), command, &scope, "").finish();
         self.service
@@ -616,6 +625,7 @@ fn the_direct_path_commits_the_forge_with_the_remote() {
                 operation_id: OperationId::new(),
             },
             Some(Some(&forge)),
+            None,
         )
         .unwrap();
     let PublicationRemoteOutcome::Changed { commit_oid } = outcome else {
@@ -643,6 +653,7 @@ fn the_direct_path_commits_the_forge_with_the_remote() {
                 operation_id: OperationId::new(),
             },
             Some(None),
+            None,
         )
         .unwrap();
     assert!(matches!(outcome, PublicationRemoteOutcome::Changed { .. }));
@@ -664,14 +675,14 @@ fn the_direct_path_commits_the_forge_with_the_remote() {
                 operation_id: OperationId::new(),
             },
             Some(Some(&same)),
+            None,
         )
         .unwrap();
     // An equal selection names the head it found, as it always did.
-    match outcome {
-        PublicationRemoteOutcome::NoChange => {}
-        PublicationRemoteOutcome::Changed { commit_oid } => assert_eq!(commit_oid, before),
-        other => panic!("{other:?}"),
-    }
+    assert!(
+        matches!(outcome, PublicationRemoteOutcome::Changed { commit_oid } if commit_oid == before),
+        "{outcome:?}"
+    );
     assert_eq!(w.primary(), before, "nothing is committed");
 }
 
@@ -909,4 +920,214 @@ fn remote_select_takes_the_path_of_the_design() {
     the_direct_path_commits_the_forge_with_the_remote();
     the_pull_request_path_records_a_change_and_never_commits();
     the_checks_before_the_recording_refuse_and_record_nothing();
+}
+
+/// A channel a call that never reaches the remote does not use: publishing a
+/// setup that is gone answers its request's stored result before it connects.
+pub(crate) struct Never;
+
+impl SetupChannel for Never {
+    fn fetch_base(&mut self, _: &SetupScope) -> Result<SetupAdvertisement, SshTransportError> {
+        panic!("a setup that is gone is not fetched");
+    }
+
+    fn push_branch(&mut self, _: &SetupScope, _: Oid) -> Result<SetupPush, SshTransportError> {
+        panic!("a setup that is gone is not pushed");
+    }
+
+    fn observe_branch(&mut self, _: &SetupScope) -> Result<Option<Oid>, SshTransportError> {
+        panic!("a setup that is gone is not observed");
+    }
+}
+
+/// The removal of a setup's record, as the ending of a refused setup does it
+/// (R-7): the request is finished in the same transaction.
+pub(crate) fn end_the_setup(service: &RepositoryService, root: &Path, request: RequestId) {
+    let mut db = open_registry(&service.registry_path, &mut |_| {}).unwrap();
+    let id: i64 = db
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root.to_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let tx = db.transaction().unwrap();
+    assert!(
+        crate::repository::mutation::finish_setup_request(
+            &tx,
+            id,
+            request,
+            ResultCode::RemoteAlreadySetUp,
+            None,
+            1_700_000_000,
+        )
+        .unwrap()
+    );
+    record::delete(&tx, id).unwrap();
+    tx.commit().unwrap();
+}
+
+/// What the stored envelope of an ended setup request is, as publishing
+/// answers it for a setup that is gone.
+fn ended_with_the_stored_envelope(outcome: &SetupOutcome) -> bool {
+    matches!(
+        outcome,
+        SetupOutcome::Ended(SetupError::Ended(result)) if result.code == ResultCode::RemoteAlreadySetUp
+    )
+}
+
+/// Contract 13 and decision 8: a direct selection that finds a pull-request
+/// primary under the lease commits nothing.
+#[test]
+fn a_direct_selection_refuses_a_pull_request_primary_under_the_lease() {
+    let forge = gitlab();
+    let rows: Vec<(&str, Change<'_>)> = vec![
+        (
+            "another remote",
+            Change {
+                name: Some("backup"),
+                integration: None,
+                forge: None,
+            },
+        ),
+        (
+            "a forge change",
+            Change {
+                name: Some("origin"),
+                integration: None,
+                forge: Some(Some(&forge)),
+            },
+        ),
+    ];
+    for (what, change) in rows {
+        let w = World::new(PR_ORIGIN);
+        let configuration = w.configuration();
+        let error = w
+            .service
+            .set_publication_remote_with(
+                SetPublicationRemoteRequest {
+                    root: w.root.clone(),
+                    name: change.name.map(str::to_owned),
+                    operation_id: OperationId::new(),
+                },
+                change.forge,
+                Some(&change),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind, RepositoryErrorKind::ExternalChange, "{what}");
+        assert_eq!(w.primary(), w.head, "{what}: the primary moved");
+        assert_eq!(w.configuration(), configuration, "{what}");
+        assert_eq!(
+            w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+            0,
+            "{what}: no operation is left in flight"
+        );
+    }
+    // The guard lets through what is a direct selection, and an equal one.
+    let w = World::new(DIRECT_ORIGIN);
+    let change = Change {
+        name: Some("backup"),
+        integration: None,
+        forge: None,
+    };
+    let outcome = w
+        .service
+        .set_publication_remote_with(
+            SetPublicationRemoteRequest {
+                root: w.root.clone(),
+                name: Some("backup".into()),
+                operation_id: OperationId::new(),
+            },
+            None,
+            Some(&change),
+        )
+        .unwrap();
+    assert!(matches!(outcome, PublicationRemoteOutcome::Changed { .. }));
+    assert_ne!(w.primary(), w.head);
+    let w = World::new(PR_ORIGIN);
+    let change = Change {
+        name: Some("origin"),
+        integration: None,
+        forge: None,
+    };
+    let outcome = w
+        .service
+        .set_publication_remote_with(
+            SetPublicationRemoteRequest {
+                root: w.root.clone(),
+                name: Some("origin".into()),
+                operation_id: OperationId::new(),
+            },
+            None,
+            Some(&change),
+        )
+        .unwrap();
+    assert!(matches!(outcome, PublicationRemoteOutcome::Changed { .. }));
+    assert_eq!(w.primary(), w.head, "an equal selection commits nothing");
+}
+
+/// Never a second setup (L11): a call that is stale, because its request
+/// recorded its setup and the setup ended meanwhile, finds its own row at
+/// `setup_recorded` and records nothing: publishing answers the request's
+/// stored envelope. The same holds for a call that is told the setup is
+/// recorded, whose row's target is the remote it selects, not the record's.
+#[test]
+fn a_stale_first_call_never_records_a_second_change() {
+    let w = World::new(DIRECT_ORIGIN);
+    let planned = w.planned("origin", Some(Integration::PullRequest));
+    let operation = OperationId::new();
+    w.accept_with(request(R1), "remote select", operation);
+    let first = w
+        .change(ChangeSetupRequest {
+            operation_id: operation,
+            ..w.first(request(R1), planned.clone())
+        })
+        .unwrap();
+    assert!(matches!(first, SetupOutcome::Recorded { .. }), "{first:?}");
+    end_the_setup(&w.service, &w.root, request(R1));
+    assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
+
+    let publish = |root: &Path, request_id: RequestId| {
+        Some(continue_setup(&w.service, root, request_id, &mut Never))
+    };
+    // The stale call: it read its row before the first call recorded.
+    let stale = w
+        .service
+        .change_setup(
+            ChangeSetupRequest {
+                operation_id: operation,
+                ..w.first(request(R1), planned)
+            },
+            &publish,
+        )
+        .unwrap();
+    assert!(ended_with_the_stored_envelope(&stale), "{stale:?}");
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM repository_setups"),
+        0,
+        "no second record"
+    );
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0
+    );
+    w.assert_primary_untouched("the stale call", &w.configuration());
+
+    // A call told the setup is recorded, with the record gone: the stored
+    // envelope, and not an operation mismatch.
+    let recorded = w
+        .service
+        .change_setup(
+            ChangeSetupRequest {
+                root: w.root.clone(),
+                operation_id: operation,
+                request_id: request(R1),
+                name: Some("origin".to_owned()),
+                planned: None,
+                recorded: true,
+            },
+            &publish,
+        )
+        .unwrap();
+    assert!(ended_with_the_stored_envelope(&recorded), "{recorded:?}");
 }
