@@ -7,7 +7,7 @@
 use std::{path::Path, time::Duration};
 
 use git2::{ErrorCode, Oid, Repository};
-use rusqlite::{Transaction, TransactionBehavior};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 
 use super::{
     channel::SetupChannel,
@@ -229,7 +229,7 @@ impl Publishing<'_> {
             Some(commit) => match self.repository.find_commit(commit) {
                 Ok(_) => {
                     let lease = self.lease()?;
-                    self.ensure_branch(commit, None)?;
+                    self.ensure_branch(commit)?;
                     drop(lease);
                     commit
                 }
@@ -423,7 +423,7 @@ impl Publishing<'_> {
             }
             .map_err(SetupError::from)
         })?;
-        self.ensure_branch(made, replacing)?;
+        self.ensure_branch(made)?;
         drop(lease);
         Ok(made)
     }
@@ -442,19 +442,29 @@ impl Publishing<'_> {
     }
 
     /// The local setup branch at `commit`: made when absent, and moved from
-    /// `replacing`, the lost commit it may still name. Any other OID is a
-    /// branch no step of ours put there.
-    fn ensure_branch(&self, commit: Oid, replacing: Option<Oid>) -> Result<(), SetupError> {
+    /// a commit whose object is missing, a lost one that a crash left it at.
+    /// Any other OID is a branch no step of ours put there.
+    fn ensure_branch(&self, commit: Oid) -> Result<(), SetupError> {
         let name = self.scope.branch_ref();
         let message = "manyhands: set up";
         match self.repository.find_reference(&name) {
             Ok(reference) => match reference.target() {
                 Some(target) if target == commit => Ok(()),
-                Some(target) if Some(target) == replacing => self
-                    .repository
-                    .reference_matching(&name, commit, true, target, message)
-                    .map(drop)
-                    .map_err(|error| self.git(error)),
+                // The branch names a commit that is not here: a lost one
+                // that a crash left it at, whether this call made the
+                // commit again or an earlier one did. Only setup
+                // operations write this ref, so it is moved.
+                Some(target)
+                    if matches!(
+                        self.repository.find_commit(target),
+                        Err(error) if error.code() == ErrorCode::NotFound
+                    ) =>
+                {
+                    self.repository
+                        .reference_matching(&name, commit, true, target, message)
+                        .map(drop)
+                        .map_err(|error| self.git(error))
+                }
                 _ => Err(SetupError::RecoveryRequired),
             },
             Err(error) if error.code() == ErrorCode::NotFound => self
@@ -489,8 +499,25 @@ impl Publishing<'_> {
         let now = self.service.clock.now().unix_timestamp();
         self.write(|tx| {
             // The request first: its scope is the registration's root.
-            finish_setup_request(tx, self.repository_id, self.record.request_id, code, now)
-                .map_err(SetupError::Registry)?;
+            let finished =
+                finish_setup_request(tx, self.repository_id, self.record.request_id, code, now)
+                    .map_err(SetupError::Registry)?;
+            if !finished {
+                // Already finished is fine. Still accepted, the guard
+                // refused it: ending the setup now would leave an accepted
+                // request with no record (R-19), so nothing is written.
+                let state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM request_records WHERE request_ulid = ?1",
+                        [self.record.request_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(RepositoryError::sqlite)?;
+                if state.as_deref() == Some(RequestState::Accepted.as_str()) {
+                    return Err(SetupError::RecoveryRequired);
+                }
+            }
             record::delete(tx, self.repository_id)?;
             if self.record.kind == SetupKind::Enable {
                 tx.execute(

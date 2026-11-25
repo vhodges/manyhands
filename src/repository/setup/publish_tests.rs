@@ -820,6 +820,28 @@ fn s2_to_s4_a_refused_setup_is_ended() {
         }
         assert_eq!(stub.log, ["fetch"], "{name}");
     }
+
+    // A request that is accepted and that the guard of `finish_accepted`
+    // refuses (its own row is not at `setup_recorded`) is not left accepted
+    // with its record gone: the ending is rolled back and the record kept.
+    let f = Fixture::new(SetupKind::Enable);
+    f.remote()
+        .find_reference(&format!("refs/heads/{PRIMARY}"))
+        .unwrap()
+        .delete()
+        .unwrap();
+    f.db()
+        .execute(
+            "UPDATE operation_records SET completed_step = 'initialization_committed'",
+            [],
+        )
+        .unwrap();
+    let mut stub = f.stub();
+    let error = f.run(&mut stub).err().unwrap();
+    assert_eq!(error.code(), ResultCode::RecoveryRequired);
+    assert!(f.record().is_some(), "the record is kept");
+    assert_eq!(f.registrations(), 1);
+    assert_eq!(f.request().state, RequestState::Accepted);
 }
 
 /// A stop before the push keeps the record, leaves the request accepted
@@ -1386,6 +1408,22 @@ fn a_lost_commit_object_is_made_again_only_while_the_remote_ref_is_absent() {
     );
     assert_eq!(f.local_ref(&branch_ref()), Some(published.commit_oid));
     assert_eq!(f.remote_ref(&branch_ref()), Some(published.commit_oid));
+
+    // A crash between recording the new commit and moving the branch: the
+    // record holds a commit whose object is there, and the branch still
+    // names the lost one. The same request moves it and publishes.
+    let f = Fixture::new(SetupKind::Enable);
+    let made = f.made_and_recorded(f.c0);
+    let path = f.root.join(".git/refs/heads/manyhands/setup");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join(SETUP), format!("{nowhere}\n")).unwrap();
+    assert!(f.git().find_commit(nowhere).is_err());
+    let mut stub = f.stub();
+    let published = f.run(&mut stub).unwrap();
+    assert_eq!(published.commit_oid, made);
+    assert_eq!(stub.log, ["observe", "push", "observe"]);
+    assert_eq!(f.local_ref(&branch_ref()), Some(made));
+    assert_eq!(f.remote_ref(&branch_ref()), Some(made));
 
     // The remote ref is present, at another commit or at the lost one: the
     // answer is `recovery_required`; nothing is made and nothing pushed.
