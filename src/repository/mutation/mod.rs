@@ -154,13 +154,16 @@ pub use dto::{
     PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
     PreviewIdentitySource, PrimaryLocalCommitsDto, PrimaryLocalCommitsType,
-    RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
-    RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SetupCancelDto, SetupCancelPreviewDto, SetupCancelType,
-    SetupForgeDto, SetupMutationDto, SetupMutationType, SetupPollDto, SetupPollType,
-    SetupPreviewDto, SynchronizationConflictMutationDto, SynchronizationConflictType,
-    SynchronizationMutationDto, TicketMutationDto,
+    PullRequestClosureAction, PullRequestClosureDto, PullRequestClosureMutationDto,
+    PullRequestClosureMutationType, PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
+    PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataDto,
+    PullRequestLinkDataType, RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto,
+    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SetupCancelDto, SetupCancelPreviewDto,
+    SetupCancelType, SetupForgeDto, SetupMutationDto, SetupMutationType, SetupPollDto,
+    SetupPollType, SetupPreviewDto, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};

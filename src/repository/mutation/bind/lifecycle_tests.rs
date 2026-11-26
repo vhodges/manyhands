@@ -1,6 +1,9 @@
 use super::super::super::{identity::RequestId, progress::Session};
 use super::*;
-use crate::repository::{ItemDtoKind, RepositoryError, RepositoryErrorKind, RepositoryOperation};
+use crate::repository::{
+    ConflictNextAction, ItemDtoKind, LifecyclePathChangeDto, LifecyclePathChangeKind,
+    RepositoryError, RepositoryErrorKind, RepositoryOperation,
+};
 
 fn reached(publication: PromotionPublication, cleanup: PromotionCleanup) -> Reached {
     Reached {
@@ -310,7 +313,7 @@ fn accepted() -> Accepted {
 fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
     use crate::repository::{BranchAnswer, BranchClosureOutcome};
     let data = tempfile::tempdir().unwrap();
-    let _service = RepositoryService::open_at(data.path()).unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
     let binding = LifecycleBinding::<Fixed> {
         root: PathBuf::from("/nowhere"),
         id: ITEM.parse().unwrap(),
@@ -323,7 +326,7 @@ fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
         oid: git2::Oid::zero(),
     };
     let outcome = |answer| BranchClosureOutcome::for_testing(answer, None, Some(published));
-    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::Published), true);
+    let ran = binding.branch_reached(&service, &accepted, &outcome(BranchAnswer::Published), true);
     assert_eq!(ran.answer.code, ResultCode::DiscoveryPending);
     assert!(matches!(ran.standing, Standing::Owed));
     assert_eq!(
@@ -333,15 +336,704 @@ fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
         )]
     );
     // The same answer with its index done is final, and offers nothing.
-    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::Published), false);
+    let ran = binding.branch_reached(
+        &service,
+        &accepted,
+        &outcome(BranchAnswer::Published),
+        false,
+    );
     assert_eq!(ran.answer.code, ResultCode::Ok);
     assert!(matches!(ran.standing, Standing::Final));
     assert!(ran.answer.recovery.is_empty());
     // Another answer keeps its code, and is final: its record is finished.
-    let ran = binding.branch_reached(&accepted, &outcome(BranchAnswer::TicketClosed), true);
+    let ran = binding.branch_reached(
+        &service,
+        &accepted,
+        &outcome(BranchAnswer::TicketClosed),
+        true,
+    );
     assert_eq!(ran.answer.code, ResultCode::TicketClosed);
     assert!(matches!(ran.standing, Standing::Final));
     assert!(ran.answer.recovery.is_empty());
+}
+
+/// A registered Git repository, and the link row its ticket was given.
+struct Registered {
+    _data: tempfile::TempDir,
+    root: tempfile::TempDir,
+    service: RepositoryService,
+}
+
+impl Registered {
+    fn new(link: bool) -> Self {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        git2::Repository::init(root.path()).unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let scope =
+            crate::repository::mutation::identity::ScopeKey::for_repository(root.path()).unwrap();
+        let db =
+            rusqlite::Connection::open(data.path().join(crate::repository::REGISTRY_FILE)).unwrap();
+        db.execute(
+            "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+            [scope.as_str()],
+        )
+        .unwrap();
+        if link {
+            let id: i64 = db
+                .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+                .unwrap();
+            crate::repository::pull_request_links::upsert_link(
+                &db,
+                id,
+                "ticket",
+                ITEM,
+                &crate::forge::PullRequestLink {
+                    source: format!("manyhands/ticket/{ITEM}"),
+                    target: "main".to_owned(),
+                    forge: Some(crate::canonical::ForgeKind::Github),
+                    url: Some("https://forge.example/new".to_owned()),
+                },
+                1,
+            )
+            .unwrap();
+        }
+        Self {
+            _data: data,
+            root,
+            service,
+        }
+    }
+
+    fn binding(&self) -> LifecycleBinding<Fixed> {
+        LifecycleBinding::<Fixed> {
+            root: self.root.path().to_owned(),
+            id: ITEM.parse().unwrap(),
+            expected: None,
+            closure_exists: false,
+            verb: PhantomData,
+        }
+    }
+
+    fn accepted(&self) -> Accepted {
+        Accepted {
+            scope: crate::repository::mutation::identity::ScopeKey::for_repository(
+                self.root.path(),
+            )
+            .unwrap(),
+            ..accepted()
+        }
+    }
+}
+
+/// A completed branch record answers with the branch record's own shape (design
+/// Part H): effects with no integration or cleanup, whatever its action; data
+/// that is the pull-request closure's, with the closure it recorded or kept or
+/// withdrew, the commit it made, how its branch was published, what a new
+/// branch retired and the link record's link; and no made-ready report, which
+/// a closure that is not closed has none of. An answer that is not one of the
+/// design's five carries no data.
+#[test]
+fn a_branch_record_answers_its_own_shape() {
+    use crate::repository::{
+        BranchAnswer as A, BranchClosureOutcome, BranchRecording as R, ClosureAction,
+    };
+    let oid = |text: &str| git2::Oid::from_str(&text.repeat(40)).unwrap();
+    let published = PromotionPublication::Published { oid: oid("b") };
+    let at = Some("2026-11-25T10:00:00Z");
+    let registered = Registered::new(true);
+    let binding = registered.binding();
+    let accepted = registered.accepted();
+    let ran = |outcome: BranchClosureOutcome| {
+        binding.branch_reached(&registered.service, &accepted, &outcome, false)
+    };
+    let data_of = |ran: &Ran| match &ran.answer.data {
+        Some(MutationDataDto::PullRequestClosure(data)) => Some(data.as_ref().clone()),
+        None => None,
+        other => panic!("not a branch record's data: {other:?}"),
+    };
+    let link = crate::repository::PullRequestDto {
+        source: format!("manyhands/ticket/{ITEM}"),
+        target: "main".to_owned(),
+        forge: Some("github".to_owned()),
+        url: Some("https://forge.example/new".to_owned()),
+    };
+
+    // A close that recorded its closure and published it.
+    let recorded =
+        ran(
+            BranchClosureOutcome::for_testing(A::Published, Some(oid("a")), Some(published))
+                .for_testing_with(ClosureAction::Close, R::Recorded, at, None),
+        );
+    assert_eq!(recorded.answer.code, ResultCode::Ok);
+    assert!(matches!(recorded.standing, Standing::Final));
+    let effects = &recorded.answer.effects;
+    assert_eq!(effects.write, crate::results::WriteEffect::Written);
+    assert_eq!(effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(effects.publication, PublicationEffect::Published);
+    assert_eq!(effects.commit_oid, Some(oid("b").to_string()));
+    // Nothing reached primary, so nothing integrated or cleaned up.
+    assert_eq!(effects.integration, IntegrationEffect::NotRequested);
+    assert_eq!(effects.cleanup, CleanupEffect::NotRequested);
+    let data = data_of(&recorded).expect("a close that recorded reports");
+    assert_eq!(
+        data.action,
+        crate::repository::PullRequestClosureAction::Close
+    );
+    assert_eq!(
+        data.closure,
+        crate::repository::PullRequestClosureDto {
+            recording: crate::repository::PullRequestClosureRecording::Recorded,
+            closed_at: at.map(str::to_owned),
+        }
+    );
+    assert_eq!(data.checkpoint_oid, Some(oid("a").to_string()));
+    assert_eq!(
+        data.publication,
+        Some(crate::repository::PullRequestClosurePublication::Published)
+    );
+    assert_eq!(data.retired_context, None);
+    assert_eq!(data.pull_request, Some(link.clone()));
+    assert!(data.blockers.is_empty());
+    // The data serializes with no made-ready report and no `closed_by`.
+    let json = serde_json::to_value(&data).unwrap();
+    for key in ["made_ready", "made_ready_state", "closed_by", "integration"] {
+        assert!(
+            json.get(key).is_none() && json["closure"].get(key).is_none(),
+            "{key}"
+        );
+    }
+
+    // A new branch that retired its old context, found the remote current,
+    // and kept the closure the old context held.
+    let retired = oid("c");
+    let new_branch = ran(BranchClosureOutcome::for_testing(
+        A::Published,
+        Some(oid("a")),
+        Some(PromotionPublication::AlreadyCurrent { oid: oid("b") }),
+    )
+    .for_testing_with(ClosureAction::NewBranch, R::Existing, at, Some(retired)));
+    let data = data_of(&new_branch).unwrap();
+    assert_eq!(
+        data.action,
+        crate::repository::PullRequestClosureAction::NewBranch
+    );
+    assert_eq!(
+        data.closure.recording,
+        crate::repository::PullRequestClosureRecording::Existing
+    );
+    assert_eq!(data.retired_context, Some(retired.to_string()));
+    assert_eq!(
+        data.publication,
+        Some(crate::repository::PullRequestClosurePublication::Current)
+    );
+    assert_eq!(
+        new_branch.answer.effects.publication,
+        PublicationEffect::Current
+    );
+
+    // A withdraw reports the link record as it stands, and no closure time.
+    let withdrawn =
+        ran(
+            BranchClosureOutcome::for_testing(A::Withdrawn, Some(oid("a")), Some(published))
+                .for_testing_with(ClosureAction::Withdraw, R::Withdrawn, None, None),
+        );
+    assert_eq!(withdrawn.answer.code, ResultCode::Ok);
+    let data = data_of(&withdrawn).unwrap();
+    assert_eq!(
+        data.action,
+        crate::repository::PullRequestClosureAction::Withdraw
+    );
+    assert_eq!(
+        data.closure,
+        crate::repository::PullRequestClosureDto {
+            recording: crate::repository::PullRequestClosureRecording::Withdrawn,
+            closed_at: None,
+        }
+    );
+    assert_eq!(data.pull_request, Some(link));
+
+    // Each answer the design gives data to, and the ones it does not.
+    for (answer, code, data_named, blockers) in [
+        (A::Existing, ResultCode::AlreadyClosing, true, vec![]),
+        (A::AlreadyApplied, ResultCode::AlreadyApplied, true, vec![]),
+        (
+            A::RemoteBranchDeleted,
+            ResultCode::RemoteBranchDeleted,
+            true,
+            vec![],
+        ),
+        (A::TicketClosed, ResultCode::TicketClosed, true, vec![]),
+        (
+            A::AlreadyClosed,
+            ResultCode::TicketClosed,
+            true,
+            vec![LifecycleBlocker::AlreadyClosed],
+        ),
+        (A::ExternalChange, ResultCode::ExternalChange, false, vec![]),
+        (
+            A::RemoteChanged,
+            ResultCode::RecoveryRequired,
+            false,
+            vec![],
+        ),
+    ] {
+        let ran = ran(BranchClosureOutcome::for_testing(answer, None, None));
+        assert_eq!(ran.answer.code, code, "{answer:?}");
+        let data = data_of(&ran);
+        assert_eq!(data.is_some(), data_named, "{answer:?}");
+        if let Some(data) = data {
+            assert_eq!(data.blockers, blockers, "{answer:?}");
+            assert_eq!(data.publication, None, "{answer:?}");
+            assert_eq!(data.checkpoint_oid, None, "{answer:?}");
+        }
+    }
+
+    // An item with no link record reports none.
+    let bare = Registered::new(false);
+    let bare_binding = bare.binding();
+    let ran = bare_binding.branch_reached(
+        &bare.service,
+        &bare.accepted(),
+        &BranchClosureOutcome::for_testing(A::Published, Some(oid("a")), Some(published))
+            .for_testing_with(ClosureAction::Close, R::Recorded, at, None),
+        false,
+    );
+    assert_eq!(data_of(&ran).unwrap().pull_request, None);
+}
+
+/// A parent of the given path whose children are the given operations.
+fn parent_of(
+    path: RecordPath,
+    step: ParentStep,
+    checkpoint: Option<git2::Oid>,
+    children: [Option<OperationId>; 2],
+) -> ParentView<LifecycleBlocker> {
+    ParentView {
+        step,
+        refusal: None,
+        expectation: [0; 32],
+        item_id: ITEM.parse().unwrap(),
+        checkpoint,
+        integration: None,
+        integration_kind: None,
+        publication: None,
+        cancel_requested: false,
+        children,
+        path,
+        answered: false,
+    }
+}
+
+/// What a stopped branch record shows of its effects (design R-5): the
+/// closure commit it made on the context's branch is written and committed
+/// once the context holds it, and what its publication child pushed is
+/// published; nothing integrated or cleaned up. A direct close's stop shows
+/// neither the write nor a second child's push, which it has no use for.
+#[test]
+fn a_stopped_branch_record_shows_what_it_wrote_and_its_publication_pushed() {
+    use crate::repository::{
+        RemoteRefPlan, RemoteReservationOutcome, SynchronizationTarget, remote::state,
+    };
+    let registered = Registered::new(false);
+    let root = registered.root.path();
+    let repository = git2::Repository::open(root).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    let tree = repository
+        .find_tree(repository.index().unwrap().write_tree().unwrap())
+        .unwrap();
+    let first = repository
+        .commit(Some("HEAD"), &signature, &signature, "first", &tree, &[])
+        .unwrap();
+    let closure = repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "closure",
+            &tree,
+            &[&repository.find_commit(first).unwrap()],
+        )
+        .unwrap();
+    repository
+        .reference(
+            &format!("refs/heads/manyhands/ticket/{ITEM}"),
+            closure,
+            false,
+            "context",
+        )
+        .unwrap();
+    // The publication child's row says its push was accepted at the commit.
+    let scope = crate::repository::mutation::identity::ScopeKey::for_repository(root).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&registered.service, Path::new(scope.as_str()), |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+    };
+    let publication = OperationId::new();
+    let owner = match registered
+        .service
+        .reserve_remote_operation(
+            Path::new(scope.as_str()),
+            publication,
+            &target.operation_target(&plan),
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    drop(owner);
+    let db = rusqlite::Connection::open(
+        registered
+            ._data
+            .path()
+            .join(crate::repository::REGISTRY_FILE),
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE remote_operation_records
+            SET sync_checkpoint = 'push_verified', push_oid = ?2
+          WHERE operation_ulid = ?1",
+        [publication.to_string(), closure.to_string()],
+    )
+    .unwrap();
+    let effects = |path, step, children| {
+        parent_effects(
+            &AuthoringKind::Ticket,
+            &registered.service,
+            root,
+            Some("refs/heads/main"),
+            &parent_of(path, step, Some(closure), children),
+        )
+    };
+    let stopped = effects(
+        RecordPath::Branch,
+        ParentStep::PublicationPending,
+        [None, Some(publication)],
+    );
+    assert_eq!(stopped.write, crate::results::WriteEffect::Written);
+    assert_eq!(stopped.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(stopped.publication, PublicationEffect::Published);
+    assert_eq!(stopped.commit_oid, Some(closure.to_string()));
+    assert_eq!(stopped.integration, IntegrationEffect::NotRequested);
+    assert_eq!(stopped.cleanup, CleanupEffect::NotRequested);
+    // The same, with its closure written and nothing pushed yet.
+    let unpushed = effects(
+        RecordPath::Branch,
+        ParentStep::PublicationPending,
+        [None, Some(OperationId::new())],
+    );
+    assert_eq!(unpushed.write, crate::results::WriteEffect::Written);
+    assert_eq!(unpushed.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(unpushed.publication, PublicationEffect::NotRequested);
+    // A record that has written nothing says nothing of its own.
+    let nothing = parent_effects(
+        &AuthoringKind::Ticket,
+        &registered.service,
+        root,
+        Some("refs/heads/main"),
+        &parent_of(
+            RecordPath::Branch,
+            ParentStep::ContextSynchronized,
+            None,
+            [None, None],
+        ),
+    );
+    assert_eq!(nothing.write, crate::results::WriteEffect::NotRequested);
+    assert_eq!(nothing.checkpoint, CheckpointEffect::NotRequested);
+    // A direct close, before it integrates, shows its checkpoint and not a
+    // write, and does not read a second child.
+    let direct = effects(
+        RecordPath::Direct,
+        ParentStep::Confirmed,
+        [None, Some(publication)],
+    );
+    assert_eq!(direct.write, crate::results::WriteEffect::NotRequested);
+    assert_eq!(direct.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(direct.publication, PublicationEffect::NotRequested);
+}
+
+/// What `stopped` answers `stop` with, the parent being a branch record at
+/// `step` that has written nothing.
+fn branch_stopped_with(step: ParentStep, stop: Stop) -> Ran {
+    let id: ItemId = ITEM.parse().unwrap();
+    PARENT.with(|parent| {
+        *parent.borrow_mut() = Some(parent_of(RecordPath::Branch, step, None, [None, None]));
+    });
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let binding = LifecycleBinding::<Fixed> {
+        root: PathBuf::from("/nowhere"),
+        id,
+        expected: None,
+        closure_exists: false,
+        verb: PhantomData,
+    };
+    binding.stopped(&service, &accepted(), stop, true)
+}
+
+/// A child of a branch record that stops answers as `item sync` answers
+/// that stop (design R-5): its code, and its data, which is the host that is
+/// not trusted, the conflict's next step, or none. A closure's report of the
+/// tickets it made ready is not made, since the record closed nothing. A
+/// direct close's child that stops keeps the lifecycle's own data.
+#[test]
+fn a_branch_record_s_child_stop_carries_the_synchronization_s_data() {
+    use crate::repository::{
+        SynchronizationError, SynchronizationStage, SynchronizationTarget,
+        transport::{
+            HostKeyIdentity, SshAuthority, SshDirection, SshTransportError, SshTransportErrorKind,
+        },
+    };
+    let host = || {
+        Stop::ContextSynchronization(Box::new(SynchronizationError::Transport(
+            SshTransportError {
+                root: PathBuf::from("/nowhere"),
+                remote_name: "origin".into(),
+                direction: SshDirection::Fetch,
+                selected_key_id: None,
+                authority: Some(SshAuthority {
+                    host: "example.invalid".into(),
+                    port: 22,
+                }),
+                kind: SshTransportErrorKind::HostApprovalRequired {
+                    presented: HostKeyIdentity {
+                        algorithm: "ssh-ed25519".into(),
+                        sha256: "SHA256:abc".into(),
+                    },
+                },
+            },
+        )))
+    };
+    let conflicted = OperationId::new();
+    let conflict = || {
+        Stop::ContextSynchronization(Box::new(SynchronizationError::ConflictPending {
+            target: SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: ITEM.parse().unwrap(),
+            },
+            operation_id: conflicted,
+            stage: SynchronizationStage::Context,
+        }))
+    };
+
+    let ran = branch_stopped_with(ParentStep::PublicationPending, host());
+    assert_eq!(ran.answer.code, ResultCode::HostApprovalRequired);
+    assert!(matches!(ran.standing, Standing::Owed));
+    let Some(MutationDataDto::Synchronization(data)) = &ran.answer.data else {
+        panic!("{:?}", ran.answer.data)
+    };
+    assert_eq!(data.authority(), "example.invalid:22");
+    assert_eq!(data.presented_fingerprint, "SHA256:abc");
+
+    let ran = branch_stopped_with(ParentStep::ContextSynchronized, conflict());
+    assert_eq!(ran.answer.code, ResultCode::RecoveryRequired);
+    let Some(MutationDataDto::SynchronizationConflict(data)) = &ran.answer.data else {
+        panic!("{:?}", ran.answer.data)
+    };
+    assert_eq!(data.conflict.operation_id, conflicted.to_string());
+    // A conflict that cannot be inspected is repaired outside Manyhands.
+    assert_eq!(
+        data.conflict.next_action,
+        ConflictNextAction::ExternalRepair
+    );
+
+    // A stop that names nothing carries nothing: no made-ready report either.
+    let ran = branch_stopped_with(ParentStep::PublicationPending, Stop::Busy);
+    assert_eq!(ran.answer.code, ResultCode::Busy);
+    assert!(ran.answer.data.is_none());
+    assert!(matches!(ran.standing, Standing::Owed));
+
+    // What stands in the way of a branch record's step is named as a blocked
+    // prepare names it.
+    let ran = branch_stopped_with(
+        ParentStep::ContextSynchronized,
+        Stop::Blocked(vec![LifecycleBlocker::ContextDirty]),
+    );
+    let Some(MutationDataDto::Lifecycle(data)) = &ran.answer.data else {
+        panic!("{:?}", ran.answer.data)
+    };
+    assert_eq!(data.blockers, [LifecycleBlocker::ContextDirty]);
+
+    // A direct close's child that stops keeps the lifecycle's data.
+    let ran = stopped_with(ParentStep::Confirmed, None, host());
+    assert!(matches!(
+        ran.answer.data,
+        Some(MutationDataDto::Lifecycle(_))
+    ));
+}
+
+/// A pull-request close's preview (design Part H): the effects of each
+/// action in the order the record makes them, and the details a branch record
+/// shows: its action, the commits it starts from, the closure with its
+/// `closed_by`, what a new branch retires and the unheld paths, and the link
+/// a close gives (a withdraw gives none).
+#[test]
+fn a_branch_record_previews_its_own_effects_and_details() {
+    use crate::repository::{ClosureAction as Action, PlannedCleanup, PreviewEffect as E};
+    let oid = |text: &str| git2::Oid::from_str(&text.repeat(40)).unwrap();
+    let record = |closed_by: &str| PlannedClosure::Record {
+        closed_by: closed_by.to_owned(),
+    };
+    let kept = PlannedClosure::Existing {
+        closed_at: "2026-11-25T10:00:00Z".to_owned(),
+        closed_by: "A <a@example.invalid>".to_owned(),
+    };
+    let ready = |action, context_child, cleanup: (bool, bool), retired, unheld| Ready {
+        expected: [0; 32],
+        branch: format!("refs/heads/manyhands/ticket/{ITEM}"),
+        primary_branch: "main".to_owned(),
+        remote: Some("origin".to_owned()),
+        context_oid: oid("1"),
+        primary_oid: oid("2"),
+        context_child,
+        changes: Vec::new(),
+        integration: PlannedIntegration::MergeCommit,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            worktree: cleanup.0,
+            local_branch: cleanup.1,
+            remote_branch: false,
+        },
+        closure: None,
+        record: Some(BranchReady {
+            action,
+            context_oid: Some(oid("1")),
+            tracking_primary: Some(oid("3")),
+            retired_oid: retired,
+            unheld,
+        }),
+    };
+    for (action, closure, context_child, cleanup, expected) in [
+        (
+            Action::Close,
+            record("A <a@example.invalid>"),
+            true,
+            (false, false),
+            vec![
+                E::ContextSynchronized,
+                E::ClosureRecorded,
+                E::ContextPublished,
+                E::PullRequestLink,
+            ],
+        ),
+        (
+            Action::Close,
+            kept.clone(),
+            true,
+            (false, false),
+            vec![E::ContextSynchronized, E::PullRequestLink],
+        ),
+        (
+            Action::Withdraw,
+            kept.clone(),
+            true,
+            (false, false),
+            vec![
+                E::ContextSynchronized,
+                E::ClosureWithdrawn,
+                E::ContextPublished,
+            ],
+        ),
+        (
+            Action::NewBranch,
+            record("A <a@example.invalid>"),
+            false,
+            (true, true),
+            vec![
+                E::WorktreeRemoved,
+                E::BranchDeleted,
+                E::ContextCreated,
+                E::ClosureRecorded,
+                E::ContextPublished,
+                E::PullRequestLink,
+            ],
+        ),
+        (
+            Action::NewBranch,
+            kept.clone(),
+            false,
+            (false, false),
+            vec![E::ContextCreated, E::ContextPublished, E::PullRequestLink],
+        ),
+    ] {
+        let ready = ready(action, context_child, cleanup, None, Vec::new());
+        assert_eq!(
+            branch_effects(&ready, action, &closure),
+            expected,
+            "{action:?}"
+        );
+    }
+
+    let item: ItemId = ITEM.parse().unwrap();
+    let link = crate::forge::PullRequestLink {
+        source: format!("manyhands/ticket/{ITEM}"),
+        target: "main".to_owned(),
+        forge: None,
+        url: Some("https://forge.example/new".to_owned()),
+    };
+    let unheld = vec![LifecyclePathChangeDto {
+        path: "docs/notes.md".to_owned(),
+        change: LifecyclePathChangeKind::Added,
+    }];
+    let new_branch = ready(
+        Action::NewBranch,
+        false,
+        (true, true),
+        Some(oid("1")),
+        unheld.clone(),
+    );
+    let details = branch_preview(
+        "/repository",
+        &item,
+        Some("mh-1".to_owned()),
+        &new_branch,
+        new_branch.record.as_ref().unwrap(),
+        &record("A <a@example.invalid>"),
+        Some(link.clone()),
+    );
+    assert_eq!(details.action, PullRequestClosureAction::NewBranch);
+    assert_eq!(details.slug.as_deref(), Some("mh-1"));
+    assert_eq!(details.branch, format!("manyhands/ticket/{ITEM}"));
+    assert_eq!(details.context_oid, Some(oid("1").to_string()));
+    assert_eq!(details.tracking_primary_oid, Some(oid("3").to_string()));
+    assert_eq!(details.retired_context, Some(oid("1").to_string()));
+    assert_eq!(details.unheld, unheld);
+    assert_eq!(
+        details.closure,
+        LifecyclePlannedClosureDto {
+            recording: LifecycleRecording::Record,
+            closed_by: "A <a@example.invalid>".to_owned()
+        }
+    );
+    assert_eq!(
+        details.pull_request,
+        Some(crate::repository::PullRequestDto::from(&link))
+    );
+    // A kept closure is shown as existing, with its `closed_by`; a withdraw
+    // gives no link.
+    let withdraw = ready(Action::Withdraw, true, (false, false), None, Vec::new());
+    let details = branch_preview(
+        "/repository",
+        &item,
+        None,
+        &withdraw,
+        withdraw.record.as_ref().unwrap(),
+        &kept,
+        Some(link),
+    );
+    assert_eq!(details.action, PullRequestClosureAction::Withdraw);
+    assert_eq!(details.closure.recording, LifecycleRecording::Existing);
+    assert_eq!(details.closure.closed_by, "A <a@example.invalid>");
+    assert_eq!(details.pull_request, None);
+    assert_eq!(details.retired_context, None);
+    let json = serde_json::to_value(&details).unwrap();
+    assert_eq!(json["type"], "pull_request_closure_preview");
 }
 
 /// A branch record's answer gives the code of the design's table, and the

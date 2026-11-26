@@ -496,7 +496,7 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
     state::validate_schema_object(db, "INDEX", "ticket_closures_unfinished", INDEX)
 }
 /// `closed_at` exactly as stored: RFC 3339, UTC `Z`, whole seconds.
-fn closed_at_text(at: OffsetDateTime) -> Result<String, RepositoryError> {
+pub(super) fn closed_at_text(at: OffsetDateTime) -> Result<String, RepositoryError> {
     let at = at.to_offset(UtcOffset::UTC);
     if at.nanosecond() != 0 {
         return Err(state::recovery_required());

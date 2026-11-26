@@ -827,6 +827,14 @@ fn d1_records_publishes_and_completes_without_touching_the_primary() {
     assert_eq!(outcome.answer(), BranchAnswer::Published);
     assert_eq!(outcome.action(), ClosureAction::Close);
     assert_eq!(outcome.checkpoint_oid(), Some(closure));
+    // What the binding reports of the record: it wrote the closure, at the
+    // clock's time, and retired nothing.
+    assert_eq!(outcome.recording(), BranchRecording::Recorded);
+    assert_eq!(
+        outcome.closed_at(),
+        Some(record::closed_at_text(clock()).unwrap().as_str())
+    );
+    assert_eq!(outcome.retired_oid(), None);
     assert_eq!(
         outcome.publication(),
         Some(PromotionPublication::Published { oid: closure })
@@ -866,6 +874,10 @@ fn d2_an_existing_closure_publishes_pending_work_and_is_already_closing() {
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Existing);
     assert_eq!(outcome.checkpoint_oid(), None);
+    // It kept the closure the context held: that is not one it wrote, and
+    // the record holds no time of its own for it.
+    assert_eq!(outcome.recording(), BranchRecording::Existing);
+    assert_eq!(outcome.closed_at(), None);
     assert_eq!(
         outcome.publication(),
         Some(PromotionPublication::Published { oid: held })
@@ -899,6 +911,9 @@ fn d3_a_closure_the_context_child_brings_in_abandons_as_already_closing() {
     assert_eq!(outcome.answer(), BranchAnswer::AlreadyClosing);
     assert_eq!(outcome.checkpoint_oid(), None);
     assert_eq!(outcome.publication(), None);
+    // An abandoned record did nothing to the closure.
+    assert_eq!(outcome.recording(), BranchRecording::Nothing);
+    assert_eq!(outcome.closed_at(), None);
     assert_eq!(p.f.commits_in_odb(&close_subject()), 0);
     // The context is as the child left it: it holds the closure, whole.
     let held = parse_ticket(&support::tree_bytes(
@@ -3112,6 +3127,8 @@ fn w1_a_withdraw_publishes_and_reopens_in_either_mode() {
         assert_eq!(outcome.answer(), BranchAnswer::Withdrawn, "{case}");
         assert_eq!(outcome.action(), ClosureAction::Withdraw, "{case}");
         assert_eq!(outcome.checkpoint_oid(), Some(w), "{case}");
+        assert_eq!(outcome.recording(), BranchRecording::Withdrawn, "{case}");
+        assert_eq!(outcome.closed_at(), None, "{case}");
         assert_eq!(
             outcome.publication(),
             Some(PromotionPublication::Published { oid: w }),
@@ -4725,6 +4742,13 @@ fn f3_a_ticket_with_no_context_never_published_gets_a_new_branch() {
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Published);
     assert_eq!(outcome.action(), ClosureAction::NewBranch);
+    assert_eq!(outcome.recording(), BranchRecording::Recorded);
+    assert_eq!(
+        outcome.closed_at(),
+        Some(record::closed_at_text(clock()).unwrap().as_str())
+    );
+    // Nothing was retired, so the answer names nothing retired.
+    assert_eq!(outcome.retired_oid(), None);
     let r = p.stored(&req);
     assert_eq!(r.step, ClosureStep::Complete);
     assert_eq!(r.answer_code, Some(BranchAnswer::Published));
@@ -5301,6 +5325,8 @@ fn f1_a_merged_old_context_is_retired_and_its_closure_is_the_new_branch_s_only_c
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Published);
     assert_eq!(outcome.action(), ClosureAction::NewBranch);
+    // The answer names the commit the retirement retired.
+    assert_eq!(outcome.retired_oid(), Some(old));
     // The stale ref was deleted by the retirement, not left to the
     // publication's own write.
     assert!(gone.get());

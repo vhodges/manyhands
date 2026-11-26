@@ -248,14 +248,14 @@ impl fmt::Debug for PlannedClosure {
 /// What a new branch (Part F) retires and leaves behind, as its observation
 /// read it. The digest binds all of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in super::super) struct NewBranchFacts {
+pub(super) struct NewBranchFacts {
     /// The old context's tip `T`; none when the ticket has no context.
-    pub(in super::super) old_tip: Option<Oid>,
+    pub(super) old_tip: Option<Oid>,
     /// What step 2 retires: `T`, or for no context the remote history's
     /// last published commit; none when nothing is retired.
-    pub(in super::super) retired_oid: Option<Oid>,
+    pub(super) retired_oid: Option<Oid>,
     /// What the old tip holds that the tracking primary lacks (R-19).
-    pub(in super::super) unheld: Vec<UnheldEntry>,
+    pub(super) unheld: Vec<UnheldEntry>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -331,6 +331,11 @@ impl TicketClosurePreview {
     /// close)` is today's closure, any other pair a branch record.
     pub fn path(&self) -> (Integration, ClosureAction) {
         self.path
+    }
+    /// A new branch's old tip, retirement and unheld entries; `None` for
+    /// every other path.
+    pub(super) fn new_branch(&self) -> Option<&NewBranchFacts> {
+        self.new_branch.as_ref()
     }
 }
 impl fmt::Debug for TicketClosurePreview {
@@ -448,6 +453,17 @@ impl TicketClosureOutcome {
     }
 }
 
+/// What a finished branch record did with the closure: wrote one, kept the
+/// one the ticket held, removed it, or wrote nothing (it was abandoned, or
+/// answered before it got to the closure).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BranchRecording {
+    Recorded,
+    Existing,
+    Withdrawn,
+    Nothing,
+}
+
 /// A branch record's answer: a pull-request close never reaches the primary,
 /// so it has no integration or cleanup to report. `Debug` shows IDs, OIDs and
 /// categories only.
@@ -458,6 +474,12 @@ pub struct BranchClosureOutcome {
     answer: BranchAnswer,
     checkpoint_oid: Option<Oid>,
     publication: Option<PromotionPublication>,
+    recording: BranchRecording,
+    /// The closure's own timestamp, as the record stored it, for a record
+    /// that completed holding one.
+    closed_at: Option<String>,
+    /// What a new branch retired of the old context, for one that completed.
+    retired_oid: Option<Oid>,
 }
 impl BranchClosureOutcome {
     pub fn operation_id(&self) -> OperationId {
@@ -482,7 +504,25 @@ impl BranchClosureOutcome {
             answer,
             checkpoint_oid,
             publication,
+            recording: BranchRecording::Nothing,
+            closed_at: None,
+            retired_oid: None,
         }
+    }
+    /// The same outcome, as the action and the closure's parts a test names.
+    #[cfg(test)]
+    pub(in super::super) fn for_testing_with(
+        mut self,
+        action: ClosureAction,
+        recording: BranchRecording,
+        closed_at: Option<&str>,
+        retired_oid: Option<Oid>,
+    ) -> Self {
+        self.action = action;
+        self.recording = recording;
+        self.closed_at = closed_at.map(str::to_owned);
+        self.retired_oid = retired_oid;
+        self
     }
     /// The commit the record wrote on the context, for a record that
     /// completed having written one: none for an abandoned record, which
@@ -493,6 +533,20 @@ impl BranchClosureOutcome {
     /// The publication child's result, when that child completed.
     pub fn publication(&self) -> Option<PromotionPublication> {
         self.publication
+    }
+    /// What the record did with the closure.
+    pub fn recording(&self) -> BranchRecording {
+        self.recording
+    }
+    /// The closure's `closed_at`, exactly as the record stored it: RFC 3339,
+    /// UTC, whole seconds. None for a record that wrote or kept no closure
+    /// of its own.
+    pub fn closed_at(&self) -> Option<&str> {
+        self.closed_at.as_deref()
+    }
+    /// The commit a new branch retired of the old context.
+    pub fn retired_oid(&self) -> Option<Oid> {
+        self.retired_oid
     }
 }
 

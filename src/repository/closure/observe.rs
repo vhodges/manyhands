@@ -856,6 +856,33 @@ pub(in super::super) fn file_closure(bytes: &[u8]) -> FileClosure {
     }
 }
 
+/// Whether the ticket in `commit` holds a closure that no primary holds: a
+/// provisional one, which makes the ticket closing. `primaries` are the
+/// primary's tips this clone has (its own branch and the remote's tracking
+/// ref). A primary whose ticket names a closure key, however malformed, is
+/// not open, and a commit that cannot be read holds none: neither is
+/// provisional.
+pub(in super::super) fn holds_provisional_closure(
+    repo: &git2::Repository,
+    item: &ItemId,
+    commit: Oid,
+    primaries: &[Oid],
+) -> bool {
+    let path = ticket_path(item);
+    let closure_in = |commit: Oid| -> Option<FileClosure> {
+        let tree = repo.find_commit(commit).ok()?.tree().ok()?;
+        Some(match tree.get_path(&path) {
+            Ok(entry) => file_closure(repo.find_blob(entry.id()).ok()?.content()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => FileClosure::Open,
+            Err(_) => return None,
+        })
+    };
+    matches!(closure_in(commit), Some(FileClosure::Closed { .. }))
+        && primaries
+            .iter()
+            .all(|primary| matches!(closure_in(*primary), Some(FileClosure::Open)))
+}
+
 /// D1: the pre-closure result holds exactly one conforming ticket at its
 /// canonical path, as a regular Blob, and no `.manyhands/worktrees/` entry.
 fn result_ticket(

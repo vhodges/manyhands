@@ -267,8 +267,10 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
                 route.next.push(resume_line(root, &operation_id));
             }
             // C2's actions say these, or (`RepairOutside`) nothing does; the
-            // rest are a prepare's.
+            // rest are a prepare's. A branch record's new request is worded
+            // with its verb (Task 11).
             LifecycleWayOut::SendAgain
+            | LifecycleWayOut::PrepareAgain
             | LifecycleWayOut::Inspect
             | LifecycleWayOut::RepairOutside
             | LifecycleWayOut::RetryRequest { .. }
@@ -340,6 +342,7 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
             | LifecycleWayOut::ResumeOperation { .. }
             | LifecycleWayOut::ResolveChildConflict { .. }
             | LifecycleWayOut::Republish { .. }
+            | LifecycleWayOut::PrepareAgain
             | LifecycleWayOut::RepairOutside => {}
         }
     }

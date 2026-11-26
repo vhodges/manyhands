@@ -663,6 +663,128 @@ fn an_unknown_remote_context_polls_once() {
     );
 }
 
+/// A pull-request close's prepare that finds a remote ticket branch neither
+/// primary holds (design F5) has the poll for its way out, as an unknown
+/// published context does, and `repo sync` beside it when primary is ahead.
+/// It pins what the blocker's place in the tracking set already gives.
+#[test]
+fn a_branch_record_s_unmaterialized_context_polls_once() {
+    use LifecycleBlocker::{ContextMissing, PrimaryAheadOfRemote, RemoteContextUnmaterialized};
+    for (blockers, expected) in [
+        (vec![RemoteContextUnmaterialized], vec![PollOnce, Inspect]),
+        (
+            vec![RemoteContextUnmaterialized, ContextMissing],
+            vec![PollOnce, Inspect],
+        ),
+        (
+            vec![RemoteContextUnmaterialized, PrimaryAheadOfRemote],
+            vec![PollOnce, SharePrimary, Inspect],
+        ),
+    ] {
+        assert_eq!(ticket_prepare(blockers.clone()), expected, "{blockers:?}");
+    }
+}
+
+/// What a branch record's data gives as its way out: a deleted branch's
+/// answer is a finished record's, so the way on is a new request, not the same
+/// one; a withdraw's first republishes the branch. Every other answer of its
+/// own data is the end of it. A child that stopped on a conflict is the item
+/// sync's data, routed to the conflict verbs for a close.
+#[test]
+fn a_branch_record_names_its_way_out_from_its_data() {
+    use crate::repository::{
+        PullRequestClosureAction as Action, PullRequestClosureDto, PullRequestClosureMutationDto,
+        PullRequestClosureMutationType, PullRequestClosureRecording,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
+    };
+    let branch =
+        |command: &str, code, action, recovery: Vec<RecoveryAction>| -> Envelope<MutationDataDto> {
+            let mut envelope = answer(command, code, data(ItemDtoKind::Ticket, vec![]), recovery);
+            envelope.data = Some(MutationDataDto::PullRequestClosure(Box::new(
+                PullRequestClosureMutationDto {
+                    r#type: PullRequestClosureMutationType::PullRequestClosure,
+                    action,
+                    closure: PullRequestClosureDto {
+                        recording: PullRequestClosureRecording::Nothing,
+                        closed_at: None,
+                    },
+                    checkpoint_oid: None,
+                    publication: None,
+                    retired_context: None,
+                    pull_request: None,
+                    blockers: Vec::new(),
+                },
+            )));
+            envelope
+        };
+    for (action, expected) in [
+        (Action::Close, vec![PrepareAgain, Inspect]),
+        (Action::NewBranch, vec![PrepareAgain, Inspect]),
+        (
+            Action::Withdraw,
+            vec![Republish { item_id: item() }, PrepareAgain, Inspect],
+        ),
+    ] {
+        let envelope = branch(
+            "ticket close",
+            ResultCode::RemoteBranchDeleted,
+            action,
+            vec![inspect()],
+        );
+        assert_eq!(lifecycle_way_out(&envelope), expected, "{action:?}");
+    }
+    for code in [
+        ResultCode::Ok,
+        ResultCode::AlreadyClosing,
+        ResultCode::AlreadyApplied,
+        ResultCode::TicketClosed,
+    ] {
+        let envelope = branch("ticket close", code, Action::Close, vec![inspect()]);
+        assert_eq!(lifecycle_way_out(&envelope), [Inspect], "{code:?}");
+    }
+    // No item to republish: a withdraw has no route of its own.
+    let mut nameless = branch(
+        "ticket close",
+        ResultCode::RemoteBranchDeleted,
+        Action::Withdraw,
+        vec![],
+    );
+    nameless.scope.item_id = None;
+    assert!(lifecycle_way_out(&nameless).is_empty());
+
+    // A close's child that stopped on a conflict.
+    let conflicted = |command: &str, recovery| {
+        let mut envelope = answer(
+            command,
+            ResultCode::RecoveryRequired,
+            data(ItemDtoKind::Ticket, vec![]),
+            recovery,
+        );
+        envelope.data = Some(MutationDataDto::SynchronizationConflict(
+            SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: crate::repository::ConflictNextDto {
+                    operation_id: OTHER_OPERATION.into(),
+                    next_action: crate::repository::ConflictNextAction::Resolve,
+                },
+            },
+        ));
+        envelope
+    };
+    assert_eq!(
+        lifecycle_way_out(&conflicted("ticket close", vec![retry(), inspect()])),
+        [
+            ResolveChildConflict {
+                operation_id: OPERATION.into()
+            },
+            SendAgain,
+            Inspect
+        ]
+    );
+    // The same data of any other command is none of this module's.
+    assert!(lifecycle_way_out(&conflicted("item sync", vec![retry(), inspect()])).is_empty());
+}
+
 /// Unknown from evidence is the owner's repair, which a poll can't settle;
 /// next to blockers a poll reads, the poll still comes first.
 #[test]

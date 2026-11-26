@@ -3,18 +3,21 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{canonical::ItemId, results::ResultCode};
+use crate::{
+    canonical::{Integration, ItemId},
+    results::ResultCode,
+};
 
 use super::super::super::{
     super::{
-        AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureBlocker,
-        ClosureExpectation, ClosureRecording, DocumentPromotionError, DocumentPromotionOutcome,
-        DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind,
-        OperationId, PathChange, PlannedCleanup, PlannedClosure, PlannedIntegration,
-        PlannedPublication, PreviewDocumentPromotionRequest, PreviewTicketClosureRequest,
-        PromoteDocumentRequest, PromotionBlocker, PromotionCleanup, PromotionCleanupPending,
-        PromotionExpectation, PromotionIntegration, PromotionPathChange, PromotionPublication,
-        PromotionPublicationPending, PromotionRemoteDeletionCategory,
+        AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction,
+        ClosureBlocker, ClosureExpectation, ClosureRecording, DocumentPromotionError,
+        DocumentPromotionOutcome, DocumentPromotionPreflight, DocumentPromotionPreview,
+        DocumentPromotionResult, ItemDtoKind, OperationId, PathChange, PlannedCleanup,
+        PlannedClosure, PlannedIntegration, PlannedPublication, PreviewDocumentPromotionRequest,
+        PreviewTicketClosureRequest, PromoteDocumentRequest, PromotionBlocker, PromotionCleanup,
+        PromotionCleanupPending, PromotionExpectation, PromotionIntegration, PromotionPathChange,
+        PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
         PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
@@ -46,6 +49,21 @@ pub struct TicketCloseInput {
     pub id: ItemId,
 }
 
+/// What a branch record's preview shows that a direct one does not: the
+/// action, the commits it starts from, and a new branch's retirement and
+/// unheld entries (Part H).
+pub(in super::super::super) struct BranchReady {
+    pub(super) action: ClosureAction,
+    /// The context's head: a new branch's old tip, none for a new branch
+    /// with no context.
+    pub(super) context_oid: Option<git2::Oid>,
+    pub(super) tracking_primary: Option<git2::Oid>,
+    /// What a new branch retires of the old context.
+    pub(super) retired_oid: Option<git2::Oid>,
+    /// Each path the old context holds that the primary does not.
+    pub(super) unheld: Vec<LifecyclePathChangeDto>,
+}
+
 /// What the preview of either verb shows and consents to.
 pub(in super::super::super) struct Ready {
     pub(super) expected: [u8; 32],
@@ -61,6 +79,8 @@ pub(in super::super::super) struct Ready {
     pub(super) publication: PlannedPublication,
     pub(super) cleanup: PlannedCleanup,
     pub(super) closure: Option<PlannedClosure>,
+    /// Set for a branch record's preview, which is shown as its own.
+    pub(super) record: Option<BranchReady>,
 }
 
 pub(in super::super::super) enum Observed {
@@ -239,10 +259,41 @@ fn ready_of_promotion(preview: &DocumentPromotionPreview) -> Ready {
         publication: preview.publication(),
         cleanup: preview.cleanup(),
         closure: None,
+        record: None,
     }
 }
 
 fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
+    // Every path but a direct close's is a branch record's, whose preview
+    // shows what it starts from and, for a new branch, what it retires.
+    let record = (preview.path() != (Integration::Direct, ClosureAction::Close)).then(|| {
+        let facts = preview.new_branch();
+        BranchReady {
+            action: preview.path().1,
+            context_oid: match facts {
+                Some(facts) => facts.old_tip,
+                None => Some(preview.context_oid()),
+            },
+            tracking_primary: preview.tracking_primary(),
+            retired_oid: facts.and_then(|facts| facts.retired_oid),
+            unheld: facts
+                .map(|facts| {
+                    facts
+                        .unheld
+                        .iter()
+                        .map(|entry| LifecyclePathChangeDto {
+                            path: String::from_utf8_lossy(&entry.path).replace('\\', "/"),
+                            change: match entry.change {
+                                PathChange::Added => LifecyclePathChangeKind::Added,
+                                PathChange::Modified => LifecyclePathChangeKind::Modified,
+                                PathChange::Deleted => LifecyclePathChangeKind::Deleted,
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    });
     Ready {
         expected: preview.expectation().to_bytes(),
         branch: preview.context_branch().to_owned(),
@@ -251,14 +302,20 @@ fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
         context_oid: preview.context_oid(),
         primary_oid: preview.primary_oid(),
         // As `ClosureObservation::needs_context_child`: a contained context
-        // is never synchronized, and the checkpoint is never pushed.
+        // is never synchronized, and the checkpoint is never pushed. A new
+        // branch has no context to synchronize, and nothing else of a branch
+        // record is contained: it integrates nothing.
         context_child: preview.publication_remote().is_some()
-            && preview.integration() != PlannedIntegration::AlreadyContained,
+            && match &record {
+                Some(record) => record.action != ClosureAction::NewBranch,
+                None => preview.integration() != PlannedIntegration::AlreadyContained,
+            },
         changes: preview.changes().to_vec(),
         integration: preview.integration(),
         publication: preview.publication(),
         cleanup: preview.cleanup(),
         closure: Some(preview.closure().clone()),
+        record,
     }
 }
 

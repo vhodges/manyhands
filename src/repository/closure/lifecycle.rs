@@ -2,10 +2,10 @@
 //! forwards to the closure's record, observation and checkpoint modules; the
 //! runner owns the order, the children, retry and cleanup.
 use super::{
-    BranchAnswer, BranchClosureOutcome, BranchFinish, CloseTicketRequest, ClosureAction,
-    ClosureBlocker, ClosureExpectation, ClosureOutcome, ClosureRecording, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosureResult,
-    checkpoint, new_branch,
+    BranchAnswer, BranchClosureOutcome, BranchFinish, BranchRecording, CloseTicketRequest,
+    ClosureAction, ClosureBlocker, ClosureExpectation, ClosureOutcome, ClosureRecording,
+    PlannedClosure, PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome,
+    TicketClosureResult, checkpoint, new_branch,
     observe::{self, ClosureObservation, ClosureRefusal, PreparedClosureObservation, Verb},
     record::{self, ClosureKind, ClosureRecord},
 };
@@ -650,16 +650,38 @@ impl Lifecycle for TicketClosureLifecycle {
         r: &ClosureRecord,
         publication: Option<PromotionPublication>,
     ) -> ClosureOutcome {
+        let complete = r.step == record::ClosureStep::Complete;
+        let checkpoint_oid = r.written_commit().filter(|_| complete);
+        // What the record did: an abandoned one did nothing, whatever it had
+        // begun, and a kept closure is not one this record wrote.
+        let recording = match (r.action, r.closure_kind) {
+            (ClosureAction::Withdraw, _) if checkpoint_oid.is_some() => BranchRecording::Withdrawn,
+            (ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Existing))
+                if complete =>
+            {
+                BranchRecording::Existing
+            }
+            (ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Record))
+                if checkpoint_oid.is_some() =>
+            {
+                BranchRecording::Recorded
+            }
+            _ => BranchRecording::Nothing,
+        };
         ClosureOutcome::Branch(BranchClosureOutcome {
             operation_id: r.operation_id,
             action: r.action,
             answer: r
                 .answer_code
                 .expect("a finished branch record has its answer"),
-            checkpoint_oid: r
-                .written_commit()
-                .filter(|_| r.step == record::ClosureStep::Complete),
+            checkpoint_oid,
             publication,
+            recording,
+            closed_at: r
+                .closed_at
+                .filter(|_| complete)
+                .and_then(|at| record::closed_at_text(at).ok()),
+            retired_oid: r.retired_oid.filter(|_| complete),
         })
     }
 

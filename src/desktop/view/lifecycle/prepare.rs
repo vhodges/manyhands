@@ -119,6 +119,7 @@ pub(super) fn guidance(
         | LifecycleWayOut::RetryRequest { .. }
         | LifecycleWayOut::ResumeOperation { .. }
         | LifecycleWayOut::SendAgain
+        | LifecycleWayOut::PrepareAgain
         | LifecycleWayOut::CancelThenSendAgain { .. }
         | LifecycleWayOut::ResolveChildConflict { .. }
         | LifecycleWayOut::Republish { .. } => None,

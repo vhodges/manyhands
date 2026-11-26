@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::{
-    LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto, PrepareDataDto,
-    ResolveHistoryChoice,
+    Command, LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto,
+    PrepareDataDto, PullRequestClosureAction, PullRequestClosureMutationDto, ResolveHistoryChoice,
 };
 
 /// One step of the way out of a lifecycle answer. Its IDs are the answer's;
@@ -41,6 +41,9 @@ pub enum LifecycleWayOut {
     Republish { item_id: String },
     /// `repo sync`, which publishes primary if it is still ahead.
     SharePrimary,
+    /// A new prepare of the same verb, and a new request: a branch record
+    /// that finished with this answer gives it again to its own request ID.
+    PrepareAgain,
     /// `poll once`, which reads primary's tracking ref and whether a
     /// published context still stands.
     PollOnce,
@@ -112,12 +115,54 @@ pub fn resolve_history_way_out(
 /// `operation resume` that continued one. Nothing for an answer with no
 /// lifecycle data.
 pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleWayOut> {
-    let Some(MutationDataDto::Lifecycle(data)) = &envelope.data else {
-        return Vec::new();
+    let mut route = match &envelope.data {
+        Some(MutationDataDto::Lifecycle(data)) => route_of(envelope, data),
+        // A branch record's own data, which a finished record gives.
+        Some(MutationDataDto::PullRequestClosure(data)) => branch_route(envelope, data),
+        // A branch record's child that stopped on a conflict answers as `item
+        // sync` does (R-5): the conflict verbs take the record's ID, as for a
+        // direct close's child.
+        Some(MutationDataDto::SynchronizationConflict(_))
+            if envelope.command == Command::TicketClose.name() =>
+        {
+            child_conflict(envelope)
+        }
+        _ => return Vec::new(),
     };
-    let mut route = route_of(envelope, data);
     close_with_inspect(&envelope.recovery, &mut route);
     route
+}
+
+/// A finished branch record's way out. Only a deleted branch has one, and the
+/// record is finished, so its request would give the same answer again: the
+/// way on is a new prepare, and a new request (the deletion is then evidenced,
+/// and a close offers its new branch, keeping the closure). A withdraw needs
+/// the branch first, so it republishes it (`item republish`).
+fn branch_route(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestClosureMutationDto,
+) -> Vec<LifecycleWayOut> {
+    if envelope.code != ResultCode::RemoteBranchDeleted {
+        return Vec::new();
+    }
+    match data.action {
+        PullRequestClosureAction::Close | PullRequestClosureAction::NewBranch => {
+            vec![LifecycleWayOut::PrepareAgain]
+        }
+        PullRequestClosureAction::Withdraw => envelope
+            .scope
+            .item_id
+            .as_ref()
+            .map(|item_id| {
+                vec![
+                    LifecycleWayOut::Republish {
+                        item_id: item_id.clone(),
+                    },
+                    LifecycleWayOut::PrepareAgain,
+                ]
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// The way out of a refused prepare of `document promote` or `ticket close`:
