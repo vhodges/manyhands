@@ -53,7 +53,7 @@ use super::{
     prompts::DesktopProvider,
     setup_poll::{SetupPollPath, setup_attempt},
 };
-use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root};
+use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root, TransportFailure};
 
 /// The automatic polls that ended, as the drain heard them and in order
 /// (D6 B1): the scheduler takes them and applies them to its
@@ -135,10 +135,27 @@ pub(super) fn run(
             // past, which would make the repository due at once, and its
             // setup polled over the network in a loop. Nothing else
             // schedules it, so a poll that answered waits the interval (an
-            // activation's first ordinary poll is due at once).
-            if attempt.answer == Answer::Completed && attempt.targets.is_empty() {
-                attempt.next_eligible_at =
-                    Some(OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds));
+            // activation's first ordinary poll is due at once). So does one
+            // the model would send again at the registry's deadline, which
+            // is that row's again: a remote out of reach, or one whose
+            // endpoint changed (the model reads that as a change to look
+            // at, and reads the policy again). The first waits for the
+            // interval, the second is a failure to wait out at the model's
+            // own pace.
+            match &attempt.answer {
+                Answer::Completed | Answer::Transport(TransportFailure::Unreachable)
+                    if attempt.targets.is_empty() =>
+                {
+                    attempt.next_eligible_at = Some(
+                        OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds),
+                    );
+                }
+                Answer::Transport(TransportFailure::Changed) => {
+                    attempt.answer = Answer::Repository {
+                        recovery_required: false,
+                    };
+                }
+                _ => {}
             }
             return attempt;
         }

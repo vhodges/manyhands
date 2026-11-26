@@ -171,11 +171,11 @@ async fn launch_polls_due_ssh_repos(cx: &mut TestAppContext) {
 /// counts).
 #[gpui_kit::test]
 async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mut TestAppContext) {
-    use manyhands::repository::SetupPollOutcome;
+    use manyhands::repository::{SetupPollOutcome, transport::SshTransportErrorKind};
 
     use crate::desktop::{
         services::setup_poll::{PendingSetup, SetupPollPath},
-        test_support::polling::{PollCall, setup_report},
+        test_support::polling::{PollCall, setup_report, setup_transport_failure},
     };
 
     let world = World::new(true, cx);
@@ -287,7 +287,19 @@ async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mu
         .fixture
         .add_remote(&local, "fork", "ssh://git@example.invalid/team/repo.git");
     let local = local.to_str().unwrap().to_owned();
-    for (polled, root) in [(4, &bare), (5, &local)] {
+    // The same when the setup poll fails: offline, or the remote's endpoint
+    // changed. Nothing is recorded for a change, so the repository must not
+    // be due again at once.
+    let failing = |name: &str| {
+        let root = world.fixture.create_repository(name);
+        world
+            .fixture
+            .add_remote(&root, "fork", "ssh://git@example.invalid/team/repo.git");
+        root.to_str().unwrap().to_owned()
+    };
+    let offline = failing("offline");
+    let moved = failing("moved");
+    for (polled, root) in [(4, &bare), (5, &local), (6, &offline), (7, &moved)] {
         world.backend.publish_setup(
             root,
             PendingSetup {
@@ -296,9 +308,11 @@ async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mu
                 current_ssh: false,
             },
         );
-        world
-            .backend
-            .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+        world.backend.answer_setup_poll(match polled {
+            6 => setup_transport_failure(root, SshTransportErrorKind::TransportUnavailable),
+            7 => setup_transport_failure(root, SshTransportErrorKind::EndpointChanged),
+            _ => setup_report(SetupPollOutcome::WaitingForMerge),
+        });
         world.list(std::slice::from_ref(root), cx);
         World::settle(cx, "the setup-only poll", |_| {
             world.backend.setup_polled().len() == polled

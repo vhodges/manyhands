@@ -392,6 +392,43 @@ fn a_published_setup_takes_the_setup_poll_path() {
         next >= polled_at + time::Duration::seconds(interval as i64),
         "{next} is before the interval after {polled_at} (the stale row said {row})"
     );
+
+    // The same for a setup poll that failed: offline, or the remote's
+    // endpoint changed. The library records nothing for a change, so
+    // nothing but the desktop holds it back, and a failure the model reads
+    // as "ask again at the stored deadline" would be asked at once, over the
+    // network, whenever the remote is out of reach.
+    use crate::desktop::{
+        model::polling::TransportFailure, test_support::polling::setup_transport_failure,
+    };
+    use manyhands::repository::transport::SshTransportErrorKind;
+    for (kind, answer) in [
+        (
+            SshTransportErrorKind::TransportUnavailable,
+            Answer::Transport(TransportFailure::Unreachable),
+        ),
+        (
+            SshTransportErrorKind::EndpointChanged,
+            Answer::Repository {
+                recovery_required: false,
+            },
+        ),
+    ] {
+        stale
+            .backend
+            .answer_setup_poll(setup_transport_failure(&stale.root, kind.clone()));
+        let polled_at = time::OffsetDateTime::now_utc();
+        stale.poll(OperationId::new());
+        let (_, attempt) = stale.until_polled();
+        assert_eq!(attempt.answer, answer, "{kind:?}");
+        if matches!(attempt.answer, Answer::Transport(_)) {
+            let next = attempt.next_eligible_at.expect("a deadline");
+            assert!(
+                next >= polled_at + time::Duration::seconds(interval as i64),
+                "{kind:?}: {next} is before the interval after {polled_at}"
+            );
+        }
+    }
 }
 
 /// A background poll asks nobody for a passphrase: no prompt, the key is

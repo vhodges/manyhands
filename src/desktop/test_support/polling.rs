@@ -366,6 +366,22 @@ pub(crate) fn setup_report(
     })
 }
 
+/// A setup poll's transport failure of `kind`.
+#[allow(clippy::result_large_err)] // The library's `SetupPollError`.
+pub(crate) fn setup_transport_failure(
+    root: &str,
+    kind: SshTransportErrorKind,
+) -> Result<SetupPollReport, SetupPollError> {
+    Err(SetupPollError::Transport(SshTransportError {
+        root: PathBuf::from(root),
+        remote_name: "fork".to_owned(),
+        direction: SshDirection::Fetch,
+        selected_key_id: None,
+        authority: None,
+        kind,
+    }))
+}
+
 /// An unlock request for the key `key`, whose private file is written
 /// under `directory`.
 pub(crate) fn unlock_request(directory: &Path, key: SharedKeyId) -> UnlockRequest {
