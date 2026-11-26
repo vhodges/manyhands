@@ -52,13 +52,20 @@ impl RepositoryService {
         if let Some(commit) = result.effects.commit_oid.as_deref()
             && !local_result
         {
+            // A branch record's commit is on the ticket's own branch, and its
+            // position is primary's: nothing of it reaches primary. As for a
+            // parent's checkpoint, the branch is where the commit is held
+            // while it stands, and primary once it is gone.
+            let ticket_branch = (result.data.as_ref().is_some_and(|data| {
+                data.get("type").and_then(|t| t.as_str()) == Some("pull_request_closure")
+            }) && record.target.starts_with("ticket/"))
+            .then(|| format!("refs/heads/manyhands/{}", record.target));
+            let base_ref = ticket_branch
+                .as_deref()
+                .or(accepted.position.base_ref.as_deref());
             let reachable = git2::Oid::from_str(commit).is_ok_and(|commit| {
                 record.scope.repository().is_some_and(|root| {
-                    evidence::still_reachable(
-                        Path::new(root),
-                        accepted.position.base_ref.as_deref(),
-                        commit,
-                    )
+                    evidence::still_reachable(Path::new(root), base_ref, commit)
                 })
             });
             if !reachable {
