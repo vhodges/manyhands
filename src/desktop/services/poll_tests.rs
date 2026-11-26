@@ -248,6 +248,7 @@ fn poll_call_list() {
 /// only when that check answered.
 #[test]
 fn a_published_setup_takes_the_setup_poll_path() {
+    use crate::desktop::services::Backend;
     use crate::desktop::{
         services::setup_poll::{PendingSetup, SetupPollPath},
         test_support::polling::setup_report,
@@ -353,15 +354,44 @@ fn a_published_setup_takes_the_setup_poll_path() {
     harness.poll(OperationId::new());
     let (_, attempt) = harness.until_polled();
     assert_eq!(attempt.answer, Answer::Completed);
+    // The registry's row is not read back for a change.
     assert_eq!(
         harness.backend.calls(),
-        [
-            PollCall::Resolve,
-            PollCall::PollingStatus,
-            PollCall::RemoteSnapshot
-        ]
+        [PollCall::Resolve, PollCall::PollingStatus]
     );
     assert!(attempt.next_eligible_at.is_some());
+
+    // A stale row of the registry, left by a poll of a publication remote
+    // that is not there now, must not decide when a change's setup is polled
+    // again: the snapshot's deadline is not read for it, and the poll waits
+    // the interval, whatever the row says.
+    let mut stale = Harness::new();
+    stale.poll(OperationId::new());
+    let (_, first) = stale.until_polled();
+    let row = first
+        .next_eligible_at
+        .expect("the failed poll stored a deadline");
+    let repo = stale.backend.resolve(Path::new(&stale.root)).unwrap();
+    let interval = stale
+        .backend
+        .polling_status(&repo)
+        .unwrap()
+        .interval_seconds;
+    stale
+        .backend
+        .publish_setup(&stale.root, on(SetupPollPath::After, false));
+    stale
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    let polled_at = time::OffsetDateTime::now_utc();
+    stale.poll(OperationId::new());
+    let (_, attempt) = stale.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    let next = attempt.next_eligible_at.expect("a deadline");
+    assert!(
+        next >= polled_at + time::Duration::seconds(interval as i64),
+        "{next} is before the interval after {polled_at} (the stale row said {row})"
+    );
 }
 
 /// A background poll asks nobody for a passphrase: no prompt, the key is

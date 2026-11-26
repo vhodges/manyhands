@@ -125,28 +125,33 @@ pub(super) fn run(
         .is_some_and(|setup| !setup.polls_current_remote());
     if alone {
         let mut attempt = setup_poll(backend, session, root, operation, stored, asked);
-        // The deadline the poll stored, read back as today's poll's is. The
-        // one read before the poll is not a fallback: it is the deadline
-        // this poll was due at, and a poll that answered without one reads
-        // the policy again instead (the attempt's deadline is `None`).
+        if setup
+            .as_ref()
+            .is_some_and(|setup| setup.path == SetupPollPath::After)
+        {
+            // A change records no deadline of its own, and the registry's row
+            // is not read for it: it may be a stale one, left by a poll of a
+            // publication remote that is not there now, with a deadline long
+            // past, which would make the repository due at once, and its
+            // setup polled over the network in a loop. Nothing else
+            // schedules it, so a poll that answered waits the interval (an
+            // activation's first ordinary poll is due at once).
+            if attempt.answer == Answer::Completed && attempt.targets.is_empty() {
+                attempt.next_eligible_at =
+                    Some(OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds));
+            }
+            return attempt;
+        }
+        // A first-time setup's attempt is recorded: the deadline the poll
+        // stored, read back as today's poll's is. The one read before the
+        // poll is not a fallback: it is the deadline this poll was due at,
+        // and a poll that answered without one reads the policy again
+        // instead (the attempt's deadline is `None`).
         let after = backend
             .remote_snapshot(path)
             .ok()
             .and_then(|snapshot| snapshot.next_eligible_at());
         attempt.next_eligible_at = attempt.next_eligible_at.or(after);
-        // A change records no deadline of its own (a first-time setup's is
-        // recorded, and an activation's is the first ordinary poll's, due
-        // at once), and nothing else schedules it: it waits the interval.
-        let waits = setup
-            .as_ref()
-            .is_some_and(|setup| setup.path == SetupPollPath::After)
-            && attempt.answer == Answer::Completed
-            && attempt.targets.is_empty()
-            && attempt.next_eligible_at.is_none();
-        if waits {
-            attempt.next_eligible_at =
-                Some(OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds));
-        }
         return attempt;
     }
     let attempt = current_remote(backend, session, root, operation, restart, stored, &asked);
