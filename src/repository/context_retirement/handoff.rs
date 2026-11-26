@@ -29,7 +29,7 @@ thread_local! {
     static AFTER_CHILD: std::cell::RefCell<Option<ChildHook>> = const {std::cell::RefCell::new(None)};
 }
 #[cfg(test)]
-pub(super) fn observe_eligible(f: impl FnOnce(&RepositoryService) + 'static) {
+pub(in super::super) fn observe_eligible(f: impl FnOnce(&RepositoryService) + 'static) {
     AFTER_ELIGIBLE.with(|s| assert!(s.borrow_mut().replace(Box::new(f)).is_none()));
 }
 #[cfg(test)]

@@ -138,8 +138,8 @@ fn retirement_cli_authenticated_live_pass() -> Result<(), FixtureError> {
         0,
     );
     assert_eq!(
-        old_read["data"]["closure"]["state"], "open",
-        "default poll retains own-worktree read precedence"
+        old_read["data"]["closure"]["state"], "closed",
+        "default poll keeps the old copy, and the primary's closure decides the read"
     );
     let old_ready =
         p.b.json(&["ticket", "ready", "--repo", p.b.root()], &[], "ok", 0);
@@ -186,12 +186,12 @@ fn retirement_cli_authenticated_live_pass() -> Result<(), FixtureError> {
     let ready_after =
         p.b.json(&["ticket", "ready", "--repo", p.b.root()], &[], "ok", 0);
     assert!(
-        ready_after["data"]["items"]
+        !ready_after["data"]["items"]
             .as_array()
             .unwrap()
             .iter()
             .any(|i| i["id"] == OTHER_ITEM),
-        "retirement exposes primary closure and unblocks the still-open peer dependent"
+        "the peer dependent is closed on the primary, whichever copies exist"
     );
     // A new local lifetime at the same ID/tip must survive old request replay.
     let git = p.b.repo()?;

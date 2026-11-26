@@ -18,6 +18,7 @@
     "parent",
     "deps",
     "readiness",
+    "pull_request",
     "unknown_metadata",
     "body",
     "source",
@@ -57,17 +58,22 @@
     "closure": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["state", "closed_at", "closed_by"],
+      "required": ["state", "closed_at", "closed_by", "publication"],
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["open", "closed"]
+          "enum": ["open", "closed", "closing"]
         },
         "closed_at": {
           "type": ["string", "null"]
         },
         "closed_by": {
           "type": ["string", "null"]
+        },
+        "publication": {
+          "description": "Set only by a complete read of a closing ticket in a pull-request repository: published when the ticket at the remote tracking ref of its branch holds the same closure, pending otherwise, including when there is no tracking ref. Null for any other state, in direct mode and in every list.",
+          "type": ["string", "null"],
+          "enum": ["published", "pending", null]
         }
       }
     },
@@ -85,7 +91,7 @@
         },
         "state": {
           "type": "string",
-          "enum": ["open", "closed", "unresolved"]
+          "enum": ["open", "closed", "unresolved", "closing"]
         }
       }
     },
@@ -96,7 +102,7 @@
       }
     },
     "readiness": {
-      "description": "closed for a ticket with closure metadata. An open ticket is ready when every dependency is a closed ticket, and blocked otherwise: a closed dependency never blocks, whatever it depends on. reasons is empty unless it is blocked.",
+      "description": "closed for a ticket whose primary copy has closure metadata. An open ticket is ready when every dependency is a closed ticket, and blocked otherwise: a closed dependency never blocks, whatever it depends on, and a closing one does. A closing ticket is decided as an open one is. reasons is empty unless it is blocked.",
       "type": ["object", "null"],
       "additionalProperties": false,
       "required": ["state", "reasons"],
@@ -112,6 +118,10 @@
           }
         }
       }
+    },
+    "pull_request": {
+      "description": "The pull request link this clone gave a ticket. Set only by a complete read of a ticket that has one; null in every list, for a document and for a ticket without a link.",
+      "$ref": "pull_request.schema.json"
     },
     "unknown_metadata": {
       "description": "Front matter keys Manyhands does not define. Any JSON value may appear under a key.",

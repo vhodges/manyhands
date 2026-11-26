@@ -75,6 +75,7 @@ commands! {
     ContextRetire => "context retire",
     DocumentPromote => "document promote",
     TicketClose => "ticket close",
+    TicketWithdrawClosure => "ticket withdraw-closure",
     PollConfigure => "poll configure",
     PollPause => "poll pause",
     PollResume => "poll resume",
@@ -168,7 +169,7 @@ impl Command {
             // One parent operation, recorded in its lifecycle's own table
             // and, once it deletes the remote context, in the remote
             // journal under the same ID.
-            Self::DocumentPromote | Self::TicketClose => true,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
             // One write in the request's own transaction, with no operation
             // ID and no row: the record finished with it is
             // what says it was made.
@@ -219,7 +220,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -273,7 +275,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -321,6 +324,7 @@ impl Command {
     pub(crate) const fn setup_gate(self) -> SetupGate {
         match self {
             Self::TicketClose
+            | Self::TicketWithdrawClosure
             | Self::DocumentPromote
             | Self::RemoteSelect
             | Self::RemoteRemove
@@ -383,7 +387,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -449,7 +454,7 @@ impl Command {
             Self::ItemRepublish => true,
             // A promotion and a closure stop at the safe points of their
             // one runner, and of the children it runs.
-            Self::DocumentPromote | Self::TicketClose => true,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -525,7 +530,8 @@ impl Command {
             // This only decides how a replay reads a finished row, and keeps
             // `finishes == stops || resume` (design, Command Predicates).
             | Self::DocumentPromote
-            | Self::TicketClose => true,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -580,7 +586,7 @@ impl Command {
             // and the repository: a local-only or cleanup-only run never
             // connects, and one that does reports `connecting` itself (D5
             // decision 11).
-            Self::DocumentPromote | Self::TicketClose => ProgressStage::Observing,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -650,7 +656,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -735,6 +742,7 @@ impl Command {
             // its caller is shown all of it, and consents to that state.
             | Self::DocumentPromote
             | Self::TicketClose
+            | Self::TicketWithdrawClosure
             // A resolution records that a context was never published: its
             // caller is shown the context, the remote's answer and the choice.
             | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
@@ -837,6 +845,10 @@ mod tests {
         assert_eq!(Command::ItemRepublish.name(), "item republish");
         assert_eq!(Command::DocumentPromote.name(), "document promote");
         assert_eq!(Command::TicketClose.name(), "ticket close");
+        assert_eq!(
+            Command::TicketWithdrawClosure.name(),
+            "ticket withdraw-closure"
+        );
         assert_eq!(Command::PollConfigure.name(), "poll configure");
         assert_eq!(Command::PollPause.name(), "poll pause");
         assert_eq!(Command::PollResume.name(), "poll resume");
@@ -860,11 +872,17 @@ mod tests {
             // closure do, which stop at the safe points of their runner.
             let confirmed = matches!(
                 command,
-                Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
+                Command::ItemRepublish
+                    | Command::DocumentPromote
+                    | Command::TicketClose
+                    | Command::TicketWithdrawClosure
             );
             // A promotion or a closure looks first, and reports its steps'
             // stages itself (D5 decision 11).
-            let lifecycle = matches!(command, Command::DocumentPromote | Command::TicketClose);
+            let lifecycle = matches!(
+                command,
+                Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure
+            );
             let stopping = local
                 || comment
                 || confirmed
@@ -966,6 +984,7 @@ mod tests {
                         | Command::ItemRepublish
                         | Command::DocumentPromote
                         | Command::TicketClose
+                        | Command::TicketWithdrawClosure
                         | Command::ItemResolveHistory
                         | Command::RemoteResolveHistory
                 ),
@@ -1090,12 +1109,17 @@ mod tests {
         assert_eq!(command.stage(), ProgressStage::Writing);
     }
 
-    /// The design's Command Predicates row of both lifecycle verbs. They
+    /// The design's Command Predicates row of the lifecycle verbs, and of the
+    /// withdraw of a pull-request closure, which is a closure's twin. They
     /// finish as a synchronization only in how a replay reads a finished
     /// row, which keeps the pinned equality.
     #[test]
     fn a_promotion_and_a_closure_are_confirmed_operations_with_safe_points() {
-        for command in [Command::DocumentPromote, Command::TicketClose] {
+        for command in [
+            Command::DocumentPromote,
+            Command::TicketClose,
+            Command::TicketWithdrawClosure,
+        ] {
             assert!(command.needs_confirmation(), "{command:?}");
             assert!(command.has_operation(), "{command:?}");
             assert!(command.stops_at_safe_points(), "{command:?}");
@@ -1163,6 +1187,7 @@ mod tests {
                 Refused,
                 &[
                     "ticket close",
+                    "ticket withdraw-closure",
                     "document promote",
                     "remote select",
                     "remote remove",

@@ -31,9 +31,10 @@ mod bridges;
 mod cleanup;
 mod closure;
 pub use closure::{
-    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
-    TicketClosurePreview, TicketClosureResult,
+    BranchAnswer, BranchClosureOutcome, BranchRecording, CloseTicketRequest, ClosureAction,
+    ClosureBlocker, ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight,
+    PlannedClosure, PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome,
+    TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
 mod context_release;
@@ -72,6 +73,7 @@ mod native_resolution;
 #[path = "repository/native_resolution/windows.rs"]
 mod native_resolution;
 mod promotion;
+mod pull_request_links;
 mod read;
 mod recovery;
 mod registration_removal;
@@ -301,7 +303,12 @@ fn refuse_repair_intent(
 /// exists (C12). A creation, a repair and a write to another kind are not
 /// asked. A configuration that is not valid is left for the call to
 /// report.
+///
+/// A branch record that holds the ticket (R-17) is asked first, in either
+/// mode, from the registry: `recovery_required` naming the record. A direct
+/// record is no hold, and its closure is the guard's.
 fn refuse_closed_ticket(
+    service: &RepositoryService,
     repository: &Repository,
     root: &Path,
     operation: RepositoryOperation,
@@ -318,8 +325,19 @@ fn refuse_closed_ticket(
     else {
         return Ok(());
     };
-    ticket_guard::require_ticket_open(repository, &configuration.primary_branch, &target.item_id)
-        .map_err(|error| error.for_operation(operation, root))
+    // A branch record that holds the ticket (R-17) refuses before the guard
+    // below, which reads only the primary and so finds a closing ticket
+    // open. A direct record is no hold here: its closure is the guard's.
+    if let Some(holder) = service.branch_hold_of(root, &target.item_id, operation)? {
+        return Err(closure::record::hold_refusal(holder).for_operation(operation, root));
+    }
+    ticket_guard::require_ticket_open(
+        repository,
+        &configuration.primary_branch,
+        &target.item_id,
+        configuration.integration(),
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
@@ -657,6 +675,9 @@ enum IndexAvailability {
 pub enum LifecycleLeasePhase {
     RemoveRemoteUnselected,
     SetPublicationRemoteExisting,
+    /// A ticket repair holds the lease and its row is begun, before it asks
+    /// anything of the item.
+    RepairBegun,
 }
 
 /// The message of the commit enablement makes.
@@ -1143,6 +1164,12 @@ pub enum FailurePoint {
     /// Ticket closure: the context ref is at the checkpoint and nothing has
     /// reached the primary.
     AfterClosureCheckpoint,
+    /// A new branch's closure commit is recorded in SQL, unreferenced; its
+    /// pending ref is not made.
+    NewBranchCommitRecorded,
+    /// A new branch's closure commit is held by its pending ref; the old
+    /// context is untouched.
+    NewBranchCommitHeld,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
@@ -2400,7 +2427,9 @@ impl RepositoryService {
             &authoring_context_target(&target),
         )?;
         let effects = CallEffects::default();
-        if let Err(error) = refuse_closed_ticket(&repository, &root, operation, &target, record) {
+        if let Err(error) =
+            refuse_closed_ticket(self, &repository, &root, operation, &target, record)
+        {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
@@ -2620,6 +2649,154 @@ impl RepositoryService {
             )?;
         }
         Ok(ContextProvisionOutcome::Created(context))
+    }
+
+    /// A ticket's editing context made at `commit`: its branch
+    /// `manyhands/<kind>/<ID>` at `commit` and its worktree at
+    /// `.manyhands/worktrees/<ID>` (a new branch's step 3). Unlike
+    /// `prepare_context_unlocked` it does not require the root to be on the
+    /// primary, nor the item to be in the primary: the commit, built on the
+    /// tracking primary, holds it. The caller holds the repository lease and
+    /// the item's closure hold, so no other writer makes the context.
+    ///
+    /// Idempotent over its own partial work: a branch already at `commit` is
+    /// kept, and a worktree already made at it is checked and kept. The
+    /// branch anywhere else, or one of the branch's worktree pair without the
+    /// other, is `MismatchedAuthoringContext`, with nothing changed.
+    fn context_at_commit(
+        &self,
+        root: &Path,
+        kind: AuthoringKind,
+        item_id: &canonical::ItemId,
+        commit: git2::Oid,
+    ) -> Result<ItemContext, RepositoryError> {
+        let operation = RepositoryOperation::PrepareContext;
+        let (repository, root) = canonical_repository_root(root, operation)?;
+        let configuration = match read_configuration_for(&root, operation)? {
+            ConfigurationInspection::Valid(configuration) => configuration,
+            ConfigurationInspection::Missing => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::RepositoryNotEnabled,
+                    "a Manyhands configuration is required before authoring",
+                ));
+            }
+            ConfigurationInspection::Invalid(problem) => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::InvalidConfiguration,
+                    problem.message,
+                ));
+            }
+        };
+        let id = item_id.to_string();
+        let branch = format!("manyhands/{}/{id}", authoring_kind_segment(&kind));
+        if configuration.primary_branch == branch {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the configured primary branch cannot be an authoring branch",
+            ));
+        }
+        let worktree = root.join(".manyhands/worktrees").join(&id);
+        let context = ItemContext {
+            root: root.clone(),
+            kind,
+            item_id: item_id.clone(),
+            branch: branch.clone(),
+            worktree: worktree.clone(),
+        };
+        let git = |error| RepositoryError::git(operation, Some(root.clone()), error);
+        let target = repository.find_commit(commit).map_err(git)?;
+        validate_deterministic_worktree_path_chain(&worktree, &root, operation)?;
+        if branch_checked_out_in_another_worktree(
+            &repository,
+            &worktree,
+            &branch,
+            operation,
+            &root,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the deterministic authoring branch is checked out in another worktree",
+            ));
+        }
+        let mismatched = |message: &str| {
+            RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                message,
+            )
+        };
+        let directory = match std::fs::symlink_metadata(&worktree) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(RepositoryError::io(operation, Some(root.clone()), error)),
+        };
+        let registered = repository.find_worktree(&id).is_ok();
+        let existing = match repository.find_branch(&branch, BranchType::Local) {
+            Ok(existing) => Some(existing),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(git(error)),
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|existing| existing.get().target() != Some(commit))
+        {
+            return Err(mismatched(
+                "the deterministic authoring branch exists at another commit",
+            ));
+        }
+        if directory != registered {
+            return Err(mismatched(
+                "the deterministic worktree and its registration do not agree",
+            ));
+        }
+        if directory {
+            // Made by an earlier call: the branch must be here, at `commit`,
+            // and checked out in it.
+            if existing.is_none() {
+                return Err(mismatched(
+                    "the deterministic worktree has no authoring branch",
+                ));
+            }
+            validate_context_worktree_identity(&repository, &context, operation)?;
+            let linked = Repository::open(&worktree).map_err(git)?;
+            let head = linked
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(git)?;
+            if head.id() != commit {
+                return Err(mismatched(
+                    "the deterministic worktree is not at the commit",
+                ));
+            }
+            return Ok(context);
+        }
+        ensure_authoring_worktree_base(&root, operation)?;
+        let reference = match existing {
+            Some(existing) => existing.into_reference(),
+            None => {
+                self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
+                repository
+                    .branch(&branch, &target, false)
+                    .map_err(git)?
+                    .into_reference()
+            }
+        };
+        let mut options = WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        self.check_failure(FailurePoint::BeforeWorktreeCreation, operation, &root)?;
+        repository
+            .worktree(&id, &worktree, Some(&options))
+            .map_err(git)?;
+        Ok(context)
     }
 
     pub fn save_document(
@@ -3104,9 +3281,14 @@ impl RepositoryService {
         }
         let effects = CallEffects::default();
         // Every ticket save, relationship and short-code write comes here.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let result = (|| {
@@ -3290,6 +3472,18 @@ impl RepositoryService {
                     &context.root,
                     RepositoryErrorKind::InvalidPath,
                     "ticket ID does not match the selected target",
+                ));
+            }
+            // A save never changes the closure: a person who edits those
+            // fields by hand is refused, in both modes (R-11).
+            if ticket_guard::closure_differs_from_head(&repository, &ticket)
+                .map_err(|error| error.for_operation(operation, &context.root))?
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::InvalidItemSource,
+                    "a ticket save does not change the ticket's closure",
                 ));
             }
             if !record.is_new {
@@ -3488,9 +3682,14 @@ impl RepositoryService {
         let effects = CallEffects::default();
         // Before the publication binding is recorded: a refusal leaves
         // nothing for the row to owe.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let mut known_checkpoint = None;
@@ -4509,6 +4708,34 @@ impl RepositoryService {
             ));
         }
         Ok(())
+    }
+
+    /// The branch record that holds the ticket (R-17), read from the
+    /// registry. A repository the registry does not know has none.
+    fn branch_hold_of(
+        &self,
+        root: &Path,
+        item_id: &canonical::ItemId,
+        operation: RepositoryOperation,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let connection = self
+            .open_migrated_registry(operation)
+            .map_err(|error| error.for_operation(operation, root))?;
+        let root_path = registry_root_key(root, operation)?;
+        let repository_id: Option<i64> = connection
+            .query_row(
+                "SELECT id FROM repositories WHERE root_path=?1",
+                [root_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        let Some(repository_id) = repository_id else {
+            return Ok(None);
+        };
+        closure::record::branch_hold(&connection, repository_id, item_id)
+            .map_err(|error| error.for_operation(operation, root))
     }
 
     /// Marks the context a checkpoint committed to, and only it, as owed an

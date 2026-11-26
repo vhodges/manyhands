@@ -8,6 +8,7 @@
     "closure": {
       "closed_at": null,
       "closed_by": null,
+      "publication": null,
       "state": "open"
     },
     "context": {
@@ -40,6 +41,7 @@
     "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
     "problems": [],
     "project": "manyhands",
+    "pull_request": null,
     "readiness": {
       "reasons": [
         {

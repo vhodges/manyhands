@@ -230,6 +230,7 @@ fn spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff() {
                 )
                 .unwrap(),
             ),
+            ChildRole::Publication => unreachable!("a promotion has no publication child"),
             ChildRole::Primary => (
                 r.primary_sync_id.unwrap(),
                 RemoteOperationTarget::for_primary_synchronization(&plan),

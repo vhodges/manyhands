@@ -216,7 +216,7 @@ fn a_file_that_is_not_text_or_not_an_item_keeps_only_its_problem_code() {
             "docs/a.md",
             &context("/r"),
             &index(),
-            &Related::of(&[], &[]),
+            &Related::of(&[], PrimaryClosures::default(), &[]),
         )
     };
 
@@ -356,30 +356,50 @@ fn ticket_filters_compare_whole_values_and_closure_reads_only_closed_at() {
         ..Default::default()
     };
     let says_closed = ticket("closed", None);
+    // In the primary's context: its own closure closes it.
     let is_closed = ticket("open", Some(1));
+    // In an item's worktree, with no closure in the primary's copy.
+    let is_closing = StoredItem {
+        context: StoredContext {
+            kind: ItemContextKind::Active,
+            ..context("/r/.manyhands/worktrees/x")
+        },
+        ..ticket("open", Some(1))
+    };
+    // The state a read gives each of them is derived from both copies.
+    let primary = PrimaryClosures::default();
+    let matches = |filter: &TicketFilter, row: &StoredItem| {
+        filter.matches(row, row.closure_state(&primary), &no_graph())
+    };
+    assert_eq!(says_closed.closure_state(&primary), ClosureState::Open);
+    assert_eq!(is_closed.closure_state(&primary), ClosureState::Closed);
+    assert_eq!(is_closing.closure_state(&primary), ClosureState::Closing);
 
-    assert!(closure(ClosureFilter::Open).matches(&says_closed, &no_graph()));
-    assert!(!closure(ClosureFilter::Closed).matches(&says_closed, &no_graph()));
-    assert!(closure(ClosureFilter::Closed).matches(&is_closed, &no_graph()));
-    assert!(!closure(ClosureFilter::Open).matches(&is_closed, &no_graph()));
-    assert!(closure(ClosureFilter::All).matches(&says_closed, &no_graph()));
-    assert!(closure(ClosureFilter::All).matches(&is_closed, &no_graph()));
+    assert!(matches(&closure(ClosureFilter::Open), &says_closed));
+    assert!(!matches(&closure(ClosureFilter::Closed), &says_closed));
+    assert!(matches(&closure(ClosureFilter::Closed), &is_closed));
+    assert!(!matches(&closure(ClosureFilter::Open), &is_closed));
+    assert!(matches(&closure(ClosureFilter::All), &says_closed));
+    assert!(matches(&closure(ClosureFilter::All), &is_closed));
+    // A closing ticket is open, and is closing, and is not closed.
+    assert!(matches(&closure(ClosureFilter::Open), &is_closing));
+    assert!(matches(&closure(ClosureFilter::Closing), &is_closing));
+    assert!(!matches(&closure(ClosureFilter::Closed), &is_closing));
+    assert!(matches(&closure(ClosureFilter::All), &is_closing));
+    assert!(!matches(&closure(ClosureFilter::Closing), &says_closed));
+    assert!(!matches(&closure(ClosureFilter::Closing), &is_closed));
     // A filter on a field the ticket does not have matches nothing.
     let by_project = TicketFilter {
         project: text("alpha"),
         ..Default::default()
     };
-    assert!(!by_project.matches(&is_closed, &no_graph()));
-    for (status, matches) in [("open", true), ("Open", false), ("ope", false), ("", false)] {
+    assert!(!matches(&by_project, &is_closed));
+    for (status, expected) in [("open", true), ("Open", false), ("ope", false), ("", false)] {
         let filter = TicketFilter {
             status: text(status),
             ..Default::default()
         };
-        assert_eq!(
-            filter.matches(&is_closed, &no_graph()),
-            matches,
-            "{status:?}"
-        );
+        assert_eq!(matches(&filter, &is_closed), expected, "{status:?}");
     }
 }
 
@@ -432,7 +452,11 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
     ];
     // An ID that is both an item's and a comment's is the item's.
     let comments = [COMMENT.to_owned(), CLOSED.to_owned()];
-    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &comments);
+    let related = Related::of(
+        &rows.iter().collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &comments,
+    );
     let dependency = |id: &str, state| DependencyDto {
         id: id.to_owned(),
         state,
@@ -484,7 +508,11 @@ fn a_target_says_what_it_is_and_a_document_or_comment_is_not_a_ticket() {
         ids: vec![id.to_owned()],
         complete: true,
     };
-    let with_ticket = Related::of(&rows.iter().chain([&ticket]).collect::<Vec<_>>(), &comments);
+    let with_ticket = Related::of(
+        &rows.iter().chain([&ticket]).collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &comments,
+    );
     assert_eq!(
         stored_item_dto(&ticket, &with_ticket, &index()).readiness,
         Some(ReadinessDto {
@@ -551,7 +579,10 @@ fn the_slug_filter_matches_the_whole_short_code_without_regard_to_case() {
         ..Default::default()
     };
 
-    for (slug, matches) in [
+    let matches = |filter: &TicketFilter, row: &StoredItem| {
+        filter.matches(row, ClosureState::Open, &no_graph())
+    };
+    for (slug, expected) in [
         ("mh-vh-k9x2b", true),
         ("MH-VH-K9X2B", true),
         ("Mh-vH-k9X2b", true),
@@ -560,14 +591,10 @@ fn the_slug_filter_matches_the_whole_short_code_without_regard_to_case() {
         ("k9x2b", false),
         ("", false),
     ] {
-        assert_eq!(
-            by_slug(slug).matches(&with_slug, &no_graph()),
-            matches,
-            "{slug:?}"
-        );
-        assert!(!by_slug(slug).matches(&without, &no_graph()), "{slug:?}");
+        assert_eq!(matches(&by_slug(slug), &with_slug), expected, "{slug:?}");
+        assert!(!matches(&by_slug(slug), &without), "{slug:?}");
     }
-    assert!(TicketFilter::default().matches(&without, &no_graph()));
+    assert!(matches(&TicketFilter::default(), &without));
 }
 
 #[test]
@@ -604,14 +631,18 @@ fn the_readiness_filter_keeps_ready_or_blocked_tickets_and_never_a_closed_one() 
         // A document's ID blocks nothing and is ready for nothing.
         stored(DOCUMENT, ItemDtoKind::Document, None),
     ];
-    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let related = Related::of(
+        &rows.iter().collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &[],
+    );
     let kept = |readiness| {
         let filter = TicketFilter {
             readiness,
             ..Default::default()
         };
         rows.iter()
-            .filter(|row| filter.matches(row, &related.graph))
+            .filter(|row| related.matches(&filter, row))
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>()
     };
@@ -639,7 +670,11 @@ fn a_ticket_on_a_parent_cycle_keeps_its_parent_and_says_so() {
         // Under the cycle, not on it.
         related_to(CLOSED, Some(SELF), &[], Some(1)),
     ];
-    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let related = Related::of(
+        &rows.iter().collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &[],
+    );
     let dto = |row: &StoredItem| stored_item_dto(row, &related, &index());
 
     for (row, parent) in [(&rows[0], OPEN), (&rows[1], SELF)] {
@@ -666,7 +701,11 @@ fn a_file_decides_its_own_readiness_against_what_the_index_holds_of_the_rest() {
         related_to(OPEN, None, &[SELF], None),
         related_to(CLOSED, None, &[], Some(1)),
     ];
-    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let related = Related::of(
+        &rows.iter().collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &[],
+    );
     let read = |front_matter: &str| {
         let source = format!(
             "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {SELF}\ntitle: T\n\
@@ -731,7 +770,11 @@ fn every_ticket_on_a_dependency_cycle_says_so_whether_or_not_it_blocks() {
         // Waits for the ring and is not on it.
         related_to(ABSENT, None, &[SELF], None),
     ];
-    let related = Related::of(&rows.iter().collect::<Vec<_>>(), &[]);
+    let related = Related::of(
+        &rows.iter().collect::<Vec<_>>(),
+        PrimaryClosures::of(&rows),
+        &[],
+    );
     let dto = |row: &StoredItem| stored_item_dto(row, &related, &index());
     let state = |row: &StoredItem| dto(row).readiness.map(|readiness| readiness.state);
 

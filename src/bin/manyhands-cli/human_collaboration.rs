@@ -270,6 +270,18 @@ impl Lines {
                     lines.notes.push(MORE_COMMITS_NOTE.into());
                 }
             }
+            // The link a ticket's pull request is opened by, as `ticket show`
+            // and the closure verbs print it, in place of its fields.
+            Some(MutationDataDto::PullRequestLink(data)) => {
+                lines.replaces_fields = true;
+                let link = manyhands::forge::PullRequestLink {
+                    source: data.pull_request.source.clone(),
+                    target: data.pull_request.target.clone(),
+                    forge: None,
+                    url: data.pull_request.url.clone(),
+                };
+                lines.data.push(field(&link.human_line()));
+            }
             Some(MutationDataDto::Comment(comment)) => {
                 // Only a checkpointed comment is published, so only a
                 // result that carries one has something to say about it.

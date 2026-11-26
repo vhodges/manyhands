@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::{
-    LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto, PrepareDataDto,
-    ResolveHistoryChoice,
+    Command, LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto,
+    PrepareDataDto, PullRequestClosureAction, PullRequestClosureMutationDto, ResolveHistoryChoice,
 };
 
 /// One step of the way out of a lifecycle answer. Its IDs are the answer's;
@@ -41,6 +41,13 @@ pub enum LifecycleWayOut {
     Republish { item_id: String },
     /// `repo sync`, which publishes primary if it is still ahead.
     SharePrimary,
+    /// A new prepare of the same verb, and a new request: a branch record
+    /// that finished with this answer gives it again to its own request ID.
+    PrepareAgain,
+    /// `item sync` of the item, once the publication remote is set: a branch
+    /// record whose remote changed or went left its commit on the local
+    /// branch (R-35), and the sync publishes whatever the branch holds.
+    SyncItem { item_id: String },
     /// `poll once`, which reads primary's tracking ref and whether a
     /// published context still stands.
     PollOnce,
@@ -112,12 +119,73 @@ pub fn resolve_history_way_out(
 /// `operation resume` that continued one. Nothing for an answer with no
 /// lifecycle data.
 pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleWayOut> {
-    let Some(MutationDataDto::Lifecycle(data)) = &envelope.data else {
-        return Vec::new();
+    let mut route = match &envelope.data {
+        Some(MutationDataDto::Lifecycle(data)) => route_of(envelope, data),
+        // A branch record's own data, which a finished record gives.
+        Some(MutationDataDto::PullRequestClosure(data)) => branch_route(envelope, data),
+        // A branch record's child that stopped on a conflict answers as `item
+        // sync` does (R-5): the conflict verbs take the record's ID, as for a
+        // direct close's child.
+        Some(MutationDataDto::SynchronizationConflict(_))
+            if envelope.command == Command::TicketClose.name()
+                || envelope.command == Command::TicketWithdrawClosure.name() =>
+        {
+            child_conflict(envelope)
+        }
+        _ => return Vec::new(),
     };
-    let mut route = route_of(envelope, data);
     close_with_inspect(&envelope.recovery, &mut route);
     route
+}
+
+/// A finished branch record's way out. A record whose publication remote
+/// changed or went (R-35, the one `recovery_required` answer that carries this
+/// data) left its commit on the local branch, and `item sync` publishes it
+/// once the remote is set. The other is a deleted branch, and the
+/// record is finished, so its request would give the same answer again: the
+/// way on is a new prepare, and a new request (the deletion is then evidenced,
+/// and a close offers its new branch, keeping the closure). A withdraw needs
+/// the branch first, so it republishes it (`item republish`), and asks for a
+/// new request after only when it wrote nothing.
+fn branch_route(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestClosureMutationDto,
+) -> Vec<LifecycleWayOut> {
+    if envelope.code == ResultCode::RecoveryRequired {
+        return envelope
+            .scope
+            .item_id
+            .iter()
+            .map(|item_id| LifecycleWayOut::SyncItem {
+                item_id: item_id.clone(),
+            })
+            .collect();
+    }
+    if envelope.code != ResultCode::RemoteBranchDeleted {
+        return Vec::new();
+    }
+    match data.action {
+        PullRequestClosureAction::Close | PullRequestClosureAction::NewBranch => {
+            vec![LifecycleWayOut::PrepareAgain]
+        }
+        // A withdraw that wrote its commit has it on the local branch (W5),
+        // and the republish publishes it with the rest; one that wrote
+        // nothing asks for a new request after the republish.
+        PullRequestClosureAction::Withdraw => envelope
+            .scope
+            .item_id
+            .as_ref()
+            .map(|item_id| {
+                let mut route = vec![LifecycleWayOut::Republish {
+                    item_id: item_id.clone(),
+                }];
+                if data.checkpoint_oid.is_none() {
+                    route.push(LifecycleWayOut::PrepareAgain);
+                }
+                route
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// The way out of a refused prepare of `document promote` or `ticket close`:
@@ -289,19 +357,20 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<LifecycleWayOut> {
 }
 
 /// A blocked prepare's way out: the poll that reads primary's tracking ref,
-/// left behind or missing, or a published context whose remote state is
-/// unknown (C5 decision 35), with `repo sync` when primary is ahead; the save
+/// left behind or missing, a published context whose remote state is
+/// unknown (C5 decision 35), or a remote context branch no tracking ref
+/// holds yet, with `repo sync` when primary is ahead; the save
 /// that makes a missing context; or the local repair of a refused merge.
 fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWayOut> {
     use LifecycleBlocker::{
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
         HistoryUnresolved, IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote,
-        PrimaryMissing,
+        PrimaryMissing, RemoteContextUnmaterialized,
     };
     let tracking = |blocker: &LifecycleBlocker| {
         matches!(
             blocker,
-            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
+            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown | RemoteContextUnmaterialized
         )
     };
     if blockers.contains(&HistoryUnresolved)

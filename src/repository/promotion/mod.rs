@@ -383,6 +383,11 @@ pub(super) struct ParentView<B> {
     pub(super) cancel_requested: bool,
     /// The children it has bound, either of which may hold the reservation.
     pub(super) children: [Option<OperationId>; 2],
+    /// A branch record never integrates, and publishes instead.
+    pub(super) path: lifecycle::RecordPath,
+    /// A finished branch record has stored the answer it gave, and answers
+    /// from it ever after.
+    pub(super) answered: bool,
 }
 
 impl<B> ParentView<B> {
@@ -406,6 +411,8 @@ impl<B> ParentView<B> {
             publication: self.publication,
             cancel_requested: self.cancel_requested,
             children: self.children,
+            path: self.path,
+            answered: self.answered,
         }
     }
 }
@@ -435,6 +442,8 @@ where
                     publication: parent.publication(),
                     cancel_requested: parent.cancel_requested(),
                     children: [parent.context_sync_id(), parent.primary_sync_id()],
+                    path: parent.path(),
+                    answered: parent.answered(),
                 }
             }),
         )

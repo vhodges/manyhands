@@ -4,7 +4,7 @@
 //! exact delete, the boundary hooks and the effect counters are promotion's
 //! (`promotion::run_tests`), called, not copied.
 use super::{
-    lifecycle::{TicketClosureLifecycle, lifecycle_request},
+    lifecycle::{TicketClosureLifecycle, TicketWithdrawLifecycle, lifecycle_request},
     observe::closed_ticket_bytes,
     record::{self, ClosureKind, ClosureRecord, ClosureStep},
     test_support::{self as support, ID, checkout, commit, id, parse_ticket, read, ticket, write},
@@ -32,6 +32,9 @@ use crate::repository::{
 use git2::Oid;
 use std::{cell::RefCell, fs, path::Path, rc::Rc};
 
+#[path = "run_pull_request_tests.rs"]
+mod pull_request;
+
 const CLOSED_BY: &str = "Fixture <fixture@example.invalid>";
 
 fn context_ref() -> String {
@@ -42,6 +45,9 @@ fn tracking_context_ref() -> String {
 }
 fn close_subject() -> String {
     format!("Close ticket {ID}")
+}
+fn withdraw_subject() -> String {
+    format!("Withdraw closure of ticket {ID}")
 }
 fn merge_subject() -> String {
     format!("Integrate closed ticket {ID}")
@@ -251,6 +257,9 @@ fn authoritative(result: TicketClosureResult) -> TicketClosureOutcome {
     match result {
         TicketClosureResult::Complete(o) => o,
         TicketClosureResult::IndexPending(p) => p.authoritative,
+        TicketClosureResult::Branch(_) | TicketClosureResult::BranchIndexPending(_) => {
+            panic!("a direct close answered as a branch record")
+        }
     }
 }
 /// Every ref and its target.
@@ -1096,6 +1105,16 @@ const EXITS: [FailurePoint; 15] = [
 ];
 const F10_SEAM: usize = 15;
 const F11_SEAM: usize = 16;
+/// A new branch's own boundaries, from `NEW_BRANCH_EXIT_BASE` in the exit
+/// child's point: its commit recorded and held, then its branch and its
+/// worktree about to be made.
+const NEW_BRANCH_EXITS: [FailurePoint; 4] = [
+    FailurePoint::NewBranchCommitRecorded,
+    FailurePoint::NewBranchCommitHeld,
+    FailurePoint::BeforeContextBranchCreation,
+    FailurePoint::BeforeWorktreeCreation,
+];
+const NEW_BRANCH_EXIT_BASE: usize = 100;
 
 #[test]
 fn closure_exit_child() {
@@ -1113,7 +1132,13 @@ fn closure_exit_child() {
         .split(',')
         .map(|v| v.parse().unwrap())
         .collect();
-    let service = if point < EXITS.len() {
+    let service = if point >= NEW_BRANCH_EXIT_BASE {
+        RepositoryService::open_at_with_exit_point_for_testing(
+            Path::new(&data),
+            NEW_BRANCH_EXITS[point - NEW_BRANCH_EXIT_BASE],
+        )
+        .unwrap()
+    } else if point < EXITS.len() {
         RepositoryService::open_at_with_exit_point_for_testing(Path::new(&data), EXITS[point])
             .unwrap()
     } else {
@@ -1138,17 +1163,31 @@ fn closure_exit_child() {
         approval: None,
         confirmed_identity: None,
     };
-    let _ = run::run_with_io(
-        &TicketClosureLifecycle,
-        &service,
-        lifecycle_request(request),
-        &mut FakeIo::default(),
-    );
+    // The verb the child runs: a close, or a withdraw.
+    let _ = match std::env::var("MANYHANDS_CLOSURE_EXIT_VERB").as_deref() {
+        Ok("withdraw") => run::run_with_io(
+            &TicketWithdrawLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+        _ => run::run_with_io(
+            &TicketClosureLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+    };
     panic!("exit point was not reached")
 }
 
 /// Runs the closure in a child process that exits at `point`.
 fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
+    exit_at_with(f, req, point, "close");
+}
+
+/// `exit_at` for the verb the child runs: `close` or `withdraw`.
+fn exit_at_with(f: &Fixture, req: &CloseTicketRequest, point: usize, verb: &str) {
     // `module_path!` names this module inside whichever test crate holds it.
     let module = module_path!().split_once("::").unwrap().1;
     let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1157,6 +1196,7 @@ fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
         .env("MANYHANDS_CLOSURE_EXIT_DATA", f.data.path())
         .env("MANYHANDS_CLOSURE_EXIT_POINT", point.to_string())
         .env("MANYHANDS_CLOSURE_EXIT_OP", req.operation_id.to_string())
+        .env("MANYHANDS_CLOSURE_EXIT_VERB", verb)
         .env(
             "MANYHANDS_CLOSURE_EXIT_EXPECTATION",
             req.expected
@@ -1537,6 +1577,7 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
                     .unwrap()
             ),
             closed_by: Some(CLOSED_BY.into()),
+            publication: None,
         })
     );
     let listed = f
@@ -1974,6 +2015,75 @@ fn poll(f: &Fixture, advertised: Vec<(String, Oid)>) -> crate::repository::Remot
     }
 }
 
+/// A mutation through the production boundary, as the envelope's JSON reads.
+fn execute(f: &Fixture, mutation: crate::repository::Mutation) -> serde_json::Value {
+    use crate::repository::{CancellationToken, MutationCall, NoProgress, RequestId};
+    let envelope = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: None,
+            mutation,
+        },
+        &mut SessionCredentials::new(NoCredentials),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    serde_json::to_value(&envelope).unwrap()
+}
+
+/// A retiring poll (`PollOnceRetiring`) after a fetch that advertised only
+/// the primary, at `primary`. The ticket context's remote branch, which an
+/// earlier fetch saw published at its tracking tip, is gone from the
+/// advertisement. The poll observes the context `Closed` when the local
+/// primary holds the ticket's closure, and its retirement pass meets that
+/// candidate. Returns the envelope.
+fn retiring_poll(f: &Fixture, primary: Oid) -> serde_json::Value {
+    use crate::repository::{Mutation, PollOnceInput, RemoteRefObservation};
+    let plan = f.configure_endpoints();
+    let tip = f.repo.refname_to_id(&tracking_context_ref()).unwrap();
+    state::with_transaction(&f.service, f.root(), |tx, rid| {
+        let prior = RemoteRefObservation::from_advertisement(
+            &plan,
+            plan.context(AuthoringKind::Ticket, &id()).remote_ref(),
+            tip,
+            Some(tip),
+        )
+        .unwrap();
+        let generation = state::generation(tx, rid)?;
+        state::persist_complete_advertisement(tx, rid, &plan, generation, &[prior], 1)?;
+        Ok(())
+    })
+    .unwrap();
+    f.repo
+        .reference("refs/remotes/origin/main", primary, true, "fixture fetch")
+        .unwrap();
+    crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+    execute(
+        f,
+        Mutation::PollOnceRetiring(PollOnceInput {
+            root: f.root().into(),
+        }),
+    )
+}
+
+/// The retirement candidate a poll stored for the ticket's context was
+/// refused when it was captured, before any resource was selected for it.
+fn assert_candidate_refused(f: &Fixture) {
+    let candidates: Vec<String> = f
+        .db()
+        .prepare("SELECT candidate FROM poll_retirement_candidates")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    let candidate: serde_json::Value = serde_json::from_str(&candidates[0]).unwrap();
+    assert_eq!(candidate["item_id"], ID);
+    assert_eq!(candidate["refusal"], "recovery_required", "{candidate}");
+    assert_eq!(candidate["resources"], "invalid", "{candidate}");
+}
+
 /// R-T6-4, the brief's "collaborator content arriving" with a remote: a
 /// poll in the `closing` window updates tracking but never fast-forwards the
 /// ticket context, so the same ID re-checks consent and abandons with
@@ -2122,6 +2232,62 @@ fn a_poll_never_rebuilds_the_context_while_closure_cleanup_is_unfinished() {
         pushed
     );
     f.assert_cleaned();
+}
+
+/// R-17 for a direct record (rulings 22 and 26): the poll's retirement meets
+/// every record the fence holds. A direct close whose primary child
+/// completed and whose cleanup was then cancelled sits at `published` with
+/// no reservation held. The context is remotely gone and the local primary
+/// holds the closure, so the poll observes the context `Closed`, and its
+/// retirement must leave the context alone while the fence holds. The same
+/// request then completes.
+#[test]
+fn a_poll_does_not_retire_a_context_a_direct_closure_holds() {
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = CancelAfterPrimary {
+        inner: FakeIo::default(),
+        parent: req.operation_id,
+    };
+    let first = authoritative(f.run_io(&f.service, req.clone(), &mut io).unwrap());
+    assert_eq!(
+        first.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::Cancelled
+        }
+    );
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.step, ClosureStep::Published);
+    assert_eq!(
+        r.cleanup,
+        Some(crate::repository::promotion::record::CleanupCategory::Cancelled)
+    );
+    assert_eq!(close_reservations(&f, req.operation_id), 0);
+    let (context, worktree) = (
+        f.context_oid(),
+        f.root().join(".manyhands/worktrees").join(ID),
+    );
+    assert!(worktree.exists());
+    let value = retiring_poll(&f, f.primary());
+    let target = value["data"]["poll"]["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|t| t["item_id"] == ID))
+        .unwrap_or_else(|| panic!("the ticket context is a poll target: {value}"));
+    assert_candidate_refused(&f);
+    assert_eq!(target["disposition"], "closed", "{value}");
+    assert_eq!(
+        f.repo.refname_to_id(&context_ref()).ok(),
+        Some(context),
+        "{value}"
+    );
+    assert!(worktree.exists(), "{value}");
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Published);
+    let finished = authoritative(
+        f.run_io(&f.service, req.clone(), &mut FakeIo::default())
+            .unwrap(),
+    );
+    assert_eq!(finished.cleanup(), PromotionCleanup::Complete);
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Complete);
 }
 
 /// Obligation 9, restart: a manual context synchronization interrupted

@@ -468,6 +468,13 @@ impl RepositoryService {
             operation_id,
         };
         self.reject_pending_synchronization_target(&root, &kind, &id, OPERATION)?;
+        // A branch record that holds the ticket (R-17) owns its context until
+        // it finishes: a direct record keeps the answers it has.
+        if let Some(holder) = self.branch_hold_of(&root, &id, OPERATION)? {
+            return Err(
+                super::super::closure::record::hold_refusal(holder).for_operation(OPERATION, &root)
+            );
+        }
         let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
@@ -493,6 +500,15 @@ impl RepositoryService {
             // recorded its write: a row that was begun and left with
             // nothing done is entered again as it was begun.
             if record.completed_step.is_none() {
+                // The hold (R-17), asked again under the lease: a branch
+                // record can reach `closing` while this call waited for the
+                // lease, before its own row existed for C12 to stop it. The
+                // check before the lease is the cheap first answer.
+                self.run_lifecycle_lease_hook(super::super::LifecycleLeasePhase::RepairBegun);
+                if let Some(holder) = self.branch_hold_of(&root, &id, OPERATION)? {
+                    return Err(super::super::closure::record::hold_refusal(holder)
+                        .for_operation(OPERATION, &root));
+                }
                 // The file is where its path says by the names its
                 // directories list, and not only by a name a file system
                 // that folds case takes for it: the source is written at

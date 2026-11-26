@@ -119,7 +119,12 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
     let prepare = || {
         L::prepare(
             service,
-            L::preview_request(root.clone(), record.context.item_id.clone(), identity),
+            L::preview_request(
+                root.clone(),
+                record.context.item_id.clone(),
+                identity,
+                parent,
+            ),
         )
     };
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
