@@ -232,7 +232,7 @@ fn record_commit(
                     kept_at,
                     &kept_by,
                 )?
-                .map(|commit| (whole_utc_seconds(kept_at), commit)),
+                .map(|commit| (kept_at, commit)),
                 None => None,
             };
             match built {
@@ -555,10 +555,19 @@ fn retire_remotely(
         RemoteReservationOutcome::Reserved(owner) => owner,
         RemoteReservationOutcome::Busy => return Err(TicketClosureError::Busy),
         RemoteReservationOutcome::PollYielding => return Err(TicketClosureError::PollYielding),
-        // The row ends with the record's retirement, in one transaction: a
-        // completed row under a record that is not retired is not this
+        // The row ends with the record's retirement, in one transaction, so
+        // a completed row means another run retired the record since this one
+        // read it: it goes on to step 3. Under any other step it is not this
         // call's to continue.
-        RemoteReservationOutcome::Replay(_) => return Err(TicketClosureError::RecoveryRequired),
+        RemoteReservationOutcome::Replay(_) => {
+            let reloaded = run::load::<TicketClosureLifecycle>(service, root, op)?;
+            if reloaded.step != ClosureStep::Retired {
+                return Err(TicketClosureError::RecoveryRequired);
+            }
+            let lease = repository_lease(repo, root, RepositoryOperation::RepositorySnapshot)?;
+            *rec = reloaded;
+            return Ok(Retirement::Done(lease));
+        }
     };
     // Nothing is fetched or pushed between the safe points: the part that
     // follows is local, and `finish_parent` needs the second.

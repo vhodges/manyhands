@@ -5412,6 +5412,10 @@ fn f4_a_deleted_history_and_its_stale_tracking_ref_are_retired() {
     // There was no old worktree or branch to remove.
     assert_eq!(p.f.effects("worktree_remove"), 0);
     assert_eq!(p.f.effects("branch_delete"), 0);
+    assert_eq!(
+        p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        r.closure_oid.unwrap()
+    );
     p.assert_nothing_deleted_remotely(&io);
     p.assert_primary_untouched(&io);
 }
@@ -5934,4 +5938,36 @@ fn f10_a_retry_makes_the_pending_ref_again_or_refuses_one_elsewhere() {
     assert!(!p.worktree().exists());
     assert_eq!(io.children(), 0);
     p.assert_primary_untouched(&io);
+}
+
+/// A run that read its record at `branch_deleted` while another run of the
+/// same request completed the retirement meets the parent's row completed:
+/// the record is `retired` now, so it goes on to step 3, not to a stop.
+#[test]
+fn a_replayed_reservation_of_a_retired_record_goes_on_to_step_three() {
+    let p = PullRequest::new();
+    p.merged_on_tracking();
+    p.deleted_on_remote();
+    let old = p.f.context_oid();
+    let req = p.confirming(p.ready().expectation());
+    exit_at(&p.f, &req, F11_SEAM);
+    let retired = p.stored(&req);
+    assert_eq!(retired.step, ClosureStep::Retired);
+    // The record as the slower run read it, before the other one retired.
+    let stale = ClosureRecord {
+        step: ClosureStep::BranchDeleted,
+        ..retired
+    };
+    let step = new_branch::step(&p.f.reopened(), &lifecycle_request(req.clone()), &stale)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    assert!(matches!(
+        step,
+        crate::repository::promotion::lifecycle::BranchStep::Closing
+    ));
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Closing);
+    assert_eq!(p.f.context_oid(), r.closure_oid.unwrap());
+    assert_eq!(p.pending_ref(req.operation_id), None);
+    p.assert_retired(&r, old);
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 1);
 }

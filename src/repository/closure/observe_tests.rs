@@ -2316,6 +2316,18 @@ fn a_new_branch_keeps_a_provisional_closure_and_needs_an_identity() {
         TicketClosurePreflight::Blocked { blockers, identity_configuration: Some(_) }
             if blockers == [ClosureBlocker::IdentityRequired]
     ));
+    // R40: the record keeps the kept closure's own `closed_at`, a whole-second
+    // UTC time, so one the ticket holds with a fraction (an edit made outside
+    // Manyhands, which the canonical reader accepts) is not kept.
+    let f = pull_request_fixture();
+    f.close_context();
+    let fractional = String::from_utf8(read(&f.context, &ticket()))
+        .unwrap()
+        .replace("2023-11-14T22:13:20Z", "2023-11-14T22:13:20.5Z");
+    write(&f.context, &ticket(), fractional);
+    commit(&f.context);
+    f.history("observed_published");
+    assert_eq!(f.blockers(), [ClosureBlocker::TicketInvalidAfterClosure]);
 }
 
 /// A new branch's digest wire bytes, written out by hand: the pull-request

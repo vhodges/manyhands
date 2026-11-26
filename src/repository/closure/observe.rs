@@ -1753,8 +1753,12 @@ fn branch_observation(
                         .as_ref()
                         .and_then(|ticket| parsed_ticket(&ticket.bytes).ok())
                         .and_then(|(_, ticket)| Some((ticket.closed_at?, ticket.closed_by?)));
+                    // The record keeps the kept closure's own `closed_at`, which
+                    // its column holds in whole seconds (R40).
                     kept.is_none_or(|(kept_at, kept_by)| {
-                        closure_replaced_bytes(&base_ticket.bytes, kept_at, &kept_by).is_err()
+                        kept_at.nanosecond() != 0
+                            || closure_replaced_bytes(&base_ticket.bytes, kept_at, &kept_by)
+                                .is_err()
                     })
                 }
             };
