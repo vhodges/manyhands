@@ -5178,7 +5178,10 @@ fn context_at_commit_has_its_own_preconditions() {
     made(&p, commit);
     // A commit that is not here makes nothing.
     let p = PullRequest::without_context();
-    assert!(make(&p, Oid::from_str(&"1".repeat(40)).unwrap()).is_err());
+    let error = make(&p, Oid::from_str(&"1".repeat(40)).unwrap())
+        .err()
+        .expect("a commit that is not here");
+    assert_eq!(error.kind, RepositoryErrorKind::Git);
     assert!(p.f.repo.find_reference(&context_ref()).is_err());
     assert!(!p.worktree().exists());
     // A directory where the worktree goes, with no registration, is not ours.
@@ -5189,4 +5192,14 @@ fn context_at_commit_has_its_own_preconditions() {
     assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
     assert!(p.f.repo.find_reference(&context_ref()).is_err());
     assert!(p.f.repo.find_worktree(ID).is_err());
+    // A registration whose directory is gone is not ours to build over.
+    let p = PullRequest::without_context();
+    let commit = p.off(p.tracking_primary(), "elsewhere.txt");
+    make(&p, commit).unwrap();
+    fs::remove_dir_all(p.worktree()).unwrap();
+    let error = make(&p, commit)
+        .err()
+        .expect("a registration with no directory");
+    assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(!p.worktree().exists());
 }
