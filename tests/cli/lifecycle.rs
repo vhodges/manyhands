@@ -1647,7 +1647,12 @@ fn operation_resume_of_an_unheld_withdraw_continues_it_as_a_withdraw() {
     assert_eq!(resumed["scope"]["item_id"], WITHDRAW.id, "{resumed}");
     assert_eq!(
         resumed["scope"]["worktree"],
-        format!("{}/.manyhands/worktrees/{}", case.root(), WITHDRAW.id),
+        std::path::Path::new(case.root())
+            .join(".manyhands")
+            .join("worktrees")
+            .join(WITHDRAW.id)
+            .to_str()
+            .unwrap(),
         "{resumed}"
     );
     // It was taken up as the withdraw it is: its record is still the one

@@ -1869,8 +1869,10 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
     // The same guard with the context present (ruling 36): every push the
     // classification counts must be the retired tip or its ancestor, or the
     // boundary after the retirement could still read the branch as unresolved.
-    // An intended push leaves the deletion itself in doubt, which another
-    // blocker says; the counted proven pushes are this guard's.
+    // A lone intended push leaves the deletion itself in doubt, which another
+    // blocker says, so no row here has one. An intent next to a proven push
+    // does reach this guard: the proven push makes the boundary deleted, and
+    // intents are counted too.
     for (case, elsewhere, resolved) in [
         ("proven, an ancestor of the tip", false, true),
         ("proven, not an ancestor", true, false),

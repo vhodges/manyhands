@@ -1089,7 +1089,12 @@ fn a_branch_record_s_answers_name_the_ticket_s_branch_and_a_direct_one_s_name_pr
     let main = (Some("main".to_owned()), None);
     let ticket = (
         Some(format!("manyhands/ticket/{ITEM}")),
-        Some(format!("{root}/.manyhands/worktrees/{ITEM}")),
+        Path::new(root)
+            .join(".manyhands")
+            .join("worktrees")
+            .join(ITEM)
+            .to_str()
+            .map(str::to_owned),
     );
     let parent_of = |path| {
         PARENT.with(|parent| {
