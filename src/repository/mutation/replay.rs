@@ -85,6 +85,7 @@ impl RepositoryService {
             }
             None => None,
         };
+        reply.binding.settled(self, &accepted);
         // The one place an outcome is not derived: it is the stored one.
         let envelope = Envelope::mutation(
             record.command,

@@ -959,6 +959,12 @@ pub(crate) trait Binding {
     /// no branch or worktree, since none may exist.
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope;
 
+    /// Called before a stored result of the accepted request is given again,
+    /// when no prepare has run to tell the binding what its record is. A
+    /// binding whose `scope` depends on that reads it from the record here.
+    /// Nothing by default.
+    fn settled(&self, _service: &RepositoryService, _accepted: &Accepted) {}
+
     /// Validates the input and makes the checks that need no lease. An
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.

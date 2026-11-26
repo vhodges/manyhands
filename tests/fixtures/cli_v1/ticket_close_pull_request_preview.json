@@ -44,11 +44,11 @@
     ],
     "expires_at": "<expires-at>",
     "scope": {
-      "branch": null,
+      "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
       "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
       "remote": null,
       "repository": "<repository>",
-      "worktree": null
+      "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
     }
   },
   "effects": {
@@ -67,10 +67,10 @@
   "request_id": null,
   "schema_version": 1,
   "scope": {
-    "branch": null,
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
     "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
     "remote": null,
     "repository": "<repository>",
-    "worktree": null
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
   }
 }

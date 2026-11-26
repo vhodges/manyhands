@@ -48,13 +48,19 @@
 //! preview that plans a merge commit is answered as blocked here, last, with
 //! nothing else in the way. A closure's preview names it itself.
 
-use std::{marker::PhantomData, path::Path, path::PathBuf};
+use std::{
+    marker::PhantomData,
+    path::Path,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     canonical::ItemId,
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect,
         PublicationEffect, RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
+        absolute_path_string,
     },
 };
 
@@ -122,6 +128,12 @@ pub(in super::super) struct LifecycleBinding<V> {
     /// ticket already holds: its run records nothing, and reports no
     /// `recording` (R-15). `false` when this call observed nothing.
     closure_exists: bool,
+    /// Whether the request's record is a branch record, as far as this binding
+    /// has learned: from what a prepare observed, from the parent it read, or
+    /// from the answer a branch record gave. Decision 17: its answers name the
+    /// ticket's branch and worktree in `scope`. Set through `&self`, since a
+    /// run learns it from the parent it reads while it answers.
+    branch_record: AtomicBool,
     verb: PhantomData<V>,
 }
 
@@ -133,6 +145,7 @@ impl From<DocumentPromoteInput> for LifecycleBinding<Promote> {
             id,
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
@@ -146,6 +159,7 @@ impl From<TicketCloseInput> for LifecycleBinding<Close> {
             id,
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
@@ -159,9 +173,56 @@ impl From<TicketWithdrawClosureInput> for LifecycleBinding<Withdraw> {
             id,
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
+}
+
+/// The scope of a branch record's answers (decision 17): the ticket's branch
+/// and its worktree, as `item sync`, `comment add` and `ticket save` name them
+/// for the same commit. The worktree is named once the repository is known;
+/// `root` stands in for a repository that is not.
+pub(super) fn branch_scope(
+    kind: &AuthoringKind,
+    id: &ItemId,
+    repository: Option<String>,
+    root: &Path,
+) -> Scope {
+    let names = context_names(
+        repository.as_deref().map_or(root, Path::new),
+        kind,
+        &id.to_string(),
+    );
+    Scope {
+        item_id: Some(id.to_string()),
+        branch: Some(
+            names
+                .branch_ref
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&names.branch_ref)
+                .to_owned(),
+        ),
+        worktree: repository
+            .as_ref()
+            .and_then(|_| absolute_path_string(&names.worktree)),
+        repository,
+        remote: None,
+    }
+}
+
+/// The ticket whose branch record the operation `operation` is, when its
+/// parent record is one.
+pub(super) fn branch_record_of(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Option<ItemId> {
+    Close::parent(service, root, operation)
+        .ok()
+        .flatten()
+        .filter(|parent| parent.path == RecordPath::Branch)
+        .map(|parent| parent.item_id)
 }
 
 /// Whether `observed` is ready with a closure the ticket already holds (R-15).
@@ -551,6 +612,28 @@ fn reached_effects(reached: &Reached) -> Effects {
 }
 
 impl<V: LifecycleVerb> LifecycleBinding<V> {
+    /// Learns from the record's path whether its answers name the ticket's
+    /// branch (decision 17). A binding that has learned a branch record keeps
+    /// it: it serves one request.
+    fn note_path(&self, path: RecordPath) {
+        if path == RecordPath::Branch {
+            self.branch_record.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Learns from what a prepare observed: only a ready branch record names
+    /// its path. A blocked state, or one that answers before any record
+    /// exists, names none, and keeps the scope a direct request has.
+    fn note_observed(&self, observed: &Observed) {
+        if matches!(observed, Observed::Ready(ready) if ready.record.is_some()) {
+            self.branch_record.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn names_branch(&self) -> bool {
+        self.branch_record.load(Ordering::Relaxed)
+    }
+
     /// Reads the repository and what the domain's preview says of the item:
     /// the repository's root, its registration's ID, and the preview.
     fn observe(&self, service: &RepositoryService) -> Result<(PathBuf, i64, Observed), Answer> {
@@ -562,6 +645,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             let blocker = error.blocker().cloned();
             refused(error).naming(service, &root, blocker.as_ref())
         })?;
+        self.note_observed(&observed);
         Ok((root, repository.registration_id(), observed))
     }
 
@@ -806,6 +890,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         outcome: &BranchClosureOutcome,
         index_pending: bool,
     ) -> Ran {
+        self.branch_record.store(true, Ordering::Relaxed);
         let code = branch_code(outcome.answer());
         // The index step is yet to run: only a close that answered `ok` says so.
         let pending = index_pending && code == ResultCode::Ok;
@@ -1296,6 +1381,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         primary: Option<&str>,
         parent: &ParentView<LifecycleBlocker>,
     ) -> Option<Answer> {
+        self.note_path(parent.path);
         // A finished branch record answers from its stored answer, which the
         // domain gives: whatever ended it, it is the run's to report.
         if parent.answered {
@@ -1355,20 +1441,35 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             // What a call observed, and no part of the request.
             expected: _,
             closure_exists: _,
+            branch_record: _,
             verb: _,
         } = self;
         builder
     }
 
-    /// The request's position is on primary, so its result names primary:
-    /// the context's worktree does not outlive a complete run.
+    /// A direct request's position is on primary, so its result names
+    /// primary: the context's worktree does not outlive a complete run. A
+    /// branch record is placed on primary too, but it never reaches it: its
+    /// answers name the ticket's branch and its worktree, as `item sync`,
+    /// `comment add` and `ticket save` do for the same commit (decision 17).
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
+        if self.names_branch() {
+            return branch_scope(&V::KIND, &self.id, repository, &self.root);
+        }
         Scope {
             repository,
             item_id: Some(self.id.to_string()),
             branch: position.and_then(|position| position.branch().map(str::to_owned)),
             worktree: None,
             remote: None,
+        }
+    }
+
+    /// A stored answer is given again from the request's record, with no
+    /// prepare to have observed it: the parent says which path it was.
+    fn settled(&self, service: &RepositoryService, accepted: &Accepted) {
+        if let Ok(Some(parent)) = V::parent(service, &accepted.root(), accepted.operation_id) {
+            self.note_path(parent.path);
         }
     }
 

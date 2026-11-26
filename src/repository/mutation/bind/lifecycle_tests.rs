@@ -286,6 +286,7 @@ fn stopped_with(step: ParentStep, refusal: Option<Refusal<LifecycleBlocker>>, st
         id,
         expected: None,
         closure_exists: false,
+        branch_record: AtomicBool::new(false),
         verb: PhantomData,
     };
     binding.stopped(&service, &accepted(), stop, true)
@@ -319,6 +320,7 @@ fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
         id: ITEM.parse().unwrap(),
         expected: None,
         closure_exists: false,
+        branch_record: AtomicBool::new(false),
         verb: PhantomData,
     };
     let accepted = accepted();
@@ -411,6 +413,7 @@ impl Registered {
             id: ITEM.parse().unwrap(),
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
@@ -894,6 +897,7 @@ fn branch_stopped_with(step: ParentStep, stop: Stop) -> Ran {
         id,
         expected: None,
         closure_exists: false,
+        branch_record: AtomicBool::new(false),
         verb: PhantomData,
     };
     binding.stopped(&service, &accepted(), stop, true)
@@ -1066,6 +1070,170 @@ fn a_branch_record_s_child_stop_carries_the_synchronization_s_data() {
         ran.answer.data,
         Some(MutationDataDto::Lifecycle(_))
     ));
+}
+
+/// Decision 17: a branch record's answers name the ticket's branch and its
+/// worktree in `scope`, whatever way the binding came to know its path (a
+/// prepare's observation, the parent a run or a replay read, or the answer a
+/// branch record gave); a direct request's name primary, and so does a binding
+/// that has learned nothing, as a blocked prepare's is. The record's position
+/// is on primary all the while.
+#[test]
+fn a_branch_record_s_answers_name_the_ticket_s_branch_and_a_direct_one_s_name_primary() {
+    use crate::repository::{BranchAnswer, BranchClosureOutcome, PlannedCleanup};
+    let root = "/repository";
+    let position = Position {
+        base_ref: Some("refs/heads/main".to_owned()),
+        base_oid: None,
+    };
+    let main = (Some("main".to_owned()), None);
+    let ticket = (
+        Some(format!("manyhands/ticket/{ITEM}")),
+        Some(format!("{root}/.manyhands/worktrees/{ITEM}")),
+    );
+    let parent_of = |path| {
+        PARENT.with(|parent| {
+            *parent.borrow_mut() = Some(ParentView {
+                step: ParentStep::ContextSynchronized,
+                refusal: None,
+                expectation: [0; 32],
+                item_id: ITEM.parse().unwrap(),
+                checkpoint: None,
+                integration: None,
+                integration_kind: None,
+                publication: None,
+                cancel_requested: false,
+                children: [None, None],
+                path,
+                answered: false,
+            });
+        });
+    };
+    let ready = |record| Ready {
+        expected: [0; 32],
+        branch: format!("refs/heads/manyhands/ticket/{ITEM}"),
+        primary_branch: "main".to_owned(),
+        remote: Some("origin".to_owned()),
+        context_oid: git2::Oid::zero(),
+        primary_oid: git2::Oid::zero(),
+        context_child: false,
+        changes: Vec::new(),
+        integration: PlannedIntegration::MergeCommit,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        },
+        closure: None,
+        record,
+    };
+    let branch_ready = || BranchReady {
+        action: ClosureAction::Close,
+        context_oid: None,
+        tracking_primary: None,
+        retired_oid: None,
+        unheld: Vec::new(),
+    };
+    type Learn = Box<dyn Fn(&LifecycleBinding<Fixed>, &RepositoryService)>;
+    let rows: Vec<(&str, Learn, bool)> = vec![
+        ("nothing learned", Box::new(|_, _| {}), false),
+        (
+            "a prepare that observed a blocked state",
+            Box::new(|binding, _| binding.note_observed(&Observed::Blocked(Vec::new()))),
+            false,
+        ),
+        (
+            "a prepare that observed a direct close",
+            Box::new(move |binding, _| {
+                binding.note_observed(&Observed::Ready(Box::new(ready(None))))
+            }),
+            false,
+        ),
+        (
+            "a prepare that observed a branch record",
+            Box::new(move |binding, _| {
+                binding.note_observed(&Observed::Ready(Box::new(ready(Some(branch_ready())))))
+            }),
+            true,
+        ),
+        (
+            "a stop that read a direct parent",
+            Box::new(move |binding, service| {
+                parent_of(RecordPath::Direct);
+                binding.stopped(service, &accepted(), Stop::Busy, false);
+            }),
+            false,
+        ),
+        (
+            "a stop that read a branch parent",
+            Box::new(move |binding, service| {
+                parent_of(RecordPath::Branch);
+                binding.stopped(service, &accepted(), Stop::Busy, false);
+            }),
+            true,
+        ),
+        (
+            "a branch record's finished answer",
+            Box::new(|binding, service| {
+                binding.branch_reached(
+                    service,
+                    &accepted(),
+                    &BranchClosureOutcome::for_testing(BranchAnswer::Existing, None, None),
+                    false,
+                );
+            }),
+            true,
+        ),
+        (
+            "a replay that read a branch parent",
+            Box::new(move |binding, service| {
+                parent_of(RecordPath::Branch);
+                Binding::settled(binding, service, &accepted());
+            }),
+            true,
+        ),
+        (
+            "a replay that read a direct parent",
+            Box::new(move |binding, service| {
+                parent_of(RecordPath::Direct);
+                Binding::settled(binding, service, &accepted());
+            }),
+            false,
+        ),
+    ];
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    for (name, learn, branch) in rows {
+        let binding = LifecycleBinding::<Fixed> {
+            root: PathBuf::from(root),
+            id: ITEM.parse().unwrap(),
+            expected: None,
+            closure_exists: false,
+            branch_record: AtomicBool::new(false),
+            verb: PhantomData,
+        };
+        learn(&binding, &service);
+        let scope = binding.scope(Some(root.to_owned()), Some(&position));
+        let (named_branch, worktree) = if branch { &ticket } else { &main };
+        assert_eq!(&scope.branch, named_branch, "{name}");
+        assert_eq!(&scope.worktree, worktree, "{name}");
+        assert_eq!(scope.item_id.as_deref(), Some(ITEM), "{name}");
+        assert_eq!(scope.repository.as_deref(), Some(root), "{name}");
+    }
+    // A preview has no position and names the branch all the same: a branch
+    // record's path is known from what it observed.
+    let binding = LifecycleBinding::<Fixed> {
+        root: PathBuf::from(root),
+        id: ITEM.parse().unwrap(),
+        expected: None,
+        closure_exists: false,
+        branch_record: AtomicBool::new(true),
+        verb: PhantomData,
+    };
+    let scope = binding.scope(Some(root.to_owned()), None);
+    assert_eq!(scope.branch, ticket.0);
+    assert_eq!(scope.worktree, ticket.1);
 }
 
 /// A pull-request close's preview (design Part H): the effects of each
@@ -1360,6 +1528,7 @@ fn a_branch_parent_view_is_never_integrated() {
         id: ITEM.parse().unwrap(),
         expected: None,
         closure_exists: false,
+        branch_record: AtomicBool::new(false),
         verb: PhantomData,
     };
     let ended = |answered| {
@@ -1493,6 +1662,7 @@ fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
         id: ITEM.parse().unwrap(),
         expected: None,
         closure_exists: false,
+        branch_record: AtomicBool::new(false),
         verb: PhantomData,
     };
     let again = binding.stopped(&service, &accepted(), Stop::Busy, true);

@@ -1637,6 +1637,19 @@ fn operation_resume_of_an_unheld_withdraw_continues_it_as_a_withdraw() {
         None,
     );
     assert_eq!(resumed["command"], "operation resume");
+    // A resume that continues a branch record names the ticket's branch and
+    // its worktree, as the record's own request does (decision 17).
+    assert_eq!(
+        resumed["scope"]["branch"],
+        format!("manyhands/ticket/{}", WITHDRAW.id),
+        "{resumed}"
+    );
+    assert_eq!(resumed["scope"]["item_id"], WITHDRAW.id, "{resumed}");
+    assert_eq!(
+        resumed["scope"]["worktree"],
+        format!("{}/.manyhands/worktrees/{}", case.root(), WITHDRAW.id),
+        "{resumed}"
+    );
     // It was taken up as the withdraw it is: its record is still the one
     // withdraw record, unfinished and at its first step, and nothing was
     // written to the branch.

@@ -1866,6 +1866,39 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
         })
     );
     assert_eq!(o.consented_head(), Some(tip));
+    // The same guard with the context present (ruling 36): every push the
+    // classification counts must be the retired tip or its ancestor, or the
+    // boundary after the retirement could still read the branch as unresolved.
+    // An intended push leaves the deletion itself in doubt, which another
+    // blocker says; the counted proven pushes are this guard's.
+    for (case, elsewhere, resolved) in [
+        ("proven, an ancestor of the tip", false, true),
+        ("proven, not an ancestor", true, false),
+    ] {
+        let f = pull_request_fixture();
+        f.history("observed_published");
+        let tip = f.context_oid();
+        f.proven_push(if elsewhere {
+            tree_commit(
+                &f.repo,
+                f.base,
+                &[("elsewhere.txt", Some((b"other history", 0o100644)))],
+            )
+        } else {
+            f.base
+        });
+        if resolved {
+            let o = f.observation(at(1_700_000_000));
+            assert_eq!(o.path, new_branch, "{case}");
+            assert_eq!(
+                o.new_branch.as_ref().unwrap().retired_oid,
+                Some(tip),
+                "{case}"
+            );
+        } else {
+            f.blocked(&[ClosureBlocker::HistoryUnresolved]);
+        }
+    }
 
     // Situation 3, no context. 3.4: no tracking ref; the ticket is never
     // published, so nothing is retired and no worktree is removed.

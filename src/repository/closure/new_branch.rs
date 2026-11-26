@@ -27,8 +27,9 @@ use crate::{
     canonical::Integration,
     repository::{
         AuthoringKind, ClosureBlocker, FailurePoint, OperationId, RemoteOperationSafePoint,
-        RemoteOperationTarget, RemoteRefPlan, RemoteReservationOutcome, RepositoryErrorKind,
-        RepositoryLease, RepositoryOperation, RepositoryService, canonical_repository_root,
+        RemoteOperationTarget, RemoteRefPlan, RemoteReservationOutcome, RemoteSafePointOutcome,
+        RepositoryErrorKind, RepositoryLease, RepositoryOperation, RepositoryService,
+        canonical_repository_root,
         cleanup::{BranchDeletion, ContextCleanup, Precheck, TrackingDeletion, WorktreeRemoval},
         promotion::{
             integrate,
@@ -570,14 +571,22 @@ fn retire_remotely(
         }
     };
     // Nothing is fetched or pushed between the safe points: the part that
-    // follows is local, and `finish_parent` needs the second.
+    // follows is local, and `finish_parent` needs the second. What a safe
+    // point answers does not stop it (ruling 44): a cancel under the
+    // reservation stops the run at `retired`, after this part, and a poll's
+    // yield does not interrupt the remote part.
     for point in [
         RemoteOperationSafePoint::BeforeTransport,
         RemoteOperationSafePoint::AfterAdvertisement,
     ] {
-        service
+        match service
             .remote_safe_point(root, &owner, point)
-            .map_err(|_| TicketClosureError::RecoveryRequired)?;
+            .map_err(|_| TicketClosureError::RecoveryRequired)?
+        {
+            RemoteSafePointOutcome::Continue
+            | RemoteSafePointOutcome::Interrupted
+            | RemoteSafePointOutcome::Cancelled => {}
+        }
     }
     let cleanup = ContextCleanup::acquire(root)?;
     run::validate_cleanup_owner(

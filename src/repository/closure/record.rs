@@ -479,9 +479,11 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
         .map_err(|_| state::recovery_required())?;
     if !moded {
         // The path columns: rebuild a table that predates them. Its rows read
-        // `direct` and `close`, the columns' defaults; the index goes first.
+        // `direct` and `close`, the columns' defaults; the index goes first. The
+        // rows are copied in rowid order, which `close_found_deleted` reads as
+        // the order the records were made in (ruling 51a).
         if !created {
-            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_modes; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM ticket_closures_before_modes; DROP TABLE ticket_closures_before_modes;")).map_err(|_| state::recovery_required())?;
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_modes; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM ticket_closures_before_modes ORDER BY rowid; DROP TABLE ticket_closures_before_modes;")).map_err(|_| state::recovery_required())?;
         }
         tx.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
