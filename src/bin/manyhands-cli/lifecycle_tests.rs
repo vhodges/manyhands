@@ -14,8 +14,13 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupState,
         LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState,
-        LifecycleMutationDto, LifecycleMutationType, LifecyclePublicationPendingReason,
-        LifecyclePublicationState, LifecycleRecording, MutationDataDto, PrepareDataDto, RequestId,
+        LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
+        LifecyclePathChangeKind, LifecyclePlannedClosureDto, LifecyclePublicationPendingReason,
+        LifecyclePublicationState, LifecycleRecording, MutationDataDto, PrepareDataDto,
+        PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PullRequestClosureAction,
+        PullRequestClosureDto, PullRequestClosureMutationDto, PullRequestClosureMutationType,
+        PullRequestClosurePreviewDto, PullRequestClosurePreviewType, PullRequestClosurePublication,
+        PullRequestClosureRecording, PullRequestDto, RequestId,
     },
     results::{Effects, Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -556,6 +561,34 @@ fn a_lifecycle_answer_naming_blockers_is_not_retried_automatically() {
     assert!(should_retry(&refused, id));
 }
 
+/// A branch record's data names what stands in the way as a lifecycle's does,
+/// so the retry guard reads it from there too (Part H).
+#[test]
+fn a_branch_record_answer_naming_blockers_is_not_retried_automatically() {
+    let id = RequestId::parse(REQUEST).unwrap();
+    let mut refused = branch_answer(
+        PullRequestClosureAction::Close,
+        PullRequestClosureRecording::Nothing,
+        None,
+        None,
+        None,
+    );
+    refused.code = ResultCode::Busy;
+    refused.outcome = manyhands::results::Outcome::Partial;
+    refused.recovery = vec![retry()];
+    let Some(MutationDataDto::PullRequestClosure(data)) = refused.data.as_mut() else {
+        panic!("a branch record's data")
+    };
+    data.blockers = vec![LifecycleBlocker::AlreadyClosed];
+    assert!(!should_retry(&refused, id));
+    // The same stop naming no blockers repeats, as a lifecycle's does.
+    let Some(MutationDataDto::PullRequestClosure(data)) = refused.data.as_mut() else {
+        panic!("a branch record's data")
+    };
+    data.blockers = Vec::new();
+    assert!(should_retry(&refused, id));
+}
+
 #[test]
 fn a_root_and_a_slug_with_controls_are_escaped() {
     const HOSTILE: &str = "/re\npo\x1b[2J";
@@ -960,4 +993,166 @@ fn a_wrong_passphrase_keeps_c2_s_hint() {
         "{}",
         stderr(&out)
     );
+}
+
+/// A finished branch record's answer, with the link a person opens.
+fn branch_answer(
+    action: PullRequestClosureAction,
+    recording: PullRequestClosureRecording,
+    closed_at: Option<&str>,
+    publication: Option<PullRequestClosurePublication>,
+    pull_request: Option<PullRequestDto>,
+) -> Envelope<MutationDataDto> {
+    let mut envelope = answer("ticket close", ResultCode::Ok, None, vec![]);
+    envelope.data = Some(MutationDataDto::PullRequestClosure(Box::new(
+        PullRequestClosureMutationDto {
+            r#type: PullRequestClosureMutationType::PullRequestClosure,
+            action,
+            closure: PullRequestClosureDto {
+                recording,
+                closed_at: closed_at.map(str::to_owned),
+            },
+            checkpoint_oid: Some(OID.into()),
+            publication,
+            retired_context: None,
+            pull_request,
+            blockers: Vec::new(),
+        },
+    )));
+    envelope
+}
+
+/// Part H: a pull-request closure answer prints `closure: recorded
+/// <closed_at>`, `closure: already recorded`, `closure: withdrawn` or no
+/// closure line, then `publication: <state>`, then the link's own line; and
+/// a preview prints each path the primary lacks, escaped.
+#[test]
+fn pull_request_closure_lines() {
+    let link = |url: Option<&str>| PullRequestDto {
+        source: "manyhands/ticket/x".into(),
+        target: "main".into(),
+        forge: None,
+        url: url.map(str::to_owned),
+    };
+    let at = "2026-11-26T10:00:00Z";
+    use PullRequestClosureAction::{Close, Withdraw};
+    use PullRequestClosurePublication::{Current, Published};
+    use PullRequestClosureRecording::{Existing, Nothing, Recorded, Withdrawn};
+    for (action, recording, closed_at, publication, url, lines) in [
+        (
+            Close,
+            Recorded,
+            Some(at),
+            Some(Published),
+            Some("https://forge.example/pr/1"),
+            vec![
+                "closure: recorded 2026-11-26T10:00:00Z\n",
+                "publication: published\n",
+                "pull request: https://forge.example/pr/1\n",
+            ],
+        ),
+        (
+            Close,
+            Existing,
+            None,
+            Some(Current),
+            None,
+            vec![
+                "closure: already recorded\n",
+                "publication: current\n",
+                "open a pull request from manyhands/ticket/x into main\n",
+            ],
+        ),
+        (
+            Withdraw,
+            Withdrawn,
+            None,
+            Some(Published),
+            None,
+            vec!["closure: withdrawn\n", "publication: published\n"],
+        ),
+    ] {
+        let out = output(
+            &branch_answer(action, recording, closed_at, publication, Some(link(url))),
+            false,
+        );
+        let text = stdout(&out);
+        for line in &lines {
+            assert!(text.contains(line), "{line:?} in {text}");
+        }
+        // Each line is its own, and the link's is the item's only.
+        assert_eq!(text.matches("publication: ").count(), 1, "{text}");
+        no_raw_control(text);
+    }
+
+    // No closure of its own, no publication and no link: no such lines.
+    let out = output(&branch_answer(Close, Nothing, None, None, None), false);
+    let nothing = stdout(&out);
+    for absent in ["closure:", "publication:", "pull request", "open a pull"] {
+        assert!(!nothing.contains(absent), "{absent:?} in {nothing}");
+    }
+
+    // A control character in a link's URL is escaped, as a field's is.
+    let out = output(
+        &branch_answer(
+            Close,
+            Recorded,
+            Some(at),
+            Some(Published),
+            Some(link(Some("https://forge.example/\u{1b}[31m"))),
+        ),
+        false,
+    );
+    let escaped = stdout(&out);
+    no_raw_control(escaped);
+    assert!(
+        escaped.contains("pull request: https://forge.example/"),
+        "{escaped}"
+    );
+
+    // The preview of a new branch lists what the primary lacks, escaped.
+    let prepared = Envelope::<PrepareDataDto>::read_success(
+        "ticket close",
+        scope(true),
+        PrepareDataDto::Preview(Box::new(PreviewDto {
+            confirmation_id: "01ARZ3NDEKTSV4RRFFQ69G5FZ1".into(),
+            expires_at: "2026-11-26T10:05:00Z".into(),
+            command: "ticket close".into(),
+            scope: scope(true),
+            effects: vec![PreviewEffectDto {
+                effect: PreviewEffect::ContextCreated,
+            }],
+            details: PreviewDetailsDto::PullRequestClosure(Box::new(
+                PullRequestClosurePreviewDto {
+                    r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
+                    root: ROOT.into(),
+                    action: PullRequestClosureAction::NewBranch,
+                    item_id: ITEM.into(),
+                    slug: None,
+                    branch: "manyhands/ticket/x".into(),
+                    primary_branch: "main".into(),
+                    remote: Some("origin".into()),
+                    context_oid: Some(OID.into()),
+                    tracking_primary_oid: Some(OID.into()),
+                    closure: LifecyclePlannedClosureDto {
+                        recording: LifecycleRecording::Record,
+                        closed_by: "A <a@example.invalid>".into(),
+                    },
+                    retired_context: Some(OID.into()),
+                    unheld: vec![LifecyclePathChangeDto {
+                        path: "odd\u{1b}[31m\n.md".into(),
+                        change: LifecyclePathChangeKind::Deleted,
+                    }],
+                    pull_request: None,
+                },
+            )),
+        })),
+    );
+    let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &prepared);
+    let shown = stdout(&out);
+    assert!(
+        shown.contains("not on main: deleted odd\\u{1b}[31m\\n.md\n"),
+        "{shown}"
+    );
+    no_raw_control(shown);
 }
