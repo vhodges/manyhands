@@ -238,7 +238,7 @@ fn save<L: Lifecycle>(
         L::save_record(tx, id, &updated)
     })
 }
-fn boundary(
+pub(in super::super) fn boundary(
     service: &RepositoryService,
     root: &Path,
     point: FailurePoint,
@@ -273,7 +273,7 @@ fn abandon<L: Lifecycle>(
         Err(e) => mapped::<L::Error>(e),
     }
 }
-fn cancelled<L: Lifecycle>(
+pub(in super::super) fn cancelled<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
     r: &L::Record,
@@ -945,7 +945,7 @@ fn promote_branch<L: Lifecycle>(
         }
         return Err(L::Error::interrupted());
     }
-    if r.step() == Step::Confirmed {
+    if r.step() == Step::Confirmed && r.synchronizes_context() {
         match context_step::<L>(service, request, primary, r, observed, io, progress) {
             Ok(ContextStep::Synchronized) => (),
             Ok(ContextStep::Gone) => {

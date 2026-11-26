@@ -708,7 +708,7 @@ fn boundary(
 /// reading owed until an indexing stores it (the final review's F-1). A mark
 /// that cannot be written refuses the move, with nothing changed. The move
 /// changes the ticket's context alone; `context_moved` marks the primary too.
-fn context_moving(
+pub(super) fn context_moving(
     service: &RepositoryService,
     root: &Path,
     item: &ItemId,

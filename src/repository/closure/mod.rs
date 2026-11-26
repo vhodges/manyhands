@@ -26,6 +26,7 @@ use time::OffsetDateTime;
 
 pub(super) mod checkpoint;
 pub(super) mod lifecycle;
+pub(super) mod new_branch;
 pub(super) mod observe;
 pub(super) mod record;
 #[cfg(test)]

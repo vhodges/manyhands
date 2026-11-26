@@ -222,6 +222,12 @@ pub(in super::super) trait LifecycleRecord: Clone {
     fn answered(&self) -> bool {
         false
     }
+    /// Whether the record's run begins with a child that synchronizes its
+    /// context: every record's but a new branch's, which makes its context
+    /// instead.
+    fn synchronizes_context(&self) -> bool {
+        true
+    }
     fn context_sync_id(&self) -> Option<OperationId>;
     fn primary_sync_id(&self) -> Option<OperationId>;
     fn base_oid(&self) -> Option<Oid>;

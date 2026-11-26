@@ -1156,6 +1156,12 @@ pub enum FailurePoint {
     /// Ticket closure: the context ref is at the checkpoint and nothing has
     /// reached the primary.
     AfterClosureCheckpoint,
+    /// A new branch's closure commit is recorded in SQL, unreferenced; its
+    /// pending ref is not made.
+    NewBranchCommitRecorded,
+    /// A new branch's closure commit is held by its pending ref; the old
+    /// context is untouched.
+    NewBranchCommitHeld,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
@@ -2632,6 +2638,154 @@ impl RepositoryService {
             )?;
         }
         Ok(ContextProvisionOutcome::Created(context))
+    }
+
+    /// A ticket's editing context made at `commit`: its branch
+    /// `manyhands/<kind>/<ID>` at `commit` and its worktree at
+    /// `.manyhands/worktrees/<ID>` (a new branch's step 3). Unlike
+    /// `prepare_context_unlocked` it does not require the root to be on the
+    /// primary, nor the item to be in the primary: the commit, built on the
+    /// tracking primary, holds it. The caller holds the repository lease and
+    /// the item's closure hold, so no other writer makes the context.
+    ///
+    /// Idempotent over its own partial work: a branch already at `commit` is
+    /// kept, and a worktree already made at it is checked and kept. The
+    /// branch anywhere else, or one of the branch's worktree pair without the
+    /// other, is `MismatchedAuthoringContext`, with nothing changed.
+    fn context_at_commit(
+        &self,
+        root: &Path,
+        kind: AuthoringKind,
+        item_id: &canonical::ItemId,
+        commit: git2::Oid,
+    ) -> Result<ItemContext, RepositoryError> {
+        let operation = RepositoryOperation::PrepareContext;
+        let (repository, root) = canonical_repository_root(root, operation)?;
+        let configuration = match read_configuration_for(&root, operation)? {
+            ConfigurationInspection::Valid(configuration) => configuration,
+            ConfigurationInspection::Missing => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::RepositoryNotEnabled,
+                    "a Manyhands configuration is required before authoring",
+                ));
+            }
+            ConfigurationInspection::Invalid(problem) => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::InvalidConfiguration,
+                    problem.message,
+                ));
+            }
+        };
+        let id = item_id.to_string();
+        let branch = format!("manyhands/{}/{id}", authoring_kind_segment(&kind));
+        if configuration.primary_branch == branch {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the configured primary branch cannot be an authoring branch",
+            ));
+        }
+        let worktree = root.join(".manyhands/worktrees").join(&id);
+        let context = ItemContext {
+            root: root.clone(),
+            kind,
+            item_id: item_id.clone(),
+            branch: branch.clone(),
+            worktree: worktree.clone(),
+        };
+        let git = |error| RepositoryError::git(operation, Some(root.clone()), error);
+        let target = repository.find_commit(commit).map_err(git)?;
+        validate_deterministic_worktree_path_chain(&worktree, &root, operation)?;
+        if branch_checked_out_in_another_worktree(
+            &repository,
+            &worktree,
+            &branch,
+            operation,
+            &root,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the deterministic authoring branch is checked out in another worktree",
+            ));
+        }
+        let mismatched = |message: &str| {
+            RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                message,
+            )
+        };
+        let directory = match std::fs::symlink_metadata(&worktree) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(RepositoryError::io(operation, Some(root.clone()), error)),
+        };
+        let registered = repository.find_worktree(&id).is_ok();
+        let existing = match repository.find_branch(&branch, BranchType::Local) {
+            Ok(existing) => Some(existing),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(git(error)),
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|existing| existing.get().target() != Some(commit))
+        {
+            return Err(mismatched(
+                "the deterministic authoring branch exists at another commit",
+            ));
+        }
+        if directory != registered {
+            return Err(mismatched(
+                "the deterministic worktree and its registration do not agree",
+            ));
+        }
+        if directory {
+            // Made by an earlier call: the branch must be here, at `commit`,
+            // and checked out in it.
+            if existing.is_none() {
+                return Err(mismatched(
+                    "the deterministic worktree has no authoring branch",
+                ));
+            }
+            validate_context_worktree_identity(&repository, &context, operation)?;
+            let linked = Repository::open(&worktree).map_err(git)?;
+            let head = linked
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(git)?;
+            if head.id() != commit {
+                return Err(mismatched(
+                    "the deterministic worktree is not at the commit",
+                ));
+            }
+            return Ok(context);
+        }
+        ensure_authoring_worktree_base(&root, operation)?;
+        let reference = match existing {
+            Some(existing) => existing.into_reference(),
+            None => {
+                self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
+                repository
+                    .branch(&branch, &target, false)
+                    .map_err(git)?
+                    .into_reference()
+            }
+        };
+        let mut options = WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        self.check_failure(FailurePoint::BeforeWorktreeCreation, operation, &root)?;
+        repository
+            .worktree(&id, &worktree, Some(&options))
+            .map_err(git)?;
+        Ok(context)
     }
 
     pub fn save_document(

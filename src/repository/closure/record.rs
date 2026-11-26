@@ -651,6 +651,11 @@ fn validate_direct(r: &ClosureRecord) -> Result<(), RepositoryError> {
     }
     Ok(())
 }
+/// The ref that holds a new branch's commit from the moment it is recorded
+/// until its context exists.
+pub(in super::super) fn pending_ref_name(operation: OperationId) -> String {
+    format!("refs/manyhands/closures/{operation}")
+}
 /// A branch record: no integration, a publication child in its place, and
 /// the per-action rules of the `closing` CHECK. Its answer is stored.
 fn validate_branch(r: &ClosureRecord) -> Result<(), RepositoryError> {
@@ -695,7 +700,7 @@ fn validate_branch(r: &ClosureRecord) -> Result<(), RepositoryError> {
         // is the record's own and goes with its commit.
         || r.retired_oid.is_some() && !new_branch
         || r.pending_ref.as_deref().is_some_and(|name| {
-            name != format!("refs/manyhands/closures/{}", r.operation_id)
+            name != pending_ref_name(r.operation_id)
                 || !new_branch
                 || r.closure_oid.is_none()
                 || r.step.terminal()
@@ -1079,6 +1084,78 @@ pub(in super::super) fn begin_branch_closing(
     Ok(())
 }
 
+/// A new branch's step 1 write, in one SQL write: the commit just built on
+/// the tracking primary `base`, not yet referenced, its `closed_at` (whole UTC
+/// seconds), the tracking context tip the consent bound (`remote_context_oid`)
+/// and the record's own pending ref, which is made next. The step stays
+/// `confirmed`: from this write the record holds the ticket. The caller has
+/// just re-checked that no synchronization of the context is unfinished.
+pub(in super::super) fn begin_new_branch(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    operation: OperationId,
+    base: Oid,
+    closed_at: OffsetDateTime,
+    commit: Oid,
+    tracking: Option<Oid>,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    if r.action != ClosureAction::NewBranch
+        || r.step != ClosureStep::Confirmed
+        || r.closure_kind != Some(ClosureKind::Record)
+        || r.closure_oid.is_some()
+        || base.is_zero()
+        || commit.is_zero()
+        || tracking.is_some_and(|tracking| tracking.is_zero())
+    {
+        return Err(state::recovery_required());
+    }
+    let closed_at = closed_at_text(closed_at)?;
+    tx.execute("UPDATE ticket_closures SET base_oid=?2,closed_at=?3,closure_oid=?4,remote_context_oid=?5,pending_ref='refs/manyhands/closures/'||operation_id,updated_at=max(updated_at,?6) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),closed_at,commit.to_string(),tracking.map(|o|o.to_string()),parent::now()]).map_err(|_|state::recovery_required())?;
+    read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
+/// A new branch's step 3 begins: `confirmed` (nothing to retire) to
+/// `closing`, with the context to be made at the commit (`context_oid`), in
+/// one SQL write. The pending ref stays until the context exists. The caller
+/// has just re-checked that no synchronization of the context is unfinished.
+pub(in super::super) fn begin_new_branch_closing(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    operation: OperationId,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    let (Some(commit), Some(_)) = (r.closure_oid, &r.pending_ref) else {
+        return Err(state::recovery_required());
+    };
+    if r.action != ClosureAction::NewBranch
+        || r.step != ClosureStep::Confirmed
+        || r.retired_oid.is_some()
+    {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE ticket_closures SET step='closing',context_oid=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),commit.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
+    read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
+/// A new branch at `closing` lets go of its pending ref once its context
+/// holds the commit. A record that has none is left as it is.
+pub(in super::super) fn clear_pending_ref(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    operation: OperationId,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    if r.action != ClosureAction::NewBranch || r.step != ClosureStep::Closing {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE ticket_closures SET pending_ref=NULL,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![operation.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
+    read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
 /// Mints a branch record's publication child and moves it from `closing` to
 /// `publication_pending`, in one transaction: a record that has the child has
 /// the step.
@@ -1088,7 +1165,13 @@ pub(in super::super) fn begin_publication(
     op: OperationId,
 ) -> Result<ClosureRecord, RepositoryError> {
     let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if r.path() != RecordPath::Branch || r.step != ClosureStep::Closing || r.primary_attempt != 0 {
+    // A new branch's context is not made while its pending ref still holds
+    // the commit: no child before step 3 is done.
+    if r.path() != RecordPath::Branch
+        || r.step != ClosureStep::Closing
+        || r.primary_attempt != 0
+        || r.action == ClosureAction::NewBranch && r.pending_ref.is_some()
+    {
         return Err(state::recovery_required());
     }
     parent::next_attempt::<ClosureRecord>(tx, id, op, ChildRole::Publication)?;
@@ -1531,6 +1614,9 @@ impl LifecycleRecord for ClosureRecord {
     }
     fn answered(&self) -> bool {
         ClosureRecord::answered(self)
+    }
+    fn synchronizes_context(&self) -> bool {
+        self.action != ClosureAction::NewBranch
     }
     fn integration_oid(&self) -> Option<Oid> {
         self.integration_oid

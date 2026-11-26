@@ -5,7 +5,7 @@ use super::{
     BranchAnswer, BranchClosureOutcome, BranchFinish, CloseTicketRequest, ClosureAction,
     ClosureBlocker, ClosureExpectation, ClosureOutcome, ClosureRecording, PlannedClosure,
     PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosureResult,
-    checkpoint,
+    checkpoint, new_branch,
     observe::{self, ClosureObservation, ClosureRefusal, PreparedClosureObservation, Verb},
     record::{self, ClosureKind, ClosureRecord},
 };
@@ -447,15 +447,20 @@ impl Lifecycle for TicketClosureLifecycle {
             Err(blockers) => Err(record::Refusal::Blocked(blockers)),
         }
     }
-    /// Interim, until a new branch runs: a confirm of an unchanged new-branch
-    /// preview writes no record. A refusal at insertion is unaffected, since
-    /// this runs only for an unchanged digest.
+    /// Interim, until a new branch retires its old context: a confirm of an
+    /// unchanged new-branch preview that has an old branch to retire writes no
+    /// record. A refusal at insertion is unaffected, since this runs only for
+    /// an unchanged digest.
     fn require_identity(
         preview: &ClosureObservation,
         _repository: &git2::Repository,
         _confirmation: Option<&ConfirmedCommitIdentity>,
     ) -> Result<(), TicketClosureError> {
-        if preview.path == (Integration::PullRequest, ClosureAction::NewBranch) {
+        if preview
+            .new_branch
+            .as_ref()
+            .is_some_and(|facts| facts.old_tip.is_some() || facts.retired_oid.is_some())
+        {
             return Err(TicketClosureError::RecoveryRequired);
         }
         Ok(())
@@ -541,6 +546,9 @@ impl Lifecycle for TicketClosureLifecycle {
         request: &LifecycleRequest<ClosureExpectation>,
         r: &ClosureRecord,
     ) -> Result<BranchStep, TicketClosureError> {
+        if r.action == ClosureAction::NewBranch {
+            return new_branch::step(service, request, r);
+        }
         checkpoint::branch_step(
             service,
             &request.root,

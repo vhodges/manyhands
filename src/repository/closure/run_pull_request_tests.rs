@@ -4319,8 +4319,8 @@ fn f7_a_tracking_primary_without_the_ticket_keeps_today_s_blocker() {
 /// F8, before step 1: what a new branch's consent bound, changed between
 /// prepare and confirm, is `external_change`. The refused row is the new
 /// branch's, nothing is held or written, and the old context stays. A dirty
-/// old worktree is a blocker, as for any close. An unchanged confirm writes
-/// no record yet.
+/// old worktree is a blocker, as for any close. An unchanged confirm of a new
+/// branch that has an old context to retire writes no record yet.
 #[test]
 fn f8_a_change_before_the_retirement_is_external_change_or_abandons() {
     type Change = fn(&PullRequest);
@@ -4384,8 +4384,8 @@ fn f8_a_change_before_the_retirement_is_external_change_or_abandons() {
         (Integration::PullRequest, ClosureAction::Close)
     );
     p.assert_primary_untouched(&io);
-    // Unchanged, the confirm writes no record: the new branch does not run
-    // yet.
+    // Unchanged, the confirm writes no record: a new branch that retires an
+    // old context does not run yet.
     let p = setup();
     let req = p.confirming(p.ready().expectation());
     let refs_before = refs(&p.f.repo);
@@ -4631,4 +4631,562 @@ fn r51_a_withdraw_abandoned_by_a_deleted_branch_is_evidence() {
     assert_eq!(outcome.answer(), BranchAnswer::ContextRemoteBranchDeleted);
     assert_eq!(p.ready().path(), NEW_BRANCH);
     p.assert_primary_untouched(&io);
+}
+
+// --- the new branch with nothing to retire (Task 9, slice B) ---
+
+impl PullRequest {
+    /// The tracking primary `P`, which a new branch is built on.
+    fn tracking_primary(&self) -> Oid {
+        self.f
+            .repo
+            .refname_to_id("refs/remotes/origin/main")
+            .unwrap()
+    }
+    /// A ticket with no context, never published: nothing to retire.
+    fn without_context() -> Self {
+        let p = PullRequest::new();
+        p.remove_context();
+        p.drop_tracking_context();
+        p
+    }
+    fn pending_ref(&self, operation: OperationId) -> Option<Oid> {
+        self.f
+            .repo
+            .refname_to_id(&format!("refs/manyhands/closures/{operation}"))
+            .ok()
+    }
+    fn worktree(&self) -> std::path::PathBuf {
+        self.f.root().join(".manyhands/worktrees").join(ID)
+    }
+    /// What step 3 leaves of a new branch: the context ref at the record's
+    /// commit, whose only parent is `parent` and which changes only the
+    /// ticket's file; the worktree at it; no pending ref.
+    fn assert_new_branch(&self, r: &ClosureRecord, parent: Oid) {
+        let closure = r.closure_oid.expect("the record has its commit");
+        assert_eq!(self.f.context_oid(), closure);
+        let commit = self.f.repo.find_commit(closure).unwrap();
+        assert_eq!(commit.parent_count(), 1);
+        assert_eq!(commit.parent_id(0).unwrap(), parent);
+        assert_eq!(commit.summary(), Some(close_subject().as_str()));
+        let diff = self
+            .f
+            .repo
+            .diff_tree_to_tree(
+                Some(&self.f.repo.find_commit(parent).unwrap().tree().unwrap()),
+                Some(&commit.tree().unwrap()),
+                None,
+            )
+            .unwrap();
+        let paths: Vec<_> = diff
+            .deltas()
+            .map(|delta| delta.new_file().path().unwrap().to_owned())
+            .collect();
+        assert_eq!(paths, [std::path::PathBuf::from(ticket())]);
+        let worktree = git2::Repository::open(self.worktree()).unwrap();
+        assert_eq!(
+            worktree.head().unwrap().peel_to_commit().unwrap().id(),
+            closure
+        );
+        assert_eq!(
+            worktree.head().unwrap().name(),
+            Some(context_ref().as_str())
+        );
+        assert_eq!(self.pending_ref(r.operation_id), None);
+        assert_eq!(r.pending_ref, None);
+    }
+    /// Nothing on the remote side was deleted.
+    fn assert_nothing_deleted_remotely(&self, io: &PullRequestIo) {
+        assert_eq!(io.inner.calls.borrow().deletes, 0);
+        assert_eq!(self.f.effects("remote_delete"), 0);
+    }
+    /// No retirement was made: no parent row for the record, and no retired
+    /// context.
+    fn assert_nothing_retired(&self, operation: OperationId) {
+        let rows = |sql: &str| -> i64 {
+            self.f
+                .db()
+                .query_row(sql, [operation.to_string()], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            rows("SELECT count(*) FROM remote_operation_records WHERE operation_ulid=?1"),
+            0
+        );
+        assert_eq!(
+            rows("SELECT count(*) FROM retired_contexts WHERE ?1 IS NOT NULL"),
+            0
+        );
+    }
+    /// A new branch's request, run once and lost at `point` of
+    /// `NEW_BRANCH_EXITS`.
+    fn lost_at(&self, point: usize) -> CloseTicketRequest {
+        let req = self.request();
+        exit_at(&self.f, &req, NEW_BRANCH_EXIT_BASE + point);
+        req
+    }
+}
+
+/// F3: a ticket with no context, never published, gets a new branch: one
+/// commit over the tracking primary that changes only the ticket's file, on a
+/// fresh branch and worktree, published. Nothing is retired and nothing is
+/// deleted remotely.
+#[test]
+fn f3_a_ticket_with_no_context_never_published_gets_a_new_branch() {
+    let p = PullRequest::without_context();
+    let preview = p.ready();
+    assert_eq!(preview.path(), NEW_BRANCH);
+    let facts = preview.new_branch.clone().expect("a new branch");
+    assert_eq!((facts.old_tip, facts.retired_oid), (None, None));
+    assert!(facts.unheld.is_empty());
+    let parent = p.tracking_primary();
+    let req = p.confirming(preview.expectation());
+    let mut io = PullRequestIo::default();
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    assert_eq!(outcome.action(), ClosureAction::NewBranch);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Complete);
+    assert_eq!(r.answer_code, Some(BranchAnswer::Published));
+    assert_eq!(r.closure_kind, Some(ClosureKind::Record));
+    assert_eq!(r.closed_at, Some(clock()));
+    assert_eq!(r.base_oid, Some(parent));
+    assert_eq!((r.retired_oid, r.consented_context_oid), (None, None));
+    assert_eq!(outcome.checkpoint_oid(), r.closure_oid);
+    p.assert_new_branch(&r, parent);
+    assert!(!p.held());
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 1);
+    let closure = r.closure_oid.unwrap();
+    let ticket = parse_ticket(&support::tree_bytes(&p.f.repo, closure, &ticket()));
+    assert_eq!(ticket.closed_by.as_deref(), Some(CLOSED_BY));
+    assert_eq!(ticket.closed_at, Some(clock()));
+    assert_eq!(
+        p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        closure
+    );
+    // No context child ran: the publication's alone.
+    assert_eq!(io.children(), 1);
+    p.assert_nothing_retired(req.operation_id);
+    p.assert_nothing_deleted_remotely(&io);
+    p.assert_link();
+    p.assert_primary_untouched(&io);
+    // The same request again gives the same answer, and runs nothing.
+    let again = PullRequest::branch(p.run(req, &mut io));
+    assert_eq!(again, outcome);
+    assert_eq!(io.children(), 1);
+}
+
+/// F6: a surviving remote branch the tracking primary holds is no
+/// retirement: the new branch is fast-forwarded from it, and the commit is
+/// built on the tracking primary, which descends from the branch's tip.
+#[test]
+fn f6_a_surviving_branch_the_tracking_primary_holds_is_fast_forwarded() {
+    let p = PullRequest::new();
+    p.remove_context();
+    let surviving = p.f.repo.refname_to_id(&tracking_context_ref()).unwrap();
+    let parent = p.tracking_primary();
+    assert_ne!(surviving, parent);
+    assert!(p.f.repo.graph_descendant_of(parent, surviving).unwrap());
+    let preview = p.ready();
+    assert_eq!(preview.path(), NEW_BRANCH);
+    assert_eq!(
+        preview
+            .new_branch
+            .clone()
+            .map(|facts| (facts.old_tip, facts.retired_oid)),
+        Some((None, None))
+    );
+    let req = p.confirming(preview.expectation());
+    let mut io = PullRequestIo::default();
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    let r = p.stored(&req);
+    let closure = r.closure_oid.unwrap();
+    p.assert_new_branch(&r, parent);
+    assert!(!p.held());
+    assert!(p.f.repo.graph_descendant_of(closure, surviving).unwrap());
+    assert_eq!(
+        p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        closure
+    );
+    p.assert_nothing_retired(req.operation_id);
+    p.assert_nothing_deleted_remotely(&io);
+    p.assert_primary_untouched(&io);
+}
+
+/// F8, at step 1: a change after the confirm's insertion and before the
+/// commit is recorded is `external_change`: the record is abandoned with
+/// nothing written (no commit recorded, no pending ref, no branch) and the
+/// same request answers it again.
+#[test]
+fn f8_a_change_before_the_commit_is_recorded_abandons_as_external_change() {
+    let p = PullRequest::without_context();
+    let req = p.confirming(p.ready().expectation());
+    let moved = p.off(p.tracking_primary(), "later.txt");
+    let root = p.f.root().to_owned();
+    p.f.hook(move |_, point| {
+        if point == FailurePoint::AfterConfirmed {
+            git2::Repository::open(&root)
+                .unwrap()
+                .reference("refs/remotes/origin/main", moved, true, "fixture")
+                .unwrap();
+        }
+    });
+    let mut io = PullRequestIo::default();
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ExternalChange);
+    assert_eq!(outcome.action(), ClosureAction::NewBranch);
+    assert_eq!(outcome.checkpoint_oid(), None);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ExternalChange));
+    assert_eq!(r.answer_code, Some(BranchAnswer::ExternalChange));
+    assert_eq!(
+        (r.closure_oid, r.closed_at, r.pending_ref),
+        (None, None, None)
+    );
+    assert_eq!(p.pending_ref(req.operation_id), None);
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 0);
+    assert!(p.f.repo.find_reference(&context_ref()).is_err());
+    assert!(!p.worktree().exists());
+    assert!(!p.held());
+    assert_eq!(io.children(), 0);
+    p.assert_nothing_deleted_remotely(&io);
+    p.assert_primary_untouched(&io);
+}
+
+/// F10, step 1: a process lost after the commit is recorded and before its
+/// pending ref is made, or after, reuses that commit: one commit, the same
+/// `closed_at`.
+#[test]
+fn f10_a_crash_after_the_commit_is_recorded_reuses_it() {
+    for (point, held) in [(0, false), (1, true)] {
+        let case = format!("point {point}");
+        let p = PullRequest::without_context();
+        let parent = p.tracking_primary();
+        let req = p.lost_at(point);
+        let before = p.stored(&req);
+        assert_eq!(before.step, ClosureStep::Confirmed, "{case}");
+        let (closed_at, closure) = (before.closed_at, before.closure_oid);
+        assert!(closed_at.is_some() && closure.is_some(), "{case}");
+        assert_eq!(
+            p.pending_ref(req.operation_id),
+            held.then(|| closure.unwrap()),
+            "{case}"
+        );
+        // The old context is untouched, and the new one not yet made.
+        assert!(p.f.repo.find_reference(&context_ref()).is_err(), "{case}");
+        assert!(p.held(), "{case}");
+        let mut io = PullRequestIo::default();
+        let outcome = PullRequest::branch(p.run_in(&p.f.reopened(), req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Published, "{case}");
+        let r = p.stored(&req);
+        assert_eq!((r.closed_at, r.closure_oid), (closed_at, closure), "{case}");
+        assert_eq!(p.f.commits_in_odb(&close_subject()), 1, "{case}");
+        p.assert_new_branch(&r, parent);
+        assert!(!p.held(), "{case}");
+        p.assert_nothing_deleted_remotely(&io);
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// F10, step 3: a process lost with the record at `closing` and no branch
+/// yet, or the branch and no worktree yet, continues the same commit: the
+/// branch is made at it (or kept), the worktree added, no second commit.
+#[test]
+fn f10_a_crash_while_making_the_context_continues_at_closing() {
+    for (point, branch_made) in [(2, false), (3, true)] {
+        let case = format!("point {point}");
+        let p = PullRequest::without_context();
+        let parent = p.tracking_primary();
+        let req = p.lost_at(point);
+        let before = p.stored(&req);
+        assert_eq!(before.step, ClosureStep::Closing, "{case}");
+        let closure = before.closure_oid.unwrap();
+        assert_eq!(before.context_oid, Some(closure), "{case}");
+        // The pending ref still holds the commit until the context is made.
+        assert_eq!(p.pending_ref(req.operation_id), Some(closure), "{case}");
+        assert_eq!(
+            p.f.repo.refname_to_id(&context_ref()).ok(),
+            branch_made.then_some(closure),
+            "{case}"
+        );
+        assert!(!p.worktree().exists(), "{case}");
+        assert!(p.held(), "{case}");
+        let mut io = PullRequestIo::default();
+        let outcome = PullRequest::branch(p.run_in(&p.f.reopened(), req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Published, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.closure_oid, Some(closure), "{case}");
+        assert_eq!(p.f.commits_in_odb(&close_subject()), 1, "{case}");
+        p.assert_new_branch(&r, parent);
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// F10: a branch that moved off the commit before the retry is not Manyhands'
+/// to take over: the retry stops with `recovery_required`, changing nothing.
+#[test]
+fn f10_a_branch_elsewhere_than_the_commit_is_recovery_required() {
+    let p = PullRequest::without_context();
+    let req = p.lost_at(3);
+    let closure = p.stored(&req).closure_oid.unwrap();
+    let elsewhere = p.off(p.tracking_primary(), "elsewhere.txt");
+    p.f.repo
+        .reference(&context_ref(), elsewhere, true, "fixture")
+        .unwrap();
+    let mut io = PullRequestIo::default();
+    let result = p.run_in(&p.f.reopened(), req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::Repository(ref e)) if e.kind == RepositoryErrorKind::MismatchedAuthoringContext),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(
+        (r.step, r.closure_oid),
+        (ClosureStep::Closing, Some(closure))
+    );
+    assert_eq!(p.f.context_oid(), elsewhere);
+    assert!(!p.worktree().exists());
+    assert_eq!(io.children(), 0);
+    p.assert_primary_untouched(&io);
+}
+
+/// F11: while a new branch's record is unfinished at `closing`, a new request
+/// is held: the prepare answers `recovery_required` naming the record and a
+/// new confirm is `Busy`, writing nothing.
+#[test]
+fn f11_a_new_request_while_unfinished_is_held_and_busy() {
+    use crate::repository::{Mutation, TicketCloseInput};
+    let p = PullRequest::without_context();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let failing = p.f.failing(FailurePoint::BeforeWorktreeCreation);
+    assert!(p.run_in(&failing, req.clone(), &mut io).is_err());
+    assert_eq!(p.stored(&req).step, ClosureStep::Closing);
+    assert_eq!(p.holder(), Some(req.operation_id));
+    let prepared =
+        p.f.service
+            .prepare(&Mutation::TicketClose(TicketCloseInput {
+                root: p.f.root().to_owned(),
+                id: id(),
+            }));
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["code"], "recovery_required", "{value}");
+    assert!(
+        value["recovery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["operation_id"] == req.operation_id.to_string()),
+        "{value}"
+    );
+    let records = || -> i64 {
+        p.f.db()
+            .query_row("SELECT count(*) FROM ticket_closures", [], |r| r.get(0))
+            .unwrap()
+    };
+    let before = records();
+    let other = p.confirming(ClosureExpectation::from_bytes([7; 32]));
+    let mut other_io = PullRequestIo::default();
+    assert!(matches!(
+        p.run(other, &mut other_io),
+        Err(TicketClosureError::Busy)
+    ));
+    assert_eq!(other_io.children(), 0);
+    assert_eq!(records(), before);
+    p.assert_primary_untouched(&io);
+    p.assert_primary_untouched(&other_io);
+}
+
+/// F12: a publication child that stops leaves the new branch local, at
+/// `publication_pending`, holding the ticket and reading as closing, and the
+/// same request then publishes it.
+#[test]
+fn f12_a_stopped_publication_child_leaves_the_branch_local_and_closing() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    let p = PullRequest::without_context();
+    let parent = p.tracking_primary();
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Publication,
+            transport(K::TransportUnavailable),
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ContextSynchronization(_))),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.answer_code, None);
+    p.assert_new_branch(&r, parent);
+    assert!(p.held());
+    assert_eq!(p.listed_state(), Some(ClosureState::Closing));
+    // The branch is local: nothing was published.
+    assert!(p.f.repo.find_reference(&tracking_context_ref()).is_err());
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    assert!(!p.held());
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 1);
+    p.assert_nothing_deleted_remotely(&io);
+    p.assert_primary_untouched(&io);
+}
+
+/// F13: a cancellation asked at the publication child leaves the record at
+/// `publication_pending` with the category `cancelled`, and the same request
+/// publishes.
+#[test]
+fn f13_a_cancelled_new_branch_is_continued_by_the_same_request() {
+    use crate::repository::promotion::record::PublicationCategory;
+    let p = PullRequest::without_context();
+    let req = p.request();
+    let mut io = CancelAtPublication {
+        inner: PullRequestIo::default(),
+        parent: Some(req.operation_id),
+    };
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::Interrupted)),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.publication, Some(PublicationCategory::Cancelled));
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 1);
+    p.assert_primary_untouched(&io.inner);
+}
+
+/// F14: a new branch's record holds its ticket from the moment its commit is
+/// recorded, before the branch or the worktree exists: every writer answers
+/// `recovery_required` naming the record, and none makes the branch. The
+/// record then finishes.
+#[test]
+fn f14_the_hold_refuses_a_save_a_comment_and_a_context_before_the_branch_exists() {
+    use crate::repository::{
+        AuthoringTarget, ContextIntent, ExpectedPathObservation, SaveTicketRequest,
+        SubmitCommentRequest, TicketDraft,
+    };
+    // At `confirmed` with the commit recorded and held, and at `closing`
+    // with the branch not made.
+    for (case, point) in [("confirmed", 1), ("closing", 2)] {
+        let p = PullRequest::without_context();
+        let parent = p.tracking_primary();
+        let req = p.lost_at(point);
+        let record = req.operation_id;
+        let source = String::from_utf8(support::tree_bytes(&p.f.repo, parent, &ticket())).unwrap();
+        let target = |operation_id| AuthoringTarget {
+            root: p.f.root().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: id(),
+            intent: ContextIntent::Edit,
+            operation_id,
+        };
+        let service = &p.f.service;
+        assert_held(
+            case,
+            "save",
+            record,
+            service.save_ticket(SaveTicketRequest {
+                target: target(OperationId::new()),
+                draft: TicketDraft {
+                    title: "Ticket".into(),
+                    ticket_type: "task".into(),
+                    status: "open".into(),
+                    project: None,
+                    team: None,
+                    body: "Edited body.\n".into(),
+                },
+                expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
+            }),
+        );
+        assert_held(
+            case,
+            "context prepare",
+            record,
+            service.prepare_context(target(OperationId::new())),
+        );
+        assert_held(
+            case,
+            "comment",
+            record,
+            service.checkpoint_comment_locally(
+                SubmitCommentRequest {
+                    target: target(OperationId::new()),
+                    comment_id: "01BX5ZZKBKACTAV9WEVGEMMVS0".parse().unwrap(),
+                    parent_id: None,
+                    body: "A comment.\n".into(),
+                    expected_destination: ExpectedPathObservation::Missing,
+                },
+                None,
+            ),
+        );
+        // No writer made the branch, and the record is as it was.
+        assert!(p.f.repo.find_reference(&context_ref()).is_err(), "{case}");
+        assert!(!p.worktree().exists(), "{case}");
+        assert!(p.held(), "{case}");
+        assert_eq!(p.holder(), Some(record), "{case}");
+        let mut io = PullRequestIo::default();
+        let outcome = PullRequest::branch(p.run_in(&p.f.reopened(), req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Published, "{case}");
+        p.assert_new_branch(&p.stored(&req), parent);
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// The new context function's preconditions are its own, not
+/// `prepare_context`'s: it needs neither the root on the primary nor the
+/// ticket on the local primary, and it makes the branch and the worktree at
+/// the commit it is given, again and again. A directory with no registration,
+/// or a commit that is not here, is refused with nothing made.
+#[test]
+fn context_at_commit_has_its_own_preconditions() {
+    let make = |p: &PullRequest, commit: Oid| {
+        p.f.service
+            .context_at_commit(p.f.root(), AuthoringKind::Ticket, &id(), commit)
+    };
+    let made = |p: &PullRequest, commit: Oid| {
+        assert_eq!(p.f.context_oid(), commit);
+        let worktree = git2::Repository::open(p.worktree()).unwrap();
+        assert_eq!(
+            worktree.head().unwrap().peel_to_commit().unwrap().id(),
+            commit
+        );
+    };
+    // The root is on another branch, the local primary lacks the ticket, and
+    // a second call finds the context made and keeps it.
+    let p = PullRequest::without_context();
+    let commit = p.off(p.tracking_primary(), "elsewhere.txt");
+    let without = support::tree_commit(&p.f.repo, p.f.primary(), &[(ticket().as_str(), None)]);
+    p.f.repo
+        .reference("refs/heads/other", without, true, "fixture")
+        .unwrap();
+    p.f.repo.set_head("refs/heads/other").unwrap();
+    let context = make(&p, commit).unwrap();
+    assert_eq!(context.branch, format!("manyhands/ticket/{ID}"));
+    assert_eq!(context.worktree, p.worktree());
+    made(&p, commit);
+    make(&p, commit).unwrap();
+    made(&p, commit);
+    // A commit that is not here makes nothing.
+    let p = PullRequest::without_context();
+    assert!(make(&p, Oid::from_str(&"1".repeat(40)).unwrap()).is_err());
+    assert!(p.f.repo.find_reference(&context_ref()).is_err());
+    assert!(!p.worktree().exists());
+    // A directory where the worktree goes, with no registration, is not ours.
+    let p = PullRequest::without_context();
+    let commit = p.off(p.tracking_primary(), "elsewhere.txt");
+    fs::create_dir_all(p.worktree()).unwrap();
+    let error = make(&p, commit).err().expect("an unregistered directory");
+    assert_eq!(error.kind, RepositoryErrorKind::MismatchedAuthoringContext);
+    assert!(p.f.repo.find_reference(&context_ref()).is_err());
+    assert!(p.f.repo.find_worktree(ID).is_err());
 }

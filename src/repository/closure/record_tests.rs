@@ -2425,3 +2425,119 @@ fn begin_branch_closing_writes_what_the_action_writes() {
         assert_eq!(r.withdraw_oid, None, "{case}");
     }
 }
+
+/// A new branch with nothing to retire: its commit is recorded at
+/// `confirmed` with its pending ref and the tracking tip the consent bound,
+/// then it begins `closing` with its context at the commit, and lets the
+/// pending ref go. Each write is refused out of its place, and the
+/// publication child is minted only once the pending ref is gone.
+#[test]
+fn a_new_branch_records_its_commit_begins_closing_and_lets_its_ref_go() {
+    use crate::canonical::Integration;
+    let path = (Integration::PullRequest, ClosureAction::NewBranch);
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let begin_new = |item_text: &str, kind| {
+        begin_branch_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(item_text),
+            digest(7),
+            Some("origin"),
+            kind,
+            path,
+            None,
+        )
+        .unwrap()
+        .operation_id
+    };
+    let op = begin_new(ITEM, ClosureKind::Record);
+    let r = read(&tx, op);
+    assert_eq!(
+        (r.step, r.closure_oid, r.pending_ref),
+        (ClosureStep::Confirmed, None, None)
+    );
+    // The steps out of their order.
+    assert_eq!(
+        kind_of(begin_new_branch_closing(&tx, 1, op)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        kind_of(clear_pending_ref(&tx, 1, op)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    // A direct record, a kept closure and a zero commit are not a new branch's.
+    let direct = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(OTHER),
+        digest(7),
+        None,
+        ClosureKind::Record,
+    )
+    .unwrap()
+    .operation_id;
+    let kept = begin_new(&item_n(5), ClosureKind::Existing);
+    for (case, operation, commit) in [
+        ("direct", direct, oid('3')),
+        ("kept", kept, oid('3')),
+        ("zero", op, Oid::zero()),
+    ] {
+        assert_eq!(
+            kind_of(begin_new_branch(
+                &tx,
+                1,
+                operation,
+                oid('2'),
+                at(),
+                commit,
+                None
+            )),
+            RepositoryErrorKind::RecoveryRequired,
+            "{case}"
+        );
+        assert_eq!(read(&tx, operation).closure_oid, None, "{case}");
+    }
+    begin_new_branch(&tx, 1, op, oid('2'), at(), oid('3'), Some(oid('1'))).unwrap();
+    let r = read(&tx, op);
+    assert_eq!(r.step, ClosureStep::Confirmed);
+    assert_eq!(r.closure_oid, Some(oid('3')));
+    assert_eq!(
+        (r.base_oid, r.remote_context_oid),
+        (Some(oid('2')), Some(oid('1')))
+    );
+    assert_eq!(r.closed_at, Some(at()));
+    assert_eq!(r.pending_ref, Some(pending_ref_name(op)));
+    assert_eq!((r.retired_oid, r.context_oid), (None, None));
+    // A commit is recorded once.
+    assert_eq!(
+        kind_of(begin_new_branch(&tx, 1, op, oid('2'), at(), oid('4'), None)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(read(&tx, op).closure_oid, Some(oid('3')));
+    // From the first write the record holds the ticket.
+    assert!(written_closure_unfinished(&tx, 1, &item(ITEM)).unwrap());
+    begin_new_branch_closing(&tx, 1, op).unwrap();
+    let r = read(&tx, op);
+    assert_eq!(r.step, ClosureStep::Closing);
+    assert_eq!(r.context_oid, Some(oid('3')));
+    assert_eq!(r.pending_ref, Some(pending_ref_name(op)));
+    assert_eq!(
+        kind_of(begin_new_branch_closing(&tx, 1, op)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    // No child before the context is made.
+    assert_eq!(
+        kind_of(begin_publication(&tx, 1, op)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(read(&tx, op).step, ClosureStep::Closing);
+    clear_pending_ref(&tx, 1, op).unwrap();
+    assert_eq!(read(&tx, op).pending_ref, None);
+    clear_pending_ref(&tx, 1, op).unwrap();
+    let r = begin_publication(&tx, 1, op).unwrap();
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(r.primary_attempt, 1);
+}

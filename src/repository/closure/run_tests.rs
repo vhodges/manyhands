@@ -1105,6 +1105,16 @@ const EXITS: [FailurePoint; 15] = [
 ];
 const F10_SEAM: usize = 15;
 const F11_SEAM: usize = 16;
+/// A new branch's own boundaries, from `NEW_BRANCH_EXIT_BASE` in the exit
+/// child's point: its commit recorded and held, then its branch and its
+/// worktree about to be made.
+const NEW_BRANCH_EXITS: [FailurePoint; 4] = [
+    FailurePoint::NewBranchCommitRecorded,
+    FailurePoint::NewBranchCommitHeld,
+    FailurePoint::BeforeContextBranchCreation,
+    FailurePoint::BeforeWorktreeCreation,
+];
+const NEW_BRANCH_EXIT_BASE: usize = 100;
 
 #[test]
 fn closure_exit_child() {
@@ -1122,7 +1132,13 @@ fn closure_exit_child() {
         .split(',')
         .map(|v| v.parse().unwrap())
         .collect();
-    let service = if point < EXITS.len() {
+    let service = if point >= NEW_BRANCH_EXIT_BASE {
+        RepositoryService::open_at_with_exit_point_for_testing(
+            Path::new(&data),
+            NEW_BRANCH_EXITS[point - NEW_BRANCH_EXIT_BASE],
+        )
+        .unwrap()
+    } else if point < EXITS.len() {
         RepositoryService::open_at_with_exit_point_for_testing(Path::new(&data), EXITS[point])
             .unwrap()
     } else {
