@@ -125,6 +125,14 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 - Not run: the fast tier and the SSH tier (review-ready, Task 16).
 - Deferred to the final review: the `reentry` branch of `bind/retire.rs` (`lost_initial` returning `Err`) answers `refused(e)` without `naming`; `branch_hold_of` repeats a registry lookup; D16 omits the domain republish `Busy` assertion; a comment at the `let_go` inside a match guard in `promote_branch`.
 
+## Task 8: Withdraw
+
+- Design checkpoint (Obligation 5), written by an Opus designer before any code, checked by an independent Opus checker (sound with fixes), approved with the controller's corrections on 2026-11-25; it is Appendix E. Slices: A, the withdraw observation and consent; B, the withdraw lifecycle, hook and answers; C, reconciliation on `withdraw_oid`.
+- Ruling 32: after the publication child, "the published head holds a closure" answers `ticket_closed` as Part E says (it is R-30's restored merge, which the tracking-primary row catches first), stored as its own `BranchAnswer` `closed_since` so its mapping can change cheaply — another clone's closure merged there would read `closing`, a rare case.
+- Ruling 33: "the tracking primary holds the withdrawn closure" reads as any closure there — withdraw never reopens (R-27) — none.
+- Ruling 34: the withdraw digest binds no mode, as Part E lists it — withdraw behaves the same in both modes (decision 11) — a mode switch between a withdraw's prepare and confirm is not `external_change`.
+- Ruling 35: with an unfinished non-supersedable record of the ticket, the withdraw observation answers neither "nothing to withdraw" nor its foreign-synchronization `busy`, so the binding's hold answers `recovery_required` naming the holder (decision 33), as ruling 28 does for the close — none.
+
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
 ### Task 0 reference check, design sections Conventions, Baseline Facts 1-23, Parts A-C
@@ -1707,3 +1715,462 @@ All seven questions of revision 1 are ruled, and so are the checker's points R21
    - **The same holds at `published`** after the cleanup's full check stops it (1381-1385), before it reserves.
    - **Proposed fix:** a direct row, `a_poll_does_not_retire_a_context_a_direct_closure_holds` in `closure/run_tests.rs` beside 1983-2120. Its setup is `Fixture::remote()` and `CancelAfterPrimary` (1435-1460), a record at `publication_pending` with publication `cancelled`, and the remote context reported deleted. It asserts `Closed` is observed and its candidate refused, the context unchanged, and that the same request then completes.
    - **Status:** not in the slices until the controller rules. Slice E would carry it.
+
+## Appendix E: Task 8 design checkpoint, approved (verbatim)
+
+# Task 8 Design Checkpoint: Withdraw
+
+## Controller approval and corrections (binding; they override the text below where they differ)
+
+Approved by the controller on 2026-11-25 after an independent check (verdict: sound with fixes). Rulings R32 (the published head's closure answers `ticket_closed`, stored as `closed_since`), R33 (any closure on the tracking primary means closed) and R34 (no mode in the withdraw digest) stand.
+
+1. **Slice A's static gates.** `prepare_observation_at` would be dead in the non-test build once `prepare_observation_in` moves to `prepare_observation_for`; mark it `#[cfg(test)]` or delete it and have observe_tests.rs:51 call `observe_for_at(…, Verb::Close, when)`.
+2. **`continues` at insertion.** A refused request reaches `refuse_record_on`, whose `existing_record` returns any same-ID record without a `continues` check (record.rs:858-860; run.rs:591, 616). Apply `continues` in both closure `refuse_record`s (or once after the insertion transaction), so a withdraw can never answer, or run `withdraw_step` on, a close record of the same ID.
+3. **Ruling 35 (W4 and decision 33).** The binding observes before it checks `held` (bind/lifecycle.rs:1056-1057), so a withdraw observation answering `NothingToWithdraw` would become `already_applied` ahead of the hold. As ruling 28 does for `busy`: when an unfinished non-supersedable record of the ticket exists, the withdraw observation does not answer `NothingToWithdraw` (nor its foreign-synchronization `busy`); it is ready, and the binding's `held` answers `recovery_required` naming the holder. `w4` gains domain rows for the two reachable holders the checker named (a withdraw lost at `BeforeCompletion`, EXITS[12], with W pushed and both contexts open; a close stopped at `confirmed`, D5, on an open ticket), asserting the observation does not answer `NothingToWithdraw` and the holder is found; Task 11 adds the binding row (`recovery_required` naming the holder).
+4. **W5.** D7, D9 and D10 are runner-generic and covered by `d7_…`, `d9_…` and `d10_…` (a retained child held by `let_go`, run.rs:1052-1066); additionally script the row-order test's row-6 stop as `PushRejected`, so D9's path through `withdrawal_answer` is exercised.
+5. **W12.** The domain variant is tested here; Task 11 names a binding test for `publication_remote_required`.
+6. **Test fixes.** W1's direct row: hold first, or refresh after the hold, so the "before" reads are `Closing` and `[ClosingDependency]` (`list_tickets` reads the stored index); the tracking-only row asserts no `dependent_reasons`. `withdraw_answers_choose_each_row_in_order`: run the withdraws at `later`, so `link_given_at() == CLOCK` can fail. W6 clean: assert the head descends from both N and W′ (the head is the Primary-stage merge). W6 conflicting: extend `provisional_closures_may_change_primary_ones_may_not` (integration/tests.rs:220) with the `(A, A, N, …)` rows instead of a new run test. `a_request_continues_only_its_own_verb_s_record`: add a row with a completed direct close's ID and digest, so the run.rs:387-389 arm is shown red too. Add a test for 3.1 step 5's malformed head (`ExternalChange`). W9's fast-forward row: say in the test that `decide_push` mirrors `push_unless_unclosed`, which Task 6 unit-tests.
+7. **Docs and anchors.** Update `ClosingState::CheckpointWritten`'s doc (checkpoint.rs:430-433) with slice C's rule. The `[IdentityRequired]` → `ExternalChange` mapping inherited from the close is intended. Anchor drift (current lines): `closure_digest_golden_vector` observe_tests.rs:1455; `pre_checkpoint_refusals_…` run_tests.rs:506; promotion `every_interruption_…` run_tests.rs:514; `remote_children_publication_…` 5212; `never_abandons_*` 938-949; `process_exit_…` 1187.
+
+
+Designer's checkpoint for Task 8, written before any Task 8 test or code. HEAD is `a2e1a1b3`, so every anchor is today's source at that commit. Paths without a prefix are under `src/repository/`. "The design" is `docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`; "Task 7's checkpoint" is `task-7-checkpoint.md` (approved). Rulings 14 to 31 are the execution ledger's.
+
+## 0. Decisions in one place
+
+- **The lifecycle (Obligation 5).** A new unit struct `TicketWithdrawLifecycle` in `closure/lifecycle.rs` implements `Lifecycle` with `type Record = ClosureRecord` and `KIND = LifecycleKind::TicketClosure`. It is chosen by the verb, statically: its `preview_request`, `preview`, `prepare`, `revalidate` and `ready` observe a withdraw, so the runner's confirm (`promotion/run.rs:541`) and its resumed preview (`run.rs:1154`) observe a withdraw with no change at those call sites. The runner's one change is a guard in `run_observed` (1.3). Everything about the record, the children, the fence, the hold, cancellation, listing and the branch tail is the close's, forwarded (section 1).
+- **The action column.** A request continues only a record of its own verb: a defaulted `Lifecycle::continues` says which records a lifecycle continues; both closure lifecycles' `begin_record` and `run_observed`'s guard refuse a record of the other verb with `OperationMismatch` (section 1.3). Inside the shared code the record's `action` selects the written commit (`written_commit`, already built), the `closing` write (`begin_branch_closing`) and the reconciliation's descendant rule (section 1.4).
+- **The observation.** One new verb parameter, `observe::Verb { Close, Withdraw }`, reaches `observe_git`. A withdraw takes the branch observation's road in either mode and ends in a new `withdraw_observation` (section 2). A withdraw that has nothing to confirm (no publication remote, or no closure) is not a blocker: it is an internal `Unoffered` reason on the refusal, and a new public `ClosureWithdrawalPreflight` carries it to the binding. `ClosureBlocker` and its stored mask are unchanged (Obligation 10, ruling 15's reading).
+- **The digest.** `observe::expectation` dispatches on the path, not the mode, so a direct-mode withdraw has the pull-request domain. The withdraw reuses `branch_expectation_with_head` with action tag 1: it binds the item, the context branch, the primary branch, the remote, the head and the closure being withdrawn (both fields). It binds no mode (Part E's field list; open question 3).
+- **The hook.** A new `checkpoint::withdraw_step`, sibling of `branch_step`, writes the commit `Withdraw closure of ticket <ULID>` from a new byte helper `observe::withdrawn_ticket_bytes` (beside `closed_ticket_bytes`, which is in `closure/observe.rs:81`, not `checkpoint.rs` as the brief says). `withdraw_oid` is stored with `closing` before the context moves. A `closing` record with nothing written moves to its stored commit rather than rebuilding it (section 3.4): a withdraw stores no time, so a rebuild would make a second commit.
+- **The answers.** A new `checkpoint::withdrawal_answer` gives Part E's rows. Four new `BranchAnswer` values (`withdrawn`, `withdraw_closed`, `closed_since`, `already_applied`), added in Rust only (ruling 17); the action-neutral ones are reused. A withdraw never gives a link: the link record is kept as it is (W1).
+- **The hold.** Nothing changes: Task 7's range and writers already cover a withdraw from `closing` (section 5).
+- **Entry points.** `RepositoryService::preview_closure_withdrawal` and `RepositoryService::withdraw_ticket_closure` (both `pub`), and `closure::lifecycle::withdraw` for Task 11's observed entry. Nothing of the CLI, the catalog, `Command`, `Mutation`, the DTOs, the preview variant or `way_out.rs` (section 9).
+
+## 1. Obligation 5: the withdraw lifecycle
+
+### 1.1 The type, and what it shares with the close's
+
+`closure/lifecycle.rs`, after `TicketClosureLifecycle` (178):
+
+```rust
+/// A withdraw of a provisional closure (Part E) over the closure lifecycle's
+/// record: a branch record with the action `withdraw`, in either mode. Its
+/// observation, its step 3 and its answers are its own; everything else is
+/// the close's.
+pub(in super::super) struct TicketWithdrawLifecycle;
+impl Lifecycle for TicketWithdrawLifecycle { … }
+```
+
+| Trait item (`promotion/lifecycle.rs:395-648`) | Withdraw | Close today |
+| --- | --- | --- |
+| `Record`, `Error`, `Preview`, `Expectation`, `PreviewRequest`, `Observation`, `Refusal`, `ReplacementGuard`, `Outcome`, `Output`, `BranchFinish`, `KIND` | the close's (`closure/lifecycle.rs:181-192`) | — |
+| `type Preflight` | `Result<ClosureObservation, ClosureRefusal>`: the whole refusal, so `ready` can read `unoffered` (2.3) | `Result<ClosureObservation, Vec<ClosureBlocker>>` (185) |
+| `read_record`, `save_record`, `replacement_guard`, `clear_cancellation`, `reset_context_after_primary_advance`, `child_state`, `child_execution`, `next_attempt`, `complete_record`, `reconcile_completion` | call the same `record::` functions as 194-320 | — |
+| `begin_record`, `continues` | `begin_closure_record` then `continues` (`r.action == Withdraw`) (1.3) | `begin_record` (212-244) becomes the same with `r.action != Withdraw` |
+| `refuse_record` | `record::refuse_record_on(…, observed.map_or((config.integration(), ClosureAction::Withdraw), \|o\| o.path))` with `kind = observed.map(kind_of)` and `remote = config.publication_remote` — never the direct `refuse_record`, so a withdraw refused at insertion in direct mode is stored `(direct, withdraw)`, a branch record | 255-272, default path `(config.integration(), Close)`, unchanged |
+| `preview_request` | `ClosurePreviewRequest { request, mode: record.map(\|r\| r.integration_mode), verb: Verb::Withdraw }` | 329-342 gains `verb: Verb::Close` |
+| `prepare`, `configuration` | the close's (`prepare` now passes `request.verb`) | 354-362 call `observe::prepare_observation_for(service, &request.request, request.mode, request.verb)` |
+| `preview` | `Ok(observe::prepare_observation_for(…)?.observed)` | 344-353, the same call, `.map_err(\|r\| r.blockers)` |
+| `revalidate` | `observe::revalidate_observation_under_lease(…)` (the whole refusal) | 363-369 unchanged (`revalidate_under_lease`) |
+| `ready` | `Ok(o) => Ok(o)`; `Err(r) if r.unoffered.is_some() => Err(Refusal::ExternalChange)`; `Err(r) => <TicketClosureLifecycle as Lifecycle>::ready(Err(r.blockers))` | 373-383 unchanged |
+| `refusal_error`, `integration_request`, `write_commit`, `resume_candidate`, `apply` | forwarded to the close's | — |
+| `prepare_integration`, `pre_integration` | `Err(TicketClosureError::RecoveryRequired)`, documented "a withdraw is a branch record, which never integrates (Part D)"; `pre_integration_with` and `resume_written` keep the trait defaults | 408-457 |
+| `branch_step` | `checkpoint::withdraw_step(service, &request.root, request.confirmed_identity.as_ref(), (request.clock)(), r)` (section 3) | 459-474 |
+| `end_branch`, `begin_publication`, `complete_branch`, `branch_outcome`, `outcome`, `complete`, `index_pending` | forwarded: the D6 ends, the mint, the completion writer and the outcome are action-neutral | 475-614 |
+| `branch_answer` | own: `checkpoint::withdrawal_answer(&repo, r, primary, child)?` mapped to `BranchFinish { answer, link: None, given_at: (request.clock)().unix_timestamp() }` (section 4) | 517-548 |
+
+`closure/lifecycle.rs` also gains the production entry, beside `close` (39-57):
+
+```rust
+pub(in super::super) fn withdraw<P: SessionCredentialProvider>(service: &RepositoryService,
+    request: CloseTicketRequest, session: &mut SessionCredentials<P>, probe: Option<CancellationProbe>,
+    progress: &mut dyn run::RunObserver, clock: fn() -> OffsetDateTime)
+    -> Result<TicketClosureResult, TicketClosureError>
+```
+
+It is `close`'s body with `&TicketWithdrawLifecycle`. A withdraw's request is a close's: the same ticket, operation and consent, so `CloseTicketRequest` and `lifecycle_request` (59-81) are reused unchanged.
+
+### 1.2 How `preview_request` and `prepare` observe a withdraw at confirm and on resume
+
+The runner never names a lifecycle; it calls `L::…`. With `L = TicketWithdrawLifecycle`:
+
+- **A new request's confirm.** `run.rs:541-548`, `L::prepare(service, L::preview_request(root, item, identity, None))`: `mode: None` (the live configuration, R25) and `verb: Withdraw`. The revalidation under the preflight lease (`run.rs:561`) is `L::revalidate`, the withdraw observation again with the stored verb (2.1). The refused or begun record has the observed path `(mode, Withdraw)`.
+- **A resumed attempt at `confirmed`.** `context_step` (`run.rs:1154`), `preview::<L>(…, Some(&*r))` → `L::preview_request(…, Some(r))`: the record's mode (R25) and `verb: Withdraw`. A branch observation always has `needs_context_child` true, so the child runs whatever the resumed preview says.
+- **Step 3.** `withdraw_step` prepares `observe::prepare_observation_for(service, &request, Some(r.integration_mode), Verb::Withdraw)` itself, as `branch_step` does at `checkpoint.rs:943`.
+- `promotion/integrate.rs:122` (the integration's preview) is never reached for a branch record (`run.rs:652` dispatches before it).
+
+### 1.3 A same-request continuation keeps the action
+
+- `promotion/lifecycle.rs`, in the trait beside `require_identity` (515-525), a defaulted method (so promotion's impl and every test impl are unchanged):
+  ```rust
+  /// Whether a request of this lifecycle continues `r`. A closure verb
+  /// continues only a record of its own action; every other record is its
+  /// lifecycle's own.
+  fn continues(_r: &Self::Record) -> bool { true }
+  ```
+  `TicketClosureLifecycle` overrides it as `r.action != ClosureAction::Withdraw` (a close's verb begins `close` records and, from Task 9, `new_branch`), `TicketWithdrawLifecycle` as `r.action == ClosureAction::Withdraw`.
+- `closure/lifecycle.rs`: today's body of `begin_record` (221-243) moves to a private `fn begin_closure_record(tx, id, op, item, expectation, remote, observed) -> Result<ClosureRecord, RepositoryError>`; each impl's `begin_record` is
+  ```rust
+  let r = begin_closure_record(tx, id, op, item, expectation, remote, observed)?;
+  if !Self::continues(&r) { return Err(record::action_mismatch()); }
+  Ok(r)
+  ```
+  and `record.rs` gains `pub(in super::super) fn action_mismatch() -> RepositoryError { parent::mismatch(KIND) }` (beside `begin_record`, 762). Every runner path reaches the record through `L::begin_record` first: the prior-record block (`run.rs:467-478`, `observed: None`) and the insertion (`run.rs:602-610`); `mapped` makes the error `L::Error::operation_mismatch()` (`run.rs:207-213`).
+- `promotion/run.rs:368`, `run_observed`'s guard after an error, becomes `if r.item_id() != &request.item_id || r.expectation() != request.expected || !L::continues(&r) { return Err(error); }`. Without it a request that reuses another verb's operation ID and digest would be answered from that record's stored answer by the branch arm at 372-377, after `begin_record` refused it.
+
+The digest also differs by its action tag (`observe.rs:1471-1475`), so `existing_record`'s expectation compare (`promotion/lifecycle_record.rs:370`) refuses a request that sends its own verb's digest with the other verb's operation ID; `continues` makes the column, not a hash, the rule, and catches a request that reuses both.
+
+For the direct path the check never bites: `continues` is `true` for every `close` record and for promotion. Guarded by the direct closure run tests that re-enter a record (`process_exit_at_every_boundary_reopens_without_repeated_effects`, `closure/run_tests.rs:1186`; `pre_checkpoint_refusals_abandon_with_nothing_written_replay_and_a_new_id_works`, 500) and promotion's `every_interruption_reopens_with_one_candidate_and_only_unfinished_children` (`promotion/run_tests.rs:491`).
+
+### 1.4 Where the record's `action` drives dispatch
+
+| Place | Rule | Built |
+| --- | --- | --- |
+| `TicketWithdrawLifecycle` vs `TicketClosureLifecycle` | chosen by the verb; `begin_record` and `run_observed` refuse the other verb's record through `Lifecycle::continues` | Task 8 |
+| `ClosureRecord::written_commit` (`record.rs:264-270`) | `withdraw_oid` for `withdraw`, else `closure_oid`; read by `effect_written` (1501), `merged_context` (279-292), `written_checkpoint` (1421), `reconcile_closing` (439-441) and `finish_context_move` (886-898) | Task 7 |
+| `ClosureRecord::path` (`record.rs:251-257`) | `(direct, withdraw)` is a branch record, so it takes `promote_branch` (`run.rs:652`), the branch `validate` (656-719), `branch_permits` (95-126, `withdraw` shares `close`'s row) and the branch fence range (1350-1376) | Task 7 |
+| `record::begin_branch_closing` (`record.rs:1024-1061`) | the write must match the action (3.3) | Task 8 |
+| `checkpoint::reconcile_closing` (`checkpoint.rs:535-550`) | a descendant of the written commit "holding its closure state": the same closure for a close, an open ticket for a withdraw (3.4) | Task 8, slice C |
+| The binding (Task 11) | resume's rebuild of a lifecycle request reads the record's action to rebuild the right input (design Part H), and `held_by_its_child`, `asks_a_parent` and `cancel_parent` reach the new verb | not Task 8 |
+
+## 2. Prepare: the withdraw observation
+
+### 2.1 Entry points and the verb (`closure/observe.rs`)
+
+- New: `#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub(in super::super) enum Verb { Close, Withdraw }`, documented "the verb a closure observation observes for: a close (from Task 9 its situation may make it a new branch) or a withdraw".
+- New: `fn branch_observed(mode: Integration, verb: Verb) -> bool { mode == Integration::PullRequest || verb == Verb::Withdraw }` — "a pull-request close, and every withdraw, takes the branch record's observation (Part D, Consent and dispatch)".
+- `prepare_observation_in` (345-351) keeps its signature and calls the new `pub(in super::super) fn prepare_observation_for(service, request, mode: Option<Integration>, verb: Verb) -> Result<PreparedClosureObservation, RepositoryError>`, which calls `observe_for_at(service, request, mode, verb, now())`.
+- `prepare_observation_at` (359-408) keeps its signature for its one test caller (`observe_tests.rs:51`) and becomes `observe_for_at(service, request, mode, Verb::Close, at)`. Its body moves into `fn observe_for_at(…, verb: Verb, at)`, with the `pending_work` argument at 371 changed to `branch_observed(mode, verb)` and `verb` passed to `observe_git`.
+- `PreparedClosureObservation` (309-318) gains `verb: Verb` beside `mode`, so a revalidation keeps the verb as it keeps the mode.
+- New `pub(in super::super) fn revalidate_observation_under_lease(prepared, service, repository) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError>`: today's body of `revalidate_under_lease` (410-441) without its last `.map_err`, with 419's argument `branch_observed(prepared.mode, prepared.verb)` and `prepared.verb` passed to `observe_git`. `revalidate_under_lease` becomes `Ok(revalidate_observation_under_lease(…)?.map_err(|refusal| refusal.blockers))`; its callers (`closure/lifecycle.rs:368`, `checkpoint.rs:1029`, `observe_tests.rs:732, 771`) are unchanged.
+- `observe_git` (696-1079) gains `verb: Verb` after `mode`. Line 710 becomes `let branch = branch_observed(mode, verb);`, so the primary's checkout blockers (765), the root's state (779) and the remote facts (798-803) take the branch reading for a withdraw in direct mode too. The dispatch at 805 becomes `if branch { return match verb { Verb::Close => branch_observation(…), Verb::Withdraw => withdraw_observation(…, mode, …) }; }` with the same `Gathered`.
+- `ClosureObservation.identity`'s doc (226-230) widens: "the selected identity of a `Record` closure or a withdraw (its commit's author); `None` for `Existing`".
+
+### 2.2 `withdraw_observation`, in order
+
+`#[allow(clippy::too_many_arguments)] fn withdraw_observation(repository, root, config, item, snapshot, facts, confirmation, mode: Integration, pending: PendingWork, gathered: Gathered) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError>`, after `branch_observation` (1262-1397). Its doc lists the order:
+
+1. **No publication remote** (`config.publication_remote.is_none()`): `Ok(Err(ClosureRefusal::unoffered(Unoffered::PublicationRemoteRequired)))` (W12, R-33). First, as `item republish` checks the remote before the ticket (`mutation/bind/republish.rs:198-210`). Only direct mode reaches it: a pull-request configuration requires a publication remote (`canonical.rs:1467`).
+2. **Situation 1, deciding alone** (ruling 29): the local or the tracking primary's ticket is not `FileClosure::Open` (`Malformed` included), read as `branch_observation` reads it (1291-1303): `[AlreadyClosed]` alone. Part E's prepare text lists Part D's blockers and not the situation; it is included because Part E's step 3 ("withdrawing it would be a reopen"), the Cycle document's item 7 ("`ticket_closed` when the primary holds it") and K-7 ("withdraw refuses it as closed") all ask for it, and the binding then answers `ticket_closed` (`bind/lifecycle.rs:218-224`).
+3. **Busy** (ruling 28): `pending.synchronization` filtered by `!pending.record_unfinished` → `Err(foreign_synchronization_busy(root, op))`, as 1304-1310. `pending_work` reads it because `branch_observed` is true for a withdraw in either mode.
+4. **The blockers** (Part D's, as `branch_observation` keeps them): those `observe_git` gathered (`NotATicket`, `ContextNonconforming`, `ContextDirty`, `ContextConflicted`, `ConflictPending`, `LocalOperationPending`, `CommentPublicationPending`, `PrimaryMissing`, the root's `PrimaryConflicted`); `PrimaryMissing` when the tracking primary is absent (1286-1288); `ContextMissing` when `context_missing` (W14); and, for a context that exists (`!context_missing`) with no tracking context, `remote_history_blocker` (`RemoteContextDeleted`, whose way out is `item republish`; `HistoryUnknown`; `HistoryUnresolved`), as 1311-1314. A ticket with no context is `ContextMissing` and nothing of its remote history (Part E: "a context whose remote branch's deletion is evidenced").
+5. **The closure being withdrawn.** The context's ticket through `context_ticket_at` (1098-1116, which inserts `ContextNonconforming` for a non-canonical entry) and the tracking context's ticket through `tree_ticket` on `tracking_context`'s tree; each read with `file_closure` (600-620):
+   - the context's holds `Closed { closed_at, closed_by }`: that closure;
+   - the context's is `Open` and the tracking context's holds `Closed`: the tracking context's (the withdraw is offered and its context child brings the closure in);
+   - either one read is `Malformed`, or `withdrawn_ticket_bytes` refuses the ticket holding the chosen closure: `TicketInvalidAfterClosure`;
+   - neither holds one: nothing to withdraw.
+6. **Blocked** if any blocker was inserted: `Ok(Err(refusal_of(blockers, None)))`. Blockers come before "nothing to withdraw" because Part E lists them first: a dirty context with no closure answers `context_dirty`.
+7. **Nothing to withdraw:** `Ok(Err(ClosureRefusal::unoffered(Unoffered::NothingToWithdraw)))` (W2, decision 11). No identity is asked for it.
+8. **The identity** of the commit's author: `select_identity(repository, root, confirmation, true)` (1142-1194); none is `[IdentityRequired]` with its configuration (`refusal_of` gives the configuration only when it is alone, 1228-1238). The identity is not consented: the digest binds no `closed_by` of the withdrawer.
+9. **Ready:** a `ClosureObservation` as 1369-1393 with `closure: PlannedClosure::Existing { closed_at, closed_by }` (the chosen closure, exactly as the file has it), `identity: Some(..)`, `base` the tracking primary, `needs_context_child: true`, `changes` empty, `cleanup` all false, `integration: MergeCommit` (unused), `path: (mode, ClosureAction::Withdraw)`, and `expectation = expectation(&observation)`.
+
+The observation's `context_oid` is the head, which `begin_branch_record` stores as `consented_context_oid` (`closure/lifecycle.rs:240`, ruling 14).
+
+### 2.3 Nothing to confirm: the internal reason and the public preflight
+
+- `ClosureRefusal` (272-275) gains `pub(in super::super) unoffered: Option<Unoffered>`, `None` in `refusal_of`. New:
+  ```rust
+  /// Why a withdraw offers nothing to confirm; `blockers` is then empty.
+  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+  pub(in super::super) enum Unoffered {
+      /// Neither the context's ticket nor its tracking ref's holds a closure (decision 11).
+      NothingToWithdraw,
+      /// No publication remote: a withdraw's children publish (R-33).
+      PublicationRemoteRequired,
+  }
+  impl ClosureRefusal { fn unoffered(reason: Unoffered) -> Self { … } }
+  ```
+  A close's observation never sets it, so `into_preflight` (277-286) and the close's `preview` are unchanged.
+- At a confirm the reason is a changed situation (Obligation 10): the withdraw's `ready` maps it to `Refusal::ExternalChange`, which the runner stores as today's refusal at insertion, with nothing written. The unoffered reason is never stored.
+- `closure/mod.rs`, after `TicketClosurePreflight` (306-317), and re-exported with it at `repository.rs:33-37`:
+  ```rust
+  /// A withdraw's preflight: a close's two answers, and the two with nothing to confirm.
+  #[derive(Clone, Debug, PartialEq, Eq)]
+  #[allow(clippy::large_enum_variant)]
+  pub enum ClosureWithdrawalPreflight {
+      Ready(TicketClosurePreview),
+      Blocked { blockers: Vec<ClosureBlocker>, identity_configuration: Option<ExpectedConfiguration> },
+      /// `already_applied`, with no data and nothing to confirm (decision 11).
+      NothingToWithdraw,
+      /// `publication_remote_required` (R-33).
+      PublicationRemoteRequired,
+  }
+  ```
+- `PreparedClosureObservation::withdrawal_preflight(&self) -> ClosureWithdrawalPreflight` (beside `preflight`, 319-323) maps the four; `observe::withdrawal_preview(service, request)` is `Ok(prepare_observation_for(service, request, None, Verb::Withdraw)?.withdrawal_preflight())`.
+- `RepositoryService::preview_closure_withdrawal(&self, request: PreviewTicketClosureRequest) -> Result<ClosureWithdrawalPreflight, RepositoryError>` (pub), beside `preview_ticket_closure` (`closure/mod.rs:528-533`).
+
+### 2.4 The digest
+
+- `observe::expectation` (1399-1404) becomes `match o.path { (Integration::Direct, ClosureAction::Close) => direct_expectation(o), _ => branch_expectation(o) }`. Today it dispatches on the mode only, which would give a direct-mode withdraw the direct digest (`manyhands closure v1`), against Part D's "for every withdraw … `manyhands pull request closure v1`". For every record that exists today the result is unchanged (a close's path is `(mode, Close)`), guarded by `closure_digest_golden_vector` (`observe_tests.rs:1380`) and `pull_request_digest_wire_format` (1952).
+- The withdraw's fields are `branch_expectation_with_head`'s (1464-1491): the domain, the tag `1`, the item, the context branch, the primary branch, the remote, the head, and the closure effect `1 ‖ closed_by ‖ closed_at` (`closure_effect`, 1435-1452). Part E's list (action, item, branch, remote, both fields) is a subset; the primary branch and the head are what Part D binds for every branch record. At step 3 the head is `consented_context_oid` (ruling 14), so a closure the context child brought in from the tracking ref still proves.
+- No mode is bound (Part E's list): a withdraw prepared in direct mode and confirmed after a switch begins in the live mode (open question 3).
+
+### 2.5 Direct mode
+
+A withdraw in direct mode is the same observation: `branch_observed` is true, so it reports no `PrimaryNotCheckedOut`, `PrimaryDirty`, `PrimaryAheadOfRemote` or `ContextBehindRemote`, reads pending work with the busy read, and its record is `(direct, withdraw)`, a branch record (`record.rs:251-257`). It needs a publication remote (2.2, step 1).
+
+### 2.6 The byte helper (`closure/observe.rs`, beside `closed_ticket_bytes` at 81)
+
+- `ClosureContentError` (56-73) gains `NotClosed` ("the ticket holds no closure to remove"), and its doc names both helpers. Nothing outside `observe.rs` matches it exhaustively.
+- `with_closure` (132-162) takes `closure: Option<(OffsetDateTime, &str)>` and sets both fields from it (`None` clears them); `closed_ticket_bytes` (95) and `closure_replaced_bytes` (113) pass `Some((closed_at, closed_by))`. Behaviour preserving, guarded by `closed_ticket_bytes_round_trips_every_field_and_body`, `closed_ticket_bytes_normalizes_relationships_without_refusing`, `closed_ticket_bytes_refusals` (`observe_tests.rs:212-290`), `closure_replaced_bytes_gives_the_closure_and_keeps_everything_else` (298) and `repository::integration::tests::closure_only_conflicts_settle_with_the_remote_closure` (`integration/tests.rs:381`, through `prepare.rs:228, 311`).
+- New:
+  ```rust
+  /// The ticket's bytes with its closure removed (Part E): parsed, both
+  /// fields cleared, serialized canonically, and every other parsed field,
+  /// unknown key and the body as they were. `NotClosed` for an open ticket.
+  pub(in super::super) fn withdrawn_ticket_bytes(original: &[u8]) -> Result<Vec<u8>, ClosureContentError>
+  ```
+  `parsed_ticket`, then `NotClosed` when both fields are absent, then `with_closure(&path, &ticket, None)`.
+
+## 3. Step 3: the withdraw hook
+
+### 3.1 `checkpoint::withdraw_step`, in order
+
+`pub(in super::super) fn withdraw_step<E: LifecycleError>(service, root: &Path, confirmation: Option<&ConfirmedCommitIdentity>, now: OffsetDateTime, r: &ClosureRecord) -> Result<BranchStep, E>`, after `branch_step` (`checkpoint.rs:927-1139`). It shares `branch_step`'s parts and none of the direct hook's base checks (R-34):
+
+1. **Prepare and lease**, as 937-955: `observe::prepare_observation_for(service, &request, Some(r.integration_mode), observe::Verb::Withdraw)?` outside the lease; a foreign synchronization of the context answers `foreign_synchronization_busy` (`Repository(RepositoryBusy)`, named; Task 7 correction 4); then the lease. `remote`, `context` (`r.context_oid`), `path`, `context_ref` and `given_at` as 956-962. The abandon closure is 968-982's with `link: None` always: a withdraw gives no link.
+2. **At `closing`**: slice B answers `Err(E::recovery_required())` with the record kept ("reconciled in slice C"). Slice C replaces it with 3.4.
+3. **The tip:** the context ref is not `r.context_oid` → abandon `Refusal::ExternalChange` / `BranchAnswer::ExternalChange` (as 1005-1008).
+4. **The tracking primary's ticket names a closure** (`commit_names_closure`, 288-299, on `refs/remotes/<remote>/<primary>`) → abandon `Refusal::Blocked(vec![ClosureBlocker::AlreadyClosed])` / `BranchAnswer::AlreadyClosed` (W3; withdrawing it would be a reopen).
+5. **The head's ticket names no closure** (`!commit_names_closure(repo, context, path)`) → abandon `Refusal::ExternalChange` / `BranchAnswer::AlreadyApplied` (W2: another clone's withdraw arrived). A head that names a closure that does not parse (`commit_closure_text` is `None`) → abandon `ExternalChange` / `ExternalChange`.
+6. **Revalidate** `observe::revalidate_under_lease(&prepared, service, &repo)`: `Err` of kind `ExternalChange`, or `Ok(Err(_))`, → abandon `ReconfirmationRequired` / `ReconfirmationRequired` (as 1029-1047).
+7. **The consent:** `observe::branch_expectation_with_head(&observation, r.consented_context_oid) != r.expectation` → abandon `ExternalChange` / `ExternalChange`. This is W11: another closure on the head is another `PlannedClosure::Existing` and another digest. The observation's closure must be `PlannedClosure::Existing` (a withdraw observation's always is), else `Err(E::recovery_required())`.
+8. **A synchronization still running** (`record::context_synchronization_unfinished`, `record.rs:1392-1400`) → `Err(E::busy())`, before anything is written (as 1079-1085).
+9. **The commit:** `integrate::promotion_identity::<E>(service, &repo, root, confirmation)?` (`promotion/integrate.rs:640`), then `build_withdraw_commit(&repo, item, &path, context, whole_utc_seconds(now), &identity)?`; `None` → abandon `ReconfirmationRequired` / `ReconfirmationRequired` (as 1097-1105).
+10. **`closing`:** one transaction: `context_synchronization_unfinished` → held off, `Err(E::busy())`; else `record::begin_branch_closing(tx, id, r.operation_id, observation.base, BranchWrite::Withdraw { commit })`. `base_oid` is the tracking primary the hook read (Obligation 2).
+11. **The move**, as 1129-1137: `boundary(ClosureAfterClosingRecorded)`, `context_repository`, `context_moving`, `move_context_to_checkpoint_with(&context_repo, item, context, commit, || boundary(service, root, FailurePoint::ClosureDuringCheckpointCheckout))`, `context_moving` (the move marks the ticket's context alone), `boundary(AfterClosureCheckpoint)`, `Ok(BranchStep::Closing)`.
+
+Every abandon is one `abandon_branch_record` transaction under the lease (`record.rs:1148-1174`); one from `closing` happens only after `NothingWritten` (3.4).
+
+### 3.2 The commit
+
+`checkpoint.rs`, beside `checkpoint_subject` (45-47) and `build_closure_commit` (158-211):
+
+```rust
+/// A withdraw's commit subject.
+fn withdraw_subject(item: &ItemId) -> String { format!("Withdraw closure of ticket {item}") }
+/// The commit `Withdraw closure of ticket <ULID>`: the context's ticket with
+/// both closure fields removed (`withdrawn_ticket_bytes`, mode kept), parent
+/// the context, the identity as author and committer at `at`. Unreferenced.
+/// `None` when the ticket is not a canonical regular file or the helper refuses it.
+pub(in super::super) fn build_withdraw_commit(repo: &git2::Repository, item: &ItemId, path: &Path,
+    context: Oid, at: OffsetDateTime, identity: &CommitIdentity) -> Result<Option<Oid>, RepositoryError>
+```
+
+The body is `build_closure_commit`'s (entry and mode at 170-178, blob, tree update, signature, `repo.commit(None, …)`) with `withdrawn_ticket_bytes(original.content())` and `withdraw_subject`.
+
+### 3.3 The record writer (`record.rs`)
+
+- `BranchWrite` (1011-1022) gains `/// A withdraw's commit, built and not yet referenced. Withdraw { commit: Oid }`.
+- `begin_branch_closing` (1024-1061): `matching` becomes
+  - `Closure { commit, .. }` → `r.action == ClosureAction::Close && r.closure_kind == Some(Record) && !commit.is_zero()`;
+  - `Existing` → `r.action == ClosureAction::Close && r.closure_kind == Some(Existing)`;
+  - `Withdraw { commit }` → `r.action == ClosureAction::Withdraw && r.closure_kind == Some(Existing) && !commit.is_zero()`.
+
+  The separate `r.action != ClosureAction::Close` test at 1039 is folded into `matching`. The new arm writes `UPDATE ticket_closures SET step='closing',base_oid=?2,withdraw_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1`, and the re-read validates it against the `closing` CHECK's `withdraw` row (`record.rs:406`) and `validate_branch` (682-684). Its doc names the withdraw.
+
+### 3.4 `closing` reconciled on `withdraw_oid` (slice C; W8's later points need none, W13)
+
+In `withdraw_step`, step 2 becomes:
+
+- `reconcile_closing(&context_repo, r)?` (`checkpoint.rs:439`), which already reads `written_commit()` (= `withdraw_oid`):
+  - `CheckoutDone` → `context_moving`, `finish_context_move` (886-898, already on `written_commit`), `context_moving`, `boundary(AfterClosureCheckpoint)`, `Ok(Closing)` (as 984-1004);
+  - `CheckpointWritten { .. }` → `context_moving`, `Ok(Closing)`;
+  - `Unrecognized` → `Err(E::recovery_required())`;
+  - `NothingWritten` → steps 3 to 8 again, then step 9 does not build: `r.withdraw_oid` is moved to as it is, when `repo.find_commit(oid)` has one parent equal to `context` and the subject `withdraw_subject(item)`; otherwise `Err(E::recovery_required())`. Step 10's transaction keeps only its `context_synchronization_unfinished` check (no write: the record already holds `closing`). A withdraw stores no time to rebuild with, so a rebuild would be a second commit (W13 asserts one); the stored commit is the one the record was written for (C6's intent for a withdraw).
+- `reconcile_closing`'s descendant rule (535-550) is made the record's closure state:
+  ```rust
+  let same_state = match record.action {
+      ClosureAction::Withdraw => commit_holds_open_ticket(context_repo, tip, &path),
+      _ => closure_fields.is_some() && commit_closure_text(context_repo, tip, &path) == closure_fields,
+  };
+  ```
+  with a new `fn commit_holds_open_ticket(repo, commit, path) -> bool` (the path is a blob whose front matter names neither key) beside `commit_names_closure`. Direct and close rows are unchanged, guarded by the ten `reconcile_*` tests (`checkpoint_tests.rs:509-700`) and `reconcile_checkout_done_under_line_ending_filters` (1493).
+- After `CheckpointWritten` with a descendant tip, `r.context_oid` still names the pre-withdraw head and the record holds `withdraw_oid`; the publication child publishes the tip, which `withdrawal_answer` reads.
+
+Once the publication child is minted (`primary_attempt > 0`) the runner never calls the hook again (`run.rs:929-931`): W8's crashes after it need no reconciliation.
+
+## 4. The publication child and the answers
+
+### 4.1 `checkpoint::withdrawal_answer`
+
+`pub(in super::super) fn withdrawal_answer(repo: &git2::Repository, r: &ClosureRecord, primary: &str, child: Option<&Result<SynchronizationOutcome, SynchronizationError>>) -> Result<Option<BranchAnswer>, RepositoryError>`, after `publication_answer` (1152-1215), whose skeleton it keeps. "The tracking primary" is the record's remote's `refs/remotes/<remote>/<primary>` as the child left it (R-27).
+
+| # | Condition, in order | `BranchAnswer` | Code |
+| --- | --- | --- | --- |
+| 1 | the tracking primary's ticket names a closure (the withdrawn one or another, a malformed one included; open question 2) | `WithdrawClosed` | `ticket_closed` |
+| 2 | no child ran (`child` is `None`: the remote is not the record's, R-35) | `RemoteChanged` | `recovery_required` |
+| 3 | child `Err(TicketClosed)` (R-30's refusal, W9's fast-forward) | `WithdrawClosed` | `ticket_closed` |
+| 4 | child `Err(RemoteContextDeleted)` | `RemoteBranchDeleted` | `remote_branch_deleted`, never `ok` |
+| 5 | child `Err(Transport)` of kind `PublicationRemoteMissing`, `EndpointChanged` or `ConfigurationInvalid` (ruling 20) | `RemoteChanged` | `recovery_required` |
+| — | any other child error, or `Ok(PublishPending)` | `None`: the stop stands | the child's |
+| 6 | child `Ok`, the published head's ticket names a closure | `ClosedSince` | `ticket_closed` (open question 1) |
+| 7 | child `Ok`, the published head's ticket names none | `Withdrawn` | `ok` |
+
+Part E's three groups are these rows: rows 1, 3 and 6 are its `ticket_closed` (row 6 is "the published head holds a closure"), row 4 its `remote_branch_deleted`, row 7 its `ok`. Rows 2 and 5 are R-35's, which Part D gives every branch record. Row 6 cannot be R-30's merge: R-30 gives a merge the closure the fetched primary holds, so row 1 has already answered (open question 1).
+
+### 4.2 Which of the close's rows apply, and how they read `withdraw_oid`
+
+- The close's rows 1, 2 and 6 to 9 compare against "this record's closure" (`checkpoint.rs:1159-1163`); a withdraw has none to compare, so they are replaced by rows 1, 6 and 7.
+- The close's rows 3, 4 and 5 keep their conditions, with row 4's answer `WithdrawClosed`.
+- `withdraw_oid` is read through the outcome, not the table: `branch_outcome` (`closure/lifecycle.rs:564-580`) gives `checkpoint_oid = written_commit()` (= `withdraw_oid`) for a `complete` record, and `None` for an abandoned one. The published head is the child's authority OID, `withdraw_oid` or a descendant of it (a merge the child made).
+- Every row after a stopped child lets it go first (`finish_branch`, `run.rs:1056-1066`); a retained child's stop stands (ruling 31). Both are the runner's, unchanged.
+
+### 4.3 W5's `remote_branch_deleted` rule
+
+A publication child that stops with `RemoteContextDeleted` answers row 1 when the tracking primary (as its fetch left it) names a closure, `WithdrawClosed` → `ticket_closed`; otherwise row 4, `RemoteBranchDeleted`. The record completes either way, and the withdraw commit stays on the local branch (the context branch at `withdraw_oid`, the tracking context where it was; nothing pushed). Task 10 gives row 4 its way out from the action in the data.
+
+### 4.4 Stored `answer_code` values (ruling 17: Rust only, no rebuild)
+
+`closure/mod.rs:96-113` `BranchAnswer` gains, appended, each with `name`/`parse` arms (116-157):
+
+| Value | Stored | After the child (`record.rs:1101-1115` `after_child`) |
+| --- | --- | --- |
+| `Withdrawn` | `withdrawn` | yes |
+| `WithdrawClosed` | `withdraw_closed` | yes |
+| `ClosedSince` | `closed_since` | yes |
+| `AlreadyApplied` | `already_applied` | no (an abandon, with `Refusal::ExternalChange`) |
+
+Reused unchanged, with the same meaning for a withdraw: `RemoteBranchDeleted`, `RemoteChanged` (after the child); `AlreadyClosed`, `ExternalChange`, `ReconfirmationRequired`, `ContextRemoteBranchDeleted`, `ContextHistoryUnresolved`, `ContextTicketClosed` (abandons; the last three through the forwarded `end_branch`, `closure/lifecycle.rs:475-516`). Each value satisfies the shape CHECK (`record.rs:391`). The record's `action` tells a withdraw's `RemoteBranchDeleted` from a close's.
+
+`mutation/bind/lifecycle_verb.rs:505-527` `branch_code` is an exhaustive match, so it gains the arms in this task: `Withdrawn => Ok`, `WithdrawClosed | ClosedSince => TicketClosed`, `AlreadyApplied => AlreadyApplied`. Withdraw's `already_applied` at step 3 keeps `noop` (`Outcome::of_mutation`, R-32); its context child's publication is in that child's completed row, which Task 10's effects show.
+
+### 4.5 The link record is kept (W1)
+
+`TicketWithdrawLifecycle::branch_answer` gives `link: None`, so `complete_branch_record`'s `give_link` (`record.rs:1176-1197`) writes nothing; the abandons pass `None` too. Neither retirement path runs for a branch record, so the row an earlier close gave stays as it is, `given_at` included. "`ok` with the link record's link, or null" is the answer's data, read from that row by Task 10.
+
+## 5. The writers and the hold
+
+Nothing changes in code. A withdraw record holds its ticket from `closing` until it is finished, as a close does:
+
+- `written_closure_holder`'s SQL (`record.rs:1350-1376`) holds every non-direct record past `context_synchronized` until `complete`/`abandoned`/`superseded`; `withdraw` rows at `closing` and `publication_pending` are pinned by `written_closure_unfinished_covers_branch_records_by_step` (`record_tests.rs:2190-2199`).
+- `branch_hold` (1377-1385) gives every branch holder, so slice E's writers (`refuse_closed_ticket`, republish, `ticket repair`, `context retire`, the ticket's `context sync-local`) answer `recovery_required` naming a withdraw's request, in both modes (`refuse_closed_ticket` reads `branch_hold` whatever the mode). Ruling 19 lets `item resolve-history` pass it.
+- `closure_holds_context` exempts the holder's own publication child by role (`is_publication_of`), whatever the action; the poll's materialize, fast-forward and retirement checks read the same range (rulings 22, 26).
+- Before `closing` the prepare is held by the binding's `held` and step 3 waits on `context_synchronization_unfinished`, as for a close.
+
+The one new check is end to end, in W5: a withdraw at `publication_pending` refuses a ticket save naming its request, in pull-request and in direct mode, and its own publication child then completes. While it holds, the ticket reads `open` (the context's copy is the withdrawn one), not `closing` as a close's does.
+
+## 6. W6 and W7
+
+**W6** is Tasks 3's and 6's behaviour. What proves it today is at the prepare layer only, and in the mirrored direction: G5 (`integration/tests.rs`, "G5 ours withdrawn, theirs unchanged") proves the clean merge for the withdrawing clone, and no row of `provisional_closures_may_change_primary_ones_may_not` (`integration/tests.rs:220`) is W6's conflicting shape (base `A`, local `A`, incoming `N`, primary open, result `N`). `w6_another_clone_s_synchronization_keeps_the_withdraw` proves both for the clone that holds the unchanged closure, which is W6's direction:
+
+- **Clean:** after a close (`C`, published), the local context gets an unrelated commit over `C` (`notes.txt`), the remote branch the other clone's withdraw of `C` (`withdraw_commit_on(C)`); after `p.f.configure_endpoints()` (as `d5_…`'s manual reservation), `sync::promotion_test_drive_local` (`remote/sync.rs:3975`, unbound: no record holds the context) with `SynchronizeRemoteRequest { root, operation_id: OperationId::new(), target: SynchronizationTarget::Context { kind: AuthoringKind::Ticket, item_id: id() }, approval: None, confirmed_identity: None, restart: false }` merges it through `integrate_divergence`'s two stages. The merged head's ticket holds no closure, `notes.txt` is kept, the head has both parents, and the context ref is at it.
+- **Conflicting:** ours is `C` with the body changed, theirs the withdraw of `C` with the body changed another way (the closures differ, so the conflict is external repair only, `IncompatibleClosures`). A repair commit with both parents, the merged body and no closure: `integration::validate::validates_external_integration(&repo, ours, theirs, Some(tracking primary), repair)` is `true` (R-12: none is allowed when the primary is open), and `false` with no primary side (today's rule keeps the local closure); a repair keeping ours' closure is `true`; with a primary that holds `C`'s closure, the withdraw-keeping repair is `false`.
+
+W6 pins unchanged behaviour and is exempt from fail-first; the "no primary side" assertion is its contrast. It ends with the local primary unchanged.
+
+**W7** is Part D's close on the withdrawn head: the close observation reads the head open, so its closure is `record` and step 3 writes a second `Close ticket <ULID>` commit on the withdraw commit with `closed_at` from the request's clock (R-23). `w7_…` runs the close, the withdraw and the close again with a later clock, and asserts a new `closed_at`.
+
+## 7. The test plan
+
+### 7.1 Module, fixture and helpers
+
+All run tests are in `repository::closure::run_tests::pull_request` (`closure/run_pull_request_tests.rs`), each by exact name. New helpers there (no existing helper changes meaning):
+
+- `const DEPENDENT: &str` (a valid ULID other than `ID`), `fn later() -> OffsetDateTime` (`CLOCK + 86_400`).
+- `PullRequest::direct() -> Self`: `Fixture::remote()`, `switch(&f, Integration::Direct)`, `primary_before = f.primary()`. `PullRequest::local() -> Self`: `Fixture::new()` (direct, no remote).
+- `PullRequest::close_first(&self) -> Oid`: a close request run to `Published` with its own `PullRequestIo`, asserting its primary untouched; returns the closure commit `C` (the context's tip, published, the link given at `CLOCK`).
+- `PullRequest::withdrawal(&self) -> ClosureWithdrawalPreflight` through `preview_closure_withdrawal`; `withdraw_request(&self) -> CloseTicketRequest` from its `Ready` preview (panics otherwise).
+- `PullRequest::withdraw(&self, req, io)`, `withdraw_in(&self, service, req, io)` and `withdraw_at(&self, req, io, clock)`: `run::run_with_io(&TicketWithdrawLifecycle, service, LifecycleRequest { clock, ..lifecycle_request(req) }, io)`. `run_at(&self, req, io, clock)` for the close.
+- `PullRequest::withdraw_commit_on(&self, parent) -> Oid`: `parent` with its ticket through `observe::withdrawn_ticket_bytes` (another clone's withdraw).
+- `PullRequest::add_dependent(&mut self)`: commits `.manyhands/tickets/<DEPENDENT>/ticket.md` (a canonical ticket with `deps: ["<ID>"]`) on the primary, moves `refs/remotes/origin/main` to it, refreshes the index (`refresh_repository`, as `closure/run_tests.rs:1279-1288`) and resets `primary_before`. `dependent_reasons(&self) -> Vec<ReadinessReasonCode>` from `list_tickets`.
+- `fn squash_merge(p: &PullRequest, tip: Oid) -> Oid`: a commit on the primary whose ticket is `tip`'s, one parent.
+- `fn withdraw_subject() -> String` in `closure/run_tests.rs`, beside `close_subject` (46-48).
+- `fn link_given_at(p: &PullRequest) -> Option<i64>`: `pull_request_links.given_at` for the ticket.
+
+`close_first` and `withdraw_commit_on` land in slice A with `w6_…`; the others in slice B with their first test.
+
+### 7.2 Mechanical edits (slice B)
+
+- `PullRequestIo` (`run_pull_request_tests.rs:428-445`) gains `decide_push: bool` (default `false`). When true, the drive's `Ok(merged)` (531-547) is first put to R-30's push decision as production's `push_unless_unclosed` (`remote/sync.rs:4370-4384`) puts it: `integration::prepare::lacks_primary_closure(&repo, merged, <refs/remotes/origin/main>, &observe::ticket_path(&id()))` true → `Err(SynchronizationError::TicketClosed)` with the row left as the drive left it (kept for its parent, `ended_if_unresolved`'s `keep`), nothing completed or published. Existing tests leave it false.
+- `closure_exit_child` (`closure/run_tests.rs:1106-1155`) reads `MANYHANDS_CLOSURE_EXIT_VERB` (absent or `close` → `TicketClosureLifecycle`, `withdraw` → `TicketWithdrawLifecycle`); `exit_at` (1157-1184) becomes `exit_at_with(f, req, point, "close")`, and `exit_at_with` sets the variable. Guarded by `process_exit_at_every_boundary_reopens_without_repeated_effects` (1186), `d12_…` and `d13_…`.
+- `a_branch_answer_gives_its_code` (`mutation/bind/lifecycle_tests.rs:350-413`) gains four rows: `(Withdrawn, Ok, "withdrawn")`, `(WithdrawClosed, TicketClosed, "withdraw_closed")`, `(ClosedSince, TicketClosed, "closed_since")`, `(AlreadyApplied, AlreadyApplied, "already_applied")`. Run red first against a `branch_code` arm stub.
+
+### 7.3 Tests, by slice, each red first unless marked exempt
+
+Every run test ends with `p.assert_primary_untouched(&io)` for each io it ran (a test that runs a close first asserts the close's io too).
+
+**Slice A** (observe and the module):
+
+| Test | Setup | Asserts | Red by |
+| --- | --- | --- | --- |
+| `withdrawn_ticket_bytes_removes_both_fields_and_keeps_everything_else` (`closure::observe::tests`, beside 298) | `hand_written` and `repository_ticket`, both line ends, closed with `closed_ticket_bytes` | the result parses with neither field and every other field, unknown key and the body as the closed ticket's; `closed_ticket_bytes(&withdrawn, at, CLOSER) == closed` (a round trip); `NotClosed` for an open ticket, `NotText`, `NotATicket` for a document | a stub returning `Err(NotPreserved)` |
+| `withdraw_prepare_decides_its_answers_and_blockers` (`closure::observe::tests`, after the pull-request table) | `Fixture::new(true)` (direct, remote) and `pull_request_fixture()`; `close_context`, `close_primary`, `tracking`, `closed_base`, `history`, `reserve_context`, `missing_identity`, `write` as the pull-request table uses them; a tracking context ref at a closed commit over the head | rows: no remote (`Fixture::new(false)`, context closed, primary closed too) → `PublicationRemoteRequired`; local or tracking primary closed (malformed too), with a dirty context → `Blocked([AlreadyClosed])`, both modes; a foreign `synchronize_context` row → `RepositoryBusy` naming it; no context (worktree and branch removed, with `history("observed_published")`) → `[ContextMissing]`; `history("observed_published")` with the context closed → `[RemoteContextDeleted]`; context closed → `Ready`, `Existing` with the context's two fields, path `(mode, Withdraw)`, `base` the tracking primary, the child runs, no changes, no cleanup, both modes; only the tracking context closed → `Ready` with its fields; neither → `NothingToWithdraw`, both modes; dirty context, nothing to withdraw → `[ContextDirty]`; no identity with a closure → `[IdentityRequired]` and its configuration; no identity, nothing to withdraw → `NothingToWithdraw`; direct mode with the primary dirty, or not checked out → `Ready` | the dispatch sending `Withdraw` to `branch_observation`; the direct rows against `branch = mode == PullRequest` |
+| `withdraw_digest_binds_the_action_and_both_fields` (same module) | as above | the withdraw digest differs from the pull-request close's `existing` digest of the same state (tag); two tracking-only closures differing in `closed_at` alone, then `closed_by` alone, give different digests; a direct-mode withdraw's digest equals the pull-request-mode withdraw's for the same state (no mode bound) and differs from the direct close's | the stub's tag |
+| `withdraw_digest_wire_format` (beside 1952) | `ClosureObservation` literal, path `(Integration::Direct, ClosureAction::Withdraw)`, `Existing { closed_at, closed_by }` | `expectation(&o) == blake3("manyhands pull request closure v1" ‖ 1 ‖ item ‖ branch ‖ main ‖ remote ‖ head ‖ 1 ‖ closed_by ‖ closed_at)` | today's mode dispatch (direct digest) |
+| `w6_another_clone_s_synchronization_keeps_the_withdraw` | section 6 | section 6 | exempt (Tasks 3 and 6) |
+
+**Slice B** (the lifecycle, the first run of the hook, the answers):
+
+| Test | Setup | Asserts |
+| --- | --- | --- |
+| `w1_a_withdraw_publishes_and_reopens_in_either_mode` | table: (pull request) `add_dependent`, `close_first`, withdraw at `later`; (direct) `PullRequest::direct()`, `add_dependent`, `hold(closed_commit_on(context, 1_700_000_000, CLOSED_BY))`; (pull request, tracking only) the tracking context at `closed_commit_on(head, …)`, `drive = (Context, it)` | before: `listed_state() == Closing` (not for the tracking-only row), `dependent_reasons() == [ClosingDependency]`; `Withdrawn`, `action() == Withdraw`, `checkpoint_oid() == Some(W)`, `publication() == Published { W }`; one `withdraw_subject()` commit whose parent is `r.context_oid`, time the run's clock, ticket the head's with both fields removed (`withdrawn_ticket_bytes` of the parent's); record `complete`, `answer_code == Withdrawn`, `withdraw_oid == W`, `closure_oid`/`closed_at` none, path `(mode, Withdraw)`; tracking context and context tip at `W`; after: `listed_state() == Open`, `dependent_reasons() == [OpenDependency]`; link: pull request row's `link()` and `link_given_at() == CLOCK` unchanged, direct and tracking-only rows `link() == None`; `!held()`; the same request again gives the same outcome, runs no child and makes no commit |
+| `w2_nothing_to_withdraw_is_already_applied_with_nothing_written` | rows: (prepare) the fixture's open context; (confirm) a held closure, `withdraw_request()`, then `hold(open_commit_on(head))` and the tracking context left open; (step 3) `close_first`, `drive = (Context, withdraw_commit_on(C))`; (R-32) `close_first`, `hold(withdraw_commit_on(C))` (an unpublished local withdraw) | prepare → `NothingToWithdraw`; confirm → `Err(ExternalChange)`, through `assert_refused_untouched(…, (PullRequest, Withdraw), …)` and no `withdraw_subject()` commit; step 3 → `AlreadyApplied`, record `abandoned`, refusal `ExternalChange`, `withdraw_oid` none, no withdraw commit, the context as the child left it, `!held()`, the same request answers the same; R-32 → prepare `Ready` (the tracking ref holds the closure), then `AlreadyApplied` with the context child's publication: the tracking context at the local withdraw, `outcome.publication() == None` |
+| `w3_a_closure_the_tracking_primary_holds_at_step_three_is_ticket_closed` | `close_first`; table `fetched = [(Context, own_closure_on_primary)]`, `[(Context, another_closure_on_primary)]` | `AlreadyClosed`; refusal `Blocked([AlreadyClosed])`; no withdraw commit; `io.children() == 1` |
+| `w4_an_unfinished_closure_record_holds_a_withdraw_and_a_withdraw_holds_a_close` | (i) a close stopped at `publication_pending` (kept transport stop); (ii) a withdraw stopped at `publication_pending` (kept transport stop) | (i) `holder()` names the close (what the withdraw verb's `held` will read, Task 11); `withdrawal()` is `Ready`, not busy (the holder's own child is left out, ruling 28); a new withdraw confirm `Err(Busy)`, no child, one record; (ii) `f.service.prepare(&Mutation::TicketClose(…))` answers `recovery_required` naming the withdraw's request (as `d14_…`, 1244-1258); a new close confirm `Err(Busy)`; one record |
+| `w5_a_stopped_child_answers_as_a_close_s_and_a_deleted_branch_by_the_tracking_primary` | `close_first`; table: context transport stop, kept; context `RemoteContextDeleted`, kept; publication transport stop, kept (pull request, and `PullRequest::direct()` with a held closure); publication `RemoteContextDeleted`, kept, with `fetched = [(Publication, own_closure_on_primary)]`; the same with the tracking primary open | context stop → `Err(ContextSynchronization)`, `confirmed`, child kept, then the same request → `Withdrawn`; D6 → `ContextRemoteBranchDeleted` abandon, child let go, no withdraw commit; publication stop → `Err(ContextSynchronization)`, `publication_pending`, `held()`, `listed_state() == Open`, a ticket save refused through `assert_held` naming the withdraw's request (both modes), then the same request → `Withdrawn`; deleted branch → `WithdrawClosed`, resp. `RemoteBranchDeleted`, `complete`, the child ended (`assert_no_active_child`), the context at `withdraw_oid`, the tracking context still `C` |
+| `w7_a_close_after_a_withdraw_records_a_new_closed_at` | `close_first` (`CLOCK`), withdraw, then a close request run at `later` | `Published`; two `close_subject()` commits; the new one's parent is `W`, its ticket's `closed_at == later()`; the record's `closed_at == later()`; `listed_state() == Closing`; `link_given_at() == later` |
+| `w8_a_crash_after_the_publication_child_never_runs_the_hook_again` | `close_first`; `exit_at_with(…, point, "withdraw")` at `EXITS[7]` (`AfterPublication`) and `EXITS[12]` (`BeforeCompletion`); `run_with_io_observed(&TicketWithdrawLifecycle, &p.f.reopened(), …, &mut Told(..))` | `Withdrawn`; one withdraw commit; `RunEvent::Recording` not told (as `d13_…`, 1150-1173) |
+| `w9_a_forge_merge_between_the_children_answers_ticket_closed_in_every_style` | `close_first`; forged computed before the withdraw: fast-forward (`C`), merge commit (`forge_merge(&p)`), squash (`squash_merge(&p, C)`); `PullRequestIo { fetched: [(Publication, forged)], drive: Some((Publication, C)), decide_push: true }` | all `WithdrawClosed` (row 1), `complete`, no active child; fast-forward: the context at `W`, the tracking context `C`, `publication() == None` (K-11); merge and squash: the head's ticket holds `C`'s two fields, `W` is its ancestor, the tracking context at it, `publication() == Published { head }` |
+| `w10_a_cancelled_withdraw_is_continued_by_the_same_request` | `close_first`; `CancelAtPublication { parent: Some(req.operation_id) }` (1274-1313) | `Err(Interrupted)`; `publication_pending`, publication `Cancelled`; the same request: a new attempt, `Withdrawn` |
+| `w11_another_closure_on_the_head_at_step_three_is_external_change` | `close_first`; `drive = (Context, closed_commit_on(C, 1_750_000_000, "Another <…>"))` | `ExternalChange` abandon; no withdraw commit; `!held()` |
+| `w12_without_a_publication_remote_a_withdraw_is_refused_in_direct_mode` | `PullRequest::local()`, a held closure | prepare → `PublicationRemoteRequired`; a confirm with `ClosureExpectation::from_bytes([7; 32])` → `Err(ExternalChange)`, the row `(Direct, Withdraw)` with no remote (ruling 27), `assert_refused_untouched` |
+| `w14_a_ticket_with_no_context_is_context_missing` | a held closure, `withdraw_request()`, then the worktree and branch removed (as `observe_tests.rs:1697-1704`) | prepare → `Blocked([ContextMissing])`; confirm → `Err(Blocked([ContextMissing]))`, the refused row `(PullRequest, Withdraw)`, no child, no commit |
+| `withdraw_answers_choose_each_row_in_order` | `close_first`; rows: own closure fetched with a completed child; another closure fetched; kept `TicketClosed` with the tracking primary open; a stop, then the remote removed (a new `withdraw_stopped_at_publication`, `stopped_at_publication`'s twin (1645-1657) through `p.withdraw`, then `configure(p, None, "main")` as `remote_removed`, 1876-1879, so the runner's R-35 arm runs with no child); kept `Transport(PublicationRemoteMissing)`; a stop, then `drive = (Publication, closed_commit_on(W, …))` (`W` is known only once the first run wrote it); plain | `WithdrawClosed`, `WithdrawClosed`, `WithdrawClosed`, `RemoteChanged`, `RemoteChanged`, `ClosedSince`, `Withdrawn`; each `complete`, no active child, `link_given_at() == CLOCK` |
+| `a_request_continues_only_its_own_verb_s_record` | (i) `close_first`'s request sent to `TicketWithdrawLifecycle`; (ii) a withdraw stopped at `publication_pending` sent to `TicketClosureLifecycle` | both `Err(OperationMismatch)`, the record unchanged, no child; (ii)'s withdraw request then gives `Withdrawn`. Red: without `continues`, (i) answers the close's stored `Published`; with `begin_record`'s check but not `run_observed`'s, (i) still answers it through 372-377 |
+| `begin_branch_closing_writes_what_the_action_writes` (`closure::record::tests`) | `db()`, `branch_row` at `context_synchronized` with `closure_kind` `existing` and `context_oid` | withdraw + `Withdraw { commit }` → `closing`, `withdraw_oid`, `base_oid`; withdraw + `Closure`/`Existing` refused; close + `Withdraw` refused; a zero commit refused |
+
+**Slice C** (`closing` reconciled):
+
+| Test | Setup | Asserts | Red by |
+| --- | --- | --- | --- |
+| `w13_a_withdraw_lost_at_closing_is_reconciled_on_its_commit` | `close_first`; `exit_at_with(…, point, "withdraw")` at `EXITS[2]` (`ClosureAfterClosingRecorded`), `EXITS[3]` (`ClosureDuringCheckpointCheckout`), `EXITS[4]` (`AfterClosureCheckpoint`); then `withdraw_in(&p.f.reopened(), …)` | each: the record was `closing` with `withdraw_oid`; `Withdrawn`; the same `withdraw_oid`; one withdraw commit in the ODB (the exit child ran at the wall clock and the retry at `CLOCK`, so a rebuild would make two); the context at it | slice B's interim `recovery_required` |
+| `reconcile_closing_reads_a_withdraw_by_its_commit` (`closure::checkpoint::tests`, after 700) | `Fixture::new(true)`, the context closed, a withdraw record at `context_synchronized` (`begin_branch_record` with `(PullRequest, Withdraw)`, `save_record`), `build_withdraw_commit`, `begin_branch_closing(Withdraw)` | ref at the context, ticket unchanged → `NothingWritten`; checkout without the ref update → `CheckoutDone`; ref at `withdraw_oid` → `CheckpointWritten`; a descendant with an open ticket → `CheckpointWritten { tip }`; a descendant whose ticket holds a closure → `Unrecognized` | the descendant row against today's rule |
+
+### 7.4 Guards run in each slice (unchanged behaviour)
+
+- **A:** every `closure::observe::tests` test (with `closure_digest_golden_vector` and `pull_request_digest_wire_format`), `closure_only_conflicts_settle_with_the_remote_closure`, and the module's `d17_…`, `d18_…`, `a_new_request_observes_live_and_a_continuation_its_record_s_mode`, `a_foreign_context_synchronization_is_busy_at_prepare_and_confirm`.
+- **B:** every test in `repository::closure::run_tests::pull_request` (the close's `d…` and answer-table tests go through `begin_record`'s `continues`, `begin_branch_closing` and `TicketClosureLifecycle::preview_request`), `closure::record::tests`, `a_branch_parent_view_is_never_integrated`, `process_exit_at_every_boundary_reopens_without_repeated_effects` and the direct closure run tests that re-enter a record (`pre_checkpoint_refusals_abandon_with_nothing_written_replay_and_a_new_id_works`, 500), and, for `run_observed`'s guard, promotion's `every_interruption_reopens_with_one_candidate_and_only_unfinished_children` (`promotion/run_tests.rs:491`) and `remote_children_publication_cleanup_and_replay_are_once_only` (5189).
+- **C:** the ten `reconcile_*` tests and `reconcile_checkout_done_under_line_ending_filters`, `d12_…`, `d13_…`, and `never_abandons_after_the_checkout` / `_after_the_checkpoint` / `_with_an_adopted_descendant` (`closure/run_tests.rs:932-943`).
+
+No SSH target runs between steps; `ticket_closure` and `document_promotion` compile through these files and run at review-ready (Task 16).
+
+## 8. Slices
+
+Each compiles, passes the static gates, adds no function without a production caller, and leaves the direct and close tests green.
+
+**A. The withdraw observation and consent.**
+- `closure/observe.rs`: `Verb`, `branch_observed`, `prepare_observation_for`, `observe_for_at` (with `prepare_observation_at` delegating), `PreparedClosureObservation.verb`, `revalidate_observation_under_lease`, `observe_git`'s verb, `withdraw_observation`, `Unoffered` and `ClosureRefusal.unoffered`, `withdrawal_preflight`, `withdrawal_preview`, `expectation`'s path dispatch, `withdrawn_ticket_bytes`, `ClosureContentError::NotClosed`, `with_closure`'s option.
+- `closure/mod.rs`: `ClosureWithdrawalPreflight`, `RepositoryService::preview_closure_withdrawal`. `repository.rs:33-37`: the re-export.
+- Tests: the four observe tests and `w6_…` (exempt). No mechanical edits.
+
+**B. The withdraw lifecycle, its hook and its answers.**
+- `promotion/lifecycle.rs`: `Lifecycle::continues` (defaulted). `promotion/run.rs:368`: `run_observed`'s guard.
+- `closure/lifecycle.rs`: `TicketWithdrawLifecycle`, `withdraw`, `ClosurePreviewRequest.verb`, `begin_closure_record` and both `continues`.
+- `closure/checkpoint.rs`: `withdraw_subject`, `build_withdraw_commit`, `withdraw_step` (with the interim `closing` arm), `withdrawal_answer`.
+- `closure/record.rs`: `BranchWrite::Withdraw`, `begin_branch_closing`'s per-action match, `after_child`'s three values, `action_mismatch`.
+- `closure/mod.rs`: the four `BranchAnswer` values; `RepositoryService::withdraw_ticket_closure` (pub, as `close_ticket` at 538-552).
+- `mutation/bind/lifecycle_verb.rs`: `branch_code`'s arms.
+- Tests: `w1_…` to `w5_…`, `w7_…` to `w12_…`, `w14_…`, `withdraw_answers_choose_each_row_in_order`, `a_request_continues_only_its_own_verb_s_record`, `begin_branch_closing_writes_what_the_action_writes`.
+- Mechanical edits: 7.2's three, and `withdraw_subject()`.
+
+**C. `closing` reconciled on `withdraw_oid`.**
+- `closure/checkpoint.rs`: `withdraw_step`'s `closing` arm (3.4), the stored-commit move, `reconcile_closing`'s descendant rule, `commit_holds_open_ticket`.
+- Tests: `w13_…`, `reconcile_closing_reads_a_withdraw_by_its_commit`.
+
+## 9. Where Task 8 stops, and what Task 11 binds
+
+Task 8 adds no CLI verb, catalog entry, `Command::TicketWithdrawClosure`, `Mutation::TicketWithdrawClosure`, `TicketWithdrawClosureInput`, `LifecycleVerb` impl, Session method, DTO, preview variant, schema, golden, `way_out.rs` row or desktop arm. Its only binding-file edit is `branch_code`'s four arms (an exhaustive match the new values break) and their test rows.
+
+Task 11 binds:
+- `RepositoryService::preview_closure_withdrawal(PreviewTicketClosureRequest) -> Result<ClosureWithdrawalPreflight, RepositoryError>` for the verb's `observe`. It maps `NothingToWithdraw` to `already_applied` with no data and nothing to confirm (P15's golden), and `PublicationRemoteRequired` to `publication_remote_required` (the binding should also answer that from the configuration before the domain, as `bind/sync.rs:1539-1543` does). `NothingToWithdraw` must not pre-empt decision 33: the binding observes before `held` (`bind/lifecycle.rs:384-426`), so `held` must still answer `recovery_required` for an unfinished record (W4).
+- `closure::lifecycle::withdraw(service, CloseTicketRequest, session, probe, progress, clock)`, through a new `RepositoryService::withdraw_ticket_closure_observed` (pub(super), as `close_ticket_observed`, `closure/mod.rs:554-563`) and a Session method beside `close_ticket` (`mutation/progress.rs:441-457`). Its answers are `TicketClosureResult::Branch` / `BranchIndexPending` with `action() == Withdraw`, and its errors `TicketClosureError`.
+- `RepositoryService::cancel_ticket_closure` (unchanged) for `request cancel`; `promotion::lifecycle_parent::<ClosureRecord>` and `unfinished_holder::<ClosureRecord>` for the verb's `parent` and `holder` (`lifecycle_verb.rs:481-500`, as the close's).
+
+Task 10 gives the withdraw's data (`recording: withdrawn` or `none`, `checkpoint_oid` from `withdraw_oid`, the link row as it stands), the preview variant from a `TicketClosurePreview` whose path is `(mode, Withdraw)`, R-32's effects (the context child's publication), and the way out of `RemoteBranchDeleted` for a withdraw and of `RemoteContextDeleted` (`item republish`).
+
+## Open questions for the controller
+
+1. **Row 6, "the published head holds a closure (R-30 restored it in a merge)".** R-30 gives a merge the closure the fetched primary holds, so the tracking primary names it and row 1 answers first; row 6 is reachable only when no primary holds a closure and the published head does, that is another clone's closure merged in (for example a re-recorded closure kept by a conflict repair, G6's shape). Part E answers `ticket_closed`, which says the ticket is closed when it is closing. Built as the design says (`ticket_closed`), stored as its own value `closed_since`, so a ruling of `already_closing` changes only `branch_code`'s arm and its test row.
+2. **Row 1's "the withdrawn closure".** Built as "the tracking primary names any closure": another closure there is still a closed ticket, and the alternative ("otherwise `ok`") would report a withdraw of a ticket the primary has closed. Evidence: R-27, the Cycle document's item 7 ("`ticket_closed` when the primary holds it"). If ruled otherwise, row 1 compares both fields and another closure falls to a new row.
+3. **No mode in the withdraw's digest.** R-2 says a mode switch between prepare and confirm is `external_change`, by the digest's domain; a withdraw's observation and domain are the same in both modes and Part E's field list binds no mode, so a switch is not refused and the record begins in the live mode. Nothing of a withdraw's run depends on the mode (the hold and the guard read the configuration at each call). Built per Part E. If R-2 must hold, the narrowest fix is one mode byte after the action tag in `branch_expectation_with_head` for `Withdraw` only (the close's wire format is unchanged).
