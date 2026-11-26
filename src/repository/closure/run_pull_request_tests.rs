@@ -6147,3 +6147,6 @@ fn a_replayed_reservation_of_a_retired_record_goes_on_to_step_three() {
     p.assert_retired(&r, old);
     assert_eq!(p.f.commits_in_odb(&close_subject()), 1);
 }
+
+#[path = "run_pull_request_lifecycle_tests.rs"]
+mod lifecycles;
