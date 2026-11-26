@@ -1794,7 +1794,7 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 5] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 4] = [
     (
         ResultCode::CommandUnavailable,
         "a CLI code for a planned verb, and no verb is planned once poll once is bound \
@@ -1813,12 +1813,10 @@ const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 5] = [
          refuse divergence, which no binding is",
     ),
     (
-        ResultCode::RemotePrimaryMissing,
-        "golden written in a later task of this Cycle",
-    ),
-    (
         ResultCode::RemoteAlreadySetUp,
-        "golden written in a later task of this Cycle",
+        "a library test pins it (setup::publish_tests): the remote's primary already holds a \
+         configuration, a decision a local remote makes as well as an SSH one, so the SSH \
+         case does not repeat it",
     ),
 ];
 
@@ -1854,7 +1852,7 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 9] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 8] = [
     (
         ResultCode::UsageError,
         "a CLI parse result; no command of execute or prepare returns it",
@@ -1886,12 +1884,8 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 9] = [
         "a read's code, of host inspect: no command of execute or prepare returns it",
     ),
     (
-        ResultCode::RemotePrimaryMissing,
-        "golden written in a later task of this Cycle",
-    ),
-    (
         ResultCode::RemoteAlreadySetUp,
-        "golden written in a later task of this Cycle",
+        "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
     ),
 ];
 
