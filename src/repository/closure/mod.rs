@@ -314,6 +314,25 @@ pub enum TicketClosurePreflight {
     },
 }
 
+/// A withdraw's preflight: a close's two answers, and the two with nothing
+/// to confirm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // As `TicketClosurePreflight`: the ready preview by value.
+pub enum ClosureWithdrawalPreflight {
+    Ready(TicketClosurePreview),
+    Blocked {
+        /// Every blocker, in declaration order.
+        blockers: Vec<ClosureBlocker>,
+        /// `Some` exactly when `blockers` is `[IdentityRequired]`.
+        identity_configuration: Option<ExpectedConfiguration>,
+    },
+    /// `already_applied`, with no data and nothing to confirm: neither the
+    /// context's ticket nor its tracking ref's holds a closure.
+    NothingToWithdraw,
+    /// `publication_remote_required`: a withdraw's children publish.
+    PublicationRemoteRequired,
+}
+
 /// A confirmed closure: the operation, the ticket and the consent digest of
 /// its preview. `Debug` shows the IDs only.
 #[derive(Clone)]
@@ -530,6 +549,16 @@ impl RepositoryService {
         request: PreviewTicketClosureRequest,
     ) -> Result<TicketClosurePreflight, RepositoryError> {
         observe::preview(self, &request)
+    }
+    /// The preflight of a withdraw of the ticket's provisional closure
+    /// (Part E): what `preview_ticket_closure` reads, observed as a withdraw
+    /// in either mode, without a repository lease, network access, or a
+    /// Git/registry mutation.
+    pub fn preview_closure_withdrawal(
+        &self,
+        request: PreviewTicketClosureRequest,
+    ) -> Result<ClosureWithdrawalPreflight, RepositoryError> {
+        observe::withdrawal_preview(self, &request)
     }
     /// Close a ticket as previewed: synchronize its context (with a remote),
     /// write the closure checkpoint, merge it into the primary, publish and

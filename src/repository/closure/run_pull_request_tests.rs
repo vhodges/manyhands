@@ -328,6 +328,28 @@ impl PullRequest {
             &[(ticket().as_str(), Some((&open, 0o100644)))],
         )
     }
+    /// A commit on `parent` with its ticket's closure removed, as another
+    /// clone's withdraw leaves it.
+    fn withdraw_commit_on(&self, parent: Oid) -> Oid {
+        let closed = support::tree_bytes(&self.f.repo, parent, &ticket());
+        let open = observe::withdrawn_ticket_bytes(&closed).expect("a closed ticket");
+        support::tree_commit(
+            &self.f.repo,
+            parent,
+            &[(ticket().as_str(), Some((&open, 0o100644)))],
+        )
+    }
+    /// A close request run to `Published` with its own io: the closure
+    /// commit `C`, the context's tip, published.
+    fn close_first(&self) -> Oid {
+        let mut io = PullRequestIo::default();
+        let outcome = PullRequest::branch(self.run(self.request(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Published);
+        self.assert_primary_untouched(&io);
+        let closure = self.f.context_oid();
+        assert_eq!(outcome.checkpoint_oid(), Some(closure));
+        closure
+    }
     /// A commit on `parent` with the ticket's body written as `body`.
     fn body_commit_on(&self, parent: Oid, body: &str) -> Oid {
         let source = String::from_utf8(support::tree_bytes(&self.f.repo, parent, &ticket()))
@@ -2728,4 +2750,49 @@ fn a_candidate_captured_before_the_record_held_is_refused_at_its_claim() {
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Merged);
     p.assert_primary_untouched(&io.inner);
+}
+
+/// W6 (Tasks 3 and 6, pinned here for the withdraw): a clone that holds the
+/// closure `C` unchanged, with work of its own over it, synchronizes with
+/// another clone's withdraw of `C`, and the merge keeps the withdraw. The
+/// conflicting shape (both sides changed the body) is the integration
+/// table's, `provisional_closures_may_change_primary_ones_may_not`.
+#[test]
+fn w6_another_clone_s_synchronization_keeps_the_withdraw() {
+    let p = PullRequest::new();
+    let c = p.close_first();
+    // Another clone's withdraw of `C`, and work of our own over it.
+    let withdrawn = p.withdraw_commit_on(c);
+    support::write(&p.f.context, "notes.txt", "notes\n");
+    let own = support::commit(&p.f.context);
+    assert_eq!(p.f.context_oid(), own);
+    // A manual synchronization of the context, bound to no record.
+    p.f.configure_endpoints();
+    let req = SynchronizeRemoteRequest {
+        root: p.f.root().into(),
+        operation_id: OperationId::new(),
+        target: SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id: id(),
+        },
+        approval: None,
+        confirmed_identity: None,
+        restart: false,
+    };
+    let merged = sync::promotion_test_drive_local(&p.f.service, &req, withdrawn).unwrap();
+    // The merge keeps the withdraw and the work, and descends from both.
+    let repo = &p.f.repo;
+    assert_eq!(p.f.context_oid(), merged);
+    assert!(matches!(
+        observe::file_closure(&support::tree_bytes(repo, merged, &ticket())),
+        observe::FileClosure::Open
+    ));
+    assert_eq!(
+        support::tree_bytes(repo, merged, "notes.txt"),
+        b"notes\n".to_vec()
+    );
+    assert!(repo.graph_descendant_of(merged, own).unwrap());
+    assert!(repo.graph_descendant_of(merged, withdrawn).unwrap());
+    // It never touches the primary.
+    assert_eq!(p.f.primary(), p.primary_before);
 }

@@ -3,8 +3,8 @@
 //! the post-closure ticket check (D1, C10) and identity (C2). It never takes
 //! the repository lease, writes Git or SQL, or opens the network.
 use super::{
-    ClosureAction, ClosureBlocker, ClosureExpectation, PlannedClosure, PreviewTicketClosureRequest,
-    TicketClosurePreflight, TicketClosurePreview,
+    ClosureAction, ClosureBlocker, ClosureExpectation, ClosureWithdrawalPreflight, PlannedClosure,
+    PreviewTicketClosureRequest, TicketClosurePreflight, TicketClosurePreview,
     checkpoint::{ClosureBuild, ClosureTarget, MergeHandle, build_closure},
 };
 use crate::{
@@ -53,7 +53,8 @@ pub(in super::super) fn closed_by_text(identity: &CommitIdentity) -> String {
     format!("{} <{}>", identity.name, identity.email)
 }
 
-/// Why `closed_ticket_bytes` refuses a ticket. Categories only: no content.
+/// Why `closed_ticket_bytes` or `withdrawn_ticket_bytes` refuses a ticket.
+/// Categories only: no content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum ClosureContentError {
     /// The bytes are not UTF-8 text.
@@ -69,6 +70,8 @@ pub(in super::super) enum ClosureContentError {
     /// Canonical re-serialization would change a field, an unknown key or
     /// the body beyond the two closure fields.
     NotPreserved,
+    /// The ticket holds no closure to remove.
+    NotClosed,
 }
 
 /// The closed ticket's bytes (C10): parse, set `closed_at`/`closed_by`,
@@ -94,7 +97,7 @@ pub(in super::super) fn closed_ticket_bytes(
     if closed_by.is_empty() || closed_by.contains('\0') {
         return Err(InvalidClosedBy);
     }
-    with_closure(&path, &ticket, closed_at, closed_by)
+    with_closure(&path, &ticket, Some((closed_at, closed_by)))
 }
 
 /// A ticket's bytes with its closure fields replaced (R-30, Part G): as
@@ -109,7 +112,20 @@ pub(in super::super) fn closure_replaced_bytes(
     closed_by: &str,
 ) -> Result<Vec<u8>, ClosureContentError> {
     let (path, ticket) = parsed_ticket(original)?;
-    with_closure(&path, &ticket, closed_at, closed_by)
+    with_closure(&path, &ticket, Some((closed_at, closed_by)))
+}
+
+/// The ticket's bytes with its closure removed (Part E): parsed, both
+/// fields cleared, serialized canonically, and every other parsed field,
+/// unknown key and the body as they were. `NotClosed` for an open ticket.
+pub(in super::super) fn withdrawn_ticket_bytes(
+    original: &[u8],
+) -> Result<Vec<u8>, ClosureContentError> {
+    let (path, ticket) = parsed_ticket(original)?;
+    if ticket.closed_at.is_none() && ticket.closed_by.is_none() {
+        return Err(ClosureContentError::NotClosed);
+    }
+    with_closure(&path, &ticket, None)
 }
 
 /// The ticket the bytes hold, with its canonical path.
@@ -131,13 +147,13 @@ fn parse_ticket_at(path: &Path, source: &str) -> Result<Ticket, ClosureContentEr
     }
 }
 
-/// `ticket` normalized, given the closure and serialized, which must read
-/// back as exactly that, and as `ticket` in every other field.
+/// `ticket` normalized, given the closure (`None` clears both fields) and
+/// serialized, which must read back as exactly that, and as `ticket` in
+/// every other field.
 fn with_closure(
     path: &Path,
     ticket: &Ticket,
-    closed_at: OffsetDateTime,
-    closed_by: &str,
+    closure: Option<(OffsetDateTime, &str)>,
 ) -> Result<Vec<u8>, ClosureContentError> {
     use ClosureContentError::*;
     let serialize = |ticket: &Ticket| {
@@ -148,8 +164,8 @@ fn with_closure(
         return Err(NotPreserved);
     }
     let mut closed = normalized;
-    closed.closed_at = Some(closed_at);
-    closed.closed_by = Some(closed_by.to_owned());
+    closed.closed_at = closure.map(|(closed_at, _)| closed_at);
+    closed.closed_by = closure.map(|(_, closed_by)| closed_by.to_owned());
     let bytes = serialize(&closed)?;
     if parse_ticket_at(path, &bytes).map_err(|_| NotPreserved)? != closed {
         return Err(NotPreserved);
@@ -203,6 +219,20 @@ fn preserved(original: &Ticket, normalized: &Ticket) -> bool {
         && parent(original) == parent(normalized)
 }
 
+/// The verb a closure observation observes for: a close (from Task 9 its
+/// situation may make it a new branch) or a withdraw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum Verb {
+    Close,
+    Withdraw,
+}
+
+/// A pull-request close, and every withdraw, takes the branch record's
+/// observation (Part D, Consent and dispatch).
+fn branch_observed(mode: Integration, verb: Verb) -> bool {
+    mode == Integration::PullRequest || verb == Verb::Withdraw
+}
+
 /// The observation every closure stage consumes: preview, the post-child
 /// re-check and the leased revalidation. It carries no authority to mutate
 /// Git or the registry. It deliberately has no `Debug`: `closure` and
@@ -223,8 +253,9 @@ pub(in super::super) struct ClosureObservation {
     /// contained in the base.
     pub(in super::super) needs_context_child: bool,
     pub(in super::super) cleanup: PlannedCleanup,
-    /// The selected identity of a `Record` closure; `None` for `Existing`,
-    /// whose merge signer is resolved at execution.
+    /// The selected identity of a `Record` closure or a withdraw (its
+    /// commit's author); `None` for `Existing`, whose merge signer is
+    /// resolved at execution.
     #[cfg_attr(not(test), allow(dead_code))]
     // Observed for the tests; execution re-selects under the lease.
     pub(in super::super) identity: Option<CommittingIdentity>,
@@ -272,6 +303,27 @@ impl ClosureObservation {
 pub(in super::super) struct ClosureRefusal {
     pub(in super::super) blockers: Vec<ClosureBlocker>,
     pub(in super::super) identity_configuration: Option<ExpectedConfiguration>,
+    /// Why a withdraw offers nothing to confirm; `blockers` is then empty.
+    pub(in super::super) unoffered: Option<Unoffered>,
+}
+impl ClosureRefusal {
+    fn unoffered(reason: Unoffered) -> Self {
+        Self {
+            blockers: Vec::new(),
+            identity_configuration: None,
+            unoffered: Some(reason),
+        }
+    }
+}
+
+/// Why a withdraw offers nothing to confirm. Neither is a blocker: a
+/// close's observation never gives one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum Unoffered {
+    /// Neither the context's ticket nor its tracking ref's holds a closure.
+    NothingToWithdraw,
+    /// No publication remote: a withdraw's children publish.
+    PublicationRemoteRequired,
 }
 
 fn into_preflight(observed: &Result<ClosureObservation, ClosureRefusal>) -> TicketClosurePreflight {
@@ -296,10 +348,11 @@ struct DiscoveryFacts {
 struct PendingWork {
     local_operation: bool,
     comment_publication: bool,
-    /// A pull-request close only: a live synchronization of the ticket's
-    /// context that no unfinished closure record of it owns.
+    /// A branch observation only (a pull-request close, or a withdraw): a
+    /// live synchronization of the ticket's context that no unfinished
+    /// closure record of it owns.
     synchronization: Option<String>,
-    /// A pull-request close only: an unfinished record of the ticket that a
+    /// A branch observation only: an unfinished record of the ticket that a
     /// new request could not supersede holds it (decision 33).
     record_unfinished: bool,
 }
@@ -311,6 +364,9 @@ pub(in super::super) struct PreparedClosureObservation {
     pub(in super::super) configuration: canonical::RepositoryConfig,
     /// The mode it was observed in, which a revalidation keeps.
     mode: Integration,
+    /// The verb it observed for, which a revalidation keeps as it keeps the
+    /// mode.
+    verb: Verb,
     pub(in super::super) repository_id: i64,
     seal: ObservationSeal,
     facts: DiscoveryFacts,
@@ -320,6 +376,25 @@ impl PreparedClosureObservation {
     pub(in super::super) fn preflight(&self) -> TicketClosurePreflight {
         into_preflight(&self.observed)
     }
+    /// A withdraw's preflight: a close's two answers, and the two with
+    /// nothing to confirm.
+    fn withdrawal_preflight(&self) -> ClosureWithdrawalPreflight {
+        match &self.observed {
+            Ok(observation) => ClosureWithdrawalPreflight::Ready(observation.preview()),
+            Err(ClosureRefusal {
+                unoffered: Some(Unoffered::NothingToWithdraw),
+                ..
+            }) => ClosureWithdrawalPreflight::NothingToWithdraw,
+            Err(ClosureRefusal {
+                unoffered: Some(Unoffered::PublicationRemoteRequired),
+                ..
+            }) => ClosureWithdrawalPreflight::PublicationRemoteRequired,
+            Err(refusal) => ClosureWithdrawalPreflight::Blocked {
+                blockers: refusal.blockers.clone(),
+                identity_configuration: refusal.identity_configuration,
+            },
+        }
+    }
 }
 
 pub(super) fn preview(
@@ -327,6 +402,13 @@ pub(super) fn preview(
     request: &PreviewTicketClosureRequest,
 ) -> Result<TicketClosurePreflight, RepositoryError> {
     Ok(prepare_observation(service, request)?.preflight())
+}
+
+pub(super) fn withdrawal_preview(
+    service: &RepositoryService,
+    request: &PreviewTicketClosureRequest,
+) -> Result<ClosureWithdrawalPreflight, RepositoryError> {
+    Ok(prepare_observation_for(service, request, None, Verb::Withdraw)?.withdrawal_preflight())
 }
 
 /// Outside the lease: the item's preview facts, then a full observation, in
@@ -347,7 +429,18 @@ pub(in super::super) fn prepare_observation_in(
     request: &PreviewTicketClosureRequest,
     mode: Option<Integration>,
 ) -> Result<PreparedClosureObservation, RepositoryError> {
-    prepare_observation_at(service, request, mode, now())
+    prepare_observation_for(service, request, mode, Verb::Close)
+}
+
+/// `prepare_observation_in` for `verb`: a withdraw observes in either mode
+/// as a branch record does.
+pub(in super::super) fn prepare_observation_for(
+    service: &RepositoryService,
+    request: &PreviewTicketClosureRequest,
+    mode: Option<Integration>,
+    verb: Verb,
+) -> Result<PreparedClosureObservation, RepositoryError> {
+    observe_for_at(service, request, mode, verb, now())
 }
 
 fn now() -> OffsetDateTime {
@@ -356,10 +449,11 @@ fn now() -> OffsetDateTime {
         .expect("zero nanoseconds are valid")
 }
 
-fn prepare_observation_at(
+fn observe_for_at(
     service: &RepositoryService,
     request: &PreviewTicketClosureRequest,
     mode: Option<Integration>,
+    verb: Verb,
     at: OffsetDateTime,
 ) -> Result<PreparedClosureObservation, RepositoryError> {
     let item = &request.item_id;
@@ -368,7 +462,7 @@ fn prepare_observation_at(
     // One read-only registry transaction: history, conflicts and pending work.
     let (repository_id, snapshot, pending_conflict, pending) =
         shared::read_view_with(service, &root, |tx, id| {
-            pending_work(tx, id, item, mode == Integration::PullRequest)
+            pending_work(tx, id, item, branch_observed(mode, verb))
         })?;
     let (facts, seal) = ObservationSeal::discover(KIND, &repository, &root, &config, item, || {
         shared::item_preview_facts(KIND, service, &root, item)
@@ -392,12 +486,14 @@ fn prepare_observation_at(
         &facts,
         request.confirmed_identity.as_ref(),
         mode,
+        verb,
         at,
     )?;
     Ok(PreparedClosureObservation {
         observed,
         configuration: config,
         mode,
+        verb,
         repository_id,
         seal,
         facts,
@@ -412,16 +508,29 @@ pub(in super::super) fn revalidate_under_lease(
     service: &RepositoryService,
     repository: &git2::Repository,
 ) -> Result<Result<ClosureObservation, Vec<ClosureBlocker>>, RepositoryError> {
+    Ok(
+        revalidate_observation_under_lease(prepared, service, repository)?
+            .map_err(|refusal| refusal.blockers),
+    )
+}
+
+/// `revalidate_under_lease`, with the whole refusal: a withdraw's `ready`
+/// reads why nothing was offered.
+pub(in super::super) fn revalidate_observation_under_lease(
+    prepared: &PreparedClosureObservation,
+    service: &RepositoryService,
+    repository: &git2::Repository,
+) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError> {
     let fresh = prepared.seal.reopen(repository, &prepared.configuration)?;
     let item = prepared.seal.item();
     let (id, snapshot, pending_conflict, pending) =
         shared::read_view_with(service, prepared.seal.root(), |tx, id| {
-            pending_work(tx, id, item, prepared.mode == Integration::PullRequest)
+            pending_work(tx, id, item, branch_observed(prepared.mode, prepared.verb))
         })?;
     if id != prepared.repository_id {
         return Err(shared::changed());
     }
-    Ok(observe_git(
+    observe_git(
         &fresh,
         prepared.seal.root(),
         &prepared.configuration,
@@ -432,9 +541,9 @@ pub(in super::super) fn revalidate_under_lease(
         &prepared.facts,
         prepared.confirmation.as_ref(),
         prepared.mode,
+        prepared.verb,
         now(),
-    )?
-    .map_err(|refusal| refusal.blockers))
+    )
 }
 
 /// C12. `operation_records.item_id` is null for most lifecycle rows, and for
@@ -442,8 +551,9 @@ pub(in super::super) fn revalidate_under_lease(
 /// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is unfinished while its local row or its
 /// publication's remote row is.
 ///
-/// A pull-request close also reads (`branch`) a live synchronization of the
-/// ticket's context, which the direct close meets only at its confirm. The
+/// A branch observation (`branch`: a pull-request close, or a withdraw) also
+/// reads a live synchronization of the ticket's context, which the direct
+/// close meets only at its confirm. The
 /// unfinished record's own children are left out: the binding's `held`
 /// answers for those, and a foreign synchronization alone is `busy` (R23).
 fn pending_work(
@@ -704,10 +814,11 @@ fn observe_git(
     facts: &DiscoveryFacts,
     confirmation: Option<&ConfirmedCommitIdentity>,
     mode: Integration,
+    verb: Verb,
     at: OffsetDateTime,
 ) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError> {
     use ClosureBlocker::*;
-    let branch = mode == Integration::PullRequest;
+    let branch = branch_observed(mode, verb);
     let mut blockers = BTreeSet::new();
     let path = ticket_path(item);
     let context_branch = KIND.context_branch(item);
@@ -803,26 +914,41 @@ fn observe_git(
         }
     }
     if branch {
-        return branch_observation(
-            repository,
-            root,
-            config,
-            item,
-            snapshot,
-            facts,
-            confirmation,
-            at,
-            pending,
-            Gathered {
-                blockers,
-                context_oid,
-                context_missing,
-                context_conforming,
-                primary_oid,
-                tracking_primary,
-                tracking_context,
-            },
-        );
+        let gathered = Gathered {
+            blockers,
+            context_oid,
+            context_missing,
+            context_conforming,
+            primary_oid,
+            tracking_primary,
+            tracking_context,
+        };
+        return match verb {
+            Verb::Close => branch_observation(
+                repository,
+                root,
+                config,
+                item,
+                snapshot,
+                facts,
+                confirmation,
+                at,
+                pending,
+                gathered,
+            ),
+            Verb::Withdraw => withdraw_observation(
+                repository,
+                root,
+                config,
+                item,
+                snapshot,
+                facts,
+                confirmation,
+                mode,
+                pending,
+                gathered,
+            ),
+        };
     }
     let base = if config.publication_remote.is_some() {
         tracking_primary
@@ -1233,6 +1359,7 @@ fn refusal_of(
     ClosureRefusal {
         blockers: blockers.into_iter().collect(),
         identity_configuration: identity_configuration.filter(|_| only_identity),
+        unoffered: None,
     }
 }
 
@@ -1394,12 +1521,195 @@ fn branch_observation(
     Ok(Ok(observation))
 }
 
+/// A withdraw's observation (Part E), in either mode: the branch record's
+/// road, ending in the closure being withdrawn. Nothing integrates, and the
+/// withdraw's commit is built at step 3 from the context's head. In order:
+///
+/// 1. no publication remote: nothing to confirm, a withdraw's children
+///    publish (`Unoffered::PublicationRemoteRequired`);
+/// 2. the local or the tracking primary's ticket is not open: `AlreadyClosed`
+///    alone, as for the close (withdrawing it would be a reopen);
+/// 3. a synchronization of the context that no unfinished record owns: busy;
+/// 4. the blockers Part D keeps, `ContextMissing` for no context, and the
+///    remote history of a context whose tracking ref is absent;
+/// 5. the closure to withdraw: the context's, else the tracking context's,
+///    which the context child brings in; one that is malformed, or that
+///    cannot be removed, is `TicketInvalidAfterClosure`;
+/// 6. any blocker so far refuses, before there is nothing to withdraw;
+/// 7. none: nothing to confirm (`Unoffered::NothingToWithdraw`), unless an
+///    unfinished record that a new request could not supersede holds the
+///    ticket. Then the observation goes on, with a closure that is only a
+///    placeholder: the binding observes before its hold (decision 33), which
+///    answers `recovery_required` naming the holder, and a request that
+///    confirms it meets the same record's `busy` at insertion (ruling 35);
+/// 8. the identity of the commit's author, which is not consented.
+#[allow(clippy::too_many_arguments)] // One observation's coherent inputs.
+fn withdraw_observation(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    snapshot: &RemoteSnapshot,
+    facts: &DiscoveryFacts,
+    confirmation: Option<&ConfirmedCommitIdentity>,
+    mode: Integration,
+    pending: PendingWork,
+    gathered: Gathered,
+) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError> {
+    use ClosureBlocker::*;
+    let Gathered {
+        mut blockers,
+        context_oid,
+        context_missing,
+        context_conforming,
+        primary_oid,
+        tracking_primary,
+        tracking_context,
+    } = gathered;
+    if config.publication_remote.is_none() {
+        return Ok(Err(ClosureRefusal::unoffered(
+            Unoffered::PublicationRemoteRequired,
+        )));
+    }
+    let path = ticket_path(item);
+    let closure_of = |commit: Option<Oid>| match commit {
+        Some(commit) if !facts.not_ticket => closure_at(repository, commit, &path, root),
+        _ => Ok(FileClosure::Open),
+    };
+    // Situation 1 decides alone, as for the close.
+    if !matches!(closure_of(primary_oid)?, FileClosure::Open)
+        || !matches!(closure_of(tracking_primary)?, FileClosure::Open)
+    {
+        return Ok(Err(refusal_of(BTreeSet::from([AlreadyClosed]), None)));
+    }
+    if let Some(operation) = pending
+        .synchronization
+        .as_deref()
+        .filter(|_| !pending.record_unfinished)
+    {
+        return Err(foreign_synchronization_busy(root, operation));
+    }
+    if tracking_primary.is_none() {
+        blockers.insert(PrimaryMissing);
+    }
+    if context_missing {
+        blockers.insert(ContextMissing);
+    } else if tracking_context.is_none() && !facts.not_ticket {
+        blockers.extend(remote_history_blocker(snapshot, item));
+    }
+    let context_ticket = context_ticket_at(
+        repository,
+        context_oid.filter(|_| context_conforming),
+        &path,
+        root,
+        &mut blockers,
+    )?;
+    let tracking_ticket = match tracking_context.filter(|_| !facts.not_ticket) {
+        Some(tip) => tree_ticket(repository, commit_tree(repository, tip, root)?, &path, root)?,
+        None => None,
+    };
+    // The context's closure is the one withdrawn; failing it, the tracking
+    // context's, which the context child brings in.
+    let mut chosen = None;
+    for ticket in [context_ticket.as_ref(), tracking_ticket.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        match file_closure(&ticket.bytes) {
+            FileClosure::Open => {}
+            FileClosure::Malformed => {
+                blockers.insert(TicketInvalidAfterClosure);
+            }
+            FileClosure::Closed {
+                closed_at,
+                closed_by,
+            } => {
+                chosen.get_or_insert((closed_at, closed_by, &ticket.bytes));
+            }
+        }
+    }
+    if chosen
+        .as_ref()
+        .is_some_and(|(_, _, bytes)| withdrawn_ticket_bytes(bytes).is_err())
+    {
+        blockers.insert(TicketInvalidAfterClosure);
+    }
+    if !blockers.is_empty() {
+        return Ok(Err(refusal_of(blockers, None)));
+    }
+    let (closure, identity) = match chosen {
+        Some((closed_at, closed_by, _)) => {
+            let IdentityChoice {
+                identity,
+                configuration,
+                selected,
+            } = select_identity(repository, root, confirmation, true)?;
+            if selected.is_none() {
+                return Ok(Err(refusal_of(
+                    BTreeSet::from([IdentityRequired]),
+                    configuration,
+                )));
+            }
+            (
+                PlannedClosure::Existing {
+                    closed_at,
+                    closed_by,
+                },
+                identity,
+            )
+        }
+        None if pending.record_unfinished => (
+            PlannedClosure::Existing {
+                closed_at: String::new(),
+                closed_by: String::new(),
+            },
+            None,
+        ),
+        None => {
+            return Ok(Err(ClosureRefusal::unoffered(Unoffered::NothingToWithdraw)));
+        }
+    };
+    let (Some(base), Some(context_oid), Some(primary_oid)) =
+        (tracking_primary, context_oid, primary_oid)
+    else {
+        // An unblocked observation always has every fact above.
+        return Err(shared::unavailable(root));
+    };
+    let mut observation = ClosureObservation {
+        item_id: item.clone(),
+        ticket_path: path,
+        context_oid,
+        base,
+        remote: config.publication_remote.clone(),
+        changes: Vec::new(),
+        closure,
+        integration: PlannedIntegration::MergeCommit,
+        needs_context_child: true,
+        cleanup: PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        },
+        identity,
+        expectation: ClosureExpectation::from_bytes([0; 32]),
+        context_branch: KIND.context_branch(item),
+        primary_branch: config.primary_branch.clone(),
+        primary_oid,
+        tracking_primary,
+        tracking_context,
+        path: (mode, ClosureAction::Withdraw),
+    };
+    observation.expectation = expectation(&observation);
+    Ok(Ok(observation))
+}
+
 /// The consent digest of the observation's path: the direct close's, or the
-/// pull-request close's.
+/// branch record's, which is a pull-request close's and every withdraw's, in
+/// either mode.
 fn expectation(o: &ClosureObservation) -> ClosureExpectation {
-    match o.path.0 {
-        Integration::Direct => direct_expectation(o),
-        Integration::PullRequest => branch_expectation(o),
+    match o.path {
+        (Integration::Direct, ClosureAction::Close) => direct_expectation(o),
+        _ => branch_expectation(o),
     }
 }
 

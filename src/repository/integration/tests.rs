@@ -243,6 +243,17 @@ fn provisional_closures_may_change_primary_ones_may_not() {
         ('A', 'B', 'T', Some('N'), 'B', true),
         ('A', 'B', 'T', Some('N'), 'T', true),
         ('A', 'B', 'T', Some('N'), 'N', true),
+        // A clone's withdraw (W6): the incoming side opened the closure the
+        // local side holds unchanged. Whatever the primary holds, the
+        // withdraw may stand over an open primary, and the closure may be
+        // kept; a closed primary keeps its own closure; with no primary side
+        // the local closure is kept, so the withdraw alone is refused.
+        ('A', 'A', 'N', Some('N'), 'N', true),
+        ('A', 'A', 'N', Some('N'), 'A', true),
+        ('A', 'A', 'N', Some('A'), 'A', true),
+        ('A', 'A', 'N', Some('A'), 'N', false),
+        ('A', 'A', 'N', None, 'A', true),
+        ('A', 'A', 'N', None, 'N', false),
         // The base's closure alone, or one no side holds, is refused.
         ('A', 'N', 'N', Some('N'), 'A', false),
         ('A', 'N', 'N', Some('N'), 'N', true),

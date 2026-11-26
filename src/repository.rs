@@ -32,9 +32,9 @@ mod cleanup;
 mod closure;
 pub use closure::{
     BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction, ClosureBlocker,
-    ClosureExpectation, ClosureRecording, PlannedClosure, PreviewTicketClosureRequest,
-    TicketClosureError, TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview,
-    TicketClosureResult,
+    ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight, PlannedClosure,
+    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
+    TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
 mod context_release;
