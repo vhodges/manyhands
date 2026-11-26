@@ -8,6 +8,8 @@ type: feature
 status: done
 project: manyhands
 team: core
+closed_at: 2026-11-26T10:59:04Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
