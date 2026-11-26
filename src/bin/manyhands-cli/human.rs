@@ -1,13 +1,11 @@
 use super::render::{Human, field};
-use manyhands::{
-    forge::PullRequestLink,
-    repository::{
-        CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto,
-        DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto,
-        ItemDtoKind, ItemListDto, KeyDto, KeyListDto, NewIdDto, OperationDto, OperationListDto,
-        PlanDto, PollingStatusDto, ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto,
-        RepositoryInspectionDto, RepositoryListDto,
-    },
+use manyhands::forge;
+use manyhands::repository::{
+    CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderListDto,
+    HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto,
+    KeyDto, KeyListDto, NewIdDto, OperationDto, OperationListDto, PlanDto, PollingStatusDto,
+    ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
+    RepositorySetupDto,
 };
 
 fn text(stdout: String) -> Human {
@@ -41,13 +39,19 @@ pub fn repository_list(data: &RepositoryListDto) -> Human {
     let mut output = text(String::new());
     for item in &data.items {
         output.stdout.push_str(&format!(
-            "{}  {}  configuration={}  index={}  problems={}\n",
+            "{}  {}  configuration={}  index={}  problems={}",
             field(&item.root),
             item.accessibility.as_str(),
             item.configuration.state.as_str(),
             item.index.state.as_str(),
             item.problem_count
         ));
+        if let Some(setup) = &item.setup {
+            output
+                .stdout
+                .push_str(&format!("  setup={}", field(&setup.state)));
+        }
+        output.stdout.push('\n');
         index_note(&mut output, item.index.state.as_str());
     }
     incomplete(&mut output, data.complete);
@@ -63,6 +67,31 @@ fn remote_line(data: &RemoteDto) -> String {
         data.publication_eligible,
         data.selected_for_publication
     )
+}
+
+/// A pending setup: how far it has come, and the link that opens its pull
+/// request.
+fn setup_lines(setup: &RepositorySetupDto) -> String {
+    let link = &setup.pull_request;
+    let state = if setup.state == "published" {
+        format!(
+            "waiting for {} to merge into {}",
+            field(&setup.branch),
+            field(&link.target)
+        )
+    } else {
+        "recorded, not published yet".to_owned()
+    };
+    // The link's own sentence is `PullRequestLink::human_line`; the parts it
+    // reads are all the object carries.
+    let line = forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line();
+    format!("Setup: {state}\n{}\n", field(&line))
 }
 
 pub fn repository_inspection(data: &RepositoryInspectionDto) -> Human {
@@ -92,6 +121,9 @@ pub fn repository_inspection(data: &RepositoryInspectionDto) -> Human {
         if let Some(name) = forge.kind.as_ref().or(forge.pull_request_url.as_ref()) {
             output.stdout.push_str(&format!("Forge: {}\n", field(name)));
         }
+    }
+    if let Some(setup) = &data.setup {
+        output.stdout.push_str(&setup_lines(setup));
     }
     for problem in &data.configuration.problems {
         output.stdout.push_str(&format!(
@@ -358,7 +390,7 @@ pub fn item_show(data: &ItemDto) -> Human {
         }
     }
     if let Some(link) = &data.pull_request {
-        let link = PullRequestLink {
+        let link = forge::PullRequestLink {
             source: link.source.clone(),
             target: link.target.clone(),
             forge: None,

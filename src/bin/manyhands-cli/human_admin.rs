@@ -96,6 +96,8 @@ pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
 }
 pub fn preview(preview: &PreviewDto) -> String {
     let details = match &preview.details {
+        PreviewDetailsDto::SetupCancel(d) => fields(d),
+        PreviewDetailsDto::Setup(d) => fields(d),
         PreviewDetailsDto::Repository(d) => fields(d),
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
@@ -201,6 +203,13 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
         PreviewEffect::WorktreeRemoved => "remove the editing worktree",
         PreviewEffect::BranchDeleted => "delete the local editing branch",
+        PreviewEffect::SetupRecorded => "record the setup",
+        PreviewEffect::SetupBranchCommitted => "commit the setup on a branch",
+        PreviewEffect::SetupBranchPublished => "publish the setup branch",
+        PreviewEffect::SetupBranchDeletedRemotely => "delete the setup branch from the remote",
+        PreviewEffect::SetupBranchDeleted => "delete the local setup branch",
+        PreviewEffect::SetupRecordRemoved => "remove the setup record",
+        PreviewEffect::RepositoryUnregistered => "take the repository out of the list",
         PreviewEffect::ContextPublished => "publish the editing branch",
         PreviewEffect::PullRequestLink => "record the pull request link",
         PreviewEffect::ClosureWithdrawn => "withdraw the closure from the editing branch",
@@ -249,16 +258,66 @@ pub fn mutation_success(envelope: &Envelope<MutationDataDto>) -> Human {
     stdout.push_str(&metadata(envelope));
     if let Some(data) = &envelope.data {
         stdout.push_str(&fields(data));
+        stdout.push_str(&setup_lines(data));
     }
     Human {
         stdout,
         notes: vec![],
     }
 }
+/// A setup's answer, in words: how far the setup has come and the link that
+/// opens its pull request. Nothing for any other data.
+fn setup_lines(data: &MutationDataDto) -> String {
+    if let MutationDataDto::SetupCancel(cancel) = data {
+        let mut lines = String::new();
+        if cancel.remote_branch == "kept" {
+            lines.push_str("The setup branch on the remote is at another commit than the one set up, and was left.\n");
+        }
+        if cancel.local_branch == "kept" {
+            lines.push_str("The local setup branch was left: it is at another commit than the one set up, or it is checked out.\n");
+        }
+        return lines;
+    }
+    let MutationDataDto::Setup(setup) = data else {
+        return String::new();
+    };
+    let link = &setup.pull_request;
+    let state = if setup.state == "published" {
+        format!(
+            "waiting for {} to merge into {}",
+            field(&setup.branch),
+            field(&link.target)
+        )
+    } else {
+        "recorded, not published yet".to_owned()
+    };
+    let line = manyhands::forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line();
+    format!("Setup: {state}\n{}\n", field(&line))
+}
 pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> String {
     let mut out = metadata(envelope);
+    // A setup that the remote's primary already holds: the refusal names the
+    // setup in its data, which no other refusal of the command does.
+    let merged = envelope.command == "repo setup-cancel"
+        && envelope.code == ResultCode::RecoveryRequired
+        && matches!(envelope.data, Some(MutationDataDto::Setup(_)));
     if let Some(data) = &envelope.data {
         out.push_str(&fields(data));
+        // Its words say the setup is waiting for a merge, which is not so.
+        if !merged {
+            out.push_str(&setup_lines(data));
+        }
+    }
+    if merged {
+        out.push_str(
+            "hint: a setup that the remote's primary already holds cannot be cancelled; run manyhands-cli poll once so that the repository finishes it\n",
+        );
     }
     if supplied && envelope.code == ResultCode::TransportUnavailable {
         out.push_str("hint: if the passphrase was wrong, run the command again\n");

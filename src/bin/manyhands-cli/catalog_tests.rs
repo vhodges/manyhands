@@ -109,6 +109,8 @@ const DESIGN: &[(&str, &[&str])] = &[
             "item resolve-history",
             "remote history",
             "remote resolve-history",
+            // Wave 06 Cycle 02: a pending setup is cancelled.
+            "repo setup-cancel",
         ],
     ),
 ];

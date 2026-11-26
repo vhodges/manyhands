@@ -160,6 +160,17 @@ contract_enum!(
     /// `primary_published` primary pushed; `remote_branch_deleted`,
     /// `worktree_removed` and `branch_deleted` the context retired.
     ///
+    /// `setup_recorded` to `setup_branch_published` are a pull-request
+    /// enable's: the setup recorded in the registry, its commit made on the
+    /// remote's primary and kept on the local branch `manyhands/setup/<id>`,
+    /// and that branch pushed.
+    ///
+    /// `setup_branch_deleted_remotely` to `repository_unregistered` are a
+    /// setup's cancellation's: the remote branch deleted at its recorded
+    /// commit, the local branch and the private base ref deleted, the setup's
+    /// record removed, and, for a first-time setup, the repository taken out
+    /// of the repository list.
+    ///
     /// `context_published`, `pull_request_link` and `closure_withdrawn` are
     /// a pull-request closure's, and a withdrawal's. `context_published` is
     /// the editing branch pushed to the remote, with what the context holds
@@ -205,6 +216,13 @@ contract_enum!(
         RemoteBranchDeleted => "remote_branch_deleted",
         WorktreeRemoved => "worktree_removed",
         BranchDeleted => "branch_deleted",
+        SetupRecorded => "setup_recorded",
+        SetupBranchCommitted => "setup_branch_committed",
+        SetupBranchPublished => "setup_branch_published",
+        SetupBranchDeletedRemotely => "setup_branch_deleted_remotely",
+        SetupBranchDeleted => "setup_branch_deleted",
+        SetupRecordRemoved => "setup_record_removed",
+        RepositoryUnregistered => "repository_unregistered",
         ContextPublished => "context_published",
         PullRequestLink => "pull_request_link",
         ClosureWithdrawn => "closure_withdrawn",
@@ -255,10 +273,49 @@ pub struct RepositoryPreviewDto {
     pub slug_prefix: Option<String>,
 }
 
+/// The forge a setup's configuration names: the `[forge]` table. Every key
+/// is always present; one the table lacks is `null`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupForgeDto {
+    pub kind: Option<String>,
+    pub web_url: Option<String>,
+    pub pull_request_url: Option<String>,
+}
+
+/// What a preview of a pull-request `repo enable` shows: the root, the
+/// primary, the identity, the prefix, the mode, the setup remote's name and
+/// its location (redacted), and the forge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupPreviewDto {
+    pub root: String,
+    pub primary_branch: String,
+    pub identity: PreviewIdentityDto,
+    pub slug_prefix: Option<String>,
+    pub integration: String,
+    pub remote_name: String,
+    pub remote_location: Option<String>,
+    pub forge: Option<SetupForgeDto>,
+}
+
+/// What a preview of `repo setup-cancel` shows: the setup that will be ended,
+/// as the record has it. The branch is the setup's, on the remote and in the
+/// repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelPreviewDto {
+    pub root: String,
+    pub setup_id: String,
+    pub kind: String,
+    pub state: String,
+    pub branch: String,
+    pub remote: String,
+}
+
 /// A preview's `details`: the command's own fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum PreviewDetailsDto {
+    SetupCancel(SetupCancelPreviewDto),
+    Setup(SetupPreviewDto),
     Repository(RepositoryPreviewDto),
     RemoteRemoval(RemoteRemovalPreviewDto),
     RepositoryRemoval(RepositoryRemovalPreviewDto),
@@ -1034,9 +1091,262 @@ pub enum MutationDataDto {
     Poll(PollMutationDto),
     PollRetirement(PollRetirementMutationDto),
     ResolveHistory(ItemResolveHistoryMutationDto),
+    /// Of a pull-request `repo enable` or `remote select`: the setup it
+    /// recorded, with its state.
+    Setup(Box<SetupMutationDto>),
+    /// Of a `poll once` of a repository whose first-time setup is pending:
+    /// what the setup poll saw, and what it did (design Part G).
+    SetupPoll(Box<SetupPollDto>),
+    /// Of a `repo setup-cancel`: what became of the setup's branches and
+    /// registration (design Part H).
+    SetupCancel(Box<SetupCancelDto>),
     /// Of a `busy` or `recovery_required` answer that names the operation
     /// in its way. It is never stored: a record keeps the command's own.
     Blocked(BlockedDto),
+}
+
+contract_enum!(
+    /// The tag of `SetupMutationDto`: one value, so that the data of a setup
+    /// is told apart by it alone.
+    SetupMutationType {
+        Setup => "setup",
+    }
+);
+
+/// The setup a pull-request enable recorded: the fields of a repository's
+/// `setup` read (`RepositorySetupDto`), inline and never null. `state` is
+/// `recorded` until the remote holds the setup's branch, then `published`.
+/// It holds no remote location, credential or identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupMutationDto {
+    pub r#type: SetupMutationType,
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub request_id: String,
+    pub branch: String,
+    pub remote: String,
+    pub integration: String,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl SetupMutationDto {
+    /// The data of a setup read, as an answer carries it.
+    pub(crate) fn of(setup: crate::repository::RepositorySetupDto) -> Self {
+        let crate::repository::RepositorySetupDto {
+            id,
+            kind,
+            state,
+            request_id,
+            branch,
+            remote,
+            integration,
+            pull_request,
+        } = setup;
+        Self {
+            r#type: SetupMutationType::Setup,
+            id,
+            kind,
+            state,
+            request_id,
+            branch,
+            remote,
+            integration,
+            pull_request,
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the nine
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 9 || stored.get("type")?.as_str()? != "setup" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let kind = text("kind")?;
+        let state = text("state")?;
+        let integration = text("integration")?;
+        if !matches!(kind.as_str(), "enable" | "change")
+            || !matches!(state.as_str(), "recorded" | "published")
+            || !matches!(integration.as_str(), "direct" | "pull_request")
+        {
+            return None;
+        }
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
+        Some(Self {
+            r#type: SetupMutationType::Setup,
+            id: text("id")?,
+            kind,
+            state,
+            request_id: text("request_id")?,
+            branch: text("branch")?,
+            remote: text("remote")?,
+            integration,
+            pull_request,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupPollDto`: one value, so that the data of a setup poll
+    /// is told apart by it alone.
+    SetupPollType {
+        SetupPoll => "setup_poll",
+    }
+);
+
+/// What a setup poll answers: the setup it looked at, what it saw
+/// (`outcome`), the merged mode on activation (`integration`, else null),
+/// whether the merged file is not the one the setup intended, and the link
+/// that opens the pull request. It holds no remote location, credential or
+/// identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupPollDto {
+    pub r#type: SetupPollType,
+    pub setup_id: String,
+    pub outcome: String,
+    pub integration: Option<String>,
+    pub differs: bool,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl SetupPollDto {
+    /// The data of a setup poll's report.
+    pub(crate) fn of(report: &crate::repository::setup::poll::SetupPollReport) -> Self {
+        Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: report.setup_id.to_string(),
+            outcome: report.outcome.as_str().to_owned(),
+            integration: report
+                .integration
+                .map(|integration| integration.as_str().to_owned()),
+            differs: report.differs,
+            pull_request: crate::repository::PullRequestDto::from(&report.link),
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_poll" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let outcome = text("outcome")?;
+        if !crate::repository::setup::poll::SetupPollOutcome::ALL
+            .iter()
+            .any(|known| known.as_str() == outcome)
+        {
+            return None;
+        }
+        let integration = match stored.get("integration")? {
+            serde_json::Value::Null => None,
+            value => {
+                let mode = value.as_str()?;
+                if !matches!(mode, "direct" | "pull_request") {
+                    return None;
+                }
+                Some(mode.to_owned())
+            }
+        };
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
+        Some(Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: text("setup_id")?,
+            outcome,
+            integration,
+            differs: stored.get("differs")?.as_bool()?,
+            pull_request,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupCancelDto`: one value, so that the data of a setup's
+    /// cancellation is told apart by it alone.
+    SetupCancelType {
+        SetupCancel => "setup_cancel",
+    }
+);
+
+/// What `repo setup-cancel` answers: the setup it ended, what became of its
+/// remote and local branches, and whether a first-time setup's registration
+/// was removed. It holds no remote location, credential or identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelDto {
+    pub r#type: SetupCancelType,
+    pub setup_id: String,
+    pub kind: String,
+    pub remote_branch: String,
+    pub local_branch: String,
+    pub unregistered: bool,
+}
+
+impl SetupCancelDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data of a cancel's report.
+    pub(crate) fn of(report: &crate::repository::SetupCancelReport) -> Self {
+        Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: report.setup_id.to_string(),
+            kind: report.kind.as_str().to_owned(),
+            remote_branch: report.remote_branch.as_str().to_owned(),
+            local_branch: report.local_branch.as_str().to_owned(),
+            unregistered: report.unregistered,
+        }
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_cancel" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let kind = text("kind")?;
+        let remote_branch = text("remote_branch")?;
+        let local_branch = text("local_branch")?;
+        if !matches!(kind.as_str(), "enable" | "change")
+            || !crate::repository::RemoteBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == remote_branch)
+            || !crate::repository::LocalBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == local_branch)
+        {
+            return None;
+        }
+        Some(Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: text("setup_id")?,
+            kind,
+            remote_branch,
+            local_branch,
+            unregistered: stored.get("unregistered")?.as_bool()?,
+        })
+    }
 }
 
 contract_enum!(
@@ -2485,6 +2795,12 @@ impl MutationDataDto {
             | Self::ContextRetirement(_)
             // A history resolution never reaches the host.
             | Self::ResolveHistory(_)
+            // A setup's data names no host: the transport's error does.
+            | Self::Setup(_)
+            // Nor does a setup poll's.
+            | Self::SetupPoll(_)
+            // Nor does a cancellation's.
+            | Self::SetupCancel(_)
             // Nor is a request refused for another operation's row
             // refused for its host.
             | Self::Blocked(_) => None,
@@ -2527,6 +2843,18 @@ impl MutationDataDto {
             }
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
+            }
+            // A pull-request selection stores the setup it recorded, or the
+            // local commits that refused it, told apart by the tag.
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup") =>
+            {
+                SetupMutationDto::from_stored(stored).map(|data| Self::Setup(Box::new(data)))
+            }
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("primary_local_commits") =>
+            {
+                PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
             }
             Command::RemoteAdd | Command::RemoteSelect | Command::RemoteRemove => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
@@ -2584,7 +2912,9 @@ impl MutationDataDto {
             }
             // A poll's report, or the host it stopped for on its first call.
             Command::PollOnce => {
-                if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup_poll") {
+                    SetupPollDto::from_stored(stored).map(|data| Self::SetupPoll(Box::new(data)))
+                } else if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
                     PollRetirementMutationDto::from_stored(stored).map(Self::PollRetirement)
                 } else if stored.get("completion").is_some() {
                     PollMutationDto::from_stored(stored).map(Self::Poll)
@@ -2605,11 +2935,26 @@ impl MutationDataDto {
             | Command::ItemRepublish => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
+            // A cancellation of a setup stores what became of it.
+            Command::RepoSetupCancel => {
+                SetupCancelDto::from_stored(stored).map(|data| Self::SetupCancel(Box::new(data)))
+            }
+            // A pull-request enable stores the setup it recorded, or the
+            // local commits that refused it, told apart by the tag. A direct
+            // enable reports no data, so a record of one stores none.
+            Command::RepoEnable => match stored.get("type").and_then(|t| t.as_str()) {
+                Some("setup") => {
+                    SetupMutationDto::from_stored(stored).map(|data| Self::Setup(Box::new(data)))
+                }
+                Some("primary_local_commits") => {
+                    PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
+                }
+                _ => None,
+            },
             // These report no data, so a record of one stores none.
             Command::IndexRefresh
             | Command::IndexRebuild
             | Command::RepoCreate
-            | Command::RepoEnable
             | Command::RepoRemove
             | Command::FolderCreate
             | Command::ContextRelease => None,

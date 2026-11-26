@@ -41,6 +41,7 @@ mod dto;
 mod graph;
 mod items;
 mod local_sync;
+pub(crate) mod pending_setup;
 mod resolve;
 mod status;
 
@@ -59,8 +60,8 @@ pub use dto::{
     PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto, ProblemDto, PublicKeyDto,
     PullRequestDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto, ReadinessState,
     RelationshipCheckDto, RelationshipRejectionDto, RemoteDto, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode,
-    UnplannableReasonDto, UnplannableTicketDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySetupDto, RepositorySummaryDto,
+    UnplannableReasonCode, UnplannableReasonDto, UnplannableTicketDto,
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{

@@ -241,6 +241,196 @@ fn poll_call_list() {
     assert_eq!(harness.backend.calls(), [PollCall::Resolve]);
 }
 
+/// Wave 06 Cycle 02, Part J: a first-time setup published on another remote
+/// is polled in place of the repository's own remote, with the automatic
+/// policy: the policy is not asked and today's poll is not made. A change on
+/// another remote is polled after today's poll of the current remote, and
+/// only when that check answered.
+#[test]
+fn a_published_setup_takes_the_setup_poll_path() {
+    use crate::desktop::services::Backend;
+    use crate::desktop::{
+        services::setup_poll::{PendingSetup, SetupPollPath},
+        test_support::polling::setup_report,
+    };
+    use manyhands::repository::SetupPollOutcome;
+
+    let mut harness = Harness::new();
+    let on = |path, current_ssh| PendingSetup {
+        path,
+        remote: "origin".to_owned(),
+        current_ssh,
+    };
+    let report = |targets| crate::desktop::services::poll_convert::Library::Polled {
+        parts: crate::desktop::services::poll_convert::ReportParts {
+            completion: manyhands::repository::PollCompletion::Completed,
+            completed_at: time::OffsetDateTime::now_utc(),
+            next_eligible_at: None,
+            targets,
+            outcome: None,
+        },
+        index_pending: false,
+    };
+    // First-time: Resolve, PollingStatus, then the setup poll and the
+    // deadline it stored read back; nothing of today's poll.
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::Replace, false));
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert_eq!(
+        harness.backend.calls(),
+        [
+            PollCall::Resolve,
+            PollCall::PollingStatus,
+            PollCall::RemoteSnapshot
+        ]
+    );
+    assert_eq!(
+        harness.backend.setup_polled(),
+        [(harness.root.clone(), true)]
+    );
+
+    // A change: today's five calls, then the setup poll after them.
+    harness.backend.clear_calls();
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::After, true));
+    harness.backend.answer_poll(report(Vec::new()));
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert_eq!(harness.backend.setup_polled().len(), 2);
+
+    // The check of the current remote failed: the setup is polled still, as
+    // the library's `poll once` does after any call that was not cancelled,
+    // and the failure is the attempt's answer.
+    harness
+        .backend
+        .answer_poll(crate::desktop::services::poll_convert::Library::Busy);
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Busy);
+    assert_eq!(harness.backend.setup_polled().len(), 3);
+
+    // A setup poll that fails after a check that brought something in keeps
+    // what the check brought in: its targets and its time.
+    let brought = crate::desktop::services::poll_convert::TargetParts {
+        item_id: None,
+        kind: None,
+        disposition: manyhands::repository::PollDisposition::FastForwarded,
+        main: true,
+    };
+    harness.backend.answer_poll(report(vec![brought]));
+    harness
+        .backend
+        .answer_setup_poll(Err(manyhands::repository::SetupPollError::Busy));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Busy);
+    assert_eq!(attempt.targets.len(), 1, "what the check brought in");
+    assert!(attempt.completed_at.is_some());
+
+    // A change with no SSH publication remote has nothing of today's to
+    // poll: the setup alone, held for the interval since a change records
+    // no deadline of its own.
+    harness.backend.clear_calls();
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::After, false));
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    // The registry's row is not read back for a change.
+    assert_eq!(
+        harness.backend.calls(),
+        [PollCall::Resolve, PollCall::PollingStatus]
+    );
+    assert!(attempt.next_eligible_at.is_some());
+
+    // A stale row of the registry, left by a poll of a publication remote
+    // that is not there now, must not decide when a change's setup is polled
+    // again: the snapshot's deadline is not read for it, and the poll waits
+    // the interval, whatever the row says.
+    let mut stale = Harness::new();
+    stale.poll(OperationId::new());
+    let (_, first) = stale.until_polled();
+    let row = first
+        .next_eligible_at
+        .expect("the failed poll stored a deadline");
+    let repo = stale.backend.resolve(Path::new(&stale.root)).unwrap();
+    let interval = stale
+        .backend
+        .polling_status(&repo)
+        .unwrap()
+        .interval_seconds;
+    stale
+        .backend
+        .publish_setup(&stale.root, on(SetupPollPath::After, false));
+    stale
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    let polled_at = time::OffsetDateTime::now_utc();
+    stale.poll(OperationId::new());
+    let (_, attempt) = stale.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    let next = attempt.next_eligible_at.expect("a deadline");
+    assert!(
+        next >= polled_at + time::Duration::seconds(interval as i64),
+        "{next} is before the interval after {polled_at} (the stale row said {row})"
+    );
+
+    // The same for a setup poll that failed: offline, or the remote's
+    // endpoint changed. The library records nothing for a change, so
+    // nothing but the desktop holds it back, and a failure the model reads
+    // as "ask again at the stored deadline" would be asked at once, over the
+    // network, whenever the remote is out of reach.
+    use crate::desktop::{
+        model::polling::TransportFailure, test_support::polling::setup_transport_failure,
+    };
+    use manyhands::repository::transport::SshTransportErrorKind;
+    for (kind, answer) in [
+        (
+            SshTransportErrorKind::TransportUnavailable,
+            Answer::Transport(TransportFailure::Unreachable),
+        ),
+        (
+            SshTransportErrorKind::EndpointChanged,
+            Answer::Repository {
+                recovery_required: false,
+            },
+        ),
+    ] {
+        stale
+            .backend
+            .answer_setup_poll(setup_transport_failure(&stale.root, kind.clone()));
+        let polled_at = time::OffsetDateTime::now_utc();
+        stale.poll(OperationId::new());
+        let (_, attempt) = stale.until_polled();
+        assert_eq!(attempt.answer, answer, "{kind:?}");
+        if matches!(attempt.answer, Answer::Transport(_)) {
+            let next = attempt.next_eligible_at.expect("a deadline");
+            assert!(
+                next >= polled_at + time::Duration::seconds(interval as i64),
+                "{kind:?}: {next} is before the interval after {polled_at}"
+            );
+        }
+    }
+}
+
 /// A background poll asks nobody for a passphrase: no prompt, the key is
 /// not declined, it is recorded against the running request, and the poll
 /// answers a locked key (B5, R-26). Through the real provider and a fresh

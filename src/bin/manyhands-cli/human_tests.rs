@@ -629,6 +629,7 @@ fn operation() -> OperationDto {
 fn repository_list_reports_each_registration_and_index_notes() {
     let mut data = RepositoryListDto {
         items: vec![RepositorySummaryDto {
+            setup: None,
             root: "/repository".into(),
             enabled_at: Some("2026-10-19T12:00:00Z".into()),
             accessibility: Accessibility::Accessible,
@@ -661,6 +662,7 @@ fn repository_list_reports_each_registration_and_index_notes() {
 #[test]
 fn repository_inspection_reports_registration_configuration_and_remotes() {
     let data = RepositoryInspectionDto {
+        setup: None,
         selected_path: "/linked".into(),
         root: "/repository".into(),
         registered: false,
@@ -692,6 +694,7 @@ fn repository_inspection_reports_registration_configuration_and_remotes() {
 fn repository_inspection_names_mode_and_forge() {
     let inspect = |integration: &str, forge: Option<ForgeDto>| {
         repository_inspection(&RepositoryInspectionDto {
+            setup: None,
             selected_path: "/repository".into(),
             root: "/repository".into(),
             registered: true,
@@ -1036,6 +1039,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
     escaped_metadata(
         repository_list(&RepositoryListDto {
             items: vec![RepositorySummaryDto {
+                setup: None,
                 root: CONTROL_FIELD.into(),
                 enabled_at: None,
                 accessibility: Accessibility::Accessible,
@@ -1073,6 +1077,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
     });
     escaped_metadata(
         repository_inspection(&RepositoryInspectionDto {
+            setup: None,
             root: CONTROL_FIELD.into(),
             selected_path: CONTROL_FIELD.into(),
             registered: true,
@@ -1150,4 +1155,101 @@ fn host_and_status_metadata_escape_controls_consistently() {
         9,
         2,
     );
+}
+
+fn pending_setup(state: &str, url: Option<&str>) -> RepositorySetupDto {
+    RepositorySetupDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        kind: "enable".into(),
+        state: state.into(),
+        request_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".into(),
+        branch: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            target: "main".into(),
+            forge: Some("github".into()),
+            url: url.map(Into::into),
+        },
+    }
+}
+
+#[test]
+fn repository_inspection_names_a_pending_setup() {
+    let inspect = |setup: Option<RepositorySetupDto>| {
+        repository_inspection(&RepositoryInspectionDto {
+            selected_path: "/repository".into(),
+            root: "/repository".into(),
+            registered: true,
+            head_branch: Some("main".into()),
+            local_branches: vec!["main".into()],
+            configuration: configuration(),
+            setup,
+            identity_state: IdentityAvailability::Available,
+            remotes: vec![],
+            operations: vec![],
+        })
+        .stdout
+    };
+
+    let recorded = inspect(Some(pending_setup("recorded", None)));
+    assert!(
+        recorded.contains("Setup: recorded, not published yet\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(
+            "open a pull request from manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV into main\n"
+        ),
+        "{recorded}"
+    );
+
+    let published = inspect(Some(pending_setup(
+        "published",
+        Some("https://github.com/acme/widgets/compare/main...x"),
+    )));
+    assert!(
+        published.contains(
+            "Setup: waiting for manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV to merge into main\n"
+        ),
+        "{published}"
+    );
+    assert!(
+        published.contains("pull request: https://github.com/acme/widgets/compare/main...x\n"),
+        "{published}"
+    );
+
+    let none = inspect(None);
+    assert!(
+        !none.contains("Setup:") && !none.contains("pull request"),
+        "{none}"
+    );
+}
+
+#[test]
+fn repository_list_marks_a_pending_setup() {
+    let list = |setup: Option<RepositorySetupDto>| {
+        repository_list(&RepositoryListDto {
+            items: vec![RepositorySummaryDto {
+                root: "/repository".into(),
+                enabled_at: None,
+                accessibility: Accessibility::Accessible,
+                configuration: configuration(),
+                setup,
+                index: IndexStateDto {
+                    state: IndexState::Current,
+                    refreshed_at: None,
+                },
+                problem_count: 0,
+            }],
+            complete: true,
+        })
+        .stdout
+    };
+    assert!(
+        list(Some(pending_setup("published", None))).ends_with("problems=0  setup=published\n")
+    );
+    assert!(list(Some(pending_setup("recorded", None))).ends_with("problems=0  setup=recorded\n"));
+    assert!(list(None).ends_with("problems=0\n"));
 }

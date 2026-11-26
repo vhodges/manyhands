@@ -125,6 +125,8 @@ fn held_by(entry: Entry, pid: u32, peer: Peer) -> (World, Arc<StepClock>, String
         Mutation::RemoteSelect(RemoteSelectInput {
             root: world.root.clone(),
             name: Some("origin".to_owned()),
+            integration: None,
+            forge: None,
         }),
     );
     assert_eq!(selected.code, ResultCode::Ok, "{selected:?}");

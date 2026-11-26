@@ -869,6 +869,12 @@ fn table_b_row_of(state: &str, step: Option<&str>) -> Option<TableBRow> {
                 | "context_branch_released"
                 | "context_retirement_absent"
                 | "context_retirement_preserved"
+                // A recorded setup, and a recorded setup cancellation: the
+                // operation's own work is done and recorded (both are
+                // checkpoint steps). Such rows are of the whole repository
+                // in practice, which holds every call whatever they owe.
+                | "setup_recorded"
+                | "setup_cancel_recorded"
         )
     );
     let handing_off = registering

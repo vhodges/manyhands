@@ -616,6 +616,9 @@ pub fn dispatch(
         }
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),
+        "repo setup-cancel" => {
+            return crate::admin::repo_setup_cancel(service, session, command, args);
+        }
         "repo identity-set" => {
             return crate::admin::repo_identity_set(service, session, command, args);
         }

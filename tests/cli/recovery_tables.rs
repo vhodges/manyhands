@@ -29,6 +29,7 @@ const C2: &[&str] = &[
     "repo create",
     "repo enable",
     "repo remove",
+    "repo setup-cancel",
     "repo identity-set",
     "remote add",
     "remote remove",

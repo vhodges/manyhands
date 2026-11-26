@@ -4149,7 +4149,7 @@ const LISTED_LOCAL_COMMITS: usize = 20;
 /// The commits of `local` that `remote` does not have, newest first
 /// (`git2::Sort::TOPOLOGICAL | git2::Sort::TIME`), at most 20, each with
 /// its summary line, and whether that is all of them (R-7).
-fn local_only_commits(
+pub(in super::super) fn local_only_commits(
     repository: &git2::Repository,
     local: git2::Oid,
     remote: git2::Oid,

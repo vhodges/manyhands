@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repository setup",
+  "description": "A repository's pending setup, put on a branch for a pull request until it is merged, or null when it has none.",
+  "type": ["object", "null"],
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "state",
+    "request_id",
+    "branch",
+    "remote",
+    "integration",
+    "pull_request"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["enable", "change"]
+    },
+    "state": {
+      "type": "string",
+      "enum": ["recorded", "published"]
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "remote": {
+      "type": "string"
+    },
+    "integration": {
+      "type": "string",
+      "enum": ["direct", "pull_request"]
+    },
+    "pull_request": {
+      "$ref": "pull_request.schema.json"
+    }
+  }
+}
