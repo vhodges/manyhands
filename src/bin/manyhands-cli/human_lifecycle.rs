@@ -40,8 +40,8 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
         LifecyclePublicationPendingReason, LifecycleWayOut, MutationDataDto, PrepareDataDto,
-        PullRequestClosureMutationDto, PullRequestClosureRecording, lifecycle_prepare_way_out,
-        lifecycle_way_out,
+        PullRequestClosureAction, PullRequestClosureMutationDto, PullRequestClosureRecording,
+        lifecycle_prepare_way_out, lifecycle_way_out,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -354,8 +354,13 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
 
 /// A prepare refused because an unfinished request, or an operation no request
 /// holds, has the item (decision 33): the command that goes on with it, in
-/// place of the action's own line.
-fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Option<Output> {
+/// place of the action's own line. `holder` gives the command of the request
+/// that holds it, when the request store names one.
+fn held(
+    envelope: &Envelope<PrepareDataDto>,
+    way_out: &[LifecycleWayOut],
+    holder: &dyn Fn(&str) -> Option<String>,
+) -> Option<Output> {
     let (Some(root), Some(item)) = (
         envelope.scope.repository.as_deref(),
         envelope.scope.item_id.as_deref(),
@@ -364,7 +369,11 @@ fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Opt
     };
     let (line, note) = match way_out {
         [LifecycleWayOut::RetryRequest { request_id }] => {
-            (again(&envelope.command, root, item, request_id), HELD_NOTE)
+            // A request ID is only sent again under its own command, and the
+            // two closure verbs share one record: the holder may be the
+            // other verb's request.
+            let command = holder(request_id).unwrap_or_else(|| envelope.command.clone());
+            (again(&command, root, item, request_id), HELD_NOTE)
         }
         [LifecycleWayOut::ResumeOperation { operation_id }] => {
             (resume_line(root, operation_id), HELD_RESUME_NOTE)
@@ -379,9 +388,13 @@ fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Opt
 
 /// The human output of a prepare of these verbs: C2's, with a blocked prepare's
 /// way out.
-pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output {
+pub fn prepare(
+    kind: ItemDtoKind,
+    envelope: &Envelope<PrepareDataDto>,
+    holder: &dyn Fn(&str) -> Option<String>,
+) -> Output {
     let way_out = lifecycle_prepare_way_out(kind, envelope);
-    if let Some(output) = held(envelope, &way_out) {
+    if let Some(output) = held(envelope, &way_out, holder) {
         return output;
     }
 
@@ -465,9 +478,16 @@ fn branch_output(
                 LifecycleWayOut::Republish { item_id } => {
                     body.push_str(&format!("next: {}\n", republish(root, &item_id)));
                 }
+                // The record's own verb: a resume that continued it has the
+                // resume's command, which is no verb to prepare again.
                 LifecycleWayOut::PrepareAgain => body.push_str(&format!(
                     "next: manyhands-cli {} --repo {} --id {} --prepare\n",
-                    field(&envelope.command),
+                    match data.action {
+                        PullRequestClosureAction::Withdraw => "ticket withdraw-closure",
+                        PullRequestClosureAction::Close | PullRequestClosureAction::NewBranch => {
+                            "ticket close"
+                        }
+                    },
                     quoted(root),
                     field(item)
                 )),

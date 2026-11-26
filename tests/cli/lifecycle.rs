@@ -1664,6 +1664,19 @@ fn withdraw_prepare_answers_publication_remote_required_ahead_of_the_hold() {
     let held = withdraw.json(&["--prepare"], 3, "recovery_required", None);
     assert_eq!(held["recovery"][0]["action"], "request.retry", "{held}");
     assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    // The human line sends the holder's request again under the holder's own
+    // command: the request ID is refused under any other.
+    let human = withdraw.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(
+        stderr(&human).contains(&format!(
+            "next: manyhands-cli ticket close --repo '{}' --id {} --request-id {REQUEST_1}\n",
+            withdraw.root(),
+            items::TICKET_A
+        )),
+        "{}",
+        stderr(&human)
+    );
 
     // And with the remote gone from the configuration, the configuration's
     // answer comes first.

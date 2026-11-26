@@ -3090,6 +3090,15 @@ impl MutationDataDto {
                 LifecycleMutationDto::from_stored(stored)
                     .map(|data| Self::Lifecycle(Box::new(data)))
             }
+            // So does one that continued a branch record to its end (a pull-request
+            // close, a withdraw or a new branch), by its own tag.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestClosureMutationType::PullRequestClosure.as_str()) =>
+            {
+                PullRequestClosureMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestClosure(Box::new(data)))
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }
@@ -3455,14 +3464,23 @@ mod pull_request_closure_tests {
                 );
                 assert_eq!(
                     PullRequestClosureMutationDto::from_stored(&stored),
-                    Some(answer)
+                    Some(answer.clone())
+                );
+                // E-47: a resume that continued a branch record to its end
+                // stores its answer under `operation resume`, which reads it
+                // back by its tag.
+                assert_eq!(
+                    MutationDataDto::from_stored(Command::OperationResume, &stored),
+                    Some(MutationDataDto::PullRequestClosure(Box::new(
+                        answer.clone()
+                    ))),
+                    "{stored}"
                 );
                 // No other command reports it.
                 for other in [
                     Command::DocumentPromote,
                     Command::ItemSync,
                     Command::RepoSync,
-                    Command::OperationResume,
                 ] {
                     assert_eq!(MutationDataDto::from_stored(other, &stored), None);
                 }

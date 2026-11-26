@@ -1852,3 +1852,114 @@ fn a_withdraw_is_a_lifecycle_parent_wherever_its_command_is_read() {
         .unwrap();
     assert_eq!(asked, 1, "the parent's own flag");
 }
+
+/// What a test of a process's liveness says exists.
+struct Processes(Vec<u32>);
+
+impl crate::repository::liveness::ProcessProbe for Processes {
+    fn exists(&self, pid: u32) -> bool {
+        self.0.contains(&pid)
+    }
+}
+
+struct NoPassphrase;
+
+impl crate::repository::keys::SessionCredentialProvider for NoPassphrase {
+    fn request_passphrase(
+        &mut self,
+        _: &crate::repository::keys::UnlockRequest,
+    ) -> crate::repository::keys::PassphraseResponse {
+        panic!("a resume of a record asks for no passphrase here")
+    }
+}
+
+/// A resume of an unfinished branch record that no request holds is refused
+/// `busy`, naming its holder, while another process of this host still works
+/// under it: the record's remote row, which is its reservation, names a
+/// process the system finds. It is the path a direct close's resume takes
+/// (`held`, by family alone), pinned here for the records Task 7 added: it
+/// pins behaviour that did not change. With the holder gone the resume is not
+/// refused for it.
+#[test]
+fn a_resume_of_an_unheld_branch_record_another_process_works_under_is_busy() {
+    use crate::repository::{
+        CancellationToken, MutationCall, NoProgress, OperationResumeInput, RepositoryService,
+        keys::SessionCredentials,
+    };
+    const LIVE: u32 = 4242;
+    for action in ["close", "withdraw"] {
+        let mut registered = Registered::new(false);
+        registered.service = RepositoryService::open_at(registered._data.path())
+            .unwrap()
+            .with_process_probe_for_testing(std::sync::Arc::new(Processes(vec![LIVE])));
+        let operation = OperationId::new();
+        let db = rusqlite::Connection::open(
+            registered
+                ._data
+                .path()
+                .join(crate::repository::REGISTRY_FILE),
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO ticket_closures
+               (repository_id, operation_id, item_id, expectation, step, updated_at,
+                closure_kind, integration_mode, action, remote_name)
+             SELECT id, ?1, ?2, zeroblob(32), 'confirmed', 0,
+                    'existing', 'pull_request', ?3, 'origin'
+               FROM repositories",
+            rusqlite::params![operation.to_string(), ITEM, action],
+        )
+        .unwrap();
+        // The record's reservation, held by a process of this host.
+        db.execute(
+            "INSERT INTO remote_operation_records
+               (repository_id, operation_ulid, configuration_generation, remote_name,
+                primary_branch, primary_ref, primary_tracking_ref, local_branch, action,
+                priority, phase, created_at, updated_at, host, pid)
+             SELECT id, ?1, 0, 'origin', 'main', 'refs/heads/main',
+                    'refs/remotes/origin/main', 'main', 'synchronize_primary', 'manual',
+                    'reserved', 0, 0, ?2, ?3
+               FROM repositories",
+            rusqlite::params![
+                operation.to_string(),
+                crate::repository::this_host(),
+                i64::from(LIVE)
+            ],
+        )
+        .unwrap();
+        let resume = |service: &RepositoryService| {
+            service.execute(
+                MutationCall {
+                    request_id: RequestId::new(),
+                    confirmation: None,
+                    mutation: crate::repository::Mutation::OperationResume(OperationResumeInput {
+                        root: registered.root.path().to_owned(),
+                        operation_id: operation,
+                    }),
+                },
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            )
+        };
+        let busy = resume(&registered.service);
+        assert_eq!(busy.code, ResultCode::Busy, "{action}: {busy:?}");
+        let shown = serde_json::to_value(&busy).unwrap();
+        assert_eq!(
+            shown["data"]["blocker"]["operation_id"],
+            operation.to_string(),
+            "{action}: {shown}"
+        );
+        assert_eq!(shown["data"]["blocker"]["live"], true, "{action}");
+        assert_eq!(shown["data"]["blocker"]["pid"], LIVE, "{action}");
+
+        // The holder is gone: nothing refuses it as held.
+        db.execute(
+            "UPDATE remote_operation_records SET pid = ?2 WHERE operation_ulid = ?1",
+            rusqlite::params![operation.to_string(), i64::from(LIVE) + 1],
+        )
+        .unwrap();
+        let free = resume(&registered.service);
+        assert_ne!(free.code, ResultCode::Busy, "{action}: {free:?}");
+    }
+}

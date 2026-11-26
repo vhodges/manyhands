@@ -107,7 +107,7 @@ fn prepare(envelope: &Envelope<PrepareDataDto>) -> crate::render::Output {
     } else {
         ItemDtoKind::Ticket
     };
-    human_lifecycle::prepare(kind, envelope)
+    human_lifecycle::prepare(kind, envelope, &|_| None)
 }
 
 fn next_lines(text: &str) -> Vec<&str> {
@@ -881,6 +881,45 @@ fn a_held_prepare_names_the_request_or_the_resume() {
     );
 }
 
+/// Two verbs share one closure record, so a prepare of one can be held by an
+/// unfinished request of the other: the line that goes on with it is the
+/// holder's own command, which a request ID is refused under any other
+/// (`request_mismatch`).
+#[test]
+fn a_prepare_held_by_the_other_closure_verb_names_the_holders_command() {
+    for (prepared, holder) in [
+        ("ticket withdraw-closure", "ticket close"),
+        ("ticket close", "ticket withdraw-closure"),
+    ] {
+        let mut envelope = Envelope::<PrepareDataDto>::failure(
+            prepared,
+            scope(true),
+            ResultCode::RecoveryRequired,
+            vec![retry()],
+        );
+        envelope.data = None;
+        let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &envelope, &|request| {
+            (request == REQUEST).then(|| holder.to_owned())
+        });
+        assert_eq!(
+            next_lines(stderr(&out)),
+            [format!(
+                "next: manyhands-cli {holder} --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}"
+            )],
+            "{prepared} held by {holder}"
+        );
+        // A holder the request store cannot name is worded with the prepare's
+        // own verb, as before.
+        let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &envelope, &|_| None);
+        assert_eq!(
+            next_lines(stderr(&out)),
+            [format!(
+                "next: manyhands-cli {prepared} --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}"
+            )]
+        );
+    }
+}
+
 /// Decision 18's route: cancel, the same request (`cancelled`), republish, the
 /// same request again (`ok`).
 #[test]
@@ -1157,7 +1196,7 @@ fn pull_request_closure_lines() {
             )),
         })),
     );
-    let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &prepared);
+    let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &prepared, &|_| None);
     let shown = stdout(&out);
     assert!(
         shown.contains("not on main: deleted odd\\u{1b}[31m\\n.md\n"),
@@ -1237,5 +1276,54 @@ fn a_branch_record_s_way_out_is_worded_with_its_verb() {
             "{command}: {text}"
         );
         assert!(text.contains("item sync publishes it"), "{text}");
+    }
+}
+
+/// An `operation resume` that continued a branch record to its end answers as
+/// the record's verb would: its data goes to the lifecycle's human output, with
+/// Part H's lines, and its way out names the record's own verb, not the
+/// resume.
+#[test]
+fn a_resumed_branch_record_answers_in_full_with_its_own_verb() {
+    use PullRequestClosureAction::{Close, NewBranch, Withdraw};
+    for (action, wrote, verb) in [
+        (Close, true, "ticket close"),
+        (NewBranch, true, "ticket close"),
+        (Withdraw, false, "ticket withdraw-closure"),
+    ] {
+        let mut envelope = branch_answer(
+            action,
+            PullRequestClosureRecording::Nothing,
+            None,
+            None,
+            None,
+        );
+        envelope.command = "operation resume".into();
+        envelope.code = ResultCode::RemoteBranchDeleted;
+        envelope.outcome = manyhands::results::Outcome::Partial;
+        envelope.recovery = vec![inspect()];
+        if let Some(MutationDataDto::PullRequestClosure(data)) = envelope.data.as_mut() {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert!(
+            crate::collaboration::continued_a_lifecycle(&envelope),
+            "{action:?}"
+        );
+        let out = output(&envelope, false);
+        let text = stderr(&out);
+        // The data's lines, not the generic field list.
+        assert!(text.contains("Blockers: none\n"), "{text}");
+        assert!(!text.contains("Type: pull_request_closure"), "{text}");
+        // The way out is the record's verb's.
+        let prepare = format!("next: manyhands-cli {verb} --repo '{ROOT}' --id {ITEM} --prepare\n");
+        assert_eq!(
+            text.contains(&prepare),
+            action != Withdraw || !wrote,
+            "{action:?}: {text}"
+        );
+        assert!(
+            !text.contains("manyhands-cli operation resume --repo"),
+            "{text}"
+        );
     }
 }

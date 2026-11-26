@@ -10,8 +10,8 @@ use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, TicketCloseInput,
-        TicketWithdrawClosureInput,
+        DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, RequestId,
+        TicketCloseInput, TicketWithdrawClosureInput,
     },
 };
 
@@ -101,7 +101,19 @@ fn run(
     mutate::finish(
         session.json,
         driven,
-        |envelope| human_lifecycle::prepare(kind, envelope),
+        |envelope| {
+            // The command of the request that holds the item, which a
+            // request ID is only ever sent again under: a read of its record.
+            let holder = |request: &str| {
+                let request = RequestId::parse(request).ok()?;
+                service
+                    .request_record(request)
+                    .ok()
+                    .flatten()
+                    .map(|record| record.command)
+            };
+            human_lifecycle::prepare(kind, envelope, &holder)
+        },
         human_lifecycle::output,
     )
 }
