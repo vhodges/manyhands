@@ -47,7 +47,7 @@ Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null fo
 | Answer | Meaning and what to do |
 | --- | --- |
 | `ok` (0) | The poll finished. Read the targets. |
-| `publication_remote_required` (3) | No publication remote: nothing to poll ([repositories](../manyhands-repositories/SKILL.md)). |
+| `publication_remote_required` (3) | No publication remote: nothing to poll ([repositories](../manyhands-repositories/SKILL.md)). A repository with a pending first-time setup has none in its configuration yet: its poll is the setup's ("A pending setup's poll" below). |
 | `no_selected_key`, `host_approval_required`, `key_rejected` (3) | A key or host step for the person ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). `no_selected_key` and `host_approval_required` were run; `key_rejected` is the same hand-off. |
 | `unlock_required` (3) | A passphrase key: the person runs a new `poll once` at their terminal, with a new request ID ([keys and hosts](../manyhands-keys-and-hosts/SKILL.md)). See "A passphrase key" below. |
 | `recovery_required` (3) | Something unfinished holds the repository (verified with a pending conflict). Find it with `operation list` (on a build with the change the answer's `data.blocker` names it) and take it to [recovery](../manyhands-recovery/SKILL.md). On a build with the fast-writes change a write or a sync that stopped once its commit or push was made, and owes only its index step, does not hold a poll (from the library tests). |
@@ -56,6 +56,24 @@ Read `data.targets[]`: `target` (a ref), `kind` (`ticket` or `document`, null fo
 | `repository_not_registered` (3) | This data directory does not know the repository. [Recovery](../manyhands-recovery/SKILL.md), "Not registered". Do not run `index rebuild` for it. |
 
 A poll that stopped on a key, host or transport answer is final: send a new request to poll again, after the person has dealt with the cause.
+
+### A pending setup's poll
+
+When `repo inspect` shows `data.setup`, `poll once` runs the setup's poll in place of the ordinary one for a first-time setup, and after the ordinary poll of the current remote for a change that names another remote. A change on the same remote keeps the ordinary poll alone, which fast-forwards the main branch, and its completion is not reported: read `repo inspect` (`setup` null). You run it alone, as any poll ([repositories](../manyhands-repositories/SKILL.md), "A pending setup"). Pull-request mode is not usable end to end until close and promote support it, and activating a setup does not change that.
+
+It answers `ok` (exit 0) whatever it saw, with `data.type` `setup_poll`, and the request is finished: a stop is final, and a new request polls again. `data.outcome` is the first of these that holds. `data.integration` is the merged mode on `activated` and null otherwise, `data.differs` is true when the merged configuration is not the one the setup intended (the merged one is in effect: say what differs), and `data.pull_request` is the link. Human output prints `Setup: ...` and, while waiting, the link.
+
+| `data.outcome` | What it means | What to do |
+| --- | --- | --- |
+| `not_published` | The setup is recorded and not on the remote yet; nothing was connected to. | Send the request that made the setup again, with its own confirmation and request ID ([repositories](../manyhands-repositories/SKILL.md), "Enable in pull-request mode"). Polling again changes nothing. |
+| `waiting_for_merge` | The remote's main branch does not hold the setup yet. | Tell the person, with the link. Poll again after the merge. |
+| `waiting_for_checkout` | Merged, but the root is not on the main branch, or is not clean (untracked files count), or the setup's branch (`manyhands/setup/<setup id>`) is checked out in a worktree. | Tell the person; do not move the checkout yourself. Poll again once the root is on the main branch with no changes and no worktree has the setup's branch checked out. |
+| `diverged` | Merged, but the local main branch has commits the remote's lacks. | The person's Git work: [recovery](../manyhands-recovery/SKILL.md), "Local commits on the primary of a pull-request repository". |
+| `configuration_invalid`, `primary_differs` | The remote's main branch holds a configuration that cannot be read, or one that names another main branch. | Fix it on the remote (the person), or cancel the setup (the person's OK). |
+| `branch_deleted` | The setup's branch is gone from the remote and the main branch does not hold the setup. | Cancel the setup (`repo setup-cancel`, with the person's OK) and start again. |
+| `activated` | The main branch was fast-forwarded to the remote's, and the repository is set up as a direct enable plus a remote selection of the merged configuration would have set it up. A merge commit, a squash and a fast-forward of the setup commit all activate. | Check with `repo inspect`, then the gated writes work. The remote's setup branch is left in place ([recovery](../manyhands-recovery/SKILL.md), "A pending setup"). |
+
+A key, unlock, host or network stop of a setup poll answers its own code and is final, as the poll's table above says. The setup's poll reserves nothing on the remote, so `operation list` shows no row for it, and a first-time setup's poll records its attempt, so the desktop polls a pending setup by the polling policy as well.
 
 ### A passphrase key
 

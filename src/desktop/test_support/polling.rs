@@ -31,6 +31,12 @@
 //!   selection a retirement's key attention falls back to (E3).
 //! - `resume_polling` records each Resume checking and then makes the
 //!   library's own call.
+//! - `publish_setup` and `answer_setup_poll` stand in for a setup published on
+//!   another remote (Wave 06 Cycle 02, Part J), whose poll reaches the same
+//!   SSH transport: `pending_setup` says what was scripted for a root, and
+//!   `poll_setup` records its root and `automatic` and answers what was
+//!   queued. Neither is a `PollCall`, so a test of anything else sees the
+//!   calls it always did.
 //! - `answer_unanswered_polls` (opt-in) answers every poll nothing is queued
 //!   for with a stand-in, counted, instead of the library's call.
 
@@ -48,7 +54,8 @@ use manyhands::{
         AutomaticPollEligibility, ConflictDto, Mutation, MutationDataDto, OperationId,
         PollPublicationRemoteRequest, PollingOutcome, PollingStatusDto, PrepareDataDto,
         ProgressStage, ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
-        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
+        RepositoryError, RepositoryService, ResolvedRepository, SetupPollError, SetupPollReport,
+        SharedKeyId,
         keys::{
             KeySourceToken, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, SessionUnlockFailure, UnlockReason, UnlockRequest,
@@ -65,6 +72,7 @@ use crate::desktop::services::{
     poll_convert::Library,
     prompts::DesktopProvider,
     resolutions::{ResolutionStore, ResolutionStoreError},
+    setup_poll::PendingSetup,
 };
 
 /// One call the double heard, in the order made.
@@ -141,6 +149,16 @@ pub(crate) struct PollingBackend {
     selected: Mutex<Option<SharedKeyId>>,
     /// The stand-in for polls nothing is queued for, when opted in.
     unanswered: Mutex<Option<unanswered::Unanswered>>,
+    /// The setup `pending_setup` says each root has (`publish_setup`).
+    setups: Mutex<BTreeMap<String, PendingSetup>>,
+    /// Answers that stand in place of the next setup polls', each taken in
+    /// turn (`answer_setup_poll`).
+    setup_answers: Mutex<VecDeque<Result<SetupPollReport, SetupPollError>>>,
+    /// The root and `automatic` of every `poll_setup` made, in order.
+    setup_polls: Mutex<Vec<(String, bool)>>,
+    /// The next check `polling_status` says a root has once a `poll_setup`
+    /// of it was made (`record_setup_deadline`).
+    setup_deadlines: Mutex<BTreeMap<String, Vec<time::OffsetDateTime>>>,
 }
 
 /// What a Check now's passphrase request was answered.
@@ -173,6 +191,10 @@ impl PollingBackend {
             outcomes: Mutex::default(),
             selected: Mutex::default(),
             unanswered: Mutex::default(),
+            setups: Mutex::default(),
+            setup_answers: Mutex::default(),
+            setup_polls: Mutex::default(),
+            setup_deadlines: Mutex::default(),
         }
     }
 
@@ -273,6 +295,33 @@ impl PollingBackend {
             .insert(root.to_owned(), outcome);
     }
 
+    /// Makes `root` read as having `setup` published on another remote.
+    pub(crate) fn publish_setup(&self, root: &str, setup: PendingSetup) {
+        self.setups.lock().unwrap().insert(root.to_owned(), setup);
+    }
+
+    /// The next `poll_setup` answers `result`, without asking the library.
+    /// Answers queue.
+    pub(crate) fn answer_setup_poll(&self, result: Result<SetupPollReport, SetupPollError>) {
+        self.setup_answers.lock().unwrap().push_back(result);
+    }
+
+    /// Makes `polling_status` of `root` say its next check is the `n`th of
+    /// `deadlines` after the `n`th `poll_setup` of it (the last one for any
+    /// later), as the library records a first-time setup's attempt in the
+    /// registry (Part G).
+    pub(crate) fn record_setup_deadlines(&self, root: &str, deadlines: Vec<time::OffsetDateTime>) {
+        self.setup_deadlines
+            .lock()
+            .unwrap()
+            .insert(root.to_owned(), deadlines);
+    }
+
+    /// The root and `automatic` of every `poll_setup` made so far, in order.
+    pub(crate) fn setup_polled(&self) -> Vec<(String, bool)> {
+        self.setup_polls.lock().unwrap().clone()
+    }
+
     /// Sets the key `selected_key` answers (E3).
     pub(crate) fn select_key(&self, key: Option<SharedKeyId>) {
         *self.selected.lock().unwrap() = key;
@@ -296,6 +345,41 @@ impl PollingBackend {
     fn record(&self, call: PollCall) {
         self.calls.lock().unwrap().push(call);
     }
+}
+
+/// A setup poll's answer of `outcome`, as the library gives it.
+#[allow(clippy::result_large_err)] // The library's `SetupPollError`.
+pub(crate) fn setup_report(
+    outcome: manyhands::repository::SetupPollOutcome,
+) -> Result<SetupPollReport, SetupPollError> {
+    Ok(SetupPollReport {
+        setup_id: "01JD0000000000000000000001".parse().expect("an item ID"),
+        outcome,
+        integration: None,
+        differs: false,
+        link: manyhands::forge::PullRequestLink {
+            source: "manyhands/setup/x".to_owned(),
+            target: "main".to_owned(),
+            forge: None,
+            url: None,
+        },
+    })
+}
+
+/// A setup poll's transport failure of `kind`.
+#[allow(clippy::result_large_err)] // The library's `SetupPollError`.
+pub(crate) fn setup_transport_failure(
+    root: &str,
+    kind: SshTransportErrorKind,
+) -> Result<SetupPollReport, SetupPollError> {
+    Err(SetupPollError::Transport(SshTransportError {
+        root: PathBuf::from(root),
+        remote_name: "fork".to_owned(),
+        direction: SshDirection::Fetch,
+        selected_key_id: None,
+        authority: None,
+        kind,
+    }))
 }
 
 /// An unlock request for the key `key`, whose private file is written
@@ -429,6 +513,23 @@ impl Backend for PollingBackend {
         if let Some(outcome) = self.outcomes.lock().unwrap().get(&root) {
             status.latest_outcome = Some(*outcome);
         }
+        let polled = self
+            .setup_polls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(held, _)| *held == root)
+            .count();
+        let deadlines = self.setup_deadlines.lock().unwrap();
+        if polled > 0
+            && let Some(at) = deadlines
+                .get(&root)
+                .and_then(|list| list.get(polled - 1).or(list.last()))
+        {
+            status.next_eligible_at = at
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok();
+        }
         Ok(status)
     }
 
@@ -492,6 +593,33 @@ impl Backend for PollingBackend {
 
     fn after_poll(&self, _operation: OperationId) -> Option<Library> {
         self.canned.lock().unwrap().pop_front()
+    }
+
+    fn pending_setup(&self, root: &Path) -> Option<PendingSetup> {
+        let scripted = self
+            .setups
+            .lock()
+            .unwrap()
+            .get(root.to_string_lossy().as_ref())
+            .cloned();
+        scripted.or_else(|| self.inner.pending_setup(root))
+    }
+
+    fn poll_setup(
+        &self,
+        root: &Path,
+        automatic: bool,
+        session: &mut SessionCredentials<DesktopProvider>,
+    ) -> Result<SetupPollReport, SetupPollError> {
+        self.setup_polls
+            .lock()
+            .unwrap()
+            .push((root.to_string_lossy().into_owned(), automatic));
+        let answer = self.setup_answers.lock().unwrap().pop_front();
+        match answer {
+            Some(answer) => answer,
+            None => self.inner.poll_setup(root, automatic, session),
+        }
     }
 
     fn selected_key(&self) -> Option<SharedKeyId> {

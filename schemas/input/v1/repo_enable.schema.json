@@ -7,6 +7,17 @@
   "properties": {
     "primary_branch": { "type": "string" },
     "identity": { "$ref": "commit_identity.schema.json" },
-    "ticket_slug_prefix": { "type": "string" }
+    "ticket_slug_prefix": { "type": "string" },
+    "publication_remote": { "type": "string" },
+    "integration": { "type": "string", "enum": ["direct", "pull_request"] },
+    "forge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "web_url": { "type": "string" },
+        "pull_request_url": { "type": "string" }
+      }
+    }
   }
 }

@@ -87,6 +87,7 @@ const NO_INPUT: &[&str] = &[
     "operation resume",
     "operation abandon",
     // C5's (R-2: the lifecycle verbs take none).
+    "repo setup-cancel",
     "document promote",
     "ticket close",
     "poll once",
@@ -133,8 +134,26 @@ const DATA: &[(&str, &[&str])] = &[
     ("id new", &["new_id"]),
     // A create or enable answers with its preview and no other data.
     ("repo create", &["preview"]),
-    ("repo enable", &["blocked", "preview"]),
+    (
+        "repo enable",
+        &[
+            "blocked",
+            "preview",
+            "primary_local_commits",
+            "setup_mutation",
+            "setup_preview",
+        ],
+    ),
     ("repo remove", &["repository_removal_preview"]),
+    (
+        "repo setup-cancel",
+        &[
+            "blocked",
+            "setup_cancel_preview",
+            "setup_cancel",
+            "setup_mutation",
+        ],
+    ),
     (
         "repo identity-set",
         &["identity_preview", "identity_mutation"],
@@ -144,7 +163,15 @@ const DATA: &[(&str, &[&str])] = &[
         "remote remove",
         &["blocked", "remote_removal_preview", "remote_mutation"],
     ),
-    ("remote select", &["blocked", "remote_mutation"]),
+    (
+        "remote select",
+        &[
+            "blocked",
+            "primary_local_commits",
+            "remote_mutation",
+            "setup_mutation",
+        ],
+    ),
     ("key generate", &["key_mutation"]),
     ("key import", &["key_mutation"]),
     ("key select", &["key_mutation"]),
@@ -256,6 +283,7 @@ const DATA: &[(&str, &[&str])] = &[
         &[
             "poll_mutation",
             "poll_retirement_mutation",
+            "setup_poll",
             "synchronization_mutation",
         ],
     ),
@@ -391,7 +419,7 @@ fn every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt() {
     }
     let expected = set(bound.difference(&set(EXEMPT.iter().copied())).copied());
     assert_eq!(mutating, expected);
-    assert_eq!(mutating.len(), 44);
+    assert_eq!(mutating.len(), 45);
 }
 
 #[test]
@@ -409,7 +437,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 81);
+    assert_eq!(catalogued.len(), 82);
 }
 
 #[test]

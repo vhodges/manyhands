@@ -1,0 +1,42 @@
+{
+  "code": "ok",
+  "command": "remote select",
+  "data": {
+    "branch": "manyhands/setup/<setup>",
+    "id": "<setup>",
+    "integration": "pull_request",
+    "kind": "change",
+    "pull_request": {
+      "forge": "github",
+      "source": "manyhands/setup/<setup>",
+      "target": "main",
+      "url": null
+    },
+    "remote": "origin",
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX7",
+    "state": "published",
+    "type": "setup"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "published",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX7",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

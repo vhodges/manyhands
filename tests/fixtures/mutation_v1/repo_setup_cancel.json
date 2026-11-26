@@ -1,0 +1,34 @@
+{
+  "code": "ok",
+  "command": "repo setup-cancel",
+  "data": {
+    "kind": "change",
+    "local_branch": "deleted",
+    "remote_branch": "deleted",
+    "setup_id": "<setup>",
+    "type": "setup_cancel",
+    "unregistered": false
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FXA",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

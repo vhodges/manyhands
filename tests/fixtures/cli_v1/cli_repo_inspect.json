@@ -50,7 +50,8 @@
       }
     ],
     "root": "<repository>",
-    "selected_path": "<repository>"
+    "selected_path": "<repository>",
+    "setup": null
   },
   "effects": {
     "checkpoint": "not_requested",

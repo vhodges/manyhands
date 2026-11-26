@@ -217,6 +217,59 @@ pub(super) fn build_callbacks<'a>(
     callbacks
 }
 
+/// One update of a push as its negotiation reports it: libgit2 gives the
+/// remote's current OID as `src` and the new one as `dst`, even for a
+/// deletion, whose source refname is empty.
+#[derive(Clone, Copy)]
+pub(super) struct PushedUpdate<'a> {
+    pub(super) src: git2::Oid,
+    pub(super) dst: git2::Oid,
+    pub(super) dst_refname: Option<&'a str>,
+}
+
+/// Whether `updates` are the one guarded delete of `reference`: the remote's
+/// ref is at `expected` and the new OID is zero.
+pub(super) fn delete_update_allowed(
+    updates: &[PushedUpdate<'_>],
+    reference: &str,
+    expected: git2::Oid,
+) -> bool {
+    let [update] = updates else {
+        return false;
+    };
+    !expected.is_zero()
+        && update.src == expected
+        && update.dst.is_zero()
+        && update.dst_refname == Some(reference)
+}
+
+/// Whether `updates` are the one guarded create of `reference`: the remote
+/// has no such ref (a zero OID) and the new OID is `commit`.
+pub(super) fn create_update_allowed(
+    updates: &[PushedUpdate<'_>],
+    reference: &str,
+    commit: git2::Oid,
+) -> bool {
+    let [update] = updates else {
+        return false;
+    };
+    !commit.is_zero()
+        && update.src.is_zero()
+        && update.dst == commit
+        && update.dst_refname == Some(reference)
+}
+
+fn pushed<'a>(updates: &'a [git2::PushUpdate<'_>]) -> Vec<PushedUpdate<'a>> {
+    updates
+        .iter()
+        .map(|update| PushedUpdate {
+            src: update.src(),
+            dst: update.dst(),
+            dst_refname: update.dst_refname(),
+        })
+        .collect()
+}
+
 /// Locked libgit2 uses src=current remote OID and dst=new OID, even though
 /// a deletion has an empty source refname. Refuse before sending any command.
 pub(super) fn guard_delete<'a>(
@@ -225,13 +278,24 @@ pub(super) fn guard_delete<'a>(
     expected: git2::Oid,
 ) {
     callbacks.push_negotiation(move |updates| {
-        if updates.len() != 1
-            || expected.is_zero()
-            || updates[0].src() != expected
-            || !updates[0].dst().is_zero()
-            || updates[0].dst_refname() != Some(reference)
-        {
+        if !delete_update_allowed(&pushed(updates), reference, expected) {
             return Err(git2::Error::from_str("SSH deletion precondition rejected"));
+        }
+        Ok(())
+    });
+}
+
+/// The create of a setup's branch: one update, of `reference`, from no ref to
+/// `commit`. Anything else, a ref that appeared since the advertisement
+/// included, is refused before any command is sent.
+pub(super) fn guard_create<'a>(
+    callbacks: &mut git2::RemoteCallbacks<'a>,
+    reference: &'a str,
+    commit: git2::Oid,
+) {
+    callbacks.push_negotiation(move |updates| {
+        if !create_update_allowed(&pushed(updates), reference, commit) {
+            return Err(git2::Error::from_str("SSH creation precondition rejected"));
         }
         Ok(())
     });
@@ -311,5 +375,148 @@ mod tests {
             );
             assert_eq!(attempt.key_submissions(), 1);
         }
+    }
+
+    fn oid(digit: char) -> git2::Oid {
+        git2::Oid::from_str(&digit.to_string().repeat(40)).unwrap()
+    }
+
+    /// A setup's branch is created by one update, from no ref to the commit,
+    /// of that ref alone; a guarded delete is one update, from the expected
+    /// OID to none, of the ref it names. Each guard refuses every other
+    /// update, whatever the count, ref or OIDs, before a command is sent.
+    #[test]
+    fn guard_create_and_guard_delete_decide_on_one_exact_update() {
+        const REF: &str = "refs/heads/manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        const OTHER: &str = "refs/heads/manyhands/setup/01BX5ZZKBKACTAV9WEVGEMMVRZ";
+        let (zero, commit, other) = (git2::Oid::zero(), oid('a'), oid('b'));
+        let update = |src, dst, name| PushedUpdate {
+            src,
+            dst,
+            dst_refname: name,
+        };
+        // (updates, create allowed for `commit`, delete allowed for `commit`)
+        let cases: Vec<(&str, Vec<PushedUpdate<'_>>, bool, bool)> = vec![
+            (
+                "a create",
+                vec![update(zero, commit, Some(REF))],
+                true,
+                false,
+            ),
+            (
+                "a delete",
+                vec![update(commit, zero, Some(REF))],
+                false,
+                true,
+            ),
+            (
+                "a create of another ref",
+                vec![update(zero, commit, Some(OTHER))],
+                false,
+                false,
+            ),
+            (
+                "a create of the primary",
+                vec![update(zero, commit, Some("refs/heads/main"))],
+                false,
+                false,
+            ),
+            (
+                "a create of a context",
+                vec![update(
+                    zero,
+                    commit,
+                    Some("refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+                )],
+                false,
+                false,
+            ),
+            (
+                "a create with no name",
+                vec![update(zero, commit, None)],
+                false,
+                false,
+            ),
+            (
+                "a create over a ref that has appeared",
+                vec![update(other, commit, Some(REF))],
+                false,
+                false,
+            ),
+            (
+                "an update of the ref to another OID",
+                vec![update(zero, other, Some(REF))],
+                false,
+                false,
+            ),
+            (
+                "a delete of another ref",
+                vec![update(commit, zero, Some(OTHER))],
+                false,
+                false,
+            ),
+            (
+                "a delete of a ref at another OID",
+                vec![update(other, zero, Some(REF))],
+                false,
+                false,
+            ),
+            (
+                "a move of the ref",
+                vec![update(other, commit, Some(REF))],
+                false,
+                false,
+            ),
+            ("no update", Vec::new(), false, false),
+            (
+                "two creates",
+                vec![
+                    update(zero, commit, Some(REF)),
+                    update(zero, commit, Some(REF)),
+                ],
+                false,
+                false,
+            ),
+            (
+                "a create with another",
+                vec![
+                    update(zero, commit, Some(REF)),
+                    update(zero, commit, Some(OTHER)),
+                ],
+                false,
+                false,
+            ),
+            (
+                "a delete with another",
+                vec![
+                    update(commit, zero, Some(REF)),
+                    update(commit, zero, Some(OTHER)),
+                ],
+                false,
+                false,
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, updates, create, delete) in &cases {
+            actual.push((
+                *name,
+                create_update_allowed(updates, REF, commit),
+                delete_update_allowed(updates, REF, commit),
+            ));
+            expected.push((*name, *create, *delete));
+        }
+        assert_eq!(actual, expected);
+        // A zero OID is never the commit to create, nor the one to delete.
+        assert!(!create_update_allowed(
+            &[update(zero, zero, Some(REF))],
+            REF,
+            zero
+        ));
+        assert!(!delete_update_allowed(
+            &[update(zero, zero, Some(REF))],
+            REF,
+            zero
+        ));
     }
 }

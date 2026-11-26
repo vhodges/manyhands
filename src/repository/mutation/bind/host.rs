@@ -60,14 +60,15 @@ use crate::{
 use super::{
     super::{
         super::{
-            ConfigurationInspection, RepositoryService,
+            ConfigurationInspection, RepositoryOperation, RepositoryService,
             keys::{SessionCredentialProvider, SessionCredentials},
             read::stored_authority,
             read_configuration,
             recovery::JournalRow,
+            setup::record as setup_record,
             transport::{
-                HostApproval, HostKeyIdentity, SshAuthority, SshDirection, SshTransportError,
-                SshTransportErrorKind, VerifySshTransportRequest,
+                HostApproval, HostKeyIdentity, SetupScope, SshAuthority, SshDirection,
+                SshTransportError, SshTransportErrorKind, VerifySshTransportRequest,
                 endpoint::configured_remote_endpoint, trust::valid_identity,
             },
         },
@@ -191,8 +192,13 @@ struct Host {
     root: PathBuf,
     /// The host, as a pin stores it.
     authority: SshAuthority,
-    /// The publication remote.
+    /// The publication remote, or the remote of the pending setup when
+    /// `setup` is set.
     remote: String,
+    /// The pending setup whose remote this is, when the remote is the
+    /// setup's and not the configuration file's: the host is then connected
+    /// to through the setup channel's scope.
+    setup: Option<SetupScope>,
     /// Where the remote is fetched from, when that is this host: the
     /// location as the transport connects to it. It goes into the
     /// observation digest and nowhere else.
@@ -225,18 +231,74 @@ impl Host {
         };
         let resolved = resolve_root(service, root)?;
         let root = resolved.root().to_owned();
-        let remote = match read_configuration(&root).map_err(refused)? {
-            ConfigurationInspection::Valid(configuration) => configuration
-                .publication_remote
-                .ok_or_else(|| Answer::stopped(ResultCode::PublicationRemoteRequired))?,
-            ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
+        // The file's publication remote, when it names one. A file with no
+        // remote, or none, may still have a pending setup whose remote is
+        // the one asked of; with neither, the file's own refusal stands.
+        let (configured, refusal) = match read_configuration(&root).map_err(refused)? {
+            ConfigurationInspection::Valid(configuration) => (
+                configuration.publication_remote,
+                ResultCode::PublicationRemoteRequired,
+            ),
+            ConfigurationInspection::Missing => (None, ResultCode::InvalidConfiguration),
+            ConfigurationInspection::Invalid(_) => {
                 return Err(Answer::stopped(ResultCode::InvalidConfiguration));
             }
         };
         let repository = git2::Repository::open(&root)
             .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
-        let fetch = configured_remote_endpoint(&repository, &remote, SshDirection::Fetch);
-        let push = configured_remote_endpoint(&repository, &remote, SshDirection::Push);
+        let endpoints = |remote: &str| {
+            (
+                configured_remote_endpoint(&repository, remote, SshDirection::Fetch),
+                configured_remote_endpoint(&repository, remote, SshDirection::Push),
+            )
+        };
+        let names = |endpoint: &Result<_, SshTransportErrorKind>, authority: &SshAuthority| {
+            endpoint.as_ref().is_ok_and(
+                |endpoint: &super::super::super::transport::endpoint::SshEndpoint| {
+                    endpoint.authority == *authority
+                },
+            )
+        };
+        let setup = || {
+            service
+                .read_session(RepositoryOperation::Read, |connection| {
+                    Ok(setup_record::read(connection, resolved.registration_id())?)
+                })
+                .map(|record| record.as_ref().map(SetupScope::of))
+                .map_err(|error| Answer::of_read(&error))
+        };
+        // The remote asked of, and the setup it is the remote of, if it is.
+        let (remote, setup, (fetch, push)) = match (configured, authority.as_ref()) {
+            (Some(remote), None) => {
+                let endpoints = endpoints(&remote);
+                (remote, None, endpoints)
+            }
+            (Some(remote), Some(authority)) => {
+                let file = endpoints(&remote);
+                if names(&file.0, authority) || names(&file.1, authority) {
+                    (remote, None, file)
+                } else {
+                    match setup()? {
+                        Some(scope) => {
+                            let pending = endpoints(&scope.remote_name);
+                            if names(&pending.0, authority) || names(&pending.1, authority) {
+                                (scope.remote_name.clone(), Some(scope), pending)
+                            } else {
+                                (remote, None, file)
+                            }
+                        }
+                        None => (remote, None, file),
+                    }
+                }
+            }
+            (None, _) => match setup()? {
+                Some(scope) => {
+                    let pending = endpoints(&scope.remote_name);
+                    (scope.remote_name.clone(), Some(scope), pending)
+                }
+                None => return Err(Answer::stopped(refusal)),
+            },
+        };
         let unusable = match (&fetch, &push) {
             (Err(kind), Err(_)) => Some(outcome::ssh_transport_error_code(kind)),
             (Ok(_), _) | (_, Ok(_)) => None,
@@ -269,6 +331,7 @@ impl Host {
             root,
             authority,
             remote,
+            setup,
             fetch,
             push,
             pin: trust.pin,
@@ -299,6 +362,8 @@ impl Host {
             // The record's target.
             authority: _,
             remote,
+            // The remote's name is in the digest; the scope is its source.
+            setup: _,
             fetch,
             push,
             pin,
@@ -357,6 +422,9 @@ struct Sighting {
     pin: Option<HostKeyIdentity>,
     /// Whether the reapproval marker was there.
     reapproval_required: bool,
+    /// The setup whose remote the host is connected to through, when the
+    /// remote is a pending setup's.
+    setup: Option<SetupScope>,
 }
 
 impl Sighting {
@@ -368,6 +436,7 @@ impl Sighting {
             direction: host.direction().ok()?,
             pin: host.pin.clone(),
             reapproval_required: host.reapproval_required,
+            setup: host.setup.clone(),
         })
     }
 }
@@ -541,6 +610,7 @@ impl HostBinding {
             direction,
             pin,
             reapproval_required,
+            setup,
         }) = self.seen.clone()
         else {
             return Ran {
@@ -552,18 +622,21 @@ impl HostBinding {
             return Self::failed(accepted, ResultCode::InvalidInput);
         };
         let approved = self.approved();
-        let verified = call.session.verify_transport(
-            call.service,
-            VerifySshTransportRequest {
-                root: accepted.root(),
-                direction,
-                approval: Some(HostApproval {
-                    authority: authority.clone(),
-                    expected: pin.clone(),
-                    presented: approved.clone(),
-                }),
-            },
-        );
+        let request = VerifySshTransportRequest {
+            root: accepted.root(),
+            direction,
+            approval: Some(HostApproval {
+                authority: authority.clone(),
+                expected: pin.clone(),
+                presented: approved.clone(),
+            }),
+        };
+        let verified = match &setup {
+            Some(scope) => call
+                .session
+                .verify_setup_transport(call.service, request, scope),
+            None => call.session.verify_transport(call.service, request),
+        };
         // What is there is not what this call observed: the remote
         // names another host by now, or the host's pin has moved. The
         // record is released, as when the observation itself finds it.
@@ -864,6 +937,7 @@ impl Confirmed for HostBinding {
             root,
             authority,
             remote: _,
+            setup: _,
             fetch,
             push,
             pin,
@@ -931,16 +1005,17 @@ impl RepositoryService {
             Ok(direction) => direction,
             Err(answer) => return failure(scope, answer.code),
         };
-        let verified = self.verify_ssh_transport(
-            VerifySshTransportRequest {
-                root: host.root.clone(),
-                direction,
-                // Nothing is approved: a host that is not trusted is
-                // refused, and what it presented comes back with that.
-                approval: None,
-            },
-            credentials,
-        );
+        let request = VerifySshTransportRequest {
+            root: host.root.clone(),
+            direction,
+            // Nothing is approved: a host that is not trusted is
+            // refused, and what it presented comes back with that.
+            approval: None,
+        };
+        let verified = match &host.setup {
+            Some(scope) => self.verify_setup_transport(request, scope, credentials),
+            None => self.verify_ssh_transport(request, credentials),
+        };
         // The pin is read again where the host was trusted: it is the
         // pin the connection was checked against, unless it moved.
         let (reached, presented, pinned) = match verified {
@@ -1009,3 +1084,7 @@ impl RepositoryService {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

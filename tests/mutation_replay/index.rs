@@ -642,6 +642,8 @@ fn killed_at_fault_point_child() {
             Mutation::RemoteSelect(manyhands::repository::RemoteSelectInput {
                 root,
                 name: Some("origin".to_owned()),
+                integration: None,
+                forge: None,
             })
         }
         other => panic!("{other}: not a request the child makes"),

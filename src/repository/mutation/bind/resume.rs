@@ -705,6 +705,19 @@ fn found_local(
     }
     Ok(match row.standing() {
         LocalStanding::Abandoned => Named::Abandoned,
+        // A setup that was recorded is continued by its own request, which
+        // is sent again while it is unfinished (design K6).
+        LocalStanding::Completed if row.step_is(recovery::LocalStep::SetupRecorded) => {
+            left_to_its_request(
+                connection,
+                OperationFamily::Local,
+                root,
+                operation_id,
+                Named::Ended {
+                    synchronization: None,
+                },
+            )?
+        }
         LocalStanding::Completed | LocalStanding::Rejected => Named::Ended {
             synchronization: None,
         },

@@ -1913,6 +1913,13 @@ local_steps! {
     Abandoned => "abandoned";
     /// Frozen local context inputs, before any Git effect.
     LocalSyncPrepared => "local_sync_prepared";
+    /// A pull-request setup was recorded, and its repository registered
+    /// with no configuration, in one registry transaction. The setup
+    /// request re-enters through the record, not through this step.
+    SetupRecorded => "setup_recorded";
+    /// A setup cancellation was recorded on its own row. The cancellation
+    /// re-enters through the record, not through this step.
+    SetupCancelRecorded => "setup_cancel_recorded";
 }
 
 impl LocalStep {
@@ -1933,7 +1940,11 @@ impl LocalStep {
             // never says more than that. With the registration pending
             // it does exist.
             | Self::CommentCheckpointIntent
-            | Self::CommentRegistrationPending => true,
+            | Self::CommentRegistrationPending
+            // A recorded setup is the point a re-entered setup request
+            // takes up as recorded.
+            | Self::SetupRecorded
+            | Self::SetupCancelRecorded => true,
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -2010,7 +2021,10 @@ impl LocalStep {
             | Self::Error
             | Self::Completed
             | Self::Rejected
-            | Self::Abandoned => None,
+            | Self::Abandoned
+            // The setup bindings re-enter through the record.
+            | Self::SetupRecorded
+            | Self::SetupCancelRecorded => None,
         }
     }
 }
@@ -2941,6 +2955,34 @@ fn in_the_way(
     Ok(matching.map_or(Pending::Nothing, Pending::Own))
 }
 
+/// Refuses, in the caller's transaction, a call of `operation` under
+/// `operation_id` and `target` while another row of the repository is in its
+/// way: `recovery_required` naming the blocker. The call's own row, taken up or
+/// completed, is not. A setup's cancellation asks it before it deletes the
+/// record, as a removal's reconciliation would be refused.
+pub(super) fn require_not_in_the_way(
+    connection: &Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+) -> Result<(), RepositoryError> {
+    let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
+    match in_the_way(
+        connection,
+        root_path,
+        action_name(operation),
+        &operation_id.to_string(),
+        target,
+        false,
+        CallReach::OwnItem,
+        false,
+    )? {
+        Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
+        Pending::Own(_) | Pending::Nothing => Ok(()),
+    }
+}
+
 /// Refuses a root on which a refresh under `operation_id` would be
 /// refused before it began: with `OperationMismatch` for an ID that is a
 /// promotion's parent or child whose exact authoritative hand-off is not due,
@@ -3225,6 +3267,11 @@ impl LocalRow {
         operation_from_name(&self.action)
     }
 
+    /// Whether the row's last step is `step`.
+    pub(super) fn step_is(&self, step: LocalStep) -> bool {
+        listed(self.step.as_deref()) == Some(step)
+    }
+
     /// Whether the row's state and step have the form of the names the
     /// journal stores; see `is_stored_name`.
     pub(super) fn is_well_formed(&self) -> bool {
@@ -3410,6 +3457,52 @@ pub(super) fn advance_after_observation(
         refuse_abandoned(connection, record_id)?;
     }
     Ok(())
+}
+
+/// Completes the row `record_id` at `step` in the caller's transaction, as a
+/// setup's recording does: the step and the completion are written with the
+/// record they belong to, or not at all. A row that is not there, or was
+/// abandoned, is an error.
+pub(super) fn complete_with_step(
+    connection: &Connection,
+    record_id: i64,
+    step: LocalStep,
+) -> Result<(), RepositoryError> {
+    let completed = connection
+        .execute(
+            &format!(
+                "UPDATE operation_records
+                    SET state = 'completed', completed_step = ?2, observed_at = ?3
+                  WHERE id = ?1 AND {NOT_ABANDONED}"
+            ),
+            params![record_id, step.as_str(), now()],
+        )
+        .map_err(RepositoryError::sqlite)?;
+    if completed == 0 {
+        refuse_abandoned(connection, record_id)?;
+        return Err(super::remote::state::recovery_required());
+    }
+    Ok(())
+}
+
+/// Whether the row `record_id` has completed at `setup_recorded`: the call
+/// that owns it has recorded its setup, whatever became of the record since.
+/// A call that is told so by `begin_or_reconcile` is not: it reads the step as
+/// none (`LocalStep::continued`), so a recording transaction asks here.
+pub(super) fn recorded_a_setup(
+    connection: &Connection,
+    record_id: i64,
+) -> Result<bool, RepositoryError> {
+    let step: Option<String> = connection
+        .query_row(
+            "SELECT completed_step FROM operation_records WHERE id = ?1 AND state = 'completed'",
+            [record_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .flatten();
+    Ok(step.as_deref() == Some(LocalStep::SetupRecorded.as_str()))
 }
 
 /// Marks the pending row `record_id` as touched now: the heartbeat of a
@@ -3685,6 +3778,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::CreateAndEnable => "create_and_enable",
         RepositoryOperation::Enable => "enable",
         RepositoryOperation::RemoveRegistration => "remove_registration",
+        RepositoryOperation::CancelSetup => "cancel_setup",
         RepositoryOperation::AddRemote => "add_remote",
         RepositoryOperation::RemoveRemote => "remove_remote",
         RepositoryOperation::SetPublicationRemote => "set_publication_remote",
@@ -3725,6 +3819,7 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "create_and_enable" => Some(RepositoryOperation::CreateAndEnable),
         "enable" => Some(RepositoryOperation::Enable),
         "remove_registration" => Some(RepositoryOperation::RemoveRegistration),
+        "cancel_setup" => Some(RepositoryOperation::CancelSetup),
         "add_remote" => Some(RepositoryOperation::AddRemote),
         "remove_remote" => Some(RepositoryOperation::RemoveRemote),
         "set_publication_remote" => Some(RepositoryOperation::SetPublicationRemote),
@@ -4142,6 +4237,8 @@ mod abandoned_row_tests {
                 "rejected",
                 "abandoned",
                 "local_sync_prepared",
+                "setup_recorded",
+                "setup_cancel_recorded",
             ]
         );
         for step in LocalStep::ALL {

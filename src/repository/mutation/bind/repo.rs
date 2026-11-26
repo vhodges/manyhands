@@ -40,8 +40,8 @@ use std::{
 use git2::{ConfigLevel, Repository};
 
 use crate::{
-    canonical,
-    results::{ResultCode, Scope},
+    canonical::{self, ForgeSetting, Integration},
+    results::{Effects, PublicationEffect, ResultCode, Scope, WriteEffect, redact_url},
 };
 
 use super::{
@@ -50,16 +50,22 @@ use super::{
             CommitIdentity, ConfigurationInspection, CreateRepositoryRequest,
             EnableRepositoryOutcome, EnableRepositoryRequest, INITIALIZATION_MESSAGE,
             OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-            WorktreeState, canonical_configuration, canonical_repository_root, checked_out_branch,
-            publication_remote_eligible, read_configuration_for,
+            WorktreeState, canonical_configuration_with, canonical_repository_root,
+            checked_out_branch, publication_remote_eligible, read_configuration_for,
             recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
-            resolve_identity, validate_identity, worktree_state,
+            resolve_identity,
+            setup::{
+                data as setup_data,
+                enable::{SetupOutcome, SetupRequest},
+                intent::{self, Intended, IntentError},
+            },
+            validate_identity, worktree_state,
         },
         command::Command,
         confirm::scope_key,
         dto::{
             PreviewDetailsDto, PreviewEffect, PreviewIdentityDto, PreviewIdentitySource,
-            RepositoryPreviewDto,
+            RepositoryPreviewDto, SetupForgeDto, SetupPreviewDto,
         },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder},
@@ -98,6 +104,15 @@ pub struct RepoEnableInput {
     pub identity: Option<CommitIdentity>,
     /// The short code prefix the configuration is to hold.
     pub slug_prefix: Option<String>,
+    /// The remote the configuration names as the publication remote, and
+    /// that a setup is published to.
+    pub publication_remote: Option<String>,
+    /// The mode: `direct` commits the configuration to the primary, `pull
+    /// request` puts it on a setup branch. With none, the forge's default
+    /// for the remote's address, or direct for no remote.
+    pub integration: Option<Integration>,
+    /// The `[forge]` setting the configuration is to hold.
+    pub forge: Option<ForgeSetting>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,11 +127,28 @@ pub(crate) struct RepoBinding {
     primary_branch: String,
     identity: Option<CommitIdentity>,
     slug_prefix: Option<String>,
+    publication_remote: Option<String>,
+    integration: Option<Integration>,
+    forge: Option<ForgeSetting>,
     /// The identity the domain call is given, which it writes to the
     /// repository's own configuration: the one supplied, and for a create
     /// that supplies none, the one found outside any repository. Set
     /// before each domain call.
     acting: Option<CommitIdentity>,
+    /// What the domain call does, worked out from the input and what was
+    /// observed: set with `acting`, before each call. An enable that has none
+    /// is never run as a direct one: only a row that holds a step of its own
+    /// says what the request was.
+    route: Option<Route>,
+}
+
+/// What a request that finds no configuration does.
+#[derive(Clone)]
+enum Route {
+    /// Commits the configuration to the primary, as an enable always has.
+    Direct,
+    /// Puts the configuration on a setup branch for a pull request.
+    Setup(Box<Intended>),
 }
 
 impl From<RepoCreateInput> for RepoBinding {
@@ -135,7 +167,11 @@ impl From<RepoCreateInput> for RepoBinding {
             primary_branch,
             identity,
             slug_prefix,
+            publication_remote: None,
+            integration: None,
+            forge: None,
             acting: None,
+            route: Some(Route::Direct),
         }
     }
 }
@@ -147,6 +183,9 @@ impl From<RepoEnableInput> for RepoBinding {
             primary_branch,
             identity,
             slug_prefix,
+            publication_remote,
+            integration,
+            forge,
         } = input;
         Self {
             verb: Verb::Enable,
@@ -154,7 +193,11 @@ impl From<RepoEnableInput> for RepoBinding {
             primary_branch,
             identity,
             slug_prefix,
+            publication_remote,
+            integration,
+            forge,
             acting: None,
+            route: None,
         }
     }
 }
@@ -216,6 +259,20 @@ struct Observed {
     /// The identity Git would commit as and the level it is configured
     /// at, read only for a request that supplies none.
     effective: Option<(CommitIdentity, PreviewIdentitySource)>,
+    /// What the request's remote, mode and forge come to, for a request that
+    /// supplies any of them and finds no configuration.
+    intent: Option<SetupObservation>,
+}
+
+/// What a request's publication remote, mode and forge come to at the
+/// repository, read from Git and contacting nothing.
+struct SetupObservation {
+    fetch_url: Option<String>,
+    push_url: Option<String>,
+    /// Whether the remote can be published to from this clone: true when the
+    /// request names none.
+    eligible: bool,
+    intended: Result<Intended, IntentError>,
 }
 
 fn identity_source(level: ConfigLevel) -> Option<PreviewIdentitySource> {
@@ -451,13 +508,77 @@ impl RepoBinding {
     /// The configuration file the request writes. `None` for an input
     /// that could not be written, which no request is accepted with.
     fn written(&self) -> Option<String> {
-        canonical_configuration(
+        canonical_configuration_with(
             &self.primary_branch,
             self.slug_prefix.as_deref(),
+            self.publication_remote.as_deref(),
+            self.forge.as_ref(),
             &self.root,
             self.operation(),
         )
         .ok()
+    }
+
+    /// Whether the request supplies a publication remote, a mode or a forge.
+    /// None of them is for a create, and a request that supplies none has
+    /// the digests and the answers it always had.
+    fn supplies_setting(&self) -> bool {
+        self.publication_remote.is_some() || self.integration.is_some() || self.forge.is_some()
+    }
+
+    /// What the supplied remote, mode and forge come to at `repository`:
+    /// the remote's addresses, whether it can be published to, and the
+    /// intent. Nothing is contacted.
+    fn observe_intent(&self, repository: &Repository, root: &Path) -> SetupObservation {
+        let name = self.publication_remote.as_deref();
+        let (fetch_url, push_url) = match name.map(|name| repository.find_remote(name)) {
+            Some(Ok(remote)) => (
+                remote.url().map(str::to_owned),
+                remote.pushurl().or(remote.url()).map(str::to_owned),
+            ),
+            Some(Err(_)) | None => (None, None),
+        };
+        let eligible = name.is_none_or(|name| {
+            publication_remote_eligible(repository, root, name).unwrap_or(false)
+        });
+        let intended = intent::for_enable(
+            &self.primary_branch,
+            name,
+            self.integration,
+            self.forge.as_ref(),
+            fetch_url.as_deref(),
+        );
+        SetupObservation {
+            fetch_url,
+            push_url,
+            eligible,
+            intended,
+        }
+    }
+
+    /// The route the observation gives: a pull-request setup when the
+    /// repository has no configuration and the intent is pull request.
+    fn route_of(&self, observed: &Observed) -> Route {
+        match (&observed.state, &observed.intent) {
+            (
+                State::Enable {
+                    configuration: ConfigurationInspection::Missing,
+                    head: _,
+                    worktree: _,
+                    registered: _,
+                    remote_eligible: _,
+                },
+                Some(SetupObservation {
+                    intended: Ok(intended),
+                    eligible: true,
+                    fetch_url: _,
+                    push_url: _,
+                }),
+            ) if intended.integration == Integration::PullRequest => {
+                Route::Setup(Box::new(intended.clone()))
+            }
+            _ => Route::Direct,
+        }
     }
 
     /// The checks of the input alone.
@@ -465,13 +586,20 @@ impl RepoBinding {
         let invalid = |_| Answer::stopped(ResultCode::InvalidInput);
         // The branch and the prefix are valid exactly when the
         // configuration that holds them can be written.
-        canonical_configuration(
+        canonical_configuration_with(
             &self.primary_branch,
             self.slug_prefix.as_deref(),
+            self.publication_remote.as_deref(),
+            self.forge.as_ref(),
             &self.root,
             self.operation(),
         )
         .map_err(invalid)?;
+        // A pull-request mode that is named needs a remote, whatever the
+        // repository holds.
+        if self.integration == Some(Integration::PullRequest) && self.publication_remote.is_none() {
+            return Err(Answer::stopped(ResultCode::InvalidInput));
+        }
         if let Some(identity) = &self.identity {
             validate_identity(identity, self.operation()).map_err(invalid)?;
         }
@@ -522,6 +650,7 @@ impl RepoBinding {
             root,
             state: State::Create { target },
             effective,
+            intent: None,
         })
     }
 
@@ -577,6 +706,9 @@ impl RepoBinding {
                 self.effective_identity(&config, &root)?
             }
         };
+        let intent = (self.supplies_setting()
+            && matches!(configuration, ConfigurationInspection::Missing))
+        .then(|| self.observe_intent(&repository, &root));
         Ok(Observed {
             root,
             state: State::Enable {
@@ -587,6 +719,7 @@ impl RepoBinding {
                 remote_eligible,
             },
             effective,
+            intent,
         })
     }
 
@@ -606,13 +739,13 @@ impl RepoBinding {
     /// what a later observation is compared with.
     fn digest(&self, observed: &Observed) -> ObservationDigest {
         ObservationDigest {
-            state: self.state_digest(&observed.state),
+            state: self.state_digest(&observed.state, observed.intent.as_ref()),
             unchanging: self.identity_digest(observed.effective.as_ref()),
         }
     }
 
     /// The digest of the state the command changes.
-    fn state_digest(&self, state: &State) -> String {
+    fn state_digest(&self, state: &State, intent: Option<&SetupObservation>) -> String {
         let observation = Observation::of(self.command().name());
         let observation = match state {
             State::Create { target } => observation.text(
@@ -680,6 +813,61 @@ impl RepoBinding {
                     )
             }
         };
+        // What a request that supplies a remote, a mode or a forge adds to
+        // what it covers: the mode they come to, the forge, and the remote's
+        // fetch and push addresses, so that a change of any of them between
+        // the preview and the request is `external_change`. A request that
+        // supplies none covers what it always did.
+        let observation = match intent {
+            None => observation,
+            Some(intent) => {
+                let observation = observation
+                    .text(
+                        "mode",
+                        match &intent.intended {
+                            Ok(intended) => intended.integration.as_str(),
+                            Err(error) => match error {
+                                IntentError::InvalidInput => "invalid_input",
+                                IntentError::InvalidRemote => "invalid_remote",
+                            },
+                        },
+                    )
+                    .text(
+                        "remote_name",
+                        self.publication_remote.as_deref().unwrap_or(""),
+                    )
+                    .text("remote_usable", if intent.eligible { "yes" } else { "no" });
+                let forge = self.forge.as_ref();
+                let observation = observation
+                    .text(
+                        "forge_kind",
+                        forge.and_then(|f| f.kind).map_or("", |k| k.as_str()),
+                    )
+                    .text(
+                        "forge_web_url",
+                        forge.and_then(|f| f.web_url.as_deref()).unwrap_or(""),
+                    )
+                    .text(
+                        "forge_pull_request_url",
+                        forge
+                            .and_then(|f| f.pull_request_url.as_deref())
+                            .unwrap_or(""),
+                    );
+                match &intent.fetch_url {
+                    Some(url) => observation.text("fetch_url", url),
+                    None => observation.absent("fetch_url"),
+                }
+                .text(
+                    "push_url_present",
+                    if intent.push_url.is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                )
+                .text("push_url", intent.push_url.as_deref().unwrap_or(""))
+            }
+        };
         observation.finish()
     }
 
@@ -709,6 +897,20 @@ impl RepoBinding {
         match configuration {
             ConfigurationInspection::Valid(config) => {
                 config.primary_branch == self.primary_branch
+                    // A supplied remote, mode or forge that is not the
+                    // configuration's would be lost: the shared
+                    // configuration decides (design R-10).
+                    && self
+                        .publication_remote
+                        .as_deref()
+                        .is_none_or(|remote| config.publication_remote.as_deref() == Some(remote))
+                    && self
+                        .integration
+                        .is_none_or(|integration| config.integration() == integration)
+                    && self
+                        .forge
+                        .as_ref()
+                        .is_none_or(|forge| config.forge().as_ref() == Some(forge))
                     && self.slug_prefix.as_ref().is_none_or(|requested| {
                         canonical::slug_settings(config)
                             .ok()
@@ -792,13 +994,36 @@ impl RepoBinding {
                 if !on_primary {
                     return stopped(ResultCode::WrongBranch);
                 }
+                // A pull request is made on a commit of the remote's primary:
+                // an unborn HEAD has no branch to activate (R-11).
+                if matches!(
+                    head,
+                    Head::Unborn {
+                        name: _,
+                        primary_exists: _
+                    }
+                ) && matches!(self.route_of(observed), Route::Setup(_))
+                {
+                    return stopped(ResultCode::WrongBranch);
+                }
                 match worktree {
                     WorktreeState::Clean => {}
                     WorktreeState::Dirty => return stopped(ResultCode::WorktreeNotClean),
                     WorktreeState::Conflicted => return stopped(ResultCode::WorktreeConflicted),
                 }
                 match configuration {
-                    ConfigurationInspection::Missing => {}
+                    ConfigurationInspection::Missing => {
+                        // The remote is one this clone can publish to, and
+                        // the intent is one that can be written.
+                        if let Some(intent) = &observed.intent {
+                            if !intent.eligible {
+                                return stopped(ResultCode::InvalidRemote);
+                            }
+                            if let Err(error) = &intent.intended {
+                                return stopped(error.code());
+                            }
+                        }
+                    }
                     ConfigurationInspection::Invalid(_) => {
                         return stopped(ResultCode::InvalidConfiguration);
                     }
@@ -908,15 +1133,40 @@ impl RepoBinding {
     /// made through `enable` once its repository exists: only the first
     /// part of a create is its own, and `enable` takes up a row a create
     /// began.
-    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+    fn call(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        let service = call.service;
         let root = accepted.root();
+        if self.verb == Verb::Enable {
+            match &self.route {
+                Some(Route::Setup(intended)) => {
+                    return self.call_setup(call, accepted, Some(intended), false);
+                }
+                Some(Route::Direct) => {}
+                // No observation gave a route. A row that holds a step of an
+                // enable's own says it is a direct one; the setup's step goes
+                // on from its record; with none, nothing says what the request
+                // is, and it is never run as a direct enable: it is owed.
+                None => match accepted.recorded_local_step(service) {
+                    Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => {
+                        return self.call_setup(call, accepted, None, true);
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(()) => {
+                        return Ran {
+                            answer: Answer::stopped(ResultCode::RecoveryRequired),
+                            standing: Standing::Owed,
+                        };
+                    }
+                },
+            }
+        }
         let through_enable = match self.verb {
             Verb::Enable => true,
             Verb::Create => is_repository_root(&root),
         };
         let prefix = self.slug_prefix.as_deref();
         let result = if through_enable {
-            service.enable_with_slug_prefix(
+            service.enable_direct_with(
                 EnableRepositoryRequest {
                     root: root.clone(),
                     primary_branch: self.primary_branch.clone(),
@@ -924,6 +1174,8 @@ impl RepoBinding {
                     operation_id: accepted.operation_id,
                 },
                 prefix,
+                self.publication_remote.as_deref(),
+                self.forge.as_ref(),
             )
         } else {
             service.create_and_enable_with_slug_prefix(
@@ -1027,6 +1279,69 @@ impl RepoBinding {
                 }
             }
             Err(()) => unconfirmed(),
+        }
+    }
+
+    /// A pull-request enable: records the setup and publishes it, or, for a
+    /// request whose row completed at `setup_recorded`, goes on from its
+    /// record (design Part K). `intended` is what a first call records.
+    fn call_setup(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        intended: Option<&Intended>,
+        recorded: bool,
+    ) -> Ran {
+        let service = call.service;
+        let root = accepted.root();
+        let request = EnableRepositoryRequest {
+            root: root.clone(),
+            primary_branch: self.primary_branch.clone(),
+            identity: self.identity.clone(),
+            operation_id: accepted.operation_id,
+        };
+        let setup = SetupRequest {
+            request_id: accepted.request_id,
+            prefix: self.slug_prefix.clone(),
+            remote_name: self.publication_remote.clone().unwrap_or_default(),
+            intended: intended.cloned(),
+            recorded,
+        };
+        let outcome = service.enable_with_setup(request, setup, &|root, request_id| {
+            call.session.publish_setup(service, root, request_id)
+        });
+        match outcome {
+            Ok(outcome) => setup_ran(service, accepted, &root, outcome),
+            Err(error) => {
+                let blocker = error.blocker().cloned();
+                // A refusal before the recording is an enable's, settled as
+                // one. The row decides, as it stands when the call answers:
+                // another call of the request may have recorded the setup
+                // meanwhile (`stopped` reads the journal after the domain call
+                // returned), and a request that is recorded, or whose row
+                // cannot be read, is owed whatever this call was: settled as a
+                // completed row is, it would be deleted, and its ID freed for a
+                // second setup.
+                if !recorded && !recorded_now(service, accepted) {
+                    let mut ran = self.stopped(service, accepted, &root, error.kind);
+                    if !recorded_now(service, accepted) {
+                        ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
+                        return ran;
+                    }
+                }
+                let answer = Answer {
+                    data: setup_data::of(service, &root, None),
+                    // The setup is recorded: a durable change no effect
+                    // shows, so the request is partial, never a refusal.
+                    local_change: true,
+                    ..Answer::stopped(outcome::repository_error_code(error.kind))
+                }
+                .naming(service, &root, blocker.as_ref());
+                Ran {
+                    answer,
+                    standing: Standing::Owed,
+                }
+            }
         }
     }
 
@@ -1187,8 +1502,12 @@ impl Binding for RepoBinding {
             primary_branch,
             identity,
             slug_prefix,
+            publication_remote,
+            integration,
+            forge,
             // Worked out from the input and what is observed.
             acting: _,
+            route: _,
         } = self;
         fn optional(value: Option<&String>) -> FieldValue<'_> {
             match value {
@@ -1196,7 +1515,7 @@ impl Binding for RepoBinding {
                 None => FieldValue::Absent,
             }
         }
-        builder
+        let mut builder = builder
             .field("primary_branch", FieldValue::Text(primary_branch))
             .field(
                 "name",
@@ -1206,7 +1525,30 @@ impl Binding for RepoBinding {
                 "email",
                 optional(identity.as_ref().map(|identity| &identity.email)),
             )
-            .field("slug_prefix", optional(slug_prefix.as_ref()))
+            .field("slug_prefix", optional(slug_prefix.as_ref()));
+        // Each is a field of the request only when it is supplied, so that
+        // the digest of a request that supplies none is the one it was.
+        if let Some(remote) = publication_remote {
+            builder = builder.field("publication_remote", FieldValue::Text(remote));
+        }
+        if let Some(mode) = integration {
+            builder = builder.field("integration", FieldValue::Text(mode.as_str()));
+        }
+        if let Some(forge) = forge {
+            builder = builder
+                .field(
+                    "forge_kind",
+                    forge
+                        .kind
+                        .map_or(FieldValue::Absent, |kind| FieldValue::Text(kind.as_str())),
+                )
+                .field("forge_web_url", optional(forge.web_url.as_ref()))
+                .field(
+                    "forge_pull_request_url",
+                    optional(forge.pull_request_url.as_ref()),
+                );
+        }
+        builder
     }
 
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
@@ -1230,6 +1572,7 @@ impl Binding for RepoBinding {
             return Err(Answer::stopped(ResultCode::InvalidPath));
         }
         self.acting = self.acting_identity(&observed);
+        self.route = Some(self.route_of(&observed));
         Ok(Prepared {
             family: Some(OperationFamily::Local),
             position: self.position(&observed),
@@ -1239,7 +1582,7 @@ impl Binding for RepoBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call.service, accepted)
+        self.call(call, accepted)
     }
 
     /// In order:
@@ -1278,8 +1621,22 @@ impl Binding for RepoBinding {
         Some(self)
     }
 
+    /// A request whose row completed at `setup_recorded` goes on from its
+    /// record: it writes what a crash may have left unwritten and publishes,
+    /// and records nothing again. Any other goes through `call`, by the
+    /// route its observation gave.
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call.service, accepted)
+        match accepted.recorded_local_step(call.service) {
+            Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => {
+                self.call_setup(call, accepted, None, true)
+            }
+            Ok(_) => self.call(call, accepted),
+            // Git or the journal could not say what the request has done.
+            Err(()) => Ran {
+                answer: Answer::stopped(ResultCode::RepositoryInaccessible),
+                standing: Standing::Unconfirmed,
+            },
+        }
     }
 }
 
@@ -1304,12 +1661,23 @@ impl Confirmed for RepoBinding {
                 owes_work: false,
                 checkpointed: _,
             } => {
-                return Row::answers(self.ended(
-                    service,
-                    accepted,
-                    journal.clone(),
-                    previewed.as_ref(),
-                ));
+                // A request that recorded a setup is entered through its
+                // record, which the domain reads: nothing is compared, no
+                // identity is, and a record that cannot be read is owed,
+                // never the direct path.
+                return match accepted.recorded_local_step(service) {
+                    Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => Row::Unfinished,
+                    Err(()) => Row::answers(Ran {
+                        answer: Answer::stopped(ResultCode::RepositoryInaccessible),
+                        standing: Standing::Unconfirmed,
+                    }),
+                    Ok(_) => Row::answers(self.ended(
+                        service,
+                        accepted,
+                        journal.clone(),
+                        previewed.as_ref(),
+                    )),
+                };
             }
             // No local operation is in another journal, ends in another
             // way or owes work once it has completed. Nothing is run or
@@ -1380,6 +1748,7 @@ impl Confirmed for RepoBinding {
             }
         };
         self.acting = self.acting_identity(&observed);
+        self.route = Some(self.route_of(&observed));
         // A row that is pending is the domain's to end, also when the
         // repository was enabled as requested under it: nothing is
         // written then, and nothing is compared.
@@ -1399,9 +1768,12 @@ impl Confirmed for RepoBinding {
                 }
             );
         let own = own_directory.then(|| ObservationDigest {
-            state: self.state_digest(&State::Create {
-                target: Target::Absent,
-            }),
+            state: self.state_digest(
+                &State::Create {
+                    target: Target::Absent,
+                },
+                None,
+            ),
             unchanging: found.unchanging.clone(),
         });
         Ok(Seen::State { found, own })
@@ -1447,6 +1819,45 @@ impl Confirmed for RepoBinding {
             Verb::Create => true,
             Verb::Enable => self.identity.is_some(),
         };
+        // A pull-request enable: the repository is registered with no
+        // configuration, and the setup is recorded and published.
+        if let (Route::Setup(intended), Some(intent)) = (self.route_of(&observed), &observed.intent)
+        {
+            let mut effects = Vec::new();
+            if written_locally {
+                effects.push(PreviewEffect::IdentityWritten);
+            }
+            effects.extend([
+                PreviewEffect::WorktreeExclusionWritten,
+                PreviewEffect::RepositoryRegistered,
+                PreviewEffect::SetupRecorded,
+                PreviewEffect::SetupBranchCommitted,
+                PreviewEffect::SetupBranchPublished,
+            ]);
+            return Ok(Previewed {
+                observation: self.digest(&observed).to_stored(),
+                effects,
+                details: PreviewDetailsDto::Setup(SetupPreviewDto {
+                    root: observed.root.to_string_lossy().into_owned(),
+                    primary_branch: self.primary_branch.clone(),
+                    identity: PreviewIdentityDto {
+                        name: identity.name,
+                        email: identity.email,
+                        source,
+                        written_locally,
+                    },
+                    slug_prefix: self.slug_prefix.clone(),
+                    integration: intended.integration.as_str().to_owned(),
+                    remote_name: self.publication_remote.clone().unwrap_or_default(),
+                    remote_location: intent.fetch_url.as_deref().map(redact_url),
+                    forge: self.forge.as_ref().map(|forge| SetupForgeDto {
+                        kind: forge.kind.map(|kind| kind.as_str().to_owned()),
+                        web_url: forge.web_url.clone(),
+                        pull_request_url: forge.pull_request_url.clone(),
+                    }),
+                }),
+            });
+        }
         let mut effects = Vec::new();
         if let State::Create { target } = &observed.state {
             if *target == Target::Absent {
@@ -1497,3 +1908,122 @@ impl Confirmed for RepoBinding {
         })
     }
 }
+
+/// Whether the request's own row is at `setup_recorded`, or cannot be
+/// read: the request is then owed.
+pub(super) fn recorded_now(service: &RepositoryService, accepted: &Accepted) -> bool {
+    match accepted.recorded_local_step(service) {
+        Ok(step) => step.is_some_and(|step| step.is(LocalStep::SetupRecorded)),
+        Err(()) => true,
+    }
+}
+
+/// What a pull-request setup that got as far as its recording answers with,
+/// and what is left of its request (design K2). It is shared: an enable's and
+/// a selection's setups end alike.
+pub(super) fn setup_ran(
+    service: &RepositoryService,
+    accepted: &Accepted,
+    root: &Path,
+    outcome: SetupOutcome,
+) -> Ran {
+    match outcome {
+        SetupOutcome::Published(published) => {
+            let Some(data) = setup_data::of(service, root, Some(&published)) else {
+                // Published, and its record cannot be read: the same
+                // request answers it once it can. The setup is recorded and
+                // pushed, a durable change no effect shows: partial, as the
+                // other owed answers after the recording are.
+                return Ran {
+                    answer: Answer {
+                        local_change: true,
+                        ..Answer::stopped(ResultCode::RecoveryRequired)
+                    },
+                    standing: Standing::Owed,
+                };
+            };
+            Ran {
+                answer: Answer {
+                    // No commit: the setup commit is never on the
+                    // primary, so a replay checks nothing against it.
+                    effects: Effects {
+                        write: WriteEffect::Written,
+                        publication: PublicationEffect::Published,
+                        ..Effects::not_requested()
+                    },
+                    data: Some(data),
+                    ..Answer::stopped(ResultCode::Ok)
+                },
+                standing: Standing::Final,
+            }
+        }
+        SetupOutcome::Recorded { stop, authority } => {
+            // The host a transport stop is about, for the approval the
+            // stop is answered with: the setup's data names none.
+            let recovery = match (&authority, root.to_str()) {
+                (Some(authority), Some(root)) => {
+                    outcome::host_action(stop, root, authority, accepted.request_id)
+                }
+                _ => Vec::new(),
+            };
+            Ran {
+                answer: Answer {
+                    data: setup_data::of(service, root, None),
+                    recovery,
+                    // The registry rows and the record are durable
+                    // changes no effect shows.
+                    local_change: true,
+                    ..Answer::stopped(stop)
+                },
+                standing: Standing::Owed,
+            }
+        }
+        // The domain finished the request in the transaction that ended
+        // the setup: `settled` answers the stored envelope.
+        SetupOutcome::Ended(error) => Ran {
+            answer: Answer::stopped(error.code()),
+            standing: Standing::Final,
+        },
+        SetupOutcome::AnotherSetup => Ran {
+            answer: Answer::stopped(ResultCode::SetupPending),
+            standing: Standing::Final,
+        },
+        // A change's refusal: only a `remote select` meets it.
+        SetupOutcome::InTheWay { blocker } => Ran {
+            answer: Answer::stopped(ResultCode::RecoveryRequired).naming(
+                service,
+                root,
+                blocker.as_ref(),
+            ),
+            standing: Standing::Final,
+        },
+        SetupOutcome::IdentityRequired => {
+            // Nothing was recorded by this call, but another call of the
+            // request may have recorded the setup since (R-20): a request
+            // recorded, or whose row cannot be read, is owed with its setup,
+            // as the `Err` arm of the call has it. Settled as a refusal it
+            // would be deleted, leaving a record that names a request that
+            // has none.
+            if recorded_now(service, accepted) {
+                return Ran {
+                    answer: Answer {
+                        data: setup_data::of(service, root, None),
+                        local_change: true,
+                        ..Answer::stopped(ResultCode::IdentityRequired)
+                    },
+                    standing: Standing::Owed,
+                };
+            }
+            Ran {
+                answer: Answer::stopped(ResultCode::IdentityRequired),
+                standing: Standing::Stopped {
+                    journal: accepted.journal_row(service),
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "repo_tests.rs"]
+pub(super) mod tests;

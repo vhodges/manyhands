@@ -81,6 +81,19 @@ commands! {
     PollOnce => "poll once",
     ItemResolveHistory => "item resolve-history",
     RemoteResolveHistory => "remote resolve-history",
+    RepoSetupCancel => "repo setup-cancel",
+}
+
+/// What a pending setup does to a command (Wave 06 Cycle 02, design Part B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SetupGate {
+    /// The command runs whatever the repository's setup.
+    Carries,
+    /// Refused while a first-time setup is pending: the repository has no
+    /// configuration yet, so its items cannot be written or published.
+    RefusedBeforeEnable,
+    /// Refused while any setup is pending.
+    Refused,
 }
 
 impl Command {
@@ -128,6 +141,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             // The refresh that puts the folder in the index: making the
             // directory records nothing, and the refresh's row is the
@@ -223,6 +237,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -278,6 +293,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -296,6 +312,61 @@ impl Command {
             | Self::PollResume
             | Self::ItemResolveHistory
             | Self::RemoteResolveHistory => false,
+        }
+    }
+
+    /// What a pending setup does to the command: the design's table, a
+    /// total partition of the commands. A command added here does not
+    /// compile until it has a place in it.
+    pub(crate) const fn setup_gate(self) -> SetupGate {
+        match self {
+            Self::TicketClose
+            | Self::DocumentPromote
+            | Self::RemoteSelect
+            | Self::RemoteRemove
+            | Self::RepoEnable => SetupGate::Refused,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::DocumentRepair
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::TicketRepair
+            | Self::FolderCreate
+            | Self::CommentAdd
+            | Self::ItemSync
+            | Self::RepoSync
+            | Self::ItemRepublish
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory
+            | Self::ConflictResolve
+            | Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::ContextRetire => SetupGate::RefusedBeforeEnable,
+            Self::RepoCreate
+            | Self::RepoRemove
+            | Self::RepoSetupCancel
+            | Self::RepoIdentitySet
+            | Self::RemoteAdd
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::KeyDelete
+            | Self::HostApprove
+            | Self::HostReplace
+            | Self::OperationResume
+            | Self::OperationAbandon
+            | Self::PollOnce
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::IndexRefresh
+            | Self::IndexRebuild => SetupGate::Carries,
         }
     }
 
@@ -332,6 +403,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -397,6 +469,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -472,6 +545,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -530,6 +604,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -596,6 +671,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -640,6 +716,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -743,6 +820,7 @@ mod tests {
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
+        assert_eq!(Command::RepoSetupCancel.name(), "repo setup-cancel");
         assert_eq!(Command::KeyDelete.name(), "key delete");
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
         assert_eq!(Command::ItemSync.name(), "item sync");
@@ -877,6 +955,7 @@ mod tests {
                         | Command::RepoEnable
                         | Command::RemoteRemove
                         | Command::RepoRemove
+                        | Command::RepoSetupCancel
                         | Command::KeyDelete
                         | Command::OperationAbandon
                         | Command::RepoIdentitySet
@@ -1072,6 +1151,90 @@ mod tests {
                 command == Command::IndexRebuild,
                 "{command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_command_has_the_setup_gate_of_the_design() {
+        use super::SetupGate::{Carries, Refused, RefusedBeforeEnable};
+        // Design Part B's table, written out.
+        let table = [
+            (
+                Refused,
+                &[
+                    "ticket close",
+                    "document promote",
+                    "remote select",
+                    "remote remove",
+                    "repo enable",
+                ][..],
+            ),
+            (
+                RefusedBeforeEnable,
+                &[
+                    "document create",
+                    "document save",
+                    "document move",
+                    "document repair",
+                    "ticket create",
+                    "ticket save",
+                    "ticket slug-assign",
+                    "ticket repair",
+                    "folder create",
+                    "comment add",
+                    "item sync",
+                    "repo sync",
+                    "item republish",
+                    "item resolve-history",
+                    "remote resolve-history",
+                    "conflict resolve",
+                    "context sync-local",
+                    "context resolve-local",
+                    "context prepare",
+                    "context release",
+                    "context retire",
+                ][..],
+            ),
+            (
+                Carries,
+                &[
+                    "repo create",
+                    "repo remove",
+                    "repo setup-cancel",
+                    "repo identity-set",
+                    "remote add",
+                    "key generate",
+                    "key import",
+                    "key select",
+                    "key clear",
+                    "key remove",
+                    "key delete",
+                    "host approve",
+                    "host replace",
+                    "operation resume",
+                    "operation abandon",
+                    "poll once",
+                    "poll configure",
+                    "poll pause",
+                    "poll resume",
+                    "index refresh",
+                    "index rebuild",
+                ][..],
+            ),
+        ];
+        let mut seen = Vec::new();
+        for (gate, names) in table {
+            for name in names {
+                let command = Command::parse(name).unwrap_or_else(|| panic!("{name}"));
+                assert_eq!(command.setup_gate(), gate, "{name}");
+                assert!(!seen.contains(&command), "{name} is in the table twice");
+                seen.push(command);
+            }
+        }
+        // The table names every command, once.
+        assert_eq!(seen.len(), Command::ALL.len());
+        for command in Command::ALL {
+            assert!(seen.contains(&command), "{command:?} is not in the table");
         }
     }
 

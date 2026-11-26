@@ -14,6 +14,11 @@
 //! 5. `remote_snapshot`: the deadline the poll stored, which a failure's
 //!    backoff is.
 //!
+//! A repository with a setup published on another remote takes a sixth call
+//! beside these, `poll_setup` (Wave 06 Cycle 02, Part J): a first-time setup
+//! in place of calls 3 and 4, a change after call 5. `pending_setup`, which
+//! tells which, is not one of the recorded calls.
+//!
 //! When the policy says no, the poll is not made (the library would answer
 //! the same `NotEligible` without contacting the remote), and nothing was
 //! stored to read back, so call 5 is skipped too.
@@ -30,6 +35,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
+    time::Duration,
 };
 
 use manyhands::{
@@ -45,8 +51,9 @@ use super::{
     Backend, Services,
     poll_convert::{Library, attempt_of, poll_attempt, repository_failed},
     prompts::DesktopProvider,
+    setup_poll::{SetupPollPath, setup_attempt},
 };
-use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root};
+use crate::desktop::model::polling::{Answer, CancelCause, PollAttempt, Root, TransportFailure};
 
 /// The automatic polls that ended, as the drain heard them and in order
 /// (D6 B1): the scheduler takes them and applies them to its
@@ -101,10 +108,114 @@ pub(super) fn run(
         Ok(repo) => repo,
         Err(error) => return refused(error.code() == ResultCode::RecoveryRequired),
     };
-    let stored = match backend.polling_status(&repo) {
-        Ok(status) => stored_deadline(&status),
+    let status = match backend.polling_status(&repo) {
+        Ok(status) => status,
         Err(error) => return refused(error.code() == ResultCode::RecoveryRequired),
     };
+    let stored = stored_deadline(&status);
+    // A setup published on another remote (Part J): a first-time setup is
+    // polled instead of the repository's own remote, which it has none of;
+    // a change is polled after it. Neither call is a recorded one.
+    let setup = backend.pending_setup(path);
+    // A setup with no SSH publication remote beside it has nothing of
+    // today's to poll: a first-time setup, and a change in a repository that
+    // has none (or one that is not SSH).
+    let alone = setup
+        .as_ref()
+        .is_some_and(|setup| !setup.polls_current_remote());
+    if alone {
+        let mut attempt = setup_poll(backend, session, root, operation, stored, asked);
+        if setup
+            .as_ref()
+            .is_some_and(|setup| setup.path == SetupPollPath::After)
+        {
+            // A change records no deadline of its own, and the registry's row
+            // is not read for it: it may be a stale one, left by a poll of a
+            // publication remote that is not there now, with a deadline long
+            // past, which would make the repository due at once, and its
+            // setup polled over the network in a loop. Nothing else
+            // schedules it, so a poll that answered waits the interval (an
+            // activation's first ordinary poll is due at once). So does one
+            // the model would send again at the registry's deadline, which
+            // is that row's again: a remote out of reach, or one whose
+            // endpoint changed (the model reads that as a change to look
+            // at, and reads the policy again). The first waits for the
+            // interval, the second is a failure to wait out at the model's
+            // own pace.
+            match &attempt.answer {
+                Answer::Completed | Answer::Transport(TransportFailure::Unreachable)
+                    if attempt.targets.is_empty() =>
+                {
+                    attempt.next_eligible_at = Some(
+                        OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds),
+                    );
+                }
+                Answer::Transport(TransportFailure::Changed) => {
+                    attempt.answer = Answer::Repository {
+                        recovery_required: false,
+                    };
+                }
+                _ => {}
+            }
+            return attempt;
+        }
+        // A first-time setup's attempt is recorded: the deadline the poll
+        // stored, read back as today's poll's is. The one read before the
+        // poll is not a fallback: it is the deadline this poll was due at,
+        // and a poll that answered without one reads the policy again
+        // instead (the attempt's deadline is `None`).
+        let after = backend
+            .remote_snapshot(path)
+            .ok()
+            .and_then(|snapshot| snapshot.next_eligible_at());
+        attempt.next_eligible_at = attempt.next_eligible_at.or(after);
+        return attempt;
+    }
+    let attempt = current_remote(backend, session, root, operation, restart, stored, &asked);
+    // The setup is polled after the check of the current remote whatever it
+    // answered, unless it was cancelled, as the library's `poll once` does.
+    if setup.is_some() && !matches!(attempt.answer, Answer::Cancelled(_)) {
+        let after = setup_poll(backend, session, root, operation, stored, asked);
+        return joined(attempt, after);
+    }
+    attempt
+}
+
+/// The check of the current remote and the setup poll after it, as one
+/// attempt. The check's own answer stands unless it completed, and then the
+/// setup's does: a setup poll that failed after a check that brought
+/// something in keeps what the check brought in and when. What an activation
+/// brought in is added to the check's targets.
+fn joined(attempt: PollAttempt, after: PollAttempt) -> PollAttempt {
+    if attempt.answer != Answer::Completed {
+        let mut attempt = attempt;
+        attempt.targets.extend(after.targets);
+        return attempt;
+    }
+    if after.answer != Answer::Completed {
+        let mut after = after;
+        after.targets = attempt.targets.into_iter().chain(after.targets).collect();
+        after.completed_at = attempt.completed_at;
+        return after;
+    }
+    let mut attempt = attempt;
+    attempt.targets.extend(after.targets);
+    attempt
+}
+
+/// Today's automatic poll of the repository's publication remote, after
+/// `resolve` and `polling_status` (`stored` is the deadline the second read).
+fn current_remote(
+    backend: &dyn Backend,
+    session: &mut SessionCredentials<DesktopProvider>,
+    root: &Root,
+    operation: OperationId,
+    restart: bool,
+    stored: Option<OffsetDateTime>,
+    asked: &impl Fn() -> Option<CancelCause>,
+) -> PollAttempt {
+    let path = Path::new(root);
+    let refused = |recovery_required: bool| repository_failed(root, operation, recovery_required);
     match backend.poll_eligibility(path) {
         Ok(AutomaticPollEligibility::Eligible) => {}
         Ok(AutomaticPollEligibility::NotEligible {
@@ -148,6 +259,30 @@ pub(super) fn run(
         .and_then(|snapshot| snapshot.next_eligible_at());
     attempt.next_eligible_at = attempt.next_eligible_at.or(after).or(stored);
     attempt
+}
+
+/// The setup poll, with the automatic policy (Part J). It reserves no remote
+/// row, so there is nothing for the cancel task to reach: a stop asked is
+/// seen before the call (P-2), and the poll runs to its answer. The library
+/// stores a first-time setup's attempt and deadline, which the caller reads
+/// back as today's poll's is; a change records nothing, and the check of the
+/// current remote schedules both.
+fn setup_poll(
+    backend: &dyn Backend,
+    session: &mut SessionCredentials<DesktopProvider>,
+    root: &Root,
+    operation: OperationId,
+    stored: Option<OffsetDateTime>,
+    asked: impl Fn() -> Option<CancelCause>,
+) -> PollAttempt {
+    let path = Path::new(root);
+    if let Some(cause) = asked() {
+        return stopped(root, operation, cause, stored);
+    }
+    let result = backend.poll_setup(path, true, session);
+    setup_attempt(root, operation, &result, || {
+        asked().unwrap_or(CancelCause::Takeover)
+    })
 }
 
 /// A poll that was stopped before it called `poll_automatic`: cancelled for

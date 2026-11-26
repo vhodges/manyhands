@@ -437,6 +437,8 @@ fn select(world: &World, name: Option<&str>) -> Mutation {
     Mutation::RemoteSelect(RemoteSelectInput {
         root: world.root.clone(),
         name: name.map(str::to_owned),
+        integration: None,
+        forge: None,
     })
 }
 
@@ -1465,6 +1467,8 @@ fn a_selection_another_request_committed_first_is_not_reported_as_this_request_s
             Mutation::RemoteSelect(RemoteSelectInput {
                 root,
                 name: Some("origin".to_owned()),
+                integration: None,
+                forge: None,
             }),
         );
         assert_eq!(other.outcome, Outcome::Success);
