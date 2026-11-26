@@ -15,12 +15,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::desktop::{
     model::polling::{Authority, Policy, Root},
-    services::{
-        Backend,
-        inflight::ActiveRow,
-        poll,
-        setup_poll::{PendingSetup, SetupPollPath},
-    },
+    services::{Backend, inflight::ActiveRow, poll, setup_poll::PendingSetup},
 };
 
 /// The publication remote a repository is checked against: its name and its
@@ -132,11 +127,13 @@ pub(super) fn status_of(backend: &dyn Backend, root: &Root) -> Option<PollingSta
 }
 
 /// The remotes as the scheduler reads them for a repository whose setup is
-/// the first-time one `setup` names: the setup's remote stands where the
-/// selected publication remote would, since the repository has none yet
-/// (Part J). Any other repository's remotes are as listed.
+/// polled through its own remote: a first-time setup, and a change in a
+/// repository that has no SSH publication remote today's poll can check (none
+/// at all, or one that is not SSH). The setup's remote stands where the
+/// selected publication remote would (Part J). Any other repository's remotes
+/// are as listed.
 fn polled_through(remotes: RemoteListDto, setup: Option<&PendingSetup>) -> RemoteListDto {
-    let Some(setup) = setup.filter(|setup| setup.path == SetupPollPath::Replace) else {
+    let Some(setup) = setup.filter(|setup| !setup.polls_current_remote()) else {
         return remotes;
     };
     RemoteListDto {

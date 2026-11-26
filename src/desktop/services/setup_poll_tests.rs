@@ -78,11 +78,16 @@ fn inspection(
 #[test]
 fn a_published_setup_takes_the_poll_its_kind_and_remote_say() {
     use SetupPollPath::{After, Replace};
-    let on = |path, remote: &str| {
+    let on = |path, remote: &str, current_ssh| {
         Some(PendingSetup {
             path,
             remote: remote.to_owned(),
+            current_ssh,
         })
+    };
+    let not_ssh = || RemoteDto {
+        publication_eligible: false,
+        ..remote("origin", true)
     };
     let cases = [
         ("no setup", inspection(None, Vec::new()), None),
@@ -97,7 +102,7 @@ fn a_published_setup_takes_the_poll_its_kind_and_remote_say() {
                 Some(setup("enable", "published", "origin")),
                 vec![remote("origin", false)],
             ),
-            on(Replace, "origin"),
+            on(Replace, "origin", false),
         ),
         (
             "change, recorded",
@@ -121,7 +126,15 @@ fn a_published_setup_takes_the_poll_its_kind_and_remote_say() {
                 Some(setup("change", "published", "fork")),
                 vec![remote("origin", true), remote("fork", false)],
             ),
-            on(After, "fork"),
+            on(After, "fork", true),
+        ),
+        (
+            "change, current remote not SSH",
+            inspection(
+                Some(setup("change", "published", "fork")),
+                vec![not_ssh(), remote("fork", false)],
+            ),
+            on(After, "fork", false),
         ),
         (
             "change with no current remote",
@@ -129,7 +142,7 @@ fn a_published_setup_takes_the_poll_its_kind_and_remote_say() {
                 Some(setup("change", "published", "fork")),
                 vec![remote("fork", false)],
             ),
-            on(After, "fork"),
+            on(After, "fork", false),
         ),
     ];
     for (name, inspected, expected) in cases {

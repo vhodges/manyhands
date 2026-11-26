@@ -45,6 +45,19 @@ pub(crate) struct PendingSetup {
     pub path: SetupPollPath,
     /// The setup's remote, by name.
     pub remote: String,
+    /// Whether the repository has an SSH publication remote today's poll
+    /// can check. A change on another remote is polled through the setup's
+    /// remote alone when it has none (no publication remote yet, or one
+    /// that is not SSH).
+    pub current_ssh: bool,
+}
+
+impl PendingSetup {
+    /// Whether today's poll of the current remote is made too: only for a
+    /// change, and only where there is a remote to check.
+    pub(crate) fn polls_current_remote(&self) -> bool {
+        self.path == SetupPollPath::After && self.current_ssh
+    }
 }
 
 /// The setup `inspection` shows, when the desktop polls it: one that is
@@ -56,6 +69,10 @@ pub(crate) fn pending_setup_of(inspection: &RepositoryInspectionDto) -> Option<P
     if setup.state != PUBLISHED {
         return None;
     }
+    let current_ssh = inspection
+        .remotes
+        .iter()
+        .any(|remote| remote.selected_for_publication && remote.publication_eligible);
     let path = if setup.kind == FIRST_TIME {
         SetupPollPath::Replace
     } else {
@@ -71,6 +88,7 @@ pub(crate) fn pending_setup_of(inspection: &RepositoryInspectionDto) -> Option<P
     Some(PendingSetup {
         path,
         remote: setup.remote.clone(),
+        current_ssh,
     })
 }
 

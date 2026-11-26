@@ -35,6 +35,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
+    time::Duration,
 };
 
 use manyhands::{
@@ -107,18 +108,22 @@ pub(super) fn run(
         Ok(repo) => repo,
         Err(error) => return refused(error.code() == ResultCode::RecoveryRequired),
     };
-    let stored = match backend.polling_status(&repo) {
-        Ok(status) => stored_deadline(&status),
+    let status = match backend.polling_status(&repo) {
+        Ok(status) => status,
         Err(error) => return refused(error.code() == ResultCode::RecoveryRequired),
     };
+    let stored = stored_deadline(&status);
     // A setup published on another remote (Part J): a first-time setup is
     // polled instead of the repository's own remote, which it has none of;
     // a change is polled after it. Neither call is a recorded one.
     let setup = backend.pending_setup(path);
-    let replaces = setup
+    // A setup with no SSH publication remote beside it has nothing of
+    // today's to poll: a first-time setup, and a change in a repository that
+    // has none (or one that is not SSH).
+    let alone = setup
         .as_ref()
-        .is_some_and(|setup| setup.path == SetupPollPath::Replace);
-    if replaces {
+        .is_some_and(|setup| !setup.polls_current_remote());
+    if alone {
         let mut attempt = setup_poll(backend, session, root, operation, stored, asked);
         // The deadline the poll stored, read back as today's poll's is. The
         // one read before the poll is not a fallback: it is the deadline
@@ -129,23 +134,50 @@ pub(super) fn run(
             .ok()
             .and_then(|snapshot| snapshot.next_eligible_at());
         attempt.next_eligible_at = attempt.next_eligible_at.or(after);
+        // A change records no deadline of its own (a first-time setup's is
+        // recorded, and an activation's is the first ordinary poll's, due
+        // at once), and nothing else schedules it: it waits the interval.
+        let waits = setup
+            .as_ref()
+            .is_some_and(|setup| setup.path == SetupPollPath::After)
+            && attempt.answer == Answer::Completed
+            && attempt.targets.is_empty()
+            && attempt.next_eligible_at.is_none();
+        if waits {
+            attempt.next_eligible_at =
+                Some(OffsetDateTime::now_utc() + Duration::from_secs(status.interval_seconds));
+        }
         return attempt;
     }
     let attempt = current_remote(backend, session, root, operation, restart, stored, &asked);
-    // The setup is polled after a check of the current remote that answered;
-    // a stop of that check is its answer, and the setup waits for the next.
-    if setup.is_some() && attempt.answer == Answer::Completed {
+    // The setup is polled after the check of the current remote whatever it
+    // answered, unless it was cancelled, as the library's `poll once` does.
+    if setup.is_some() && !matches!(attempt.answer, Answer::Cancelled(_)) {
         let after = setup_poll(backend, session, root, operation, stored, asked);
-        // A setup poll that failed is the attempt's answer; one that
-        // answered leaves the check of the current remote as it was, with
-        // the primary the activation brought in.
-        if after.answer != Answer::Completed {
-            return after;
-        }
+        return joined(attempt, after);
+    }
+    attempt
+}
+
+/// The check of the current remote and the setup poll after it, as one
+/// attempt. The check's own answer stands unless it completed, and then the
+/// setup's does: a setup poll that failed after a check that brought
+/// something in keeps what the check brought in and when. What an activation
+/// brought in is added to the check's targets.
+fn joined(attempt: PollAttempt, after: PollAttempt) -> PollAttempt {
+    if attempt.answer != Answer::Completed {
         let mut attempt = attempt;
         attempt.targets.extend(after.targets);
         return attempt;
     }
+    if after.answer != Answer::Completed {
+        let mut after = after;
+        after.targets = attempt.targets.into_iter().chain(after.targets).collect();
+        after.completed_at = attempt.completed_at;
+        return after;
+    }
+    let mut attempt = attempt;
+    attempt.targets.extend(after.targets);
     attempt
 }
 

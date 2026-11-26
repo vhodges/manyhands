@@ -198,6 +198,7 @@ async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mu
         PendingSetup {
             path: SetupPollPath::Replace,
             remote: "origin".to_owned(),
+            current_ssh: false,
         },
     );
     // The library records the setup poll's attempt and its next check.
@@ -252,6 +253,7 @@ async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mu
         PendingSetup {
             path: SetupPollPath::After,
             remote: "fork".to_owned(),
+            current_ssh: true,
         },
     );
     world.backend.answer_poll(world.completed());
@@ -266,6 +268,55 @@ async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mu
     World::quiet(cx).await;
     assert_eq!(world.backend.polled_roots(), std::slice::from_ref(&change));
     assert_eq!(world.backend.setup_polled()[2], (change.clone(), true));
+
+    // A change that adds a publication remote to a repository with none, and
+    // one on a repository whose publication remote is not SSH: nothing of
+    // today's to poll, so the setup alone is polled, by policy (once, then
+    // held for the interval, since a change records no deadline).
+    let bare = world.fixture.create_repository("bare");
+    world
+        .fixture
+        .add_remote(&bare, "fork", "ssh://git@example.invalid/team/repo.git");
+    let bare = bare.to_str().unwrap().to_owned();
+    let local = world.fixture.create_repository("local");
+    world.fixture.publish_over_ssh(&local);
+    world
+        .fixture
+        .set_remote_url(&local, "origin", "file:///srv/elsewhere.git");
+    world
+        .fixture
+        .add_remote(&local, "fork", "ssh://git@example.invalid/team/repo.git");
+    let local = local.to_str().unwrap().to_owned();
+    for (polled, root) in [(4, &bare), (5, &local)] {
+        world.backend.publish_setup(
+            root,
+            PendingSetup {
+                path: SetupPollPath::After,
+                remote: "fork".to_owned(),
+                current_ssh: false,
+            },
+        );
+        world
+            .backend
+            .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+        world.list(std::slice::from_ref(root), cx);
+        World::settle(cx, "the setup-only poll", |_| {
+            world.backend.setup_polled().len() == polled
+        })
+        .await;
+        World::quiet(cx).await;
+        assert_eq!(
+            world.backend.setup_polled()[polled - 1],
+            (root.clone(), true)
+        );
+        assert_eq!(
+            world.backend.setup_polled().len(),
+            polled,
+            "held, not looped"
+        );
+        assert!(world.scheduled(root, cx));
+    }
+    assert_eq!(world.backend.polled_roots(), std::slice::from_ref(&change));
 }
 
 /// The timer wakes at the model's next wake, and submits one poll at a

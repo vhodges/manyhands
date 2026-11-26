@@ -255,15 +255,26 @@ fn a_published_setup_takes_the_setup_poll_path() {
     use manyhands::repository::SetupPollOutcome;
 
     let mut harness = Harness::new();
-    let on = |path| PendingSetup {
+    let on = |path, current_ssh| PendingSetup {
         path,
         remote: "origin".to_owned(),
+        current_ssh,
+    };
+    let report = |targets| crate::desktop::services::poll_convert::Library::Polled {
+        parts: crate::desktop::services::poll_convert::ReportParts {
+            completion: manyhands::repository::PollCompletion::Completed,
+            completed_at: time::OffsetDateTime::now_utc(),
+            next_eligible_at: None,
+            targets,
+            outcome: None,
+        },
+        index_pending: false,
     };
     // First-time: Resolve, PollingStatus, then the setup poll and the
     // deadline it stored read back; nothing of today's poll.
     harness
         .backend
-        .publish_setup(&harness.root, on(SetupPollPath::Replace));
+        .publish_setup(&harness.root, on(SetupPollPath::Replace, false));
     harness
         .backend
         .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
@@ -287,19 +298,8 @@ fn a_published_setup_takes_the_setup_poll_path() {
     harness.backend.clear_calls();
     harness
         .backend
-        .publish_setup(&harness.root, on(SetupPollPath::After));
-    harness
-        .backend
-        .answer_poll(crate::desktop::services::poll_convert::Library::Polled {
-            parts: crate::desktop::services::poll_convert::ReportParts {
-                completion: manyhands::repository::PollCompletion::Completed,
-                completed_at: time::OffsetDateTime::now_utc(),
-                next_eligible_at: None,
-                targets: Vec::new(),
-                outcome: None,
-            },
-            index_pending: false,
-        });
+        .publish_setup(&harness.root, on(SetupPollPath::After, true));
+    harness.backend.answer_poll(report(Vec::new()));
     harness
         .backend
         .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
@@ -308,14 +308,60 @@ fn a_published_setup_takes_the_setup_poll_path() {
     assert_eq!(attempt.answer, Answer::Completed);
     assert_eq!(harness.backend.setup_polled().len(), 2);
 
-    // The check of the current remote did not answer: the setup waits.
+    // The check of the current remote failed: the setup is polled still, as
+    // the library's `poll once` does after any call that was not cancelled,
+    // and the failure is the attempt's answer.
     harness
         .backend
         .answer_poll(crate::desktop::services::poll_convert::Library::Busy);
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
     harness.poll(OperationId::new());
     let (_, attempt) = harness.until_polled();
     assert_eq!(attempt.answer, Answer::Busy);
-    assert_eq!(harness.backend.setup_polled().len(), 2, "no third poll");
+    assert_eq!(harness.backend.setup_polled().len(), 3);
+
+    // A setup poll that fails after a check that brought something in keeps
+    // what the check brought in: its targets and its time.
+    let brought = crate::desktop::services::poll_convert::TargetParts {
+        item_id: None,
+        kind: None,
+        disposition: manyhands::repository::PollDisposition::FastForwarded,
+        main: true,
+    };
+    harness.backend.answer_poll(report(vec![brought]));
+    harness
+        .backend
+        .answer_setup_poll(Err(manyhands::repository::SetupPollError::Busy));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Busy);
+    assert_eq!(attempt.targets.len(), 1, "what the check brought in");
+    assert!(attempt.completed_at.is_some());
+
+    // A change with no SSH publication remote has nothing of today's to
+    // poll: the setup alone, held for the interval since a change records
+    // no deadline of its own.
+    harness.backend.clear_calls();
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::After, false));
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert_eq!(
+        harness.backend.calls(),
+        [
+            PollCall::Resolve,
+            PollCall::PollingStatus,
+            PollCall::RemoteSnapshot
+        ]
+    );
+    assert!(attempt.next_eligible_at.is_some());
 }
 
 /// A background poll asks nobody for a passphrase: no prompt, the key is
