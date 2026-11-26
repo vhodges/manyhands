@@ -17,6 +17,7 @@ Revision history:
 - Revision 3 (Cycle document `71594c02`, design `4a1d899d`, plan `5882ae02`): a scoped re-review of revision 2 (1 Blocking, 7 Important, 8 Minor) and an adversarial round (3 Blocking, 8 Important, 12 Minor), and decision 15. The request lifecycle of a setup is restated as required outcomes (design Part K), built test-first with design checkpoints. 
 - Revision 4: a third round, a scoped re-review of revision 3 (0 Blocking, 5 Important, 11 Minor) and an adversarial round (2 Blocking, 8 Important, 7 Minor), all in the request lifecycle; decision 16. As the planning skill says after a third round in one mechanism, the lifecycle is not redesigned again: its rules K1 to K7 and outcomes L1 to L14 are the contract, built test-first with design checkpoints. Revision 4 has not been independently reviewed.
 - Approval, 2026-11-25: the owner approved revision 4 as written, with no further review round (decisions 17 and 18). Revision 4 stays without an independent review; its lifecycle is built test-first with the design checkpoints of Tasks 6 to 10.
+- Implementation, 2026-11-25: Tasks 0 to 13 subagent-driven, each reviewed, then a whole-branch review, two fix waves and a short third round; review-ready with the code at `0e2a5e77`. The design is amended where the build departed from it (published OID check, the digest's refactor, L10 and L11, Baseline Fact 9, activation's attempt clearing, the scheduler's read, what stops the finish and G5). Rulings, named test edits E-16 to E-32 and every test run are in the execution ledger, `docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-execution.md`.
 
 ## Purpose And Authority
 
@@ -106,20 +107,20 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 
 | # | Contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | 1-3 | A table-driven library test of the intended configuration and mode, the input refusals, the clone rule and the direct path with a remote; the input schema tests, with `repo create` refusing the new fields | planned |
-| A2 | 4, 13 | Design Part D's required outcomes S1 to S12, each with its test; the commit builder's test that only the configuration changes | planned |
-| A3 | 5 | A non-SSH test: a pull-request enable that stops at `no_selected_key` leaves a recorded setup that `repo inspect` and `repo list` show, `host observe` answers `no_selected_key`, and the same request continues; the SSH case's host stop and approval | planned |
-| A4 | 6 | The exhaustive gate test over every command; first call, acceptance, prepare and re-entry; the race with a change; the `setup_pending` golden | planned |
-| A5 | 7 | Read tests and the four repository goldens with `setup`; human `repo inspect` and `repo list` tests | planned |
-| A6 | 8 | A table-driven library test of `remote select`'s paths and refusals, each pull-request row leaving the local primary unchanged; today's remote selection tests unchanged | planned |
-| A7 | 9 | Design Part G's G1 to G7 in a library test with local repositories and a stubbed channel, for a merge commit, a squash and a fast-forward, including a crash after the fast-forward, and a comparison with a direct enable plus remote selection | planned |
-| A8 | 10 | A library test of completion for a merge commit, a squash and a fast-forward, by the gate and by a poll, and not before | planned |
-| A9 | 11 | A library test of cancel's outcomes and its crash; the non-SSH cancel of a recorded setup; the goldens | planned |
-| A10 | 4, 5, 8, 9, 11, 13 | The SSH case (design P15), decision 11: host stop and approval on the pending repository, `remote_primary_missing`, a published setup with the server's primary unchanged, a gated write, a squash on the server, activation, a change, `setup_pending` for close, cancel keeping a moved branch and deleting an unmoved one. Cycle 01's decision 6 (no push shown, in place of a refusing remote) meets the RFC's push evidence | planned |
-| A11 | 14 | The fast tier, the SSH case, and the `ssh_transport` and `remote_polling` targets, once at review-ready (decision 11) | planned |
-| A12 | Scope 10 | Desktop model and scheduler tests (design P14) | planned |
-| A13 | 12 | Design Part K's L1 to L14, each with its test (design P12) | planned |
-| A14 | Scope 11 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs`, `tests/cli/skills.rs`, `tests/cli/inventory.rs` and `tests/cli/collaboration_exits.rs` pass | planned |
+| A1 | 1-3 | A table-driven library test of the intended configuration and mode, the input refusals, the clone rule and the direct path with a remote; the input schema tests, with `repo create` refusing the new fields | met |
+| A2 | 4, 13 | Design Part D's required outcomes S1 to S12, each with its test; the commit builder's test that only the configuration changes | met |
+| A3 | 5 | A non-SSH test: a pull-request enable that stops at `no_selected_key` leaves a recorded setup that `repo inspect` and `repo list` show, `host observe` answers `no_selected_key`, and the same request continues; the SSH case's host stop and approval | met (`no_selected_key` is pinned in `tests/cli/repository.rs`: the `repository_enablement` harness cannot start Git's transport, design Baseline Fact 9's implementation note) |
+| A4 | 6 | The exhaustive gate test over every command; first call, acceptance, prepare and re-entry; the race with a change; the `setup_pending` golden | met |
+| A5 | 7 | Read tests and the four repository goldens with `setup`; human `repo inspect` and `repo list` tests | met |
+| A6 | 8 | A table-driven library test of `remote select`'s paths and refusals, each pull-request row leaving the local primary unchanged; today's remote selection tests unchanged | met |
+| A7 | 9 | Design Part G's G1 to G7 in a library test with local repositories and a stubbed channel, for a merge commit, a squash and a fast-forward, including a crash after the fast-forward, and a comparison with a direct enable plus remote selection | met (G5 also waits while the setup branch is checked out in a worktree) |
+| A8 | 10 | A library test of completion for a merge commit, a squash and a fast-forward, by the gate and by a poll, and not before | met |
+| A9 | 11 | A library test of cancel's outcomes and its crash; the non-SSH cancel of a recorded setup; the goldens | met |
+| A10 | 4, 5, 8, 9, 11, 13 | The SSH case (design P15), decision 11: host stop and approval on the pending repository, `remote_primary_missing`, a published setup with the server's primary unchanged, a gated write, a squash on the server, activation, a change, `setup_pending` for close, cancel keeping a moved branch and deleting an unmoved one. Cycle 01's decision 6 (no push shown, in place of a refusing remote) meets the RFC's push evidence | met: `a_setup_branch_is_published_activated_changed_and_cancelled`, 28 s |
+| A11 | 14 | The fast tier, the SSH case, and the `ssh_transport` and `remote_polling` targets, once at review-ready (decision 11) | met: fast tier 4914 s on `9ce90e25` with three scheduler load flakes that pass singly, the targets reading the last round's text rerun on `0e2a5e77` (296 s); SSH case 28 s, `ssh_transport` 141 s, `remote_polling` 240 s, and `document_promotion`'s four delete cases singly (R-G), 6 to 9 s each |
+| A12 | Scope 10 | Desktop model and scheduler tests (design P14) | met |
+| A13 | 12 | Design Part K's L1 to L14, each with its test (design P12) | met (L10 and L11 as amended in the design, ruling R-X) |
+| A14 | Scope 11 | The amended RFC sections and skills; `tests/cli/recovery_tables.rs`, `tests/cli/skills.rs`, `tests/cli/inventory.rs` and `tests/cli/collaboration_exits.rs` pass | met |
 
 ## Product-Owner Decisions (2026-11-25)
 
@@ -161,6 +162,13 @@ Each is the owner's decision or recorded as a ruling, and amended into the RFCs 
 - K-15: A local setup branch kept because it moved holds a configuration, so after a first-time setup is cancelled the unregistered root answers `repository_not_registered` instead of `repository_not_enabled` until the branch is deleted.
 - K-16: `repo list`, which reads the index only, can show a complete setup as pending until the next refresh; `repo inspect` reads the local primary.
 - K-17: An `index rebuild` running at the moment a first-time setup is ended or cancelled can register the root again with no configuration; `repo remove` clears it.
+- K-18: `poll once --retire-completed` on a repository whose first-time setup is pending polls the setup and retires nothing: it begins no retirement pass, since the setup's poll reports no items.
+- K-19: A setup record that vanishes (a cancel or `repo remove`) between a `--retire-completed` poll's admission and its run answers `recovery_required`, owed. The poll may leave its reserved remote row behind (not verified); `operation list` shows it, and its abandon clears it.
+- K-20: A crash inside activation's fast-forward, with the tree checked out and the primary's ref not yet moved, leaves the setup poll answering `waiting_for_checkout` until the person cleans the tree: the same hazard `repo sync` has today.
+- K-21: A crash in the window where a request's row is settled by deletion can leave a setup record naming a request that no longer exists; `repo setup-cancel` or `repo remove` clears it.
+- K-22: A local setup branch checked out in a worktree holds completion: the setup poll answers `waiting_for_checkout` until the person switches away from it. When the worktree inventory cannot be read, completion goes on and keeps the local setup branch, which the person deletes by hand.
+- K-23: A second crash right after an abandoned finish can leave one more pending row; `operation list` names it with its blocker, and its abandon clears it.
+- K-24: The desktop reads a repository's setup with a whole `repo inspect` read on every scheduler read and every automatic poll. A lighter read is follow-on work.
 
 ## Open Questions
 
