@@ -393,6 +393,13 @@ impl World {
             .unwrap();
     }
 
+    /// A registration of a linked worktree with none of its files: the
+    /// worktree inventory cannot be read, so whether the setup branch is
+    /// checked out cannot be told.
+    pub(crate) fn leave_an_unreadable_worktree_registration(&self) {
+        std::fs::create_dir_all(self.root.join(".git/worktrees/broken")).unwrap();
+    }
+
     /// The linked worktree is gone: its registration is removed, as a
     /// prune does for one whose directory was deleted.
     pub(crate) fn drop_the_linked_worktree(&self) {

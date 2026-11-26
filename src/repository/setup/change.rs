@@ -201,7 +201,14 @@ impl RepositoryService {
                 drop(lease);
                 Ok(SetupOutcome::InTheWay { blocker })
             }
-            Stage::Found(Found::Recorded | Found::Own | Found::Gone) => {
+            Stage::Found(Found::Gone) => {
+                // The request's setup ended meanwhile: no record settles this
+                // call's row now, so the call does.
+                self.complete_lifecycle(&root, operation, record)?;
+                drop(lease);
+                Ok(outcome_of(publish(&root, request.request_id)))
+            }
+            Stage::Found(Found::Recorded | Found::Own) => {
                 // The lease is not held across a connection.
                 drop(lease);
                 Ok(outcome_of(publish(&root, request.request_id)))

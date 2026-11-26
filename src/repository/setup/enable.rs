@@ -189,6 +189,14 @@ impl RepositoryService {
             drop(lease);
             return Ok(SetupOutcome::AnotherSetup);
         }
+        // The request's setup ended meanwhile: this call's row is settled by
+        // no record now, so the call settles it. Nothing is written again for
+        // a finished setup; publishing answers what became of the request.
+        if let Found::Gone = found {
+            self.complete_lifecycle(&root, operation, record)?;
+            drop(lease);
+            return Ok(outcome_of(publish(&root, setup.request_id)));
+        }
         let written = self.write_what_is_left(&request, &repository, &root, &found, &setup);
         drop(lease);
         if let Err(error) = written {

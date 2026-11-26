@@ -475,7 +475,14 @@ impl<G: Fn(git2::Error) -> RepositoryError> Polling<'_, G> {
             Err(error) if error.code() == git2::ErrorCode::NotFound => None,
             Err(error) => return Err((self.git)(error).into()),
         };
-        let Some(local) = local.filter(|_| on_primary && clean) else {
+        // The setup's branch checked out in any worktree: the finish would
+        // keep it and stop, so the poll waits before it moves the primary
+        // (the person switches away from the branch).
+        let setup_branch = format!("refs/heads/manyhands/setup/{}", record.setup_id);
+        let on_setup_branch =
+            crate::repository::cleanup::branch_is_checked_out(repository, &setup_branch)
+                == Ok(true);
+        let Some(local) = local.filter(|_| on_primary && clean && !on_setup_branch) else {
             return Ok(self.answered(SetupPollOutcome::WaitingForCheckout));
         };
         // G6: the local primary has commits the base lacks.

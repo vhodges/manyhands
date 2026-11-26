@@ -1354,6 +1354,53 @@ fn l14_an_unreadable_record_is_owed_not_the_direct_path() {
     w.assert_one_setup(&setup, "L14");
 }
 
+/// A setup published whose record cannot be read is owed, and says a local
+/// change was made: the request is partial (exit 4), as the other owed
+/// answers after the recording are, never a plain refusal.
+fn l16_a_published_setup_with_an_unreadable_record_is_owed_and_partial() {
+    use crate::repository::setup::enable::SetupOutcome;
+
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    let stopped = Scripted::new(vec![Step::Fail(|| SetupError::Busy)]);
+    assert_eq!(
+        w.run(R1, Some(confirmation), None, &stopped).code,
+        ResultCode::Busy
+    );
+    let record = w.record(R1);
+    let accepted = Accepted::of_record(&record, record.attempt).unwrap();
+    let published = published(&w.service, &w.root);
+    {
+        let db = open_registry(&w.service.registry_path, &mut |_| {}).unwrap();
+        db.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE repository_setups SET kind = 'unreadable';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    }
+
+    let ran = super::setup_ran(
+        &w.service,
+        &accepted,
+        &w.root,
+        SetupOutcome::Published(published),
+    );
+
+    assert_eq!(ran.answer.code, ResultCode::RecoveryRequired);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(
+        Outcome::of_mutation(
+            false,
+            ran.answer.code,
+            &ran.answer.effects,
+            ran.answer.local_change
+        ),
+        Outcome::Partial
+    );
+    assert_eq!(w.record(R1).state, RequestState::Accepted, "owed");
+}
+
 /// Design Part K for `repo enable` in pull-request mode: the standing of
 /// each answer, the route a re-entered request takes, what it answers and
 /// that no second registration, record or setup branch is made.
@@ -1374,6 +1421,7 @@ fn the_enable_request_lifecycle_of_design_part_k() {
     l13_resume_names_the_original_request();
     l14_an_unreadable_record_is_owed_not_the_direct_path();
     l15_an_identity_missing_after_another_call_recorded_leaves_the_request_owed();
+    l16_a_published_setup_with_an_unreadable_record_is_owed_and_partial();
 }
 
 /// Never a second setup (L11), for `repo enable`: a call that is stale,
@@ -1462,5 +1510,10 @@ fn stale_first_enable(own_row_gone: bool) {
         "no second record"
     );
     assert_eq!(w.count("SELECT COUNT(*) FROM repositories"), 0);
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0,
+        "the stale call's row is settled, not left a pending blocker"
+    );
     w.assert_local_primary_untouched("a stale first call");
 }

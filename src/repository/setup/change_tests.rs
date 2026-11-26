@@ -1154,6 +1154,11 @@ fn a_stale_first_call_never_records_a_second_change() {
         0,
         "no second record, the own row gone"
     );
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0,
+        "the stale call's fresh row is settled, not left a pending blocker"
+    );
 
     // A call told the setup is recorded, with the record gone: the stored
     // envelope, and not an operation mismatch.
@@ -1172,4 +1177,9 @@ fn a_stale_first_call_never_records_a_second_change() {
         )
         .unwrap();
     assert!(ended_with_the_stored_envelope(&recorded), "{recorded:?}");
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0,
+        "a recorded call that finds the record gone settles its row too"
+    );
 }

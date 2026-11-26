@@ -152,14 +152,17 @@ fn finish_record(
     let branch = format!("refs/heads/manyhands/setup/{}", record.setup_id);
     match repository.find_reference(&branch) {
         Ok(mut reference) if reference.target() == record.commit_oid => {
-            // `Reference::delete` does not look at other worktrees: a branch
-            // checked out in any of them (or one whose checkouts cannot all
-            // be told) is not deleted from under it. The finish stops, as
-            // when HEAD is off the primary, and the next look finishes it.
-            if crate::repository::cleanup::branch_is_checked_out(repository, &branch) != Ok(false) {
-                return Ok(false);
+            // `Reference::delete` does not look at other worktrees. A branch
+            // checked out in one is not deleted from under it: the finish
+            // stops, as when HEAD is off the primary, and the next look
+            // finishes it. Worktree evidence that cannot be read stalls
+            // nothing: the branch is kept, as a branch that moved is, and the
+            // finish completes (the person's checkout is never touched).
+            match crate::repository::cleanup::branch_is_checked_out(repository, &branch) {
+                Ok(true) => return Ok(false),
+                Ok(false) => reference.delete().map_err(git)?,
+                Err(()) => {}
             }
-            reference.delete().map_err(git)?;
         }
         Ok(_) => {}
         Err(error) if error.code() == git2::ErrorCode::NotFound => {}

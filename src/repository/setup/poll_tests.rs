@@ -193,6 +193,17 @@ fn rows() -> Vec<Row> {
             outcome: O::WaitingForCheckout,
             fetches: 1,
         },
+        Row {
+            name: "G5 merged, and the setup branch is checked out in a linked worktree",
+            kind: Enable,
+            published: true,
+            arrange: |w| {
+                done(w.squash(&merged(w)));
+                w.check_the_setup_branch_out_in_a_linked_worktree();
+            },
+            outcome: O::WaitingForCheckout,
+            fetches: 1,
+        },
         // G6
         Row {
             name: "G6 merged, and the local primary has a commit the base lacks",

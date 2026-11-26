@@ -221,6 +221,32 @@ fn a_setup_branch_checked_out_in_a_linked_worktree_stops_the_finish() {
     assert_eq!(world.local_ref(&world.branch_ref()), None);
 }
 
+/// Worktree evidence that cannot be read is no checkout found: the finish
+/// completes and keeps the setup branch (as for one that moved), and does not
+/// stall for good with the setup never reconciled.
+#[test]
+fn unreadable_worktree_evidence_keeps_the_setup_branch_and_completes() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let at = world.local_ref(&world.branch_ref());
+    assert!(at.is_some());
+    world.leave_an_unreadable_worktree_registration();
+
+    assert!(finish_without_waiting(&world), "the evidence is unreadable");
+
+    assert!(world.record().is_none(), "completed");
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(
+        world.local_ref(&world.branch_ref()),
+        at,
+        "the branch is kept"
+    );
+    assert_eq!(world.local_ref(&world.base_ref()), None);
+    assert_eq!(world.local_primary(), tip, "the primary is not moved");
+}
+
 /// Reconciliation stopped by an operation in the way: the record stays and
 /// the next look finishes it. Nothing is half done: the request is not
 /// finished.

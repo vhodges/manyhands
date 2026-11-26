@@ -1931,9 +1931,14 @@ pub(super) fn setup_ran(
         SetupOutcome::Published(published) => {
             let Some(data) = setup_data::of(service, root, Some(&published)) else {
                 // Published, and its record cannot be read: the same
-                // request answers it once it can.
+                // request answers it once it can. The setup is recorded and
+                // pushed, a durable change no effect shows: partial, as the
+                // other owed answers after the recording are.
                 return Ran {
-                    answer: Answer::stopped(ResultCode::RecoveryRequired),
+                    answer: Answer {
+                        local_change: true,
+                        ..Answer::stopped(ResultCode::RecoveryRequired)
+                    },
                     standing: Standing::Owed,
                 };
             };
