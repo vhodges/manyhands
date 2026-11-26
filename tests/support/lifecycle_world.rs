@@ -384,6 +384,7 @@ pub fn golden_at(
         ("/data/checkpoint_oid", "<checkpoint>"),
         ("/data/integration_oid", "<integration>"),
         ("/data/publication_oid", "<publication>"),
+        ("/data/closure/closed_at", "<closed-at>"),
         ("/effects/commit_oid", "<integration>"),
     ] {
         if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {

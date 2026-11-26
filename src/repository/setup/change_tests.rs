@@ -569,6 +569,26 @@ impl World {
             .unwrap();
     }
 
+    /// A branch record of a pull-request close, at `step`: an unfinished one
+    /// is in a setup's way as any parent of a closure is.
+    pub(crate) fn branch_parent(&self, action: &str, step: &str) {
+        self.db()
+            .execute(
+                "INSERT INTO ticket_closures
+                   (repository_id, operation_id, item_id, expectation, step, updated_at,
+                    closure_kind, integration_mode, action)
+                 VALUES (?1, ?2, ?3, zeroblob(32), ?4, 0, 'record', 'pull_request', ?5)",
+                params![
+                    self.id(),
+                    OperationId::new().to_string(),
+                    crate::canonical::ItemId::generate().to_string(),
+                    step,
+                    action,
+                ],
+            )
+            .unwrap();
+    }
+
     pub(crate) fn row(&self) -> Option<(String, Option<String>)> {
         self.db()
             .query_row(
@@ -775,8 +795,18 @@ fn the_pull_request_path_records_a_change_and_never_commits() {
         ("an unfinished promotion", |w| {
             w.parent("document_promotions", "integrating");
         }),
+        // A branch record is a `ticket_closures` row, whatever its action.
+        ("an unfinished withdraw", |w| {
+            w.branch_parent("withdraw", "confirmed")
+        }),
+        ("an unfinished new branch", |w| {
+            w.branch_parent("new_branch", "confirmed")
+        }),
         ("an accepted close", |w| {
             w.accept(request(R3), "ticket close")
+        }),
+        ("an accepted withdraw", |w| {
+            w.accept(request(R3), "ticket withdraw-closure")
         }),
         ("an accepted promotion", |w| {
             w.accept(request(R3), "document promote")

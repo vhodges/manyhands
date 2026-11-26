@@ -399,6 +399,7 @@ fn poll_once_reads_a_missing_primary_tracking_ref() {
             LifecycleBlocker::ContextMissing,
             LifecycleBlocker::PrimaryMissing,
         ],
+        vec![LifecycleBlocker::RemoteContextUnmaterialized],
     ] {
         assert_eq!(ticket_prepare(blockers), [PollOnce, Inspect]);
     }
@@ -660,6 +661,175 @@ fn an_unknown_remote_context_polls_once() {
         ]),
         [PollOnce, SharePrimary, Inspect]
     );
+}
+
+/// A pull-request close's prepare that finds a remote ticket branch neither
+/// primary holds (design F5) has the poll for its way out, as an unknown
+/// published context does, and `repo sync` beside it when primary is ahead.
+/// It pins what the blocker's place in the tracking set already gives.
+#[test]
+fn a_branch_record_s_unmaterialized_context_polls_once() {
+    use LifecycleBlocker::{ContextMissing, PrimaryAheadOfRemote, RemoteContextUnmaterialized};
+    for (blockers, expected) in [
+        (vec![RemoteContextUnmaterialized], vec![PollOnce, Inspect]),
+        (
+            vec![RemoteContextUnmaterialized, ContextMissing],
+            vec![PollOnce, Inspect],
+        ),
+        (
+            vec![RemoteContextUnmaterialized, PrimaryAheadOfRemote],
+            vec![PollOnce, SharePrimary, Inspect],
+        ),
+    ] {
+        assert_eq!(ticket_prepare(blockers.clone()), expected, "{blockers:?}");
+    }
+}
+
+/// What a branch record's data gives as its way out: a deleted branch's
+/// answer is a finished record's, so the way on is a new request, not the same
+/// one; a withdraw's first republishes the branch. Every other answer of its
+/// own data is the end of it. A child that stopped on a conflict is the item
+/// sync's data, routed to the conflict verbs for a close.
+#[test]
+fn a_branch_record_names_its_way_out_from_its_data() {
+    use crate::repository::{
+        PullRequestClosureAction as Action, PullRequestClosureDto, PullRequestClosureMutationDto,
+        PullRequestClosureMutationType, PullRequestClosureRecording,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
+    };
+    let branch =
+        |command: &str, code, action, recovery: Vec<RecoveryAction>| -> Envelope<MutationDataDto> {
+            let mut envelope = answer(command, code, data(ItemDtoKind::Ticket, vec![]), recovery);
+            envelope.data = Some(MutationDataDto::PullRequestClosure(Box::new(
+                PullRequestClosureMutationDto {
+                    r#type: PullRequestClosureMutationType::PullRequestClosure,
+                    action,
+                    closure: PullRequestClosureDto {
+                        recording: PullRequestClosureRecording::Nothing,
+                        closed_at: None,
+                    },
+                    checkpoint_oid: None,
+                    publication: None,
+                    retired_context: None,
+                    pull_request: None,
+                    blockers: Vec::new(),
+                },
+            )));
+            envelope
+        };
+    // A withdraw that wrote its commit (W5) has it on the local branch: only
+    // the republish is left, and the commit goes with it. One that wrote
+    // nothing asks for a new request after it. A close, or a new branch, asks
+    // for one at once.
+    for (action, wrote, expected) in [
+        (Action::Close, false, vec![PrepareAgain, Inspect]),
+        (Action::NewBranch, false, vec![PrepareAgain, Inspect]),
+        (
+            Action::Withdraw,
+            true,
+            vec![Republish { item_id: item() }, Inspect],
+        ),
+        (
+            Action::Withdraw,
+            false,
+            vec![Republish { item_id: item() }, PrepareAgain, Inspect],
+        ),
+    ] {
+        let mut envelope = branch(
+            "ticket close",
+            ResultCode::RemoteBranchDeleted,
+            action,
+            vec![inspect()],
+        );
+        if let Some(MutationDataDto::PullRequestClosure(data)) = &mut envelope.data {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            expected,
+            "{action:?} wrote {wrote}"
+        );
+    }
+    for code in [
+        ResultCode::Ok,
+        ResultCode::AlreadyClosing,
+        ResultCode::AlreadyApplied,
+        ResultCode::TicketClosed,
+    ] {
+        let envelope = branch("ticket close", code, Action::Close, vec![inspect()]);
+        assert_eq!(lifecycle_way_out(&envelope), [Inspect], "{code:?}");
+    }
+    // No item to republish: a withdraw has no route of its own.
+    let mut nameless = branch(
+        "ticket close",
+        ResultCode::RemoteBranchDeleted,
+        Action::Withdraw,
+        vec![],
+    );
+    nameless.scope.item_id = None;
+    assert!(lifecycle_way_out(&nameless).is_empty());
+
+    // R-35: a record whose publication remote changed or went completes with
+    // its commit on the local branch, and `item sync` publishes it once the
+    // remote is set. Any such record has the way out, with a commit or with
+    // a closure it only kept.
+    for (command, action, wrote) in [
+        ("ticket close", Action::Close, true),
+        ("ticket close", Action::Close, false),
+        ("ticket close", Action::NewBranch, true),
+        ("ticket withdraw-closure", Action::Withdraw, true),
+        ("ticket withdraw-closure", Action::Withdraw, false),
+    ] {
+        let mut envelope = branch(
+            command,
+            ResultCode::RecoveryRequired,
+            action,
+            vec![inspect()],
+        );
+        if let Some(MutationDataDto::PullRequestClosure(data)) = &mut envelope.data {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            [SyncItem { item_id: item() }, Inspect],
+            "{command} {action:?} wrote {wrote}"
+        );
+    }
+
+    // A close's child that stopped on a conflict.
+    let conflicted = |command: &str, recovery| {
+        let mut envelope = answer(
+            command,
+            ResultCode::RecoveryRequired,
+            data(ItemDtoKind::Ticket, vec![]),
+            recovery,
+        );
+        envelope.data = Some(MutationDataDto::SynchronizationConflict(
+            SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: crate::repository::ConflictNextDto {
+                    operation_id: OTHER_OPERATION.into(),
+                    next_action: crate::repository::ConflictNextAction::Resolve,
+                },
+            },
+        ));
+        envelope
+    };
+    for command in ["ticket close", "ticket withdraw-closure"] {
+        assert_eq!(
+            lifecycle_way_out(&conflicted(command, vec![retry(), inspect()])),
+            [
+                ResolveChildConflict {
+                    operation_id: OPERATION.into()
+                },
+                SendAgain,
+                Inspect
+            ],
+            "{command}"
+        );
+    }
+    // The same data of any other command is none of this module's.
+    assert!(lifecycle_way_out(&conflicted("item sync", vec![retry(), inspect()])).is_empty());
 }
 
 /// Unknown from evidence is the owner's repair, which a poll can't settle;

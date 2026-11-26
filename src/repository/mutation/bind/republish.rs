@@ -40,7 +40,9 @@ use super::{
         super::{
             AuthoringKind, ConfigurationInspection, ItemDtoKind, OperationFamily,
             RepositoryOperation, RepositoryService, SynchronizationError, SynchronizationTarget,
-            authoring_kind_segment, read_configuration_for,
+            authoring_kind_segment,
+            closure::record::hold_refusal,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow},
             remote::sync::{DeletionEvidence, RepublishConsent, RepublishEvidence},
             ticket_guard::require_ticket_open,
@@ -199,7 +201,24 @@ impl ItemRepublishBinding {
         let git = git2::Repository::open(&root)
             .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
         if self.kind == AuthoringKind::Ticket {
-            require_ticket_open(&git, &configuration.primary_branch, &self.id).map_err(refused)?;
+            require_ticket_open(
+                &git,
+                &configuration.primary_branch,
+                &self.id,
+                configuration.integration(),
+            )
+            .map_err(refused)?;
+            // A branch record that holds the ticket (R-17) refuses, naming
+            // its request; the domain's reservation of the context is the
+            // backstop, as `busy`.
+            if let Some(holder) = service
+                .branch_hold_of(&root, &self.id, RepositoryOperation::RepositorySnapshot)
+                .map_err(refused)?
+            {
+                let error = hold_refusal(holder);
+                let blocker = error.blocker().cloned();
+                return Err(refused(error).naming(service, &root, blocker.as_ref()));
+            }
         }
         let branch_ref = context_names(&root, &self.kind, &self.id.to_string()).branch_ref;
         let local = match git.refname_to_id(&branch_ref) {

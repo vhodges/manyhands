@@ -154,6 +154,11 @@ fn resource_and_command_help_have_scoped_goldens_without_data() {
             "help_ticket_close",
             Some("ticket close"),
         ),
+        (
+            vec!["ticket", "withdraw-closure", "--help", "--json"],
+            "help_ticket_withdraw_closure",
+            Some("ticket withdraw-closure"),
+        ),
     ] {
         let output = run(&args, &env);
         assert_eq!(output.status, 0);

@@ -90,6 +90,7 @@ const NO_INPUT: &[&str] = &[
     "repo setup-cancel",
     "document promote",
     "ticket close",
+    "ticket withdraw-closure",
     "poll once",
     "poll pause",
     "poll resume",
@@ -215,6 +216,7 @@ const DATA: &[(&str, &[&str])] = &[
             "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
+            "pull_request_link",
         ],
     ),
     (
@@ -254,6 +256,7 @@ const DATA: &[(&str, &[&str])] = &[
             "primary_local_commits",
             "local_context_sync_mutation",
             "lifecycle_mutation",
+            "pull_request_closure_mutation",
             "context_retirement_mutation",
         ],
     ),
@@ -269,12 +272,33 @@ const DATA: &[(&str, &[&str])] = &[
             "lifecycle_mutation",
         ],
     ),
+    // A pull-request close's preview, its blocked prepares and its answers
+    // are the lifecycle's or their own; a child of the record that stops
+    // answers as `item sync` does, and a busy stop is named by the blocker.
+    // The record's own answers are `pull_request_closure_mutation`.
     (
         "ticket close",
         &[
             "lifecycle_preview",
+            "pull_request_closure_preview",
             "lifecycle_blocked",
             "lifecycle_mutation",
+            "pull_request_closure_mutation",
+            "synchronization_mutation",
+            "synchronization_conflict_mutation",
+            "blocked",
+        ],
+    ),
+    (
+        "ticket withdraw-closure",
+        &[
+            "pull_request_closure_preview",
+            "lifecycle_blocked",
+            "lifecycle_mutation",
+            "pull_request_closure_mutation",
+            "synchronization_mutation",
+            "synchronization_conflict_mutation",
+            "blocked",
         ],
     ),
     // A first call's host stop carries the synchronization's host data.
@@ -419,7 +443,7 @@ fn every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt() {
     }
     let expected = set(bound.difference(&set(EXEMPT.iter().copied())).copied());
     assert_eq!(mutating, expected);
-    assert_eq!(mutating.len(), 45);
+    assert_eq!(mutating.len(), 46);
 }
 
 #[test]
@@ -437,7 +461,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 82);
+    assert_eq!(catalogued.len(), 83);
 }
 
 #[test]

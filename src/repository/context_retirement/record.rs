@@ -3,7 +3,7 @@
 //! from today's Git state. No canonical content is stored here.
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use super::super::{RepositoryError, remote::state::recovery_required};
+use super::super::{RepositoryError, pull_request_links, remote::state::recovery_required};
 
 #[path = "consumer_migration.rs"]
 mod consumer_migration;
@@ -2007,8 +2007,8 @@ pub(in super::super) fn finalize_index(
     }
     // Only implemented standalone handoffs. Preserving/source/batch authority
     // remains closed; refresh never manufactures an executor or repeats effects.
-    let handoff: Option<(String,String,String)> = tx.query_row("SELECT absence_basis,branch_removal,worktree_removal FROM context_retirement_records c WHERE operation_ulid=?1 AND repository_id=?2 AND batch_operation_ulid IS NULL AND ((initial_resources='absent' AND absence_basis='initial' AND worktree_removal='none') OR (initial_resources='branch_only' AND absence_basis='owned_intent' AND worktree_removal='none') OR (initial_resources='present' AND instance_verified=1 AND absence_basis='owned_intent' AND worktree_removal='observed') OR (absence_basis='owned_intent' AND EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| recovery_required())?;
-    let Some((basis, branch, worktree)) = handoff else {
+    let handoff: Option<(String,String,String,String,String)> = tx.query_row("SELECT absence_basis,branch_removal,worktree_removal,kind,item_id FROM context_retirement_records c WHERE operation_ulid=?1 AND repository_id=?2 AND batch_operation_ulid IS NULL AND ((initial_resources='absent' AND absence_basis='initial' AND worktree_removal='none') OR (initial_resources='branch_only' AND absence_basis='owned_intent' AND worktree_removal='none') OR (initial_resources='present' AND instance_verified=1 AND absence_basis='owned_intent' AND worktree_removal='observed') OR (absence_basis='owned_intent' AND EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|_| recovery_required())?;
+    let Some((basis, branch, worktree, kind, item)) = handoff else {
         return Err(recovery_required());
     };
     let result = if basis == "initial" {
@@ -2041,6 +2041,10 @@ pub(in super::super) fn finalize_index(
         )
         .map_err(RepositoryError::sqlite)?;
     release_single_consumer(tx, &operation, epoch)?;
+    // The retired item's link goes with it; the preserving branch above keeps
+    // the context, and so the link.
+    pull_request_links::delete_link(tx, repository_id, &kind, &item)
+        .map_err(RepositoryError::sqlite)?;
     // The validated retirement finalizer owns BOTH sides of completion. Do not
     // expose a half-terminal companion to the generic index transition guard.
     if tx.execute("UPDATE operation_records SET state='completed',context_path=NULL,observed_at=?3 WHERE id=?1 AND state='indexing' AND index_owner_epoch=?2",params![owner.record_id,owner.epoch,time::OffsetDateTime::now_utc().unix_timestamp()]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}

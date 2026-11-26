@@ -1283,6 +1283,11 @@ const C5_REASONS: &[Row] = &[
         "Needs an index hand-off that fails after the work; the CLI child takes no failure point, so tests/cli/local_sync.rs discovery_pending_is_finished_by_the_same_request stages the answer in its own process and the binary's same request finishes it; the library's made-ready tables pin IndexPending.",
     ),
     reason(
+        "already_closing",
+        0,
+        "A pull-request close answers it after its context child has synchronized a branch that already holds a closure, which needs a reachable publication remote, and no CLI fixture's remote is one; the library tests and the SSH case a_pull_request_close_publishes_only_the_ticket_branch (tests/mutation_remote/c5_lifecycle.rs) reach it through the mutation boundary and write the golden mutation_v1/ticket_close_already_closing.json.",
+    ),
+    reason(
         "command_unavailable",
         2,
         "No verb stays planned once poll once is bound (R-8, E-21); startup_tests.rs pins its answer on a test-only planned spec.",
@@ -1298,9 +1303,9 @@ const C5_REASONS: &[Row] = &[
 #[test]
 fn the_c5_table_and_reasons_account_for_every_code_of_the_audit() {
     let library = c5_union();
-    assert_eq!(library.len(), 47);
+    assert_eq!(library.len(), 48);
     let expected = set(library.iter().copied().chain(C5_CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 50);
+    assert_eq!(expected.len(), 51);
     let covered = set(C5_ROWS.iter().map(|row| row.code));
     let reasons = set(C5_REASONS.iter().map(|row| row.code));
     assert_eq!(covered.len(), C5_ROWS.len(), "a code appears twice");

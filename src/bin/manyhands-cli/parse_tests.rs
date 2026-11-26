@@ -405,7 +405,7 @@ fn closure_and_direction_use_value_lists_and_defaults() {
             .unwrap(),
         "down"
     );
-    for closure in ["open", "closed", "all"] {
+    for closure in ["open", "closed", "closing", "all"] {
         assert_eq!(
             run(&["ticket", "list", "--repo", "r", "--closure", closure])
                 .get_one::<String>("closure")

@@ -359,7 +359,9 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
             | MutationDataDto::Host(_)
             | MutationDataDto::Context(_)
             | MutationDataDto::ContextRetirement(_)
-            | MutationDataDto::Lifecycle(_),
+            | MutationDataDto::Lifecycle(_)
+            | MutationDataDto::PullRequestClosure(_)
+            | MutationDataDto::PullRequestLink(_),
         )
         | None => panic!("the envelope carries no repair data"),
     }

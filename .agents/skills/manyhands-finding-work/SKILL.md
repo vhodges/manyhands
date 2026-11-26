@@ -41,9 +41,10 @@ An item in a list or a show has these fields. A list leaves `body`, `source` and
 | `path` | Repository-relative path. A ticket is `.manyhands/tickets/<id>/ticket.md`. |
 | `title`, `type`, `status`, `project`, `team` | The ticket's fields. `type` and `status` are free text the person chooses. A document has only `title`; the others are null. |
 | `slug` | A ticket's short code, such as `sc-ch8gg`. Null on a document. |
-| `closure` | A ticket: `state` (`open` or `closed`), `closed_at`, `closed_by`. Null on a document. |
-| `parent`, `deps` | A ticket's parent ID, and `deps`: a list of `{id, state}` (`open`, `closed` or `unresolved`). |
-| `readiness` | A ticket: `state` (`ready`, `blocked` or `closed`) and `reasons`. |
+| `closure` | A ticket: `state` (`open`, `closing` or `closed`), `closed_at`, `closed_by` (set when the state is `closing` or `closed`), and `publication`. `closing` is a closure that the ticket's own branch holds and the main branch does not (a pull-request close, or an interrupted direct one): it counts as open for the ticket's dependents. `publication` is `pending` or `published` for a closing ticket in a pull-request repository in `ticket show`, and null in a list, in a direct repository and for any other state. Null on a document. |
+| `parent`, `deps` | A ticket's parent ID, and `deps`: a list of `{id, state}` (`open`, `closing`, `closed` or `unresolved`; the parent's `state` reads the same way). |
+| `pull_request` | A ticket: where its pull request is opened, `{source, target, forge, url}` with `url` possibly null, once this clone gave a link (a pull-request close, withdraw or `item sync` answer). Filled by `ticket show` and null in every list, for a document and for a ticket with none. |
+| `readiness` | A ticket: `state` (`ready`, `blocked` or `closed`) and `reasons`; a dependency that is closing gives the reason `closing_dependency`. |
 | `context` | Where this copy lives: `kind` `active` (the item's own branch and worktree) or `primary` (the main branch), plus `branch`, `worktree`, `head_oid`. |
 | `problems` | Nonconforming-file findings with a `code`, `path` and `guidance`. Empty for a healthy item. |
 | `changed_at`, `change_source` | When it last changed, and `git_commit` or `uncommitted` (an edit not yet committed). |
@@ -58,16 +59,16 @@ Open and closed come from `closure.state`, never from the `status` text: a ticke
 
 | Command | What it answers |
 | --- | --- |
-| `ticket list` | Every ticket, open and closed, unless filtered. Filters, all exact matches: `--status`, `--type`, `--project`, `--slug`, `--closure open\|closed\|all`, and `--ready` or `--blocked` (the two together are `usage_error`). An unknown value matches nothing: `--status nope` is an empty list with exit 0. |
-| `ticket ready` | Open tickets whose every dependency is closed. Takes `--status`, `--type`, `--project`. |
-| `ticket blocked` | Open tickets that are not ready, each with `readiness.reasons`: `{code: open_dependency, ids: [...], complete: true}` per open dependency. The relationships RFC names more reasons (an unresolved dependency ID, membership of a cycle); they were not provoked here. |
+| `ticket list` | Every ticket, open and closed, unless filtered. Filters, all exact matches: `--status`, `--type`, `--project`, `--slug`, `--closure open\|closed\|closing\|all`, and `--ready` or `--blocked` (the two together are `usage_error`). An unknown value matches nothing: `--status nope` is an empty list with exit 0. |
+| `ticket ready` | Open tickets whose every dependency is closed. Takes `--status`, `--type`, `--project`. It never lists a closing ticket itself, so use `ticket list --closure closing` to find one. |
+| `ticket blocked` | Open tickets that are not ready, each with `readiness.reasons`: `{code: open_dependency, ids: [...], complete: true}` per open dependency, and `closing_dependency` (the same shape) for a dependency that is closing: it stays blocked until the main branch holds that closure. A closing ticket itself is not listed. The relationships RFC names more reasons (an unresolved dependency ID, membership of a cycle); they were not provoked here. |
 | `ticket deps --id <ID>` | The tickets this one depends on (`--direction down`, the default), the tickets that depend on it (`up`) or both; `--depth <n>` limits it. `data.dependencies` and `data.dependents` are flat lists with `id`, `state`, `slug`, `title` and `depth` (1 is a direct dependency). A ticket reached twice is marked `repeated`. |
 | `ticket children --id <ID>` | Direct children (a ticket's `parent` is this ID). Empty when none. |
 | `ticket cycles` | Every dependency or parent cycle, open or closed. Empty `items` when there are none. |
-| `ticket plan` | Open tickets in `data.batches` (`batch` 1, 2, ...): everything in a batch can be worked in parallel (in different worktrees; writers on different items do not block each other on a build with the concurrent-writers change, and an older build wants one write at a time: [CLI conventions](../manyhands-overview/references/cli-conventions.md), "Other writers in the repository"), and its open dependencies are in earlier batches. `data.unplannable` holds tickets behind a cycle or an unresolved dependency. Takes the list filters. |
-| `ticket critical-path` | The longest chain of open, plannable tickets by dependency, in order, as `data.items`. |
+| `ticket plan` | Open tickets in `data.batches` (`batch` 1, 2, ...): everything in a batch can be worked in parallel (in different worktrees; writers on different items do not block each other on a build with the concurrent-writers change, and an older build wants one write at a time: [CLI conventions](../manyhands-overview/references/cli-conventions.md), "Other writers in the repository"), and its open dependencies are in earlier batches. `data.unplannable` holds tickets behind a cycle or an unresolved dependency. Takes the list filters. A closing ticket counts as open when the batches are numbered and is then left out of them, so a batch keeps the number it has in the plan of every ticket and the numbers listed can skip. |
+| `ticket critical-path` | The longest chain of open, plannable tickets by dependency, in order, as `data.items`. A closing ticket has no length and is not on the chain. |
 | `ticket find --slug <code>` | Tickets whose short code matches, ignoring case. No match is an empty list, not an error. `ticket list --slug` filters the same way. |
-| `ticket show --id <ID>` | One ticket, with `body`, `source` and `observation`. `--path` with `--context` names it by path instead. |
+| `ticket show --id <ID>` | One ticket, with `body`, `source` and `observation`, and the only read that fills `closure.publication` and `pull_request`. `--path` with `--context` names it by path instead. Human output adds `Publication: pending` or `Publication: published` and a pull request line when it has them. |
 | `ticket check --id <ID> --deps <ULID,...> --parent <ULID>` | A read-only trial of a relationship change before you save it (no input file, no request ID). Give `--deps` once, comma separated, and at least one of `--deps` or `--parent`: it checks exactly what you give, so give the ones you are keeping too. The answer is a success; read `data.rejection`: null means the change would be accepted, otherwise `{code, ids}`, for example `relationship_cycle` listing the tickets on the cycle. |
 
 ```sh
@@ -78,7 +79,7 @@ manyhands-cli --json ticket find --repo <repo-root> --slug <short-code>
 manyhands-cli --json ticket check --repo <repo-root> --id <ITEM_ID> --deps <ULID>,<ULID>
 ```
 
-Ready and blocked come from the dependencies, not from status words: a ticket is ready when it is open and every dependency is closed, and closing a ticket makes its direct dependents ready. Run `ticket ready` for the live answer. These views read the index, so check that it is current first.
+Ready and blocked come from the dependencies, not from status words: a ticket is ready when it is open and every dependency is closed, and closing a ticket makes its direct dependents ready. In a pull-request repository a ticket is closing, not closed, from the close until the pull request merges and a `poll once` brings the main branch forward, so its dependents stay blocked with `closing_dependency` until then. (This is for tickets: `document promote` in a pull-request repository still pushes the main branch until Wave 06's Cycle 04.) Run `ticket ready` for the live answer. These views read the index, so check that it is current first.
 
 ## Documents and folders
 
