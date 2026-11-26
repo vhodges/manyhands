@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Cycle document: [Wave 06 Cycle 02](../Cycles/wave-06-cycle-02-pull-request-onboarding.md). Ticket: vh-c97se (`01M84H84WQYE8J2WJWEDGJ45W4`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md), section "Onboarding and setting changes", and the Cycle document's Product-Owner Decisions.
 
-Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, Cycle decisions 17 and 18), amended at review-ready the same day where the build departed from it: the `published_oid` check, the digest's refactor, L10 and L11, Baseline Fact 9's harness note, activation's attempt clearing, the scheduler's read, what stops the finish, and G5. The execution ledger, `docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-execution.md`, gives the ruling behind each. Author: Claude.
+Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, Cycle decisions 17 and 18). Implemented, reviewed and closed 2026-11-26: the owner approved the review, and `ticket close` merged vh-c97se into main at `c56b6ef1`. Amended at review-ready the same day where the build departed from it: the `published_oid` check, the digest's refactor, L10 and L11, Baseline Fact 9's harness note, activation's attempt clearing, the scheduler's read, what stops the finish, and G5. The execution ledger, `docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-execution.md`, gives the ruling behind each. Author: Claude.
 
 ## Intent And Approval Boundary
 
