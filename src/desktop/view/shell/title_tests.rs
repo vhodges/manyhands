@@ -17,6 +17,7 @@ use crate::desktop::{
 fn entry(root: &str) -> RepositoryEntry {
     RepositoryEntry {
         summary: RepositorySummaryDto {
+            setup: None,
             root: root.to_owned(),
             enabled_at: None,
             accessibility: Accessibility::Accessible,

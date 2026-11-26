@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 setup cancel preview",
+  "description": "The data of a prepare envelope that gives a preview of repo setup-cancel: the pending setup that will be ended. It is read from the registry alone: nothing is connected to. A repository with no setup is a no-op (already_applied).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The setup that will be ended.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "setup_id",
+        "kind",
+        "state",
+        "branch",
+        "remote"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "setup_id": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "enable for a first-time setup, change for a change of an enabled repository's setting.",
+          "type": "string",
+          "enum": [
+            "enable",
+            "change"
+          ]
+        },
+        "state": {
+          "description": "recorded until the remote is seen to hold the setup's branch, then published. A publish between the preview and the confirm is refused as external_change.",
+          "type": "string",
+          "enum": [
+            "recorded",
+            "published"
+          ]
+        },
+        "branch": {
+          "description": "The setup's branch, manyhands/setup/<setup_id>, on the remote and in the repository.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "The name of the setup's remote.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

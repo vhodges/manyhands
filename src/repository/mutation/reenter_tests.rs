@@ -229,6 +229,8 @@ fn a_selection_that_ended_without_a_checkpoint_is_run_as_new_only_unless_its_set
     let binding = Mutation::RemoteSelect(crate::repository::RemoteSelectInput {
         root: PathBuf::from("/nowhere"),
         name: None,
+        integration: None,
+        forge: None,
     })
     .into_binding();
     assert_eq!(

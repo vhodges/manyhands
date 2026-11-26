@@ -15,8 +15,8 @@ use manyhands::{
         OperationNextAction, OperationOwner, PollingInterval, PollingOutcome, PreviewEffect,
         PreviewIdentitySource, ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter,
         ReadinessReasonCode, ReadinessState, RelationshipRejectionDto, RepositoryService,
-        RequestState, ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
-        transport::SshAuthority,
+        RequestState, ResolvedRepository, SetupMutationType, SharedKeyId, TicketFilter,
+        UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -687,10 +687,11 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 16] = [
+const LOCAL_ACTIONS: [OperationAction; 17] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
+    OperationAction::CancelSetup,
     OperationAction::AddRemote,
     OperationAction::RemoveRemote,
     OperationAction::SetPublicationRemote,
@@ -730,7 +731,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        PollMutationCompletion, PollTargetDisposition,
+        LocalBranch, PollMutationCompletion, PollTargetDisposition, RemoteBranch, SetupCancelType,
+        SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -751,6 +753,124 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             ]
             .map(ForgeKind::as_str)
             .to_vec(),
+        ),
+        (
+            "pull_request.schema.json",
+            "forge",
+            [
+                ForgeKind::BitbucketCloud,
+                ForgeKind::BitbucketDataCenter,
+                ForgeKind::Github,
+                ForgeKind::Gitlab,
+            ]
+            .map(ForgeKind::as_str)
+            .to_vec(),
+        ),
+        // The setup's kind and state are `SetupKind` and `SetupState`, which
+        // are crate-private; a library test pins their spellings
+        // (`inspect_and_list_report_a_pending_setup`).
+        (
+            "repository_setup.schema.json",
+            "kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "repository_setup.schema.json",
+            "state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "repository_setup.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "type",
+            SetupMutationType::ALL
+                .map(SetupMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "type",
+            SetupCancelType::ALL.map(SetupCancelType::as_str).to_vec(),
+        ),
+        ("setup_cancel.schema.json", "kind", vec!["enable", "change"]),
+        (
+            "setup_cancel.schema.json",
+            "remote_branch",
+            RemoteBranch::ALL.map(RemoteBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "local_branch",
+            LocalBranch::ALL.map(LocalBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "setup_poll.schema.json",
+            "type",
+            SetupPollType::ALL.map(SetupPollType::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "outcome",
+            SetupPollOutcome::ALL.map(SetupPollOutcome::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.identity.source",
+            PreviewIdentitySource::ALL
+                .map(PreviewIdentitySource::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.forge.kind",
+            ForgeKind::ALL.map(ForgeKind::as_str).to_vec(),
         ),
         (
             "lifecycle_blocked.schema.json",
@@ -1609,6 +1729,44 @@ fn published_enumerations_list_exactly_the_registered_values() {
         .map(|file| count_enums(&read_json(&schema::schema_directory().join(file))))
         .sum();
     assert_eq!(published, enumerations.len() + 1);
+    assert_git_transport_uninitialized();
+}
+
+/// The goldens read a repository without a setup; this is the object. Its
+/// schema is a nullable object, so it also accepts null, and is closed.
+#[test]
+fn a_pending_setup_matches_its_schema() {
+    use manyhands::repository::{PullRequestDto, RepositorySetupDto};
+    let setup = |forge: Option<&str>, url: Option<&str>| RepositorySetupDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        kind: "enable".into(),
+        state: "recorded".into(),
+        request_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".into(),
+        branch: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            target: "main".into(),
+            forge: forge.map(Into::into),
+            url: url.map(Into::into),
+        },
+    };
+    for setup in [
+        setup(Some("github"), Some("https://github.com/acme/widgets")),
+        setup(Some("gitlab"), None),
+        setup(None, None),
+    ] {
+        let value = serde_json::to_value(Some(setup)).unwrap();
+        schema::check_published("repository_setup.schema.json", &value).unwrap();
+        let mut extra = value.clone();
+        extra["pull_request"]["extra"] = json!(1);
+        assert!(schema::check_published("repository_setup.schema.json", &extra).is_err());
+        let mut unknown = value;
+        unknown["pull_request"]["forge"] = json!("sourcehut");
+        assert!(schema::check_published("repository_setup.schema.json", &unknown).is_err());
+    }
+    schema::check_published("repository_setup.schema.json", &Value::Null).unwrap();
     assert_git_transport_uninitialized();
 }
 

@@ -525,6 +525,52 @@ impl Session for Recorder {
     > {
         None
     }
+
+    fn verify_setup_transport(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::transport::VerifySshTransportRequest,
+        _: &crate::repository::transport::SetupScope,
+    ) -> Option<
+        Result<
+            crate::repository::transport::SshTransportVerified,
+            crate::repository::transport::SshTransportError,
+        >,
+    > {
+        None
+    }
+
+    fn publish_setup(
+        &self,
+        _: &RepositoryService,
+        _: &std::path::Path,
+        _: crate::repository::RequestId,
+    ) -> Option<
+        Result<
+            crate::repository::setup::publish::Published,
+            crate::repository::setup::publish::SetupError,
+        >,
+    > {
+        None
+    }
+
+    fn poll_setup(
+        &self,
+        _: &RepositoryService,
+        _: &std::path::Path,
+        _: crate::repository::RequestId,
+    ) -> Option<Result<crate::repository::SetupPollReport, crate::repository::SetupPollError>> {
+        None
+    }
+
+    fn cancel_setup(
+        &self,
+        _: &RepositoryService,
+        _: &crate::repository::CancelSetupRequest,
+    ) -> Option<Result<crate::repository::SetupCancelReport, crate::repository::SetupCancelError>>
+    {
+        None
+    }
 }
 
 /// D5 decision 11, L3, R-15: each step a run tells of is a stage. The

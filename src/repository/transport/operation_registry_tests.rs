@@ -4,10 +4,11 @@
 //! which refuses each listing and transfer after its rechecks.
 use super::*;
 use crate::repository::{
-    REGISTRY_FILE,
+    REGISTRY_FILE, RequestId,
     discovery::migrations_for_testing,
-    key_reads,
-    remote::{RemoteRefPlan, SynchronizationTarget},
+    key_reads, open_registry,
+    remote::{RemoteRefPlan, SynchronizationTarget, observation::endpoint_digest_of},
+    setup::record::{self, SetupKind, SetupRecord},
     transport::callbacks::CallbackAttempt,
 };
 use std::{fs, path::PathBuf};
@@ -15,6 +16,9 @@ use std::{fs, path::PathBuf};
 const CONFIGURATION: &str =
     "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
 const URL: &str = "ssh://fixture@example.invalid/repository.git";
+const SETUP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const OTHER_SETUP: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+const SETUP_URL: &str = "ssh://fixture@setup.example.invalid/fork.git";
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -50,6 +54,87 @@ impl Fixture {
 
     fn plan(&self) -> RemoteRefPlan {
         RemoteRefPlan::from_configuration("origin", "main").unwrap()
+    }
+
+    /// A pending setup of the remote `upstream`, which no configuration
+    /// names: the file is gone, the remote is added, and the registry holds
+    /// the repository and the setup's record. Its scope is the record's.
+    fn pending_setup(&self) -> SetupScope {
+        fs::remove_file(self.root.join(".manyhands/config.toml")).unwrap();
+        let repository = git2::Repository::open(&self.root).unwrap();
+        repository.remote("upstream", SETUP_URL).unwrap();
+        let record = SetupRecord {
+            setup_id: SETUP.parse().unwrap(),
+            kind: SetupKind::Enable,
+            remote_name: "upstream".into(),
+            primary_branch: "main".into(),
+            endpoint_digest: endpoint_digest_of(&repository, "upstream"),
+            configuration: b"format_version = 2\nprimary_branch = \"main\"\n".to_vec(),
+            base_configuration_oid: None,
+            base_oid: None,
+            commit_oid: None,
+            published_oid: None,
+            request_id: RequestId::new(),
+            created_at: 1_700_000_000,
+        };
+        let mut db = open_registry(&self.data.join(REGISTRY_FILE), &mut |_| {}).unwrap();
+        let root = fs::canonicalize(&self.root).unwrap();
+        db.execute(
+            "INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required)
+             VALUES(1,?1,123,'accessible',0)",
+            [root.to_str().unwrap()],
+        )
+        .unwrap();
+        let tx = db.transaction().unwrap();
+        record::insert(&tx, 1, &record).unwrap();
+        tx.commit().unwrap();
+        SetupScope::of(&record)
+    }
+
+    /// Replaces the setup's record with what `edit` makes of it.
+    fn edit_setup(&self, edit: impl FnOnce(&mut SetupRecord)) {
+        let mut db = open_registry(&self.data.join(REGISTRY_FILE), &mut |_| {}).unwrap();
+        let tx = db.transaction().unwrap();
+        let mut record = record::read(&tx, 1).unwrap().unwrap();
+        record::delete(&tx, 1).unwrap();
+        edit(&mut record);
+        record::insert(&tx, 1, &record).unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// Removes the setup's record, as a cancel or a completion does.
+    fn remove_setup(&self) {
+        let mut db = open_registry(&self.data.join(REGISTRY_FILE), &mut |_| {}).unwrap();
+        let tx = db.transaction().unwrap();
+        assert!(record::delete(&tx, 1).unwrap());
+        tx.commit().unwrap();
+    }
+
+    /// What `with_setup_remote` prepares for `scope`.
+    fn prepare_setup(
+        &self,
+        direction: SshDirection,
+        scope: &SetupScope,
+    ) -> Result<(PreparedSshAttempt, SshTransportError), SshTransportErrorKind> {
+        let mut context = SshTransportError {
+            root: self.root.clone(),
+            remote_name: String::new(),
+            direction,
+            selected_key_id: None,
+            authority: None,
+            kind: SshTransportErrorKind::ConfigurationInvalid,
+        };
+        self.service
+            .prepare_ssh_from(
+                VerifySshTransportRequest {
+                    root: self.root.clone(),
+                    direction,
+                    approval: None,
+                },
+                &mut context,
+                RemoteSource::Setup(scope.clone()),
+            )
+            .map(|prepared| (prepared, context))
     }
 
     /// What `with_authenticated_remote_policy_expected` prepares.
@@ -378,4 +463,220 @@ fn a_call_keeps_its_lock_on_the_registry_across_reads_and_opens() {
     ));
     let expected: Vec<_> = held.iter().map(|(read, _)| (*read, true)).collect();
     assert_eq!(held, expected);
+}
+
+/// A call made for a pending setup takes its remote from the scope, and each
+/// recheck, the preparation's included, holds it to the record and to the
+/// remote's endpoints: the record gone, another setup, another remote or
+/// primary, or a remote that is not where it was is `EndpointChanged`.
+#[test]
+fn the_setup_scope_is_rechecked_against_the_record_and_the_endpoints() {
+    use SshTransportErrorKind::EndpointChanged;
+    // The digest the record holds is today's, as the observation of the
+    // configured remote makes it.
+    {
+        let f = Fixture::new();
+        let configuration = f
+            .service
+            .observation_configuration(&f.root, &f.plan())
+            .unwrap();
+        let repository = git2::Repository::open(&f.root).unwrap();
+        assert_eq!(
+            endpoint_digest_of(&repository, "origin"),
+            configuration.endpoint_digest()
+        );
+    }
+    // What a change made after the call's preparation does to its rechecks.
+    type Change = fn(&Fixture);
+    let rows: &[(&str, Change, Option<SshTransportErrorKind>)] = &[
+        ("nothing", |_| {}, None),
+        (
+            "the record removed",
+            Fixture::remove_setup,
+            Some(EndpointChanged),
+        ),
+        (
+            "another setup",
+            |f| f.edit_setup(|record| record.setup_id = OTHER_SETUP.parse().unwrap()),
+            Some(EndpointChanged),
+        ),
+        (
+            "another remote",
+            |f| f.edit_setup(|record| record.remote_name = "origin".into()),
+            Some(EndpointChanged),
+        ),
+        (
+            "another primary",
+            |f| f.edit_setup(|record| record.primary_branch = "trunk".into()),
+            Some(EndpointChanged),
+        ),
+        (
+            "the remote's url changed",
+            |f| {
+                git2::Repository::open(&f.root)
+                    .unwrap()
+                    .remote_set_url("upstream", "ssh://fixture@moved.example.invalid/fork.git")
+                    .unwrap()
+            },
+            Some(EndpointChanged),
+        ),
+        (
+            // The fetch endpoint the call connects to is the same; only the
+            // digest of both endpoints tells.
+            "a push url added",
+            |f| {
+                git2::Repository::open(&f.root)
+                    .unwrap()
+                    .remote_set_pushurl(
+                        "upstream",
+                        Some("ssh://fixture@push.example.invalid/fork.git"),
+                    )
+                    .unwrap()
+            },
+            Some(EndpointChanged),
+        ),
+        (
+            "the remote removed",
+            |f| {
+                git2::Repository::open(&f.root)
+                    .unwrap()
+                    .remote_delete("upstream")
+                    .unwrap()
+            },
+            Some(EndpointChanged),
+        ),
+    ];
+    let (mut actual, mut expected) = (Vec::new(), Vec::new());
+    for (change, apply, refused) in rows {
+        let f = Fixture::new();
+        let scope = f.pending_setup();
+        // The file is gone: the remote is the scope's, and the call is
+        // prepared without it.
+        let (prepared, context) = f.prepare_setup(SshDirection::Fetch, &scope).unwrap();
+        assert_eq!(context.remote_name, "upstream");
+        f.service.recheck_ssh(&prepared, &context).unwrap();
+        apply(&f);
+        actual.push((*change, f.service.recheck_ssh(&prepared, &context)));
+        expected.push((*change, refused.clone().map_or(Ok(()), Err)));
+    }
+    assert_eq!(actual, expected);
+    // The preparation holds the scope to the same things.
+    let f = Fixture::new();
+    let scope = f.pending_setup();
+    let stale = SetupScope {
+        endpoint_digest: [0; 32],
+        ..scope.clone()
+    };
+    assert_eq!(
+        f.prepare_setup(SshDirection::Fetch, &stale).err(),
+        Some(EndpointChanged)
+    );
+    let other = SetupScope {
+        setup_id: OTHER_SETUP.parse().unwrap(),
+        ..scope.clone()
+    };
+    assert_eq!(
+        f.prepare_setup(SshDirection::Fetch, &other).err(),
+        Some(EndpointChanged)
+    );
+    f.edit_setup(|record| record.primary_branch = "trunk".into());
+    assert_eq!(
+        f.prepare_setup(SshDirection::Fetch, &scope).err(),
+        Some(EndpointChanged)
+    );
+}
+
+/// The four methods of the setup channel are the only ones a setup
+/// connection carries, and each runs only on a setup connection in its own
+/// direction: a refusal precedes any read, and a connection that never
+/// connected is refused only after the rechecks of an allowed step.
+#[test]
+fn a_setup_connection_carries_only_the_setup_channels_methods() {
+    use SshTransportErrorKind::{ConfigurationInvalid, ProtocolFailure};
+    let oid = git2::Oid::from_str(&"a".repeat(40)).unwrap();
+    let target = SynchronizationTarget::Context {
+        kind: crate::repository::AuthoringKind::Ticket,
+        item_id: SETUP.parse().unwrap(),
+    };
+    let kind = |result: Result<(), SshTransportError>| result.map_err(|error| error.kind);
+    let (mut actual, mut expected) = (Vec::new(), Vec::new());
+    for source in ["configured", "setup"] {
+        for direction in [
+            SshDirection::Fetch,
+            SshDirection::Push,
+            SshDirection::Delete,
+        ] {
+            let f = Fixture::new();
+            let plan = f.plan();
+            let (prepared, context) = if source == "setup" {
+                let scope = f.pending_setup();
+                f.prepare_setup(direction, &scope).unwrap()
+            } else {
+                f.prepare(direction)
+            };
+            let repository = git2::Repository::open(&f.root).unwrap();
+            let mut handle = repository
+                .remote_anonymous(&prepared.endpoint.connection_url)
+                .unwrap();
+            let attempt = CallbackAttempt::default();
+            let mut remote = AuthenticatedSshRemote::new(
+                &mut handle,
+                &attempt,
+                &f.service,
+                &prepared,
+                &context,
+                None,
+                None,
+                identity(1),
+            );
+            let setup = source == "setup";
+            let own = |wanted: SshDirection| {
+                Err(if setup && direction == wanted {
+                    ProtocolFailure
+                } else {
+                    ConfigurationInvalid
+                })
+            };
+            let name = |method: &'static str| (source, direction, method);
+            actual.push((
+                name("fetch_setup_base"),
+                kind(remote.fetch_setup_base().map(drop)),
+            ));
+            expected.push((name("fetch_setup_base"), own(SshDirection::Fetch)));
+            actual.push((
+                name("observe_setup_branch"),
+                kind(remote.observe_setup_branch().map(drop)),
+            ));
+            expected.push((name("observe_setup_branch"), own(SshDirection::Fetch)));
+            actual.push((
+                name("push_setup_branch"),
+                kind(remote.push_setup_branch(oid).map(drop)),
+            ));
+            expected.push((name("push_setup_branch"), own(SshDirection::Push)));
+            actual.push((
+                name("delete_setup_branch"),
+                kind(remote.delete_setup_branch(oid).map(drop)),
+            ));
+            expected.push((name("delete_setup_branch"), own(SshDirection::Delete)));
+            // No item method accepts a setup connection.
+            if setup {
+                for (method, result) in [
+                    ("fetch_exact", kind(remote.fetch_exact(&plan, &target))),
+                    ("push_exact", kind(remote.push_exact(&plan, &target))),
+                    (
+                        "delete_exact",
+                        kind(remote.delete_exact(&plan, &target, oid).map(drop)),
+                    ),
+                    (
+                        "fetch_poll_set",
+                        kind(remote.fetch_poll_set(&plan, |_| true).map(drop)),
+                    ),
+                ] {
+                    actual.push((name(method), result));
+                    expected.push((name(method), Err(ConfigurationInvalid)));
+                }
+            }
+        }
+    }
+    assert_eq!(actual, expected);
 }

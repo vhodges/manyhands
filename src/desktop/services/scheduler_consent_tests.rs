@@ -23,9 +23,13 @@
 //! happens to call:
 //!
 //! - **B4:** the automatic poll calls exactly `resolve`, `polling_status`,
-//!   `poll_eligibility`, `poll_automatic` and `remote_snapshot`, in that
-//!   order (a poll that stops early is a prefix of it), and `after_poll`,
-//!   the test hook the double reads its constructed answer by. On the
+//!   `pending_setup`, `poll_eligibility`, `poll_automatic` and
+//!   `remote_snapshot`, in that order (a poll that stops early is a prefix
+//!   of it), and `after_poll`, the test hook the double reads its
+//!   constructed answer by. `pending_setup` is the setup poll's local read
+//!   (Wave 06 Cycle 02, Part J): it inspects the registry and contacts
+//!   nothing. `poll_setup` is not on the list: the day has no setup, so it
+//!   is never called. On the
 //!   worker thread, from the start of an automatic poll to the next job,
 //!   nothing else is called: not `service()`, not the key store, not the
 //!   draft store, and no job, so nothing can push, checkpoint, merge, clean
@@ -34,8 +38,9 @@
 //!   and only for an operation the desktop started.
 //! - **Scheduler reads, which contact nothing:** `polling_status` and
 //!   `resolve` again (C1, A4), `publication_remotes` (B6, U-2),
-//!   `pending_operations` (Amendment 12, R-31), `selected_key` (E3) and the
-//!   draft store's listing (E1, RT-4, RT-5). Off the worker thread nothing
+//!   `pending_operations` (Amendment 12, R-31), `pending_setup` (Part J, a
+//!   local read that contacts nothing: registration reads it), `selected_key`
+//!   (E3) and the draft store's listing (E1, RT-4, RT-5). Off the worker thread nothing
 //!   else is called, and `service()` and the key store only as often as
 //!   start-up did before any poll existed.
 //!
@@ -69,7 +74,8 @@ use manyhands::{
         Mutation, MutationDataDto, OperationId, PollCompletion, PollDisposition,
         PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage, ReadError,
         RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot, RepositoryError,
-        RepositoryService, ResolvedRepository, RetirementRemoval as Removal, SharedKeyId,
+        RepositoryService, ResolvedRepository, RetirementRemoval as Removal, SetupPollError,
+        SetupPollReport, SharedKeyId,
         keys::{KeyStore, SessionCredentials},
         transport::SshTransportErrorKind,
     },
@@ -90,6 +96,7 @@ use crate::desktop::{
         prompts::DesktopProvider,
         requests::{Intent, Lane, RequestState},
         resolutions::{ResolutionStore, ResolutionStoreError},
+        setup_poll::PendingSetup,
     },
     test_support::{
         fixtures::Fixture,
@@ -106,6 +113,8 @@ enum Call {
     Drafts,
     Resolve,
     PollingStatus,
+    PendingSetup,
+    PollSetup,
     PublicationRemotes,
     PollEligibility,
     PollAutomatic,
@@ -219,6 +228,22 @@ impl Backend for Recorder {
         self.inner.polling_status(repo)
     }
 
+    fn pending_setup(&self, root: &Path) -> Option<PendingSetup> {
+        self.heard(Call::PendingSetup);
+        self.inner.pending_setup(root)
+    }
+
+    #[allow(clippy::result_large_err)] // The library's `SetupPollError`.
+    fn poll_setup(
+        &self,
+        root: &Path,
+        automatic: bool,
+        session: &mut SessionCredentials<DesktopProvider>,
+    ) -> Result<SetupPollReport, SetupPollError> {
+        self.heard(Call::PollSetup);
+        self.inner.poll_setup(root, automatic, session)
+    }
+
     fn publication_remotes(&self, repo: &ResolvedRepository) -> Result<RemoteListDto, ReadError> {
         self.heard(Call::PublicationRemotes);
         self.inner.publication_remotes(repo)
@@ -269,11 +294,13 @@ impl Backend for Recorder {
 /// rather than after the harness's 180 s.
 const BOUND: Duration = Duration::from_secs(30);
 
-/// B4's five calls in the order an automatic poll makes them, and `after_poll`,
+/// B4's calls in the order an automatic poll makes them (`pending_setup`, the
+/// setup poll's local read, right after `polling_status`), and `after_poll`,
 /// the double's hook between the last two.
-const POLL: [Call; 6] = [
+const POLL: [Call; 7] = [
     Call::Resolve,
     Call::PollingStatus,
+    Call::PendingSetup,
     Call::PollEligibility,
     Call::PollAutomatic,
     Call::AfterPoll,
@@ -282,10 +309,12 @@ const POLL: [Call; 6] = [
 
 /// What may be called from any thread but the worker's: the scheduler's
 /// reads (`resolve` and `polling_status` again, `publication_remotes`,
-/// `pending_operations`, `selected_key`, the draft listing) and the cancel.
-const OFF_THE_WORKER: [Call; 7] = [
+/// `pending_operations`, `pending_setup`, `selected_key`, the draft listing)
+/// and the cancel.
+const OFF_THE_WORKER: [Call; 8] = [
     Call::Resolve,
     Call::PollingStatus,
+    Call::PendingSetup,
     Call::PublicationRemotes,
     Call::PendingOperations,
     Call::SelectedKey,
@@ -895,6 +924,8 @@ fn verify(day: &Day, a: &str, cx: &mut TestAppContext) {
 
     // ResumePolling is the person's Resume checking, which was not pressed.
     assert_eq!(day.recorder.count(Call::ResumePolling), 0);
+    // The day has no setup, so no setup poll is ever made.
+    assert_eq!(day.recorder.count(Call::PollSetup), 0);
 
     // E1: each retirement is a background request for an item a completed
     // attempt reported, after that attempt's poll, and every one is built

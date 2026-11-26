@@ -7,9 +7,11 @@ use super::{
     *,
 };
 use crate::repository::{
-    CallRegistry, ConfigurationInspection, RepositoryOperation, RepositoryService,
+    CallRegistry, ConfigurationInspection, RepositoryError, RepositoryOperation, RepositoryService,
     canonical_repository_root, keys::*, read_configuration,
+    remote::observation::endpoint_digest_of, setup::record as setup_record,
 };
+use rusqlite::OptionalExtension;
 
 impl RepositoryService {
     pub fn verify_ssh_transport<P: SessionCredentialProvider>(
@@ -73,6 +75,62 @@ impl RepositoryService {
         expectation: Option<&SshScopeExpectation>,
         use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
     ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_from(
+            request,
+            session,
+            automatic,
+            expectation,
+            RemoteSource::Configured,
+            use_remote,
+        )
+    }
+
+    /// `verify_ssh_transport`, for the remote of a pending setup: the host
+    /// observation and approval of a remote that no configuration file names
+    /// yet. The scope is the record's, read by the caller; every recheck
+    /// holds the call to it.
+    pub(crate) fn verify_setup_transport<P: SessionCredentialProvider>(
+        &self,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<SshTransportVerified, SshTransportError> {
+        self.with_setup_remote(request, scope, false, session, |remote| {
+            remote.advertisement()?;
+            Ok(remote.verified())
+        })
+    }
+
+    /// One connection, in `request.direction`, to the remote of a pending
+    /// setup, with today's `automatic` policy for a background call. The
+    /// call can use only the four setup methods of the connection.
+    pub(crate) fn with_setup_remote<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+        automatic: bool,
+        session: &mut SessionCredentials<P>,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_from(
+            request,
+            session,
+            automatic,
+            None,
+            RemoteSource::Setup(scope.clone()),
+            use_remote,
+        )
+    }
+
+    fn with_authenticated_remote_from<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        automatic: bool,
+        expectation: Option<&SshScopeExpectation>,
+        source: RemoteSource,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
         let mut context = SshTransportError {
             root: request.root.clone(),
             remote_name: String::new(),
@@ -84,7 +142,7 @@ impl RepositoryService {
         if !crate::runtime::git_transport_initialized() {
             return Err(context.with_kind(SshTransportErrorKind::RuntimeUninitialized));
         }
-        let prepared = match self.prepare_ssh(request, &mut context) {
+        let prepared = match self.prepare_ssh_from(request, &mut context, source) {
             Ok(prepared) => prepared,
             Err(kind) => {
                 invalidate_preflight_session(session, &kind);
@@ -215,16 +273,31 @@ impl RepositoryService {
         }
     }
 
+    #[cfg(test)]
     fn prepare_ssh(
         &self,
         request: VerifySshTransportRequest,
         context: &mut SshTransportError,
     ) -> Result<PreparedSshAttempt, SshTransportErrorKind> {
+        self.prepare_ssh_from(request, context, RemoteSource::Configured)
+    }
+
+    /// `prepare_ssh`, for a remote taken from `source`: the file's
+    /// publication remote, exactly as every call takes it, or the setup's.
+    pub(super) fn prepare_ssh_from(
+        &self,
+        request: VerifySshTransportRequest,
+        context: &mut SshTransportError,
+        remote_source: RemoteSource,
+    ) -> Result<PreparedSshAttempt, SshTransportErrorKind> {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::Inspect)
                 .map_err(|_| SshTransportErrorKind::ConfigurationInvalid)?;
         context.root = root;
-        context.remote_name = publication_remote(&context.root)?;
+        context.remote_name = match &remote_source {
+            RemoteSource::Configured => publication_remote(&context.root)?,
+            RemoteSource::Setup(scope) => scope.remote_name.clone(),
+        };
         // The call's key reads, this one and its rechecks', go through one
         // registry connection, which the call holds until it ends.
         let registry = CallRegistry::new();
@@ -238,6 +311,9 @@ impl RepositoryService {
         repository
             .find_remote(&context.remote_name)
             .map_err(|_| SshTransportErrorKind::PublicationRemoteMissing)?;
+        if let RemoteSource::Setup(scope) = &remote_source {
+            self.check_setup_source(&registry, &context.root, scope, &repository)?;
+        }
         let endpoint =
             configured_remote_endpoint(&repository, &context.remote_name, context.direction)?;
         context.authority = Some(endpoint.authority.clone());
@@ -254,6 +330,7 @@ impl RepositoryService {
             trust,
             approval: request.approval,
             registry,
+            remote_source,
         })
     }
 
@@ -280,14 +357,69 @@ impl RepositoryService {
         {
             return Err(SshTransportErrorKind::KeySourceChanged);
         }
-        if publication_remote(&context.root).as_ref() != Ok(&context.remote_name) {
-            return Err(SshTransportErrorKind::EndpointChanged);
+        match &prepared.remote_source {
+            RemoteSource::Configured => {
+                if publication_remote(&context.root).as_ref() != Ok(&context.remote_name) {
+                    return Err(SshTransportErrorKind::EndpointChanged);
+                }
+            }
+            RemoteSource::Setup(scope) => {
+                if scope.remote_name != context.remote_name {
+                    return Err(SshTransportErrorKind::EndpointChanged);
+                }
+            }
         }
         let repository = git2::Repository::open(&context.root)
             .map_err(|_| SshTransportErrorKind::EndpointChanged)?;
+        if let RemoteSource::Setup(scope) = &prepared.remote_source {
+            self.check_setup_source(&prepared.registry, &context.root, scope, &repository)?;
+        }
         if configured_remote_endpoint(&repository, &context.remote_name, context.direction).as_ref()
             != Ok(&prepared.endpoint)
         {
+            return Err(SshTransportErrorKind::EndpointChanged);
+        }
+        Ok(())
+    }
+
+    /// Whether the setup's record still holds the scope's setup, remote and
+    /// primary, and the remote's endpoints still digest to the scope's
+    /// digest. Anything else is `EndpointChanged`: the setup this call was
+    /// made for is not the one there is, or its remote is not where it was.
+    /// The record is read on the call's registry connection, as its key
+    /// reads are.
+    fn check_setup_source(
+        &self,
+        registry: &CallRegistry,
+        root: &std::path::Path,
+        scope: &SetupScope,
+        repository: &git2::Repository,
+    ) -> Result<(), SshTransportErrorKind> {
+        let current = self
+            .read_key_registry(Some(registry), RepositoryOperation::Inspect, |connection| {
+                let Some(key) = root.to_str() else {
+                    return Ok(None);
+                };
+                let id = connection
+                    .query_row(
+                        "SELECT id FROM repositories WHERE root_path = ?1",
+                        [key],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map_err(RepositoryError::sqlite)?;
+                id.map(|id| setup_record::read(connection, id))
+                    .transpose()
+                    .map(Option::flatten)
+            })
+            .and_then(|read| read)
+            .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?;
+        let holds = current.as_ref().is_some_and(|record| {
+            record.setup_id == scope.setup_id
+                && record.remote_name == scope.remote_name
+                && record.primary_branch == scope.primary_branch
+        });
+        if !holds || endpoint_digest_of(repository, &scope.remote_name) != scope.endpoint_digest {
             return Err(SshTransportErrorKind::EndpointChanged);
         }
         Ok(())

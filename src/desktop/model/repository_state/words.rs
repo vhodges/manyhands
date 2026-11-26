@@ -11,6 +11,19 @@ use crate::desktop::{
 
 pub(crate) const CANT_OPEN: &str = "Can't open";
 pub(crate) const NEEDS_FIXING: &str = "Needs fixing";
+/// A first-time setup whose branch is on the remote, waiting for its pull
+/// request to merge (the RFC's words).
+pub(crate) const SETUP_WAITING: &str = "Waiting for setup to merge";
+/// A first-time setup recorded but not on the remote yet.
+pub(crate) const SETUP_NOT_PUBLISHED: &str = "Setup not published yet";
+pub(crate) const SETUP_WAITING_SENTENCE: &str =
+    "Its setup is on a branch for a pull request. Manyhands starts checking once it merges.";
+pub(crate) const SETUP_NOT_PUBLISHED_SENTENCE: &str =
+    "Its setup is not on the remote yet. Manyhands publishes it when it can.";
+/// The setup's kind for a repository with no configuration, and its state
+/// once the remote holds the branch, as `repo list` reports them.
+pub(crate) const SETUP_FIRST_TIME: &str = "enable";
+pub(crate) const SETUP_PUBLISHED: &str = "published";
 pub(crate) const LOCKED: &str = "Locked";
 pub(crate) const NEEDS_ATTENTION: &str = "Needs attention";
 /// D6's "Checking…", as Settings says it.

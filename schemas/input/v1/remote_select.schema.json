@@ -2,7 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Publication remote selection input",
   "type": "object",
-  "properties": {"name": {"type": ["string", "null"]}},
+  "properties": {
+    "name": {"type": ["string", "null"]},
+    "integration": {"type": "string", "enum": ["direct", "pull_request"]},
+    "forge": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string"},
+        "web_url": {"type": "string"},
+        "pull_request_url": {"type": "string"}
+      }
+    }
+  },
   "required": ["name"],
   "additionalProperties": false
 }

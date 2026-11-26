@@ -638,6 +638,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
+            "repository_setups",
             "request_operations",
             "request_records",
             "retired_contexts",
@@ -4183,5 +4184,1028 @@ fn enablement_rollback_and_recovery_with_symlink_parent_use_canonical_roots() {
             head_configuration_oid(&repository).to_string()
         );
         assert!(service.recovery_inspection(&root).unwrap().is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------
+// Pull-request mode (Wave 06 Cycle 02, design Part E)
+// ---------------------------------------------------------------------
+
+/// An SSH-shaped address that is never contacted.
+const NEVER_CONTACTED: &str = "ssh://git@example.invalid/team/repo.git";
+
+fn pull_request_input(
+    plain: &support::confirmation::Plain,
+) -> manyhands::repository::RepoEnableInput {
+    manyhands::repository::RepoEnableInput {
+        publication_remote: Some("origin".to_owned()),
+        integration: Some(canonical::Integration::PullRequest),
+        forge: None,
+        ..plain.input()
+    }
+}
+
+/// A pull-request enable with no selected key records its setup, registers
+/// the repository with no configuration, and stops, owed: the same request
+/// goes on from its record, and nothing is made twice.
+#[test]
+fn a_pull_request_enable_without_a_key_leaves_a_recorded_setup() {
+    use manyhands::{
+        repository::{Mutation, RequestState, TicketCreateInput, keys::SessionCredentials},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::{NoPassphrase, REQUEST_1, REQUEST_2, World, execute_with},
+    };
+
+    let desk = Desk::new();
+    let plain = Plain::new();
+    plain
+        .fixture
+        .repository
+        .remote("origin", NEVER_CONTACTED)
+        .unwrap();
+    let enable = || Mutation::RepoEnable(pull_request_input(&plain));
+    let head = plain.head();
+    let before = support::repository_and_worktree_snapshot_at(&plain.root);
+
+    // The prepare previews the setup's effects, and contacts nothing.
+    let prepared = desk.service.prepare(&enable());
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let value = serde_json::to_value(&prepared).unwrap();
+    support::schema::check_published("setup_preview.schema.json", &value["data"]).unwrap();
+    let effects: Vec<&str> = value["data"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| effect["effect"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        effects,
+        [
+            "worktree_exclusion_written",
+            "repository_registered",
+            "setup_recorded",
+            "setup_branch_committed",
+            "setup_branch_published",
+        ]
+    );
+    assert_eq!(value["data"]["details"]["integration"], "pull_request");
+    assert_eq!(value["data"]["details"]["primary_branch"], "main");
+    assert!(!manyhands::runtime::git_transport_initialized());
+    let confirmation = value["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        support::repository_and_worktree_snapshot_at(&plain.root),
+        before
+    );
+    let root = plain.root.to_str().unwrap().to_owned();
+    support::mutation_golden::assert_contract_at(
+        "repo_enable_setup_preview",
+        &root,
+        Some("setup_preview.schema.json"),
+        &[(confirmation.as_str(), "<confirmation>")],
+        &prepared,
+    );
+
+    // The confirm: publishing stops, with the request accepted and the setup
+    // recorded. This target's process has not initialized the Git transport
+    // (that is one call before any thread, which a test harness cannot make),
+    // so the transport's first answer is its own `internal_error`; the stop
+    // for want of a selected key is the CLI's test, which runs a process that
+    // has (`tests/cli/repository.rs`).
+    let stopped = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(
+        stopped.code,
+        ResultCode::InternalError,
+        "{}",
+        stopped.message
+    );
+    assert_eq!(stopped.outcome, Outcome::Partial);
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    let data = serde_json::to_value(&stopped.data).unwrap();
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "recorded");
+    assert_eq!(data["kind"], "enable");
+    assert_eq!(data["remote"], "origin");
+    assert_eq!(data["integration"], "pull_request");
+    assert_eq!(data["request_id"], REQUEST_1);
+    support::schema::check_published("setup_mutation.schema.json", &data).unwrap();
+    let setup_id = data["id"].as_str().unwrap().to_owned();
+    assert_eq!(data["branch"], format!("manyhands/setup/{setup_id}"));
+
+    // `repo inspect` and `repo list` show the setup, recorded.
+    let inspected = desk.service.inspect_repository(&plain.root).unwrap();
+    let setup = inspected.setup.expect("a setup is shown");
+    assert_eq!(
+        (
+            setup.id.as_str(),
+            setup.state.as_str(),
+            setup.request_id.as_str()
+        ),
+        (setup_id.as_str(), "recorded", REQUEST_1)
+    );
+    let listed = desk.service.list_repositories().unwrap();
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(
+        listed.items[0]
+            .setup
+            .as_ref()
+            .map(|setup| setup.state.as_str()),
+        Some("recorded")
+    );
+
+    // `ticket create` waits for the setup; `host observe` reads the setup's
+    // remote and stops where publishing did.
+    let created = execute_with(
+        &desk.service,
+        REQUEST_2,
+        Mutation::TicketCreate(TicketCreateInput {
+            root: plain.root.clone(),
+            id: support::items::item_id("01ARZ3NDEKTSV4RRFFQ69G5FE1"),
+            draft: World::draft("A ticket", "Body.\n"),
+            deps: Vec::new(),
+            parent: None,
+            initials: None,
+        }),
+    );
+    assert_eq!(created.code, ResultCode::SetupPending);
+    support::mutation_golden::assert_contract_at(
+        "ticket_create_setup_pending",
+        &root,
+        None,
+        &[],
+        &created,
+    );
+    // `repo sync` and `context sync-local` wait for a first-time setup too:
+    // the gate answers before either reads anything.
+    let synced = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX4",
+        Mutation::RepoSync(manyhands::repository::RepoSyncInput {
+            root: plain.root.clone(),
+        }),
+    );
+    assert_eq!(synced.code, ResultCode::SetupPending, "{}", synced.message);
+    support::mutation_golden::assert_contract_at(
+        "repo_sync_setup_pending",
+        &root,
+        None,
+        &[],
+        &synced,
+    );
+    let local = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX5",
+        Mutation::LocalContextSync(manyhands::repository::LocalContextSyncInput {
+            root: plain.root.clone(),
+            kind: manyhands::repository::AuthoringKind::Ticket,
+            id: support::items::item_id("01ARZ3NDEKTSV4RRFFQ69G5FE1"),
+            observation: String::new(),
+        }),
+    );
+    assert_eq!(local.code, ResultCode::SetupPending, "{}", local.message);
+    support::mutation_golden::assert_contract_at(
+        "local_sync_setup_pending",
+        &root,
+        None,
+        &[],
+        &local,
+    );
+    // `poll once` takes the setup poll for a first-time setup, and a recorded
+    // setup is not on the remote yet: it answers `not_published` without a
+    // connection, and the request is finished.
+    let polled = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+        Mutation::PollOnce(manyhands::repository::PollOnceInput {
+            root: plain.root.clone(),
+        }),
+    );
+    assert_eq!(polled.code, ResultCode::Ok, "{}", polled.message);
+    let polled_data = serde_json::to_value(&polled.data).unwrap();
+    assert_eq!(polled_data["type"], "setup_poll");
+    assert_eq!(polled_data["setup_id"], setup_id);
+    assert_eq!(polled_data["outcome"], "not_published");
+    assert_eq!(polled_data["integration"], serde_json::Value::Null);
+    assert_eq!(polled_data["differs"], false);
+    support::schema::check_published("setup_poll.schema.json", &polled_data).unwrap();
+    assert_eq!(
+        desk.record("01ARZ3NDEKTSV4RRFFQ69G5FX3").unwrap().state,
+        RequestState::Finished
+    );
+    support::mutation_golden::assert_contract_at(
+        "poll_once_setup_not_published",
+        &root,
+        Some("setup_poll.schema.json"),
+        &[
+            (setup_id.as_str(), "<setup>"),
+            (
+                &format!("manyhands/setup/{setup_id}"),
+                "manyhands/setup/<setup>",
+            ),
+        ],
+        &polled,
+    );
+    let observed = desk.service.observe_host(
+        &plain.root,
+        None,
+        &mut SessionCredentials::new(NoPassphrase),
+    );
+    assert_eq!(observed.code, ResultCode::InternalError);
+
+    // The local primary, HEAD and the working tree are as they were.
+    assert_eq!(plain.head(), head);
+    assert_eq!(plain.configuration(), None);
+    // No key was found before anything was fetched, so no setup branch is
+    // made: the branch is publishing's, and the enable makes none itself.
+    assert!(
+        plain
+            .fixture
+            .repository
+            .find_reference(&format!("refs/heads/manyhands/setup/{setup_id}"))
+            .is_err()
+    );
+    assert_eq!(
+        support::repository_and_worktree_snapshot_at(&plain.root)
+            .root
+            .files,
+        before.root.files
+    );
+
+    // The same request again: the same answer, and nothing is registered or
+    // recorded twice.
+    let again = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(again.code, ResultCode::InternalError, "{}", again.message);
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(serde_json::to_value(&again.data).unwrap(), data);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 1);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 1);
+    assert_eq!(
+        desk.count("SELECT COUNT(*) FROM operation_records WHERE action = 'enable'"),
+        1
+    );
+    assert_eq!(desk.accepted_confirmations(), 1);
+}
+
+/// A clone, which holds a valid configuration, is enabled as it is
+/// configured: a remote, a mode or a forge that is supplied and is not the
+/// configuration's is `invalid_input`, and nothing is written (R-10).
+#[test]
+fn enabling_a_clone_with_other_settings_is_invalid_input() {
+    use manyhands::{
+        canonical::{ForgeKind, ForgeSetting, Integration},
+        repository::{Mutation, RepoEnableInput},
+        results::ResultCode,
+    };
+    use support::confirmation::{Desk, Plain};
+
+    let gitlab = || ForgeSetting {
+        kind: Some(ForgeKind::Gitlab),
+        web_url: Some("https://git.example.invalid".to_owned()),
+        pull_request_url: None,
+    };
+    let configured = |source: &str| {
+        let plain = Plain::new();
+        plain
+            .fixture
+            .repository
+            .remote("origin", NEVER_CONTACTED)
+            .unwrap();
+        plain
+            .fixture
+            .repository
+            .remote("upstream", "ssh://git@example.invalid/other/repo.git")
+            .unwrap();
+        std::fs::create_dir_all(plain.root.join(".manyhands")).unwrap();
+        std::fs::write(plain.root.join(canonical::CONFIG_PATH), source).unwrap();
+        let signature =
+            git2::Signature::now("Manyhands Test", "manyhands-test@example.invalid").unwrap();
+        let mut index = plain.fixture.repository.index().unwrap();
+        index
+            .add_path(std::path::Path::new(canonical::CONFIG_PATH))
+            .unwrap();
+        index.write().unwrap();
+        let tree = plain
+            .fixture
+            .repository
+            .find_tree(index.write_tree().unwrap())
+            .unwrap();
+        let parent = plain
+            .fixture
+            .repository
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap();
+        plain
+            .fixture
+            .repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Existing configuration",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        drop((tree, parent));
+        plain
+    };
+    let direct = "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
+    let pull_request = "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n\n[forge]\nkind = \"gitlab\"\nweb_url = \"https://git.example.invalid\"\n";
+
+    type Supplied = (
+        Option<&'static str>,
+        Option<Integration>,
+        Option<ForgeSetting>,
+    );
+    // (what the file holds, what the request supplies, whether it is refused)
+    let rows: Vec<(&str, &str, Supplied, bool)> = vec![
+        (
+            "another remote",
+            direct,
+            (Some("upstream"), None, None),
+            true,
+        ),
+        (
+            "pull request, where the file is direct",
+            direct,
+            (None, Some(Integration::PullRequest), None),
+            true,
+        ),
+        (
+            "a forge the file does not hold",
+            direct,
+            (None, None, Some(gitlab())),
+            true,
+        ),
+        (
+            "direct, where the file is pull request",
+            pull_request,
+            (None, Some(Integration::Direct), None),
+            true,
+        ),
+        (
+            "another forge",
+            pull_request,
+            (
+                None,
+                None,
+                Some(ForgeSetting {
+                    kind: Some(ForgeKind::Github),
+                    web_url: None,
+                    pull_request_url: None,
+                }),
+            ),
+            true,
+        ),
+        (
+            "the file's own remote",
+            direct,
+            (Some("origin"), Some(Integration::Direct), None),
+            false,
+        ),
+        (
+            "the file's own mode and forge",
+            pull_request,
+            (
+                Some("origin"),
+                Some(Integration::PullRequest),
+                Some(gitlab()),
+            ),
+            false,
+        ),
+        ("nothing", direct, (None, None, None), false),
+    ];
+    for (what, file, (remote, integration, forge), refused) in rows {
+        let desk = Desk::new();
+        let plain = configured(file);
+        let mutation = Mutation::RepoEnable(RepoEnableInput {
+            publication_remote: remote.map(str::to_owned),
+            integration,
+            forge,
+            ..plain.input()
+        });
+        let surroundings = desk.surroundings(&plain.root);
+
+        let answer = desk.prepare(&mutation);
+
+        if refused {
+            assert_eq!(answer.code, ResultCode::InvalidInput, "{what}");
+            assert!(answer.data.is_none(), "{what}");
+            assert_eq!(desk.confirmation_rows(), 0, "{what}");
+            assert!(!desk.registered(&plain.root), "{what}");
+            assert_eq!(desk.surroundings(&plain.root), surroundings, "{what}");
+        } else {
+            assert_eq!(answer.code, ResultCode::Ok, "{what}: {}", answer.message);
+            assert_eq!(desk.confirmation_rows(), 1, "{what}");
+        }
+    }
+}
+
+/// A direct enable that names a remote, or a forge with direct named,
+/// writes them in its initialization commit, and the lost result of its
+/// request is found by the same evidence as a plain enable's (R-9).
+#[test]
+fn a_direct_enable_with_a_remote_writes_it_in_the_initialization_commit() {
+    use manyhands::{
+        canonical::{ForgeKind, ForgeSetting, Integration},
+        repository::{FailurePoint, Mutation, RepoEnableInput},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::REQUEST_1,
+    };
+
+    let rows: Vec<(&str, Option<Integration>, Option<ForgeSetting>)> = vec![
+        ("a remote, and no mode: direct", None, None),
+        (
+            "a remote and a forge, with direct named",
+            Some(Integration::Direct),
+            Some(ForgeSetting {
+                kind: Some(ForgeKind::Gitlab),
+                web_url: Some("https://git.example.invalid".to_owned()),
+                pull_request_url: None,
+            }),
+        ),
+    ];
+    for (what, integration, forge) in rows {
+        let mut desk = Desk::new();
+        let plain = Plain::new();
+        plain
+            .fixture
+            .repository
+            .remote("origin", NEVER_CONTACTED)
+            .unwrap();
+        let input = RepoEnableInput {
+            publication_remote: Some("origin".to_owned()),
+            integration,
+            forge: forge.clone(),
+            ..plain.input()
+        };
+        let enable = || Mutation::RepoEnable(input.clone());
+        let (confirmation, preview) = desk.preview(&enable());
+        // The direct preview is the one it always was.
+        assert_eq!(
+            serde_json::to_value(&preview.details).unwrap()["primary_branch"],
+            "main",
+            "{what}"
+        );
+
+        // The result is lost after the commit: another process, the same
+        // request.
+        desk.fail_once_at(FailurePoint::BeforeRegistryWrite);
+        let first = desk.execute(REQUEST_1, &confirmation, enable());
+        assert_ne!(first.outcome, Outcome::Success, "{what}");
+        let commit = first.effects.commit_oid.clone();
+        assert!(commit.is_some(), "{what}: the commit is the request's");
+        desk.reopen();
+        let again = desk.execute(REQUEST_1, &confirmation, enable());
+        assert_eq!(again.code, ResultCode::Ok, "{what}: {}", again.message);
+        assert_eq!(again.effects.commit_oid, commit, "{what}");
+        assert_eq!(plain.initializations(), 1, "{what}");
+        assert_eq!(plain.head().to_string(), commit.clone().unwrap(), "{what}");
+
+        // The file the commit holds names the remote and the forge, in a
+        // direct mode.
+        let text = plain.configuration().unwrap();
+        let config = canonical::parse_repository_config(&text).unwrap();
+        assert_eq!(
+            config.publication_remote.as_deref(),
+            Some("origin"),
+            "{what}"
+        );
+        assert_eq!(config.integration(), Integration::Direct, "{what}");
+        assert_eq!(config.forge(), forge, "{what}");
+        assert!(text.contains("format_version = 1"), "{what}: {text}");
+        let tracked = support::tracked_configuration(&plain.root).unwrap();
+        assert_eq!(
+            tracked,
+            text.as_bytes(),
+            "{what}: the file is committed as written"
+        );
+        assert!(desk.registered(&plain.root), "{what}");
+
+        // The finished request is given again, with the same commit.
+        let replayed = desk.execute(REQUEST_1, &confirmation, enable());
+        assert_eq!(replayed.code, ResultCode::Ok, "{what}");
+        assert_eq!(replayed.effects.commit_oid, commit, "{what}");
+        assert_eq!(plain.initializations(), 1, "{what}");
+    }
+}
+
+/// A selection that turns pull-request mode on records its change and stops,
+/// owed, with the primary's configuration as it was; the commands that must
+/// wait for it do, the others carry on; the same request goes on from its
+/// record, and nothing is made twice (design Parts F and K).
+#[test]
+fn turning_pull_request_mode_on_without_a_key_records_a_change() {
+    use manyhands::{
+        canonical::Integration,
+        repository::{Mutation, RemoteSelectInput, RequestState, TicketCloseInput},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        items,
+        mutation::{REQUEST_1, REQUEST_2, World, execute_with},
+    };
+
+    let world = World::new();
+    world
+        .fixture
+        .repository
+        .remote("origin", NEVER_CONTACTED)
+        .unwrap();
+    let select = || {
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: world.root.clone(),
+            name: Some("origin".to_owned()),
+            integration: Some(Integration::PullRequest),
+            forge: None,
+        })
+    };
+    let configuration = || std::fs::read(world.root.join(canonical::CONFIG_PATH)).unwrap();
+    let head = world.primary_head();
+    let before_configuration = configuration();
+    let count = |sql: &str| {
+        items::index(world.data.path())
+            .query_row(sql, [], |row| row.get::<_, i64>(0))
+            .unwrap()
+    };
+
+    // The call records its change and stops. This target's process has not
+    // initialized the Git transport (that is one call before any thread, which
+    // a test harness cannot make), so the transport's first answer is its own
+    // `internal_error`; the stop for want of a selected key is the CLI's test,
+    // which runs a process that has (`tests/cli/remotes.rs`).
+    let stopped = execute_with(&world.service, REQUEST_1, select());
+    assert_eq!(
+        stopped.code,
+        ResultCode::InternalError,
+        "{}",
+        stopped.message
+    );
+    assert_eq!(stopped.outcome, Outcome::Partial);
+    let record = world.record(REQUEST_1).unwrap();
+    assert_eq!(record.state, RequestState::Accepted);
+    let data = serde_json::to_value(&stopped.data).unwrap();
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "recorded");
+    assert_eq!(data["kind"], "change");
+    assert_eq!(data["remote"], "origin");
+    assert_eq!(data["integration"], "pull_request");
+    assert_eq!(data["request_id"], REQUEST_1);
+    support::schema::check_published("setup_mutation.schema.json", &data).unwrap();
+    let setup_id = data["id"].as_str().unwrap().to_owned();
+    assert_eq!(data["branch"], format!("manyhands/setup/{setup_id}"));
+
+    // `repo inspect` shows the change; the primary's configuration, and
+    // HEAD, are as they were: nothing was committed.
+    let inspected = world.service.inspect_repository(&world.root).unwrap();
+    let setup = inspected.setup.expect("a setup is shown");
+    assert_eq!(
+        (
+            setup.id.as_str(),
+            setup.kind.as_str(),
+            setup.state.as_str(),
+            setup.request_id.as_str()
+        ),
+        (setup_id.as_str(), "change", "recorded", REQUEST_1)
+    );
+    assert_eq!(configuration(), before_configuration);
+    assert_eq!(world.primary_head(), head);
+
+    // `ticket close --prepare` waits for the setup, as the envelope's own
+    // code; `ticket save` carries on in the mode and on the remote it has.
+    let prepared = world
+        .service
+        .prepare(&Mutation::TicketClose(TicketCloseInput {
+            root: world.root.clone(),
+            id: items::item_id(items::TICKET_A),
+        }));
+    assert_eq!(
+        prepared.code,
+        ResultCode::SetupPending,
+        "{}",
+        prepared.message
+    );
+    support::mutation_golden::assert_contract_at(
+        "ticket_close_setup_pending",
+        world.root.to_str().unwrap(),
+        None,
+        &[],
+        &prepared,
+    );
+    let saved = execute_with(
+        &world.service,
+        REQUEST_2,
+        world.save(items::TICKET_A, &world.token(items::TICKET_A)),
+    );
+    assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+    // A second selection waits for the first, whatever its request.
+    let again_selected = execute_with(&world.service, support::mutation::REQUEST_3, select());
+    assert_eq!(
+        again_selected.code,
+        ResultCode::SetupPending,
+        "{}",
+        again_selected.message
+    );
+    support::mutation_golden::assert_contract_at(
+        "remote_select_setup_pending",
+        world.root.to_str().unwrap(),
+        None,
+        &[],
+        &again_selected,
+    );
+
+    // The same request again: the same answer, and nothing is recorded twice.
+    let again = execute_with(&world.service, REQUEST_1, select());
+    assert_eq!(again.code, ResultCode::InternalError, "{}", again.message);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    assert_eq!(serde_json::to_value(&again.data).unwrap(), data);
+    assert_eq!(count("SELECT COUNT(*) FROM repository_setups"), 1);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM operation_records WHERE action = 'set_publication_remote'"),
+        1
+    );
+    assert_eq!(configuration(), before_configuration);
+}
+
+// ---------------------------------------------------------------------
+// Cancelling and removing a pending setup (Wave 06 Cycle 02, design Parts H and K)
+// ---------------------------------------------------------------------
+
+/// A recorded first-time setup is cancelled: the preview binds its state, a
+/// publish between the preview and the confirm is `external_change`, the
+/// cancel unregisters the repository and finishes the enable's own request as
+/// `cancelled`, and that request, sent again, answers so and records no
+/// second setup (L4).
+#[test]
+fn cancelling_a_recorded_setup_unregisters_it() {
+    use manyhands::{
+        repository::{Mutation, RepoSetupCancelInput, RequestState},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::{REQUEST_1, REQUEST_2, REQUEST_3},
+    };
+
+    let desk = Desk::new();
+    let plain = Plain::new();
+    plain
+        .fixture
+        .repository
+        .remote("origin", NEVER_CONTACTED)
+        .unwrap();
+    let enable = || Mutation::RepoEnable(pull_request_input(&plain));
+    let cancel = |root: &std::path::Path| {
+        Mutation::RepoSetupCancel(RepoSetupCancelInput {
+            root: root.to_owned(),
+        })
+    };
+    let root = plain.root.to_str().unwrap().to_owned();
+    let head = plain.head();
+
+    // The setup is recorded, and its enable is owed.
+    let prepared = desk.service.prepare(&enable());
+    let confirmation = serde_json::to_value(&prepared).unwrap()["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stopped = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(
+        stopped.code,
+        ResultCode::InternalError,
+        "{}",
+        stopped.message
+    );
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    let setup = serde_json::to_value(&stopped.data).unwrap();
+    let setup_id = setup["id"].as_str().unwrap().to_owned();
+    let branch = format!("manyhands/setup/{setup_id}");
+
+    // The preview reads local state only: no connection, nothing written.
+    let preview = desk.prepare(&cancel(&plain.root));
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    let value = serde_json::to_value(&preview).unwrap();
+    let effects: Vec<&str> = value["data"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| effect["effect"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        effects,
+        [
+            "setup_branch_deleted",
+            "setup_record_removed",
+            "repository_unregistered"
+        ]
+    );
+    let details = &value["data"]["details"];
+    assert_eq!(details["setup_id"], setup_id.as_str());
+    assert_eq!(details["kind"], "enable");
+    assert_eq!(details["state"], "recorded");
+    assert_eq!(details["branch"], branch.as_str());
+    assert!(!manyhands::runtime::git_transport_initialized());
+    let confirmation_id = value["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_preview",
+        &root,
+        Some("setup_cancel_preview.schema.json"),
+        &[
+            (confirmation_id.as_str(), "<confirmation>"),
+            (setup_id.as_str(), "<setup>"),
+            (branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &preview,
+    );
+
+    // The setup is published between the preview and the confirm: what was
+    // shown is not what is there.
+    let index = || support::items::index(desk.data.path());
+    index()
+        .execute(
+            "UPDATE repository_setups SET base_oid = ?1, commit_oid = ?1, published_oid = ?1",
+            [head.to_string()],
+        )
+        .unwrap();
+    let changed = desk.execute(REQUEST_2, &confirmation_id, cancel(&plain.root));
+    assert_eq!(
+        changed.code,
+        ResultCode::ExternalChange,
+        "{}",
+        changed.message
+    );
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 1);
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    index()
+        .execute(
+            "UPDATE repository_setups SET published_oid = NULL, base_oid = NULL, commit_oid = NULL",
+            [],
+        )
+        .unwrap();
+
+    // The confirm of a fresh preview unregisters the repository.
+    let (confirmation_id, _) = desk.preview(&cancel(&plain.root));
+    let cancelled = desk.execute(REQUEST_3, &confirmation_id, cancel(&plain.root));
+    assert_eq!(cancelled.code, ResultCode::Ok, "{}", cancelled.message);
+    assert_eq!(cancelled.outcome, Outcome::Success);
+    let data = serde_json::to_value(&cancelled.data).unwrap();
+    assert_eq!(data["type"], "setup_cancel");
+    assert_eq!(data["setup_id"], setup_id.as_str());
+    assert_eq!(data["kind"], "enable");
+    assert_eq!(data["remote_branch"], "not_published");
+    assert_eq!(data["local_branch"], "absent");
+    assert_eq!(data["unregistered"], true);
+    support::schema::check_published("setup_cancel.schema.json", &data).unwrap();
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_recorded",
+        &root,
+        Some("setup_cancel.schema.json"),
+        &[(setup_id.as_str(), "<setup>")],
+        &cancelled,
+    );
+    assert!(!desk.registered(&plain.root));
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0);
+    // No connection was made, and no file or ref of the repository changed.
+    assert!(!manyhands::runtime::git_transport_initialized());
+    assert_eq!(plain.head(), head);
+    assert_eq!(plain.configuration(), None);
+    // The cancel's own row is kept, completed; the enable's own row went with
+    // the registration's other rows.
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE action = 'cancel_setup' AND state = 'completed'
+                AND completed_step = 'setup_cancel_recorded'"
+        ),
+        1
+    );
+    assert_eq!(desk.count("SELECT COUNT(*) FROM operation_records"), 1);
+
+    // The enable's request was finished in the same transaction, as
+    // cancelled: sent again, it answers so, and records no second setup.
+    let finished = desk.record(REQUEST_1).unwrap();
+    assert_eq!(finished.state, RequestState::Finished);
+    assert_eq!(
+        finished.result.as_ref().unwrap().code,
+        ResultCode::Cancelled
+    );
+    let again = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(again.code, ResultCode::Cancelled, "{}", again.message);
+    assert_eq!(again.outcome, Outcome::Cancelled);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0);
+    // The cancel's own request replays what it answered.
+    let replayed = desk.execute(REQUEST_3, &confirmation_id, cancel(&plain.root));
+    assert_eq!(replayed, cancelled);
+
+    // A fresh cancel of the repository just unregistered has nothing to
+    // cancel either: no setup is the end state, as for `repo remove`.
+    let again = desk.prepare(&cancel(&plain.root));
+    assert_eq!(again.code, ResultCode::AlreadyApplied, "{}", again.message);
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert!(again.data.is_none());
+
+    // A repository with no setup has nothing to cancel.
+    let direct = Plain::new();
+    let (direct_confirmation, _) = desk.preview(&direct.enable());
+    let enabled = desk.execute(
+        "01ARZ3NDEKTSV4RRFFQ69G5FX4",
+        &direct_confirmation,
+        direct.enable(),
+    );
+    assert_eq!(enabled.code, ResultCode::Ok, "{}", enabled.message);
+    let nothing = desk.prepare(&cancel(&direct.root));
+    assert_eq!(
+        nothing.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        nothing.message
+    );
+    assert_eq!(nothing.outcome, Outcome::Noop);
+    assert!(nothing.data.is_none());
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_already_applied",
+        direct.root.to_str().unwrap(),
+        None,
+        &[],
+        &nothing,
+    );
+}
+
+/// `repo remove` always works on a repository whose setup is pending, with its
+/// root present or gone (decision 16): the setup's request is finished as
+/// `cancelled` in the removal's transaction, whatever its command, both setup
+/// branches are left, and that request, sent again, answers so and records no
+/// second setup.
+#[test]
+fn repo_remove_always_removes_a_pending_setup() {
+    use manyhands::{
+        canonical::Integration,
+        repository::{Mutation, RemoteSelectInput, RepoRemoveInput, RequestState},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::{REQUEST_1, REQUEST_2, REQUEST_3, execute_with},
+    };
+
+    // (a first-time enable, or a change), and whether the root is gone.
+    for (change, gone) in [(false, false), (false, true), (true, false)] {
+        let what = format!("change: {change}, root gone: {gone}");
+        let desk = Desk::new();
+        let plain = Plain::new();
+        plain
+            .fixture
+            .repository
+            .remote("origin", NEVER_CONTACTED)
+            .unwrap();
+        let remove = || {
+            Mutation::RepoRemove(RepoRemoveInput {
+                root: plain.root.clone(),
+            })
+        };
+        let enable = || Mutation::RepoEnable(pull_request_input(&plain));
+        let select = || {
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root: plain.root.clone(),
+                name: Some("origin".to_owned()),
+                integration: Some(Integration::PullRequest),
+                forge: None,
+            })
+        };
+
+        // A recorded setup, whose request is owed.
+        let (confirmation, stopped) = if change {
+            let (direct, _) = desk.preview(&plain.enable());
+            let enabled = desk.execute(REQUEST_1, &direct, plain.enable());
+            assert_eq!(enabled.code, ResultCode::Ok, "{what}: {}", enabled.message);
+            (
+                String::new(),
+                execute_with(&desk.service, REQUEST_2, select()),
+            )
+        } else {
+            let prepared = desk.service.prepare(&enable());
+            let confirmation = serde_json::to_value(&prepared).unwrap()["data"]["confirmation_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let stopped = desk.execute(REQUEST_2, &confirmation, enable());
+            (confirmation, stopped)
+        };
+        assert_eq!(
+            stopped.code,
+            ResultCode::InternalError,
+            "{what}: {}",
+            stopped.message
+        );
+        assert_eq!(
+            desk.record(REQUEST_2).unwrap().state,
+            RequestState::Accepted,
+            "{what}"
+        );
+        let setup_id = serde_json::to_value(&stopped.data).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Both setup branches exist, as a publication left them: the remote's
+        // is out of reach here, so only the local branch and the private ref
+        // can be seen to stay.
+        let local_branch = format!("refs/heads/manyhands/setup/{setup_id}");
+        let private_base = format!("refs/manyhands/setups/{setup_id}/base");
+        let head = plain.head();
+        plain
+            .fixture
+            .repository
+            .reference(&local_branch, head, false, "a setup branch")
+            .unwrap();
+        plain
+            .fixture
+            .repository
+            .reference(&private_base, head, false, "a private base")
+            .unwrap();
+        // The root is moved aside, so that it is gone for the removal and its
+        // refs can still be read afterwards.
+        let aside = plain.root.with_extension("aside");
+        if gone {
+            std::fs::rename(&plain.root, &aside).unwrap();
+        }
+
+        let (removal, _) = desk.preview(&remove());
+        let removed = desk.execute(REQUEST_3, &removal, remove());
+
+        assert_eq!(removed.code, ResultCode::Ok, "{what}: {}", removed.message);
+        assert!(!desk.registered(&plain.root), "{what}");
+        assert_eq!(
+            desk.count("SELECT COUNT(*) FROM repository_setups"),
+            0,
+            "{what}"
+        );
+        // The setup's request is finished `cancelled`, in that transaction.
+        let finished = desk.record(REQUEST_2).unwrap();
+        assert_eq!(finished.state, RequestState::Finished, "{what}");
+        assert_eq!(
+            finished.result.as_ref().unwrap().code,
+            ResultCode::Cancelled,
+            "{what}"
+        );
+        // The root comes back, and both setup refs were left.
+        if gone {
+            std::fs::rename(&aside, &plain.root).unwrap();
+        }
+        let repository = git2::Repository::open(&plain.root).unwrap();
+        assert!(repository.find_reference(&local_branch).is_ok(), "{what}");
+        assert!(repository.find_reference(&private_base).is_ok(), "{what}");
+        // No connection was made.
+        assert!(!manyhands::runtime::git_transport_initialized(), "{what}");
+
+        // The same request, sent again, answers `cancelled` and records no
+        // second setup.
+        let again = if change {
+            execute_with(&desk.service, REQUEST_2, select())
+        } else {
+            desk.execute(REQUEST_2, &confirmation, enable())
+        };
+        assert_eq!(
+            again.code,
+            ResultCode::Cancelled,
+            "{what}: {}",
+            again.message
+        );
+        assert_eq!(again.outcome, Outcome::Cancelled, "{what}");
+        assert_eq!(
+            desk.count("SELECT COUNT(*) FROM repository_setups"),
+            0,
+            "{what}"
+        );
+        assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0, "{what}");
     }
 }

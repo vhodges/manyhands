@@ -437,6 +437,7 @@ const AUTONOMY: &[(&str, usize, &str)] = &[
     ("repo create", 1, "`repo create`"),
     ("repo enable", 1, "`enable`"),
     ("repo identity-set", 1, "`identity-set`"),
+    ("repo setup-cancel", 1, "`repo setup-cancel`"),
     ("remote remove", 1, "`remote remove`"),
     ("document promote", 1, "`document promote`"),
     ("document repair", 1, "`document repair`"),

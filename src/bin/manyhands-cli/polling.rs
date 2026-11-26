@@ -17,6 +17,7 @@ use manyhands::{
     repository::{
         Mutation, MutationDataDto, PollConfigureInput, PollMutationDto, PollOnceInput,
         PollPauseInput, PollResumeInput, PollRetirementMutationDto, RepositoryService,
+        SetupPollDto,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -127,6 +128,54 @@ fn report(data: &PollMutationDto) -> String {
     out
 }
 
+/// A setup poll's answer in words (design Part G): what the poll saw, what
+/// the person does next, and the link that opens the pull request while the
+/// setup waits. Nothing the stored data holds is printed as a raw field.
+fn setup_poll_lines(data: &SetupPollDto) -> String {
+    let branch = field(&data.pull_request.source);
+    let primary = field(&data.pull_request.target);
+    let line = match data.outcome.as_str() {
+        "not_published" => "recorded, not published yet; send the same request that recorded the setup again to publish it".to_owned(),
+        "configuration_invalid" => format!(
+            "the configuration on the remote's {primary} cannot be read; fix it on the remote, or cancel the setup (repo setup-cancel)"
+        ),
+        "primary_differs" => format!(
+            "the configuration on the remote names another primary branch than {primary}; fix it on the remote, or cancel the setup (repo setup-cancel)"
+        ),
+        "branch_deleted" => format!(
+            "{branch} is gone from the remote and {primary} does not hold the setup; cancel it (repo setup-cancel) and start again"
+        ),
+        "waiting_for_merge" => format!("waiting for {branch} to merge into {primary}"),
+        "waiting_for_checkout" => format!(
+            "merged, waiting for {primary} to be checked out and clean; check it out with no changes or untracked files, and make sure no worktree has {branch} checked out, then poll again"
+        ),
+        "diverged" => format!(
+            "merged, but the local {primary} has commits the remote's {primary} lacks; push them or move them aside, then poll again"
+        ),
+        "activated" => format!(
+            "merged and active, in {} mode",
+            field(data.integration.as_deref().unwrap_or("direct"))
+        ),
+        other => field(other).to_string(),
+    };
+    let mut out = format!("Setup: {line}\n");
+    if data.outcome == "waiting_for_merge" {
+        let link = manyhands::forge::PullRequestLink {
+            source: data.pull_request.source.clone(),
+            target: data.pull_request.target.clone(),
+            forge: None,
+            url: data.pull_request.url.clone(),
+        };
+        out.push_str(&format!("{}\n", field(&link.human_line())));
+    }
+    if data.outcome == "activated" && data.differs {
+        out.push_str(
+            "The merged configuration differs from the one set up; the merged one is in effect.\n",
+        );
+    }
+    out
+}
+
 /// Historical results are immutable. Only the envelope's ordinary child
 /// recovery actions describe what can be done now; never reconstruct a loop.
 fn retirement_report(data: &PollRetirementMutationDto) -> String {
@@ -228,6 +277,10 @@ fn once_output_in_mode(
         Some(MutationDataDto::PollRetirement(data)) => {
             plain.data = None;
             retirement_report(data)
+        }
+        Some(MutationDataDto::SetupPoll(data)) => {
+            plain.data = None;
+            setup_poll_lines(data)
         }
         _ => String::new(),
     };

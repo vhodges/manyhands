@@ -212,6 +212,15 @@ impl RepositoryService {
         self
     }
 
+    /// The same service, waiting `wait` for the repository lease before a
+    /// lifecycle is `busy`, so that a test of the busy answer spends no real
+    /// time.
+    #[doc(hidden)]
+    pub fn with_lease_wait_for_testing(mut self, wait: Duration) -> Self {
+        self.lease_wait = wait;
+        self
+    }
+
     /// The same service, letting the time of a wait pass with `sleeper`.
     #[doc(hidden)]
     pub fn with_sleeper_for_testing(mut self, sleeper: Arc<dyn Sleeper>) -> Self {

@@ -1,6 +1,7 @@
 //! The two-clone synchronization world: an owned SSH server, a clone
 //! that Manyhands is enabled in with the server as its publication
-//! remote, and a peer clone that moves the server's branches.
+//! remote (or, for `plain_key_unenabled`, one it is not yet enabled in),
+//! and a peer clone that moves the server's branches.
 //!
 //! This is shared by the test targets that synchronize against a real
 //! server. Each declares `ssh_remote` and `ssh_privacy` beside it.
@@ -154,7 +155,20 @@ impl World {
         Self::with_key(KeyProtection::None)
     }
 
+    /// `plain_key`, with the clone left as `git clone` made it: Manyhands is
+    /// not enabled in it, no publication remote is configured, and the
+    /// server's host is not trusted. The clone has a repository-local
+    /// identity and the world has a selected key, as a first `repo enable`
+    /// of a person who has set both up would find them.
+    pub fn plain_key_unenabled() -> Result<Self, FixtureError> {
+        Self::build(KeyProtection::None, false)
+    }
+
     fn with_key(protection: KeyProtection) -> Result<Self, FixtureError> {
+        Self::build(protection, true)
+    }
+
+    fn build(protection: KeyProtection, enabled: bool) -> Result<Self, FixtureError> {
         let server = SshRemoteFixture::start()?;
         let plain = fixed(std::fs::read(server.client_key_path()))?;
         let key = fixed(ssh_key::PrivateKey::read_openssh_file(
@@ -180,31 +194,33 @@ impl World {
         fixed(fixed(repo.config())?.set_str("user.name", "Fixture"))?;
         fixed(fixed(repo.config())?.set_str("user.email", "fixture@example.invalid"))?;
         let service = fixed(RepositoryService::open_at(&directory.path().join("data")))?;
-        fixed(service.enable(EnableRepositoryRequest {
-            root: root.clone(),
-            primary_branch: "main".into(),
-            identity: None,
-            operation_id: OperationId::new(),
-        }))?;
-        let config = root.join(".manyhands/config.toml");
-        let mut source = fixed(std::fs::read_to_string(&config))?;
-        source.push_str("publication_remote = \"origin\"\n");
-        fixed(std::fs::write(&config, source))?;
-        let mut index = fixed(repo.index())?;
-        fixed(index.add_path(Path::new(".manyhands/config.toml")))?;
-        fixed(index.write())?;
-        let tree = fixed(repo.find_tree(fixed(index.write_tree())?))?;
-        let parent = fixed(fixed(repo.head())?.peel_to_commit())?;
-        let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
-        fixed(repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "owned configuration",
-            &tree,
-            &[&parent],
-        ))?;
-        push_peer(&repo, &server, "refs/heads/main")?;
+        if enabled {
+            fixed(service.enable(EnableRepositoryRequest {
+                root: root.clone(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: OperationId::new(),
+            }))?;
+            let config = root.join(".manyhands/config.toml");
+            let mut source = fixed(std::fs::read_to_string(&config))?;
+            source.push_str("publication_remote = \"origin\"\n");
+            fixed(std::fs::write(&config, source))?;
+            let mut index = fixed(repo.index())?;
+            fixed(index.add_path(Path::new(".manyhands/config.toml")))?;
+            fixed(index.write())?;
+            let tree = fixed(repo.find_tree(fixed(index.write_tree())?))?;
+            let parent = fixed(fixed(repo.head())?.peel_to_commit())?;
+            let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+            fixed(repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "owned configuration",
+                &tree,
+                &[&parent],
+            ))?;
+            push_peer(&repo, &server, "refs/heads/main")?;
+        }
         let peer = clone_owned(&server, &directory.path().join("clone-b"))?;
         let RegisterSharedKeyOutcome::Registered(key) =
             fixed(service.register_shared_key(RegisterSharedKeyRequest {
@@ -241,7 +257,9 @@ impl World {
             probes,
             paths: Vec::new(),
         };
-        world.privacy()?;
+        if enabled {
+            world.privacy()?;
+        }
         Ok(world)
     }
     pub fn data(&self) -> PathBuf {

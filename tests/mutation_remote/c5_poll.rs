@@ -673,6 +673,8 @@ fn pause_survives_the_remote_s_removal() -> Result<(), FixtureError> {
         Mutation::RemoteSelect(RemoteSelectInput {
             root: local.root.clone(),
             name: name.map(str::to_owned),
+            integration: None,
+            forge: None,
         })
     };
     let ok = |envelope: Envelope<MutationDataDto>| {
