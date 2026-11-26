@@ -8,7 +8,7 @@
 //! ref this module moves is the context's: a safe checkout with no ref lock
 //! held, then one short guarded ref update (R-T6-3).
 use super::{
-    BranchAnswer, PlannedClosure, PreviewTicketClosureRequest,
+    BranchAnswer, ClosureAction, PlannedClosure, PreviewTicketClosureRequest,
     observe::{
         self, ClosureContentError, ClosureObservation, closed_by_text, closed_ticket_bytes,
         ticket_path, withdrawn_ticket_bytes,
@@ -219,6 +219,21 @@ pub(in super::super) fn build_withdraw_commit(
     .map(|built| built.commit))
 }
 
+/// The withdraw commit a record stored, when it is the one `build_withdraw_commit`
+/// makes over `context`: one parent, `context`, and a withdraw's subject.
+fn stored_withdraw(
+    repo: &git2::Repository,
+    item: &ItemId,
+    context: Oid,
+    stored: Option<Oid>,
+) -> Option<Oid> {
+    let commit = repo.find_commit(stored?).ok()?;
+    (commit.parent_count() == 1
+        && commit.parent_id(0).ok()? == context
+        && commit.summary() == Some(withdraw_subject(item).as_str()))
+    .then(|| commit.id())
+}
+
 /// What `commit_edited_ticket` wrote.
 struct EditedTicket {
     ticket_blob: Oid,
@@ -348,17 +363,26 @@ fn commit_closure_text(
     ))
 }
 
+/// Whether a commit's ticket names either closure key; `None` when the
+/// path is not a ticket that reads.
+fn names_closure_key(repo: &git2::Repository, commit: Oid, path: &Path) -> Option<bool> {
+    let tree = repo.find_commit(commit).ok()?.tree().ok()?;
+    let entry = tree.get_path(path).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    let values = canonical::front_matter(std::str::from_utf8(blob.content()).ok()?)?;
+    Some(values.get("closed_at").is_some() || values.get("closed_by").is_some())
+}
+
 /// Whether a commit's ticket names either closure key, as the observation
 /// reads the primary: a malformed closure is never open.
 fn commit_names_closure(repo: &git2::Repository, commit: Oid, path: &Path) -> bool {
-    let names = || -> Option<bool> {
-        let tree = repo.find_commit(commit).ok()?.tree().ok()?;
-        let entry = tree.get_path(path).ok()?;
-        let blob = repo.find_blob(entry.id()).ok()?;
-        let values = canonical::front_matter(std::str::from_utf8(blob.content()).ok()?)?;
-        Some(values.get("closed_at").is_some() || values.get("closed_by").is_some())
-    };
-    names().unwrap_or(false)
+    names_closure_key(repo, commit, path).unwrap_or(false)
+}
+
+/// Whether a commit's ticket reads and names neither closure key: the state
+/// a withdraw leaves.
+fn commit_holds_open_ticket(repo: &git2::Repository, commit: Oid, path: &Path) -> bool {
+    names_closure_key(repo, commit, path) == Some(false)
 }
 
 /// The tree a merge of `tip` into `base` has: the tip's own tree when
@@ -492,8 +516,10 @@ pub(in super::super) enum ClosingState {
     /// worktree and possibly the index (R-T0-3), holding exactly the stored
     /// checkpoint's Blob: the checkout of step 6 ran.
     CheckoutDone,
-    /// The ref is at `closure_oid`, or at a descendant whose ticket carries
-    /// the same closure fields (a deliberate synchronization).
+    /// The ref is at the record's written commit (`closure_oid`, or
+    /// `withdraw_oid` for a withdraw), or at a descendant whose ticket keeps
+    /// the state that commit gave it (a deliberate synchronization): the
+    /// same closure fields for a close, no closure at all for a withdraw.
     CheckpointWritten {
         tip: Oid,
     },
@@ -600,17 +626,21 @@ pub(in super::super) fn reconcile_closing(
     let descendant = context_repo
         .graph_descendant_of(tip, closure)
         .map_err(|_| unavailable(context_repo))?;
-    let closure_fields = commit_closure_text(context_repo, closure, &path);
-    Ok(
-        if descendant
-            && closure_fields.is_some()
-            && commit_closure_text(context_repo, tip, &path) == closure_fields
-        {
-            ClosingState::CheckpointWritten { tip }
-        } else {
-            ClosingState::Unrecognized
-        },
-    )
+    // The state the written commit gave the ticket, which the descendant
+    // keeps: a withdraw's is an open ticket, a close's its closure.
+    let keeps_state = || match record.action {
+        ClosureAction::Withdraw => commit_holds_open_ticket(context_repo, tip, &path),
+        _ => {
+            let closure_fields = commit_closure_text(context_repo, closure, &path);
+            closure_fields.is_some()
+                && commit_closure_text(context_repo, tip, &path) == closure_fields
+        }
+    };
+    Ok(if descendant && keeps_state() {
+        ClosingState::CheckpointWritten { tip }
+    } else {
+        ClosingState::Unrecognized
+    })
 }
 
 /// The closure's authority after a checkpoint (C9): `closed_by` from the
@@ -1255,11 +1285,25 @@ pub(in super::super) fn withdraw_step<E: LifecycleError>(
         .map(|()| BranchStep::Finished)
         .map_err(E::from)
     };
-    // A record at `closing` holds what an earlier call recorded. Its
-    // reconciliation on `withdraw_oid` is not here yet: it stays as it is,
-    // for recovery.
+    // A record at `closing` holds what an earlier call recorded: the commit
+    // it stores is the one the context moves to.
     if r.step == ClosureStep::Closing {
-        return Err(E::recovery_required());
+        let context_repo = context_repository(root, item)?;
+        match reconcile_closing(&context_repo, r)? {
+            ClosingState::CheckoutDone => {
+                context_moving(service, root, item)?;
+                finish_context_move(&context_repo, r).map_err(|_| E::recovery_required())?;
+                context_moving(service, root, item)?;
+                boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
+                return Ok(BranchStep::Closing);
+            }
+            ClosingState::CheckpointWritten { .. } => {
+                context_moving(service, root, item)?;
+                return Ok(BranchStep::Closing);
+            }
+            ClosingState::Unrecognized => return Err(E::recovery_required()),
+            ClosingState::NothingWritten => (),
+        }
     }
     // The context holds what the child left it.
     if repo.refname_to_id(&context_ref).ok() != Some(context) {
@@ -1317,24 +1361,34 @@ pub(in super::super) fn withdraw_step<E: LifecycleError>(
     })? {
         return Err(E::busy());
     }
-    let identity = integrate::promotion_identity::<E>(service, &repo, root, confirmation)?;
-    let Some(built) = build_withdraw_commit(&repo, item, &path, context, now, &identity)? else {
-        return abandon(
-            Refusal::ReconfirmationRequired,
-            BranchAnswer::ReconfirmationRequired,
-        );
+    // A withdraw stores no time to rebuild with, and a rebuild would be a
+    // second commit: a record at `closing` moves to the commit it stored.
+    let built = if r.step == ClosureStep::Closing {
+        stored_withdraw(&repo, item, context, r.withdraw_oid).ok_or_else(E::recovery_required)?
+    } else {
+        let identity = integrate::promotion_identity::<E>(service, &repo, root, confirmation)?;
+        let Some(built) = build_withdraw_commit(&repo, item, &path, context, now, &identity)?
+        else {
+            return abandon(
+                Refusal::ReconfirmationRequired,
+                BranchAnswer::ReconfirmationRequired,
+            );
+        };
+        built
     };
     let held_off = state::with_transaction(service, root, |tx, id| {
         if record::context_synchronization_unfinished(tx, id, item)? {
             return Ok(true);
         }
-        record::begin_branch_closing(
-            tx,
-            id,
-            r.operation_id,
-            observation.base,
-            BranchWrite::Withdraw { commit: built },
-        )?;
+        if r.step != ClosureStep::Closing {
+            record::begin_branch_closing(
+                tx,
+                id,
+                r.operation_id,
+                observation.base,
+                BranchWrite::Withdraw { commit: built },
+            )?;
+        }
         Ok(false)
     })?;
     if held_off {

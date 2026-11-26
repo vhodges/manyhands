@@ -346,7 +346,16 @@ impl PullRequest {
         req: CloseTicketRequest,
         io: &mut impl PromotionIo,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        self.withdraw_with(&self.f.service, req, io, clock)
+        self.withdraw_in(&self.f.service, req, io)
+    }
+    /// A withdraw run on `service`, as a reopened process would.
+    fn withdraw_in(
+        &self,
+        service: &RepositoryService,
+        req: CloseTicketRequest,
+        io: &mut impl PromotionIo,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        self.withdraw_with(service, req, io, clock)
     }
     /// A withdraw run on `clock`.
     fn withdraw_at(
@@ -3594,6 +3603,48 @@ fn w8_a_crash_after_the_publication_child_never_runs_the_hook_again() {
     }
 }
 
+/// W13: a process lost with the record at `closing` reconciles on the commit
+/// the record stored. A withdraw stores no time, so a rebuild would make a
+/// second commit: the exit child ran at the wall clock and the retry runs at
+/// `CLOCK`, so two commits would show. The points are before the checkout
+/// (`ClosureAfterClosingRecorded`), between the checkout and the ref move
+/// (`ClosureDuringCheckpointCheckout`) and after the ref moved
+/// (`AfterClosureCheckpoint`).
+#[test]
+fn w13_a_withdraw_lost_at_closing_is_reconciled_on_its_commit() {
+    for point in [2, 3, 4] {
+        let p = PullRequest::new();
+        let closed = p.close_first();
+        let req = p.withdraw_request();
+        exit_at_with(&p.f, &req, point, "withdraw");
+        let before = p.stored(&req);
+        assert_eq!(before.step, ClosureStep::Closing, "{point}");
+        let w = before.withdraw_oid.expect("the withdraw was recorded");
+        assert_eq!(before.closure_oid, None, "{point}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{point}");
+        let mut io = PullRequestIo::default();
+        let outcome = PullRequest::branch(p.withdraw_in(&p.f.reopened(), req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Withdrawn, "{point}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{point}");
+        assert_eq!(r.withdraw_oid, Some(w), "{point}");
+        assert_eq!(outcome.checkpoint_oid(), Some(w), "{point}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{point}");
+        assert_eq!(p.f.context_oid(), w, "{point}");
+        assert_eq!(
+            p.f.repo.find_commit(w).unwrap().parent_id(0).unwrap(),
+            closed,
+            "{point}"
+        );
+        assert_eq!(
+            outcome.publication(),
+            Some(PromotionPublication::Published { oid: w }),
+            "{point}"
+        );
+        p.assert_primary_untouched(&io);
+    }
+}
+
 /// W9: the forge merges the closure between the two children. A fast-forward
 /// leaves the withdraw on the local branch only, as the publication child
 /// stops with `ticket_closed` (R-30); a merge commit or a squash is merged
@@ -3982,6 +4033,7 @@ fn a_request_continues_only_its_own_verb_s_record() {
     );
     assert_eq!(io.children(), 0);
     assert_eq!(format!("{:?}", p.stored(&close_req)), before);
+    p.assert_primary_untouched(&io);
     // A refused request that meets the record at its insertion: either
     // verb's refusal finds the other's record.
     let ConfigurationInspection::Valid(config) = read_configuration(p.f.root()).unwrap() else {
@@ -4010,6 +4062,8 @@ fn a_request_continues_only_its_own_verb_s_record() {
     let direct = f.request();
     f.close(&f.service, direct.clone()).unwrap();
     let before = format!("{:?}", f.stored(direct.operation_id));
+    // The direct close moved the primary; the refused withdraw leaves it.
+    let primary = f.primary();
     let result = run::run_with_io(
         &TicketWithdrawLifecycle,
         &f.service,
@@ -4021,6 +4075,7 @@ fn a_request_continues_only_its_own_verb_s_record() {
         "{result:?}"
     );
     assert_eq!(format!("{:?}", f.stored(direct.operation_id)), before);
+    assert_eq!(f.primary(), primary);
     // A withdraw stopped at `publication_pending`, sent as a close.
     let p = PullRequest::new();
     p.close_first();
