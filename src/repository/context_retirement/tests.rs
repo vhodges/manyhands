@@ -440,11 +440,13 @@ fn unheld_entries_against_the_primary() {
                 (local, primary, Ok(vec![]))
             }
             "a_path_only_the_primary_changed_is_not_listed" => {
-                // The branch adds `new.txt`. After the base the primary
-                // modified `code` and deleted `other`, which the branch left
-                // alone: neither is the branch's to hold.
+                // The branch adds `new.txt` and keeps `other`. After the base
+                // the primary modified `code` and deleted `other`, which the
+                // branch left alone: neither is the branch's to hold.
                 let base = commit(&repo, &with("other", "other"), &[]);
-                let local = commit(&repo, &with("new.txt", "branch"), &[base]);
+                let mut branch = with("other", "other");
+                branch.insert(b"new.txt".to_vec(), (b"branch".to_vec(), 0o100644));
+                let local = commit(&repo, &branch, &[base]);
                 let mut moved = with("other", "other");
                 moved.insert(b"code".to_vec(), (b"moved on".to_vec(), 0o100644));
                 moved.remove(b"other".as_slice());

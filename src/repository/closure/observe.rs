@@ -681,8 +681,11 @@ fn pending_work(
 /// Whether the push endpoint's finding, as a close recorded it, is the
 /// deletion of the ticket's context (ruling 51). A published context that was
 /// deleted before any fetch advertised it has no fetch to say so, so the
-/// evidence is the ticket's newest closure record (the latest by row order,
-/// whatever its mode and action) when all three hold:
+/// evidence is the ticket's newest closure record whose context child ran
+/// (the latest by row order, whatever its mode and action; a record refused at
+/// insertion, and a new branch's, have no context child and are not counted,
+/// so neither a stale confirm nor the new branch's own record at `confirmed`
+/// hides it) when all three hold:
 ///
 /// 1. it was abandoned by its context child with the answer
 ///    `context_remote_branch_deleted` (D6);
@@ -703,7 +706,8 @@ fn close_found_deleted(
     tx.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM (SELECT step, answer_code, context_sync_id FROM ticket_closures
-                            WHERE repository_id=?1 AND item_id=?2 ORDER BY rowid DESC LIMIT 1) c
+                            WHERE repository_id=?1 AND item_id=?2 AND context_sync_id IS NOT NULL
+                            ORDER BY rowid DESC LIMIT 1) c
               JOIN remote_operation_records r
                 ON r.repository_id=?1 AND r.operation_ulid=c.context_sync_id
              WHERE c.step='abandoned' AND c.answer_code='context_remote_branch_deleted'

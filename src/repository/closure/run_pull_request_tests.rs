@@ -4493,6 +4493,23 @@ fn r49_a_deletion_recorded_after_the_context_child_abandons_as_external_change()
     p.assert_primary_untouched(&io.inner);
 }
 
+/// A close of a context with one proven push, whose context child stops with
+/// `error` and is let go: the record is abandoned with the child's answer.
+fn close_stopped_by(
+    p: &PullRequest,
+    error: SynchronizationError,
+) -> (CloseTicketRequest, PullRequestIo) {
+    p.proven_push(p.f.context_oid());
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(ChildRole::Context, error, true)]),
+        ..PullRequestIo::default()
+    };
+    let result = p.run(req.clone(), &mut io);
+    assert_eq!(p.stored(&req).step, ClosureStep::Abandoned, "{result:?}");
+    (req, io)
+}
+
 /// R51: a context published once and deleted remotely before any fetch
 /// advertised it has no fetch to say so. The close's own context child finds
 /// it gone at the push endpoint and is abandoned with `remote_branch_deleted`;
@@ -4527,5 +4544,91 @@ fn r51_a_deletion_a_close_s_push_found_is_a_new_branch_until_a_later_push() {
     // A later proven push: the branch stands again.
     p.proven_push(p.f.context_oid());
     assert_eq!(p.ready().path(), close);
+    p.assert_primary_untouched(&io);
+}
+
+/// R51a: the evidence is the newest record whose context child ran. A stale
+/// close confirm after the abandon is refused and leaves it; a new branch's
+/// own record at `confirmed` (its step 1 re-observes while it stands) does
+/// not mask it; a close abandoned with another answer is not evidence.
+#[test]
+fn r51_only_the_newest_record_that_ran_its_child_with_that_answer_is_evidence() {
+    let close = (Integration::PullRequest, ClosureAction::Close);
+    // A stale confirm, prepared before the abandon.
+    let p = PullRequest::new();
+    p.proven_push(p.f.context_oid());
+    let stale = p.request();
+    let (_, mut io) = {
+        let req = p.request();
+        let mut io = PullRequestIo {
+            stops: VecDeque::from([(
+                ChildRole::Context,
+                SynchronizationError::RemoteContextDeleted,
+                true,
+            )]),
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::ContextRemoteBranchDeleted);
+        (req, io)
+    };
+    let result = p.run(stale.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ExternalChange)),
+        "{result:?}"
+    );
+    let refused = p.stored(&stale);
+    assert_eq!(refused.step, ClosureStep::Abandoned);
+    assert_eq!(refused.context_sync_id, None);
+    assert_eq!(p.ready().path(), NEW_BRANCH, "after a refused confirm");
+    // A new branch's record at `confirmed`, as step 1 re-observes it.
+    let preview = p.ready();
+    let new_branch = OperationId::new();
+    state::with_transaction(&p.f.service, p.f.root(), |tx, rid| {
+        record::begin_branch_record(
+            tx,
+            rid,
+            new_branch,
+            &id(),
+            preview.expectation(),
+            Some("origin"),
+            ClosureKind::Record,
+            NEW_BRANCH,
+            Some(p.f.context_oid()),
+        )
+    })
+    .unwrap();
+    assert_eq!(p.holder(), Some(new_branch));
+    assert_eq!(p.ready().path(), NEW_BRANCH, "with its own record");
+    assert_eq!(p.ready().expectation(), preview.expectation());
+    p.assert_primary_untouched(&io);
+    // Another answer is not the deletion.
+    let p = PullRequest::new();
+    let (_, io) = close_stopped_by(&p, SynchronizationError::HistoryUnresolved);
+    assert_eq!(p.ready().path(), close);
+    p.assert_primary_untouched(&io);
+}
+
+/// R51a: a withdraw's context child finds the same thing at the push
+/// endpoint, so its abandoned record is evidence too.
+#[test]
+fn r51_a_withdraw_abandoned_by_a_deleted_branch_is_evidence() {
+    let (p, _) = withdrawable(false);
+    assert_eq!(
+        p.ready().path(),
+        (Integration::PullRequest, ClosureAction::Close)
+    );
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Context,
+            SynchronizationError::RemoteContextDeleted,
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ContextRemoteBranchDeleted);
+    assert_eq!(p.ready().path(), NEW_BRANCH);
     p.assert_primary_untouched(&io);
 }
