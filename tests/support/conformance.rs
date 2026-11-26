@@ -56,7 +56,7 @@ pub enum Home {
 /// Where the row of every bound command is. `run` fails when this is
 /// not exactly the bound commands, so a command that is built and has
 /// no home here fails all four targets.
-pub const HOMES: [(&str, Home); 47] = [
+pub const HOMES: [(&str, Home); 48] = [
     ("context sync-local", Home::Replay),
     ("context resolve-local", Home::Replay),
     ("comment add", Home::Remote),
@@ -97,6 +97,7 @@ pub const HOMES: [(&str, Home); 47] = [
     ("context retire", Home::Bridges),
     ("document promote", Home::Remote),
     ("ticket close", Home::Remote),
+    ("ticket withdraw-closure", Home::Confirmation),
     ("poll configure", Home::Replay),
     ("poll pause", Home::Replay),
     ("poll resume", Home::Replay),

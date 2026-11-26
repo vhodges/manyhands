@@ -99,7 +99,7 @@ pub(crate) struct RelatedRow {
 impl RelatedRow {
     fn from_dependency(dependency: &DependencyDto, named: Option<(&Option<String>, &str)>) -> Self {
         let (lifecycle, resolved) = match dependency.state {
-            DependencyState::Open => (Some(Lifecycle::Open), true),
+            DependencyState::Open | DependencyState::Closing => (Some(Lifecycle::Open), true),
             DependencyState::Closed => (Some(Lifecycle::Closed), true),
             DependencyState::Unresolved => (None, false),
         };
@@ -296,7 +296,9 @@ impl Relationships {
             .filter(|line| line.depth == 1)
             .map(|line| {
                 let (lifecycle, resolved) = match line.state {
-                    DependencyState::Open => (Some(Lifecycle::Open), true),
+                    DependencyState::Open | DependencyState::Closing => {
+                        (Some(Lifecycle::Open), true)
+                    }
                     DependencyState::Closed => (Some(Lifecycle::Closed), true),
                     DependencyState::Unresolved => (None, false),
                 };
@@ -335,7 +337,7 @@ impl Relationships {
                     title: item.title.clone(),
                     lifecycle: item.closure.as_ref().map(|closure| match closure.state {
                         ClosureState::Closed => Lifecycle::Closed,
-                        ClosureState::Open => Lifecycle::Open,
+                        ClosureState::Open | ClosureState::Closing => Lifecycle::Open,
                     }),
                     resolved: true,
                 })

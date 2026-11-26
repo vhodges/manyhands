@@ -448,9 +448,11 @@ enum Stage {
     Stop(Box<SetupOutcome>),
 }
 
-/// What is in the way of a change at `root`: an unfinished close or
-/// promotion parent, or an accepted `ticket close`, `document promote` or
-/// `remote select` request other than `own`. `Some(blocker)` says something
+/// What is in the way of a change at `root`: an unfinished closure or
+/// promotion parent (a withdraw's and a new branch's records are
+/// `ticket_closures` rows too), or an accepted `ticket close`, `ticket
+/// withdraw-closure`, `document promote` or `remote select` request other than
+/// `own`. `Some(blocker)` says something
 /// is, and names its operation where either journal holds its row.
 fn in_the_way(
     tx: &rusqlite::Transaction<'_>,
@@ -502,7 +504,7 @@ fn in_the_way(
                       ORDER BY o.rowid LIMIT 1)
                FROM request_records r
               WHERE r.state = 'accepted' AND r.scope_key = ?1
-                AND r.command IN (?2, ?3, ?4) AND r.request_ulid != ?7
+                AND r.command IN (?2, ?3, ?4, ?8) AND r.request_ulid != ?7
               ORDER BY r.rowid LIMIT 1",
             params![
                 root,
@@ -512,6 +514,7 @@ fn in_the_way(
                 OperationFamily::Local.as_str(),
                 OperationFamily::Remote.as_str(),
                 own.to_string(),
+                Command::TicketWithdrawClosure.name(),
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

@@ -447,6 +447,7 @@ fn validate<'a>(
             &owner.git,
             &entry.path,
             entry.sides,
+            None,
             source.source.as_bytes(),
         )? {
             return Err(invalid());
@@ -616,6 +617,7 @@ fn prepared_candidate(
         worker,
         row.context_parent,
         row.primary_parent,
+        None,
         candidate,
     )? {
         return Err(invalid());
@@ -637,6 +639,7 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
         &owner.git,
         owner.row.context_parent,
         owner.row.primary_parent,
+        None,
         oid,
     )? {
         return Err(Fault::foreign());
@@ -994,6 +997,7 @@ fn external_proof_in(
             git,
             row.context_parent,
             row.primary_parent,
+            None,
             oid,
         )?
     {

@@ -289,6 +289,57 @@ fn every_details_shape_renders_its_fields() {
         assert!(!out.contains("Apply with"));
     }
 }
+/// A pull-request close's preview prints its fields, the closure with its
+/// `closed_by`, and for a new branch each path the old context holds that the
+/// primary does not on a line of its own, as `not on <primary>: <change>
+/// <path>`, through the field escaping.
+#[test]
+fn a_pull_request_closure_preview_prints_its_unheld_paths() {
+    let details = PullRequestClosurePreviewDto {
+        r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
+        root: "root".into(),
+        action: PullRequestClosureAction::NewBranch,
+        item_id: "item".into(),
+        slug: Some("mh-1".into()),
+        branch: "manyhands/ticket/item".into(),
+        primary_branch: "main".into(),
+        remote: Some("origin".into()),
+        context_oid: Some("old-tip".into()),
+        tracking_primary_oid: Some("primary-tip".into()),
+        closure: LifecyclePlannedClosureDto {
+            recording: LifecycleRecording::Record,
+            closed_by: "A <a@example.invalid>".into(),
+        },
+        retired_context: Some("old-tip".into()),
+        unheld: vec![
+            LifecyclePathChangeDto {
+                path: "docs/notes.md".into(),
+                change: LifecyclePathChangeKind::Added,
+            },
+            LifecyclePathChangeDto {
+                path: "odd\u{1b}[31m\n.md".into(),
+                change: LifecyclePathChangeKind::Deleted,
+            },
+        ],
+        pull_request: None,
+    };
+    let out = preview(&sample(PreviewDetailsDto::PullRequestClosure(Box::new(
+        details,
+    ))));
+    for line in [
+        "Action: new_branch\n",
+        "Closure closed by: A <a@example.invalid>\n",
+        "Closure recording: record\n",
+        "Retired context: old-tip\n",
+        "not on main: added docs/notes.md\n",
+        "not on main: deleted odd\\u{1b}[31m\\n.md\n",
+    ] {
+        assert!(out.contains(line), "{line:?} in {out}");
+    }
+    // No unheld path is listed twice, or left as a field of its own.
+    assert!(!out.contains("Unheld"), "{out}");
+    no_raw_control(&out);
+}
 #[test]
 fn a_failure_adds_request_operation_effects_and_data_lines() {
     let mut effects = Effects::not_requested();

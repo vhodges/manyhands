@@ -1153,6 +1153,23 @@ fn admit(
     // local synchronization of the item rewrites the index for the whole
     // repository (decision 14), so it is held by a row of its item, by any
     // row mid-write, and by the rows of the whole repository (`holds`).
+    //
+    // A branch record that holds the item's ticket (R-17) refuses first,
+    // naming the record, so that its own live child does not hide it. A
+    // direct record keeps the exception below (K-10).
+    if let Some(holder) =
+        closure::record::branch_hold(db, repository_id, item).map_err(recovery_error)?
+    {
+        return Err(
+            ReadError::new(ResultCode::RecoveryRequired).with_recovery(vec![
+                crate::results::RecoveryAction::for_operation(
+                    crate::results::RecoveryActionKind::OperationShow,
+                    holder.to_string(),
+                    [],
+                ),
+            ]),
+        );
+    }
     let holds = recovery::holds_sql(&recovery::CallScope::item(item).and_the_repository(), "");
     let pending:bool=db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND {holds}) OR EXISTS(SELECT 1 FROM document_promotions WHERE repository_id=?1 AND step NOT IN ('complete','abandoned','superseded'))"),[repository_id],|r|r.get(0))?;
     if pending {

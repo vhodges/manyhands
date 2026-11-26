@@ -240,6 +240,17 @@ impl Session for Scripted {
         None
     }
 
+    fn withdraw_closure(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::CloseTicketRequest,
+        _: RequestId,
+        _: &mut dyn RunObserver,
+    ) -> Option<Result<crate::repository::TicketClosureResult, crate::repository::TicketClosureError>>
+    {
+        None
+    }
+
     fn verify_transport(
         &self,
         _: &RepositoryService,

@@ -14,8 +14,13 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupState,
         LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState,
-        LifecycleMutationDto, LifecycleMutationType, LifecyclePublicationPendingReason,
-        LifecyclePublicationState, LifecycleRecording, MutationDataDto, PrepareDataDto, RequestId,
+        LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
+        LifecyclePathChangeKind, LifecyclePlannedClosureDto, LifecyclePublicationPendingReason,
+        LifecyclePublicationState, LifecycleRecording, MutationDataDto, PrepareDataDto,
+        PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PullRequestClosureAction,
+        PullRequestClosureDto, PullRequestClosureMutationDto, PullRequestClosureMutationType,
+        PullRequestClosurePreviewDto, PullRequestClosurePreviewType, PullRequestClosurePublication,
+        PullRequestClosureRecording, PullRequestDto, RequestId,
     },
     results::{Effects, Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -102,7 +107,7 @@ fn prepare(envelope: &Envelope<PrepareDataDto>) -> crate::render::Output {
     } else {
         ItemDtoKind::Ticket
     };
-    human_lifecycle::prepare(kind, envelope)
+    human_lifecycle::prepare(kind, envelope, &|_| None)
 }
 
 fn next_lines(text: &str) -> Vec<&str> {
@@ -556,6 +561,34 @@ fn a_lifecycle_answer_naming_blockers_is_not_retried_automatically() {
     assert!(should_retry(&refused, id));
 }
 
+/// A branch record's data names what stands in the way as a lifecycle's does,
+/// so the retry guard reads it from there too (Part H).
+#[test]
+fn a_branch_record_answer_naming_blockers_is_not_retried_automatically() {
+    let id = RequestId::parse(REQUEST).unwrap();
+    let mut refused = branch_answer(
+        PullRequestClosureAction::Close,
+        PullRequestClosureRecording::Nothing,
+        None,
+        None,
+        None,
+    );
+    refused.code = ResultCode::Busy;
+    refused.outcome = manyhands::results::Outcome::Partial;
+    refused.recovery = vec![retry()];
+    let Some(MutationDataDto::PullRequestClosure(data)) = refused.data.as_mut() else {
+        panic!("a branch record's data")
+    };
+    data.blockers = vec![LifecycleBlocker::AlreadyClosed];
+    assert!(!should_retry(&refused, id));
+    // The same stop naming no blockers repeats, as a lifecycle's does.
+    let Some(MutationDataDto::PullRequestClosure(data)) = refused.data.as_mut() else {
+        panic!("a branch record's data")
+    };
+    data.blockers = Vec::new();
+    assert!(should_retry(&refused, id));
+}
+
 #[test]
 fn a_root_and_a_slug_with_controls_are_escaped() {
     const HOSTILE: &str = "/re\npo\x1b[2J";
@@ -848,6 +881,45 @@ fn a_held_prepare_names_the_request_or_the_resume() {
     );
 }
 
+/// Two verbs share one closure record, so a prepare of one can be held by an
+/// unfinished request of the other: the line that goes on with it is the
+/// holder's own command, which a request ID is refused under any other
+/// (`request_mismatch`).
+#[test]
+fn a_prepare_held_by_the_other_closure_verb_names_the_holders_command() {
+    for (prepared, holder) in [
+        ("ticket withdraw-closure", "ticket close"),
+        ("ticket close", "ticket withdraw-closure"),
+    ] {
+        let mut envelope = Envelope::<PrepareDataDto>::failure(
+            prepared,
+            scope(true),
+            ResultCode::RecoveryRequired,
+            vec![retry()],
+        );
+        envelope.data = None;
+        let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &envelope, &|request| {
+            (request == REQUEST).then(|| holder.to_owned())
+        });
+        assert_eq!(
+            next_lines(stderr(&out)),
+            [format!(
+                "next: manyhands-cli {holder} --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}"
+            )],
+            "{prepared} held by {holder}"
+        );
+        // A holder the request store cannot name is worded with the prepare's
+        // own verb, as before.
+        let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &envelope, &|_| None);
+        assert_eq!(
+            next_lines(stderr(&out)),
+            [format!(
+                "next: manyhands-cli {prepared} --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}"
+            )]
+        );
+    }
+}
+
 /// Decision 18's route: cancel, the same request (`cancelled`), republish, the
 /// same request again (`ok`).
 #[test]
@@ -960,4 +1032,298 @@ fn a_wrong_passphrase_keeps_c2_s_hint() {
         "{}",
         stderr(&out)
     );
+}
+
+/// A finished branch record's answer, with the link a person opens.
+fn branch_answer(
+    action: PullRequestClosureAction,
+    recording: PullRequestClosureRecording,
+    closed_at: Option<&str>,
+    publication: Option<PullRequestClosurePublication>,
+    pull_request: Option<PullRequestDto>,
+) -> Envelope<MutationDataDto> {
+    let mut envelope = answer("ticket close", ResultCode::Ok, None, vec![]);
+    envelope.data = Some(MutationDataDto::PullRequestClosure(Box::new(
+        PullRequestClosureMutationDto {
+            r#type: PullRequestClosureMutationType::PullRequestClosure,
+            action,
+            closure: PullRequestClosureDto {
+                recording,
+                closed_at: closed_at.map(str::to_owned),
+            },
+            checkpoint_oid: Some(OID.into()),
+            publication,
+            retired_context: None,
+            pull_request,
+            blockers: Vec::new(),
+        },
+    )));
+    envelope
+}
+
+/// Part H: a pull-request closure answer prints `closure: recorded
+/// <closed_at>`, `closure: already recorded`, `closure: withdrawn` or no
+/// closure line, then `publication: <state>`, then the link's own line; and
+/// a preview prints each path the primary lacks, escaped.
+#[test]
+fn pull_request_closure_lines() {
+    let link = |url: Option<&str>| PullRequestDto {
+        source: "manyhands/ticket/x".into(),
+        target: "main".into(),
+        forge: None,
+        url: url.map(str::to_owned),
+    };
+    let at = "2026-11-26T10:00:00Z";
+    use PullRequestClosureAction::{Close, Withdraw};
+    use PullRequestClosurePublication::{Current, Published};
+    use PullRequestClosureRecording::{Existing, Nothing, Recorded, Withdrawn};
+    for (action, recording, closed_at, publication, url, lines) in [
+        (
+            Close,
+            Recorded,
+            Some(at),
+            Some(Published),
+            Some("https://forge.example/pr/1"),
+            vec![
+                "closure: recorded 2026-11-26T10:00:00Z\n",
+                "publication: published\n",
+                "pull request: https://forge.example/pr/1\n",
+            ],
+        ),
+        (
+            Close,
+            Existing,
+            None,
+            Some(Current),
+            None,
+            vec![
+                "closure: already recorded\n",
+                "publication: current\n",
+                "open a pull request from manyhands/ticket/x into main\n",
+            ],
+        ),
+        (
+            Withdraw,
+            Withdrawn,
+            None,
+            Some(Published),
+            None,
+            vec!["closure: withdrawn\n", "publication: published\n"],
+        ),
+    ] {
+        let out = output(
+            &branch_answer(action, recording, closed_at, publication, Some(link(url))),
+            false,
+        );
+        let text = stdout(&out);
+        for line in &lines {
+            assert!(text.contains(line), "{line:?} in {text}");
+        }
+        // Each line is its own, and the link's is the item's only.
+        assert_eq!(text.matches("publication: ").count(), 1, "{text}");
+        // Part H's order: the closure, the publication, then the link.
+        let at = |line: &str| {
+            text.find(line)
+                .unwrap_or_else(|| panic!("{line:?} in {text}"))
+        };
+        assert!(at(lines[0]) < at(lines[1]), "{text}");
+        if let Some(link) = lines.get(2) {
+            assert!(at(lines[1]) < at(link), "{text}");
+        }
+        no_raw_control(text);
+    }
+
+    // No closure of its own, no publication and no link: no such lines.
+    let out = output(&branch_answer(Close, Nothing, None, None, None), false);
+    let nothing = stdout(&out);
+    for absent in ["closure:", "publication:", "pull request", "open a pull"] {
+        assert!(!nothing.contains(absent), "{absent:?} in {nothing}");
+    }
+
+    // A control character in a link's URL is escaped, as a field's is.
+    let out = output(
+        &branch_answer(
+            Close,
+            Recorded,
+            Some(at),
+            Some(Published),
+            Some(link(Some("https://forge.example/\u{1b}[31m"))),
+        ),
+        false,
+    );
+    let escaped = stdout(&out);
+    no_raw_control(escaped);
+    assert!(
+        escaped.contains("pull request: https://forge.example/"),
+        "{escaped}"
+    );
+
+    // The preview of a new branch lists what the primary lacks, escaped.
+    let prepared = Envelope::<PrepareDataDto>::read_success(
+        "ticket close",
+        scope(true),
+        PrepareDataDto::Preview(Box::new(PreviewDto {
+            confirmation_id: "01ARZ3NDEKTSV4RRFFQ69G5FZ1".into(),
+            expires_at: "2026-11-26T10:05:00Z".into(),
+            command: "ticket close".into(),
+            scope: scope(true),
+            effects: vec![PreviewEffectDto {
+                effect: PreviewEffect::ContextCreated,
+            }],
+            details: PreviewDetailsDto::PullRequestClosure(Box::new(
+                PullRequestClosurePreviewDto {
+                    r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
+                    root: ROOT.into(),
+                    action: PullRequestClosureAction::NewBranch,
+                    item_id: ITEM.into(),
+                    slug: None,
+                    branch: "manyhands/ticket/x".into(),
+                    primary_branch: "main".into(),
+                    remote: Some("origin".into()),
+                    context_oid: Some(OID.into()),
+                    tracking_primary_oid: Some(OID.into()),
+                    closure: LifecyclePlannedClosureDto {
+                        recording: LifecycleRecording::Record,
+                        closed_by: "A <a@example.invalid>".into(),
+                    },
+                    retired_context: Some(OID.into()),
+                    unheld: vec![LifecyclePathChangeDto {
+                        path: "odd\u{1b}[31m\n.md".into(),
+                        change: LifecyclePathChangeKind::Deleted,
+                    }],
+                    pull_request: None,
+                },
+            )),
+        })),
+    );
+    let out = human_lifecycle::prepare(ItemDtoKind::Ticket, &prepared, &|_| None);
+    let shown = stdout(&out);
+    assert!(
+        shown.contains("not on main: deleted odd\\u{1b}[31m\\n.md\n"),
+        "{shown}"
+    );
+    no_raw_control(shown);
+}
+
+/// A branch record's way out is worded with its own verb (Part H, R-35): a
+/// deleted branch asks for a new prepare of the same verb, and a withdraw that
+/// wrote its commit republishes it first; a record whose remote went names
+/// `item sync`.
+#[test]
+fn a_branch_record_s_way_out_is_worded_with_its_verb() {
+    use PullRequestClosureAction::{Close, Withdraw};
+    let say = |command: &str, code, action, wrote: bool| {
+        let mut envelope = branch_answer(
+            action,
+            PullRequestClosureRecording::Nothing,
+            None,
+            None,
+            None,
+        );
+        envelope.command = command.into();
+        envelope.code = code;
+        envelope.outcome = manyhands::results::Outcome::Partial;
+        envelope.recovery = vec![inspect()];
+        if let Some(MutationDataDto::PullRequestClosure(data)) = envelope.data.as_mut() {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        let out = output(&envelope, false);
+        (stdout(&out).to_owned(), stderr(&out).to_owned())
+    };
+    let prepare =
+        |verb: &str| format!("next: manyhands-cli {verb} --repo '/repo' --id {ITEM} --prepare\n");
+    let republish =
+        format!("next: manyhands-cli item republish --repo '/repo' --id {ITEM} --prepare\n");
+    // A close, or a new branch: a new prepare of the same verb.
+    let (_, text) = say("ticket close", ResultCode::RemoteBranchDeleted, Close, true);
+    assert!(text.contains(&prepare("ticket close")), "{text}");
+    assert!(!text.contains("item republish"), "{text}");
+    // A withdraw that wrote its commit: the republish, which publishes it.
+    let (_, text) = say(
+        "ticket withdraw-closure",
+        ResultCode::RemoteBranchDeleted,
+        Withdraw,
+        true,
+    );
+    assert!(text.contains(&republish), "{text}");
+    assert!(
+        !text.contains(&prepare("ticket withdraw-closure")),
+        "{text}"
+    );
+    // One that wrote nothing: the republish, then a new prepare of itself.
+    let (_, text) = say(
+        "ticket withdraw-closure",
+        ResultCode::RemoteBranchDeleted,
+        Withdraw,
+        false,
+    );
+    assert!(text.contains(&republish), "{text}");
+    assert!(text.contains(&prepare("ticket withdraw-closure")), "{text}");
+    assert!(
+        text.find(&republish).unwrap() < text.find(&prepare("ticket withdraw-closure")).unwrap(),
+        "{text}"
+    );
+    // R-35: `item sync` once the remote is set, whatever the action.
+    for (command, action) in [
+        ("ticket close", Close),
+        ("ticket withdraw-closure", Withdraw),
+    ] {
+        let (_, text) = say(command, ResultCode::RecoveryRequired, action, true);
+        assert!(
+            text.contains(&format!(
+                "next: manyhands-cli item sync --repo '/repo' --id {ITEM}\n"
+            )),
+            "{command}: {text}"
+        );
+        assert!(text.contains("item sync publishes it"), "{text}");
+    }
+}
+
+/// An `operation resume` that continued a branch record to its end answers as
+/// the record's verb would: its data goes to the lifecycle's human output, with
+/// Part H's lines, and its way out names the record's own verb, not the
+/// resume.
+#[test]
+fn a_resumed_branch_record_answers_in_full_with_its_own_verb() {
+    use PullRequestClosureAction::{Close, NewBranch, Withdraw};
+    for (action, wrote, verb) in [
+        (Close, true, "ticket close"),
+        (NewBranch, true, "ticket close"),
+        (Withdraw, false, "ticket withdraw-closure"),
+    ] {
+        let mut envelope = branch_answer(
+            action,
+            PullRequestClosureRecording::Nothing,
+            None,
+            None,
+            None,
+        );
+        envelope.command = "operation resume".into();
+        envelope.code = ResultCode::RemoteBranchDeleted;
+        envelope.outcome = manyhands::results::Outcome::Partial;
+        envelope.recovery = vec![inspect()];
+        if let Some(MutationDataDto::PullRequestClosure(data)) = envelope.data.as_mut() {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert!(
+            crate::collaboration::continued_a_lifecycle(&envelope),
+            "{action:?}"
+        );
+        let out = output(&envelope, false);
+        let text = stderr(&out);
+        // The data's lines, not the generic field list.
+        assert!(text.contains("Blockers: none\n"), "{text}");
+        assert!(!text.contains("Type: pull_request_closure"), "{text}");
+        // The way out is the record's verb's.
+        let prepare = format!("next: manyhands-cli {verb} --repo '{ROOT}' --id {ITEM} --prepare\n");
+        assert_eq!(
+            text.contains(&prepare),
+            action != Withdraw || !wrote,
+            "{action:?}: {text}"
+        );
+        assert!(
+            !text.contains("manyhands-cli operation resume --repo"),
+            "{text}"
+        );
+    }
 }

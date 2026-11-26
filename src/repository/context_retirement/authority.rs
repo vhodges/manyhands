@@ -322,6 +322,13 @@ pub(in super::super) fn claim_scoped(
         }
         let call = recovery::CallScope::retirement(&request.item_id);
         recovery::require_no_pending_local(tx, id, &call)?;
+        // A branch record that holds the ticket (R-17) owns its context
+        // until it finishes. A direct record keeps the answers it has.
+        if let Some(holder) =
+            crate::repository::closure::record::branch_hold(tx, id, &request.item_id)?
+        {
+            return Err(crate::repository::closure::record::hold_refusal(holder));
+        }
         let blocked: bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
@@ -421,6 +428,12 @@ pub(in super::super) fn claim_initial(
             id,
             &recovery::CallScope::retirement(&request.item_id),
         )?;
+        // The backstop of `capture_target`: a record the closure fence holds
+        // for the ticket (R-17, direct and branch alike) owns its context.
+        if crate::repository::closure::record::written_closure_unfinished(tx, id, &request.item_id)?
+        {
+            return Err(recovery_required());
+        }
         let c = &input.candidate;
         if super::super::pass::materialization(tx, id, c)? != c.materialization {
             return Err(recovery_required());

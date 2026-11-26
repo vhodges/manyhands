@@ -136,6 +136,7 @@ fn rows_are_made_from_the_librarys_entries() {
         let lifecycle = item.closure.as_ref().map(|closure| match closure.state {
             ClosureState::Open => Lifecycle::Open,
             ClosureState::Closed => Lifecycle::Closed,
+            ClosureState::Closing => panic!("{:?}: no fixture ticket is closing", item.id),
         });
         assert_eq!(row.lifecycle, lifecycle);
     }

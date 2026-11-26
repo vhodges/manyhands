@@ -3,23 +3,28 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::canonical::ItemId;
+use crate::{
+    canonical::{Integration, ItemId},
+    results::ResultCode,
+};
 
 use super::super::super::{
     super::{
-        AuthoringKind, CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording,
-        DocumentPromotionError, DocumentPromotionOutcome, DocumentPromotionPreflight,
-        DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind, OperationId, PathChange,
-        PlannedCleanup, PlannedClosure, PlannedIntegration, PlannedPublication,
-        PreviewDocumentPromotionRequest, PreviewTicketClosureRequest, PromoteDocumentRequest,
-        PromotionBlocker, PromotionCleanup, PromotionCleanupPending, PromotionExpectation,
-        PromotionIntegration, PromotionPathChange, PromotionPublication,
+        AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction,
+        ClosureBlocker, ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight,
+        ConfigurationInspection, DocumentPromotionError, DocumentPromotionOutcome,
+        DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind,
+        OperationId, PathChange, PlannedCleanup, PlannedClosure, PlannedIntegration,
+        PlannedPublication, PreviewDocumentPromotionRequest, PreviewTicketClosureRequest,
+        PromoteDocumentRequest, PromotionBlocker, PromotionCleanup, PromotionCleanupPending,
+        PromotionExpectation, PromotionIntegration, PromotionPathChange, PromotionPublication,
         PromotionPublicationPending, PromotionRemoteDeletionCategory,
         PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
         closure, promotion,
         promotion::{ParentView, lifecycle::LifecyclePreview, run::RunObserver},
+        read_configuration_for,
         remote::{state, sync},
         transport::SshTransportError,
     },
@@ -46,6 +51,28 @@ pub struct TicketCloseInput {
     pub id: ItemId,
 }
 
+/// The input of `ticket withdraw-closure`: the ticket.
+#[derive(Clone)]
+pub struct TicketWithdrawClosureInput {
+    pub root: PathBuf,
+    pub id: ItemId,
+}
+
+/// What a branch record's preview shows that a direct one does not: the
+/// action, the commits it starts from, and a new branch's retirement and
+/// unheld entries (Part H).
+pub(in super::super::super) struct BranchReady {
+    pub(super) action: ClosureAction,
+    /// The context's head: a new branch's old tip, none for a new branch
+    /// with no context.
+    pub(super) context_oid: Option<git2::Oid>,
+    pub(super) tracking_primary: Option<git2::Oid>,
+    /// What a new branch retires of the old context.
+    pub(super) retired_oid: Option<git2::Oid>,
+    /// Each path the old context holds that the primary does not.
+    pub(super) unheld: Vec<LifecyclePathChangeDto>,
+}
+
 /// What the preview of either verb shows and consents to.
 pub(in super::super::super) struct Ready {
     pub(super) expected: [u8; 32],
@@ -61,11 +88,19 @@ pub(in super::super::super) struct Ready {
     pub(super) publication: PlannedPublication,
     pub(super) cleanup: PlannedCleanup,
     pub(super) closure: Option<PlannedClosure>,
+    /// Set for a branch record's preview, which is shown as its own.
+    pub(super) record: Option<BranchReady>,
 }
 
 pub(in super::super::super) enum Observed {
     Ready(Box<Ready>),
     Blocked(Vec<LifecycleBlocker>),
+    /// A withdraw of a ticket whose branch holds no closure: `already_applied`
+    /// with nothing to confirm (decision 11).
+    NothingToWithdraw,
+    /// A withdraw in a repository with no publication remote: its children
+    /// publish, so there is nowhere to (R-33).
+    PublicationRemoteRequired,
 }
 
 /// How far an operation that reached primary got, of either verb.
@@ -75,6 +110,18 @@ pub(in super::super::super) struct Reached {
     pub(super) publication: PromotionPublication,
     pub(super) cleanup: PromotionCleanup,
     pub(super) index_pending: bool,
+}
+
+/// What a call that did not stop answers: how far an operation got that
+/// reached primary, or how a pull-request close answered.
+pub(in super::super::super) enum Called {
+    Reached(Reached),
+    /// A branch record's answer, whatever it was. `index_pending` is the
+    /// domain's own: its refresh is yet to run.
+    Branch {
+        outcome: BranchClosureOutcome,
+        index_pending: bool,
+    },
 }
 
 /// What stopped an operation before it could report that, of either verb.
@@ -124,7 +171,7 @@ pub(in super::super::super) trait LifecycleVerb {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>>;
+    ) -> Option<Result<Called, Stop>>;
 
     fn parent(
         service: &RepositoryService,
@@ -143,6 +190,9 @@ pub(in super::super::super) trait LifecycleVerb {
 
 pub(in super::super::super) struct Promote;
 pub(in super::super::super) struct Close;
+/// `ticket withdraw-closure`: the close's twin over the same record, whose
+/// action is `withdraw`.
+pub(in super::super::super) struct Withdraw;
 
 /// Whether a commit made now would have no usable identity. It only reads.
 fn identity_missing(root: &Path) -> Result<bool, RepositoryError> {
@@ -205,6 +255,9 @@ fn closure_blocker(blocker: ClosureBlocker) -> LifecycleBlocker {
         ClosureBlocker::PrimaryReopened => LifecycleBlocker::PrimaryReopened,
         ClosureBlocker::TicketInvalidAfterClosure => LifecycleBlocker::TicketInvalidAfterClosure,
         ClosureBlocker::IdentityRequired => LifecycleBlocker::IdentityRequired,
+        ClosureBlocker::RemoteContextUnmaterialized => {
+            LifecycleBlocker::RemoteContextUnmaterialized
+        }
     }
 }
 
@@ -224,10 +277,41 @@ fn ready_of_promotion(preview: &DocumentPromotionPreview) -> Ready {
         publication: preview.publication(),
         cleanup: preview.cleanup(),
         closure: None,
+        record: None,
     }
 }
 
 fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
+    // Every path but a direct close's is a branch record's, whose preview
+    // shows what it starts from and, for a new branch, what it retires.
+    let record = (preview.path() != (Integration::Direct, ClosureAction::Close)).then(|| {
+        let facts = preview.new_branch();
+        BranchReady {
+            action: preview.path().1,
+            context_oid: match facts {
+                Some(facts) => facts.old_tip,
+                None => Some(preview.context_oid()),
+            },
+            tracking_primary: preview.tracking_primary(),
+            retired_oid: facts.and_then(|facts| facts.retired_oid),
+            unheld: facts
+                .map(|facts| {
+                    facts
+                        .unheld
+                        .iter()
+                        .map(|entry| LifecyclePathChangeDto {
+                            path: String::from_utf8_lossy(&entry.path).replace('\\', "/"),
+                            change: match entry.change {
+                                PathChange::Added => LifecyclePathChangeKind::Added,
+                                PathChange::Modified => LifecyclePathChangeKind::Modified,
+                                PathChange::Deleted => LifecyclePathChangeKind::Deleted,
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    });
     Ready {
         expected: preview.expectation().to_bytes(),
         branch: preview.context_branch().to_owned(),
@@ -236,14 +320,20 @@ fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
         context_oid: preview.context_oid(),
         primary_oid: preview.primary_oid(),
         // As `ClosureObservation::needs_context_child`: a contained context
-        // is never synchronized, and the checkpoint is never pushed.
+        // is never synchronized, and the checkpoint is never pushed. A new
+        // branch has no context to synchronize, and nothing else of a branch
+        // record is contained: it integrates nothing.
         context_child: preview.publication_remote().is_some()
-            && preview.integration() != PlannedIntegration::AlreadyContained,
+            && match &record {
+                Some(record) => record.action != ClosureAction::NewBranch,
+                None => preview.integration() != PlannedIntegration::AlreadyContained,
+            },
         changes: preview.changes().to_vec(),
         integration: preview.integration(),
         publication: preview.publication(),
         cleanup: preview.cleanup(),
         closure: Some(preview.closure().clone()),
+        record,
     }
 }
 
@@ -264,6 +354,49 @@ fn closure_reached(outcome: &TicketClosureOutcome, index_pending: bool) -> Reach
         publication: outcome.publication(),
         cleanup: outcome.cleanup(),
         index_pending,
+    }
+}
+
+/// A closure verb's answer as the binding reads it: how far it got, how a
+/// branch record answered, or what stopped it.
+fn called_of(result: Result<TicketClosureResult, TicketClosureError>) -> Result<Called, Stop> {
+    match result {
+        Ok(TicketClosureResult::Complete(outcome)) => {
+            Ok(Called::Reached(closure_reached(&outcome, false)))
+        }
+        Ok(TicketClosureResult::IndexPending(pending)) => Ok(Called::Reached(closure_reached(
+            &pending.authoritative,
+            true,
+        ))),
+        Ok(TicketClosureResult::Branch(outcome)) => Ok(Called::Branch {
+            outcome,
+            index_pending: false,
+        }),
+        Ok(TicketClosureResult::BranchIndexPending(pending)) => Ok(Called::Branch {
+            outcome: pending.authoritative,
+            index_pending: true,
+        }),
+        Err(error) => Err(match error {
+            TicketClosureError::Repository(error) => Stop::Repository(error),
+            TicketClosureError::Transport(error) => Stop::Transport(error),
+            TicketClosureError::Blocked(blockers) => {
+                Stop::Blocked(blockers.into_iter().map(closure_blocker).collect())
+            }
+            TicketClosureError::ExternalChange => Stop::ExternalChange,
+            TicketClosureError::ReconfirmationRequired => Stop::ReconfirmationRequired,
+            TicketClosureError::PrimaryAdvanced => Stop::PrimaryAdvanced,
+            TicketClosureError::IdentityRequired {
+                expected_configuration: _,
+            } => Stop::IdentityRequired,
+            TicketClosureError::ContextSynchronization(error) => {
+                Stop::ContextSynchronization(error)
+            }
+            TicketClosureError::Busy => Stop::Busy,
+            TicketClosureError::PollYielding => Stop::PollYielding,
+            TicketClosureError::Interrupted => Stop::Interrupted,
+            TicketClosureError::OperationMismatch => Stop::OperationMismatch,
+            TicketClosureError::RecoveryRequired => Stop::RecoveryRequired,
+        }),
     }
 }
 
@@ -308,7 +441,7 @@ impl LifecycleVerb for Promote {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>> {
+    ) -> Option<Result<Called, Stop>> {
         let result = session.promote_document(
             service,
             PromoteDocumentRequest {
@@ -324,11 +457,11 @@ impl LifecycleVerb for Promote {
         )?;
         Some(match result {
             Ok(DocumentPromotionResult::Complete(outcome)) => {
-                Ok(promotion_reached(&outcome, false))
+                Ok(Called::Reached(promotion_reached(&outcome, false)))
             }
-            Ok(DocumentPromotionResult::IndexPending(pending)) => {
-                Ok(promotion_reached(&pending.authoritative, true))
-            }
+            Ok(DocumentPromotionResult::IndexPending(pending)) => Ok(Called::Reached(
+                promotion_reached(&pending.authoritative, true),
+            )),
             Err(error) => Err(match error {
                 DocumentPromotionError::Repository(error) => Stop::Repository(error),
                 DocumentPromotionError::Transport(error) => Stop::Transport(error),
@@ -412,7 +545,7 @@ impl LifecycleVerb for Close {
         expected: [u8; 32],
         request_id: RequestId,
         progress: &mut dyn RunObserver,
-    ) -> Option<Result<Reached, Stop>> {
+    ) -> Option<Result<Called, Stop>> {
         let result = session.close_ticket(
             service,
             CloseTicketRequest {
@@ -426,33 +559,7 @@ impl LifecycleVerb for Close {
             request_id,
             progress,
         )?;
-        Some(match result {
-            Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),
-            Ok(TicketClosureResult::IndexPending(pending)) => {
-                Ok(closure_reached(&pending.authoritative, true))
-            }
-            Err(error) => Err(match error {
-                TicketClosureError::Repository(error) => Stop::Repository(error),
-                TicketClosureError::Transport(error) => Stop::Transport(error),
-                TicketClosureError::Blocked(blockers) => {
-                    Stop::Blocked(blockers.into_iter().map(closure_blocker).collect())
-                }
-                TicketClosureError::ExternalChange => Stop::ExternalChange,
-                TicketClosureError::ReconfirmationRequired => Stop::ReconfirmationRequired,
-                TicketClosureError::PrimaryAdvanced => Stop::PrimaryAdvanced,
-                TicketClosureError::IdentityRequired {
-                    expected_configuration: _,
-                } => Stop::IdentityRequired,
-                TicketClosureError::ContextSynchronization(error) => {
-                    Stop::ContextSynchronization(error)
-                }
-                TicketClosureError::Busy => Stop::Busy,
-                TicketClosureError::PollYielding => Stop::PollYielding,
-                TicketClosureError::Interrupted => Stop::Interrupted,
-                TicketClosureError::OperationMismatch => Stop::OperationMismatch,
-                TicketClosureError::RecoveryRequired => Stop::RecoveryRequired,
-            }),
-        })
+        Some(called_of(result))
     }
 
     fn parent(
@@ -474,6 +581,124 @@ impl LifecycleVerb for Close {
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError> {
         promotion::unfinished_holder::<closure::record::ClosureRecord>(db, repository_id, id)
+    }
+}
+
+impl LifecycleVerb for Withdraw {
+    const COMMAND: Command = Command::TicketWithdrawClosure;
+    const KIND: AuthoringKind = AuthoringKind::Ticket;
+    const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
+    // As the close's: it makes the preview look up the ticket's slug. A branch
+    // record's answers never read a made-ready report.
+    const REPORTS_MADE_READY: bool = true;
+
+    fn observe(
+        service: &RepositoryService,
+        root: &Path,
+        id: &ItemId,
+    ) -> Result<Observed, RepositoryError> {
+        // The configuration first, before the domain looks at anything: a
+        // withdraw's children publish, so with no publication remote there is
+        // nothing to offer, and that answer comes ahead of the hold (R-33,
+        // decision 33).
+        if let ConfigurationInspection::Valid(configuration) =
+            read_configuration_for(root, RepositoryOperation::RepositorySnapshot)?
+            && configuration.publication_remote.is_none()
+        {
+            return Ok(Observed::PublicationRemoteRequired);
+        }
+        Ok(
+            match service.preview_closure_withdrawal(PreviewTicketClosureRequest {
+                root: root.to_owned(),
+                item_id: id.clone(),
+                confirmed_identity: None,
+            })? {
+                ClosureWithdrawalPreflight::Ready(preview) => {
+                    Observed::Ready(Box::new(ready_of_closure(&preview)))
+                }
+                ClosureWithdrawalPreflight::Blocked {
+                    blockers,
+                    identity_configuration: _,
+                } => Observed::Blocked(blockers.into_iter().map(closure_blocker).collect()),
+                ClosureWithdrawalPreflight::NothingToWithdraw => Observed::NothingToWithdraw,
+                ClosureWithdrawalPreflight::PublicationRemoteRequired => {
+                    Observed::PublicationRemoteRequired
+                }
+            },
+        )
+    }
+
+    fn call(
+        session: &dyn Session,
+        service: &RepositoryService,
+        root: PathBuf,
+        operation_id: OperationId,
+        item_id: ItemId,
+        expected: [u8; 32],
+        request_id: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<Called, Stop>> {
+        let result = session.withdraw_closure(
+            service,
+            CloseTicketRequest {
+                root,
+                operation_id,
+                item_id,
+                expected: ClosureExpectation::from_bytes(expected),
+                approval: None,
+                confirmed_identity: None,
+            },
+            request_id,
+            progress,
+        )?;
+        Some(called_of(result))
+    }
+
+    fn parent(
+        service: &RepositoryService,
+        root: &Path,
+        operation: OperationId,
+    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
+        Close::parent(service, root, operation)
+    }
+
+    fn holder(
+        db: &rusqlite::Connection,
+        repository_id: i64,
+        id: &ItemId,
+    ) -> Result<Option<OperationId>, ReadError> {
+        Close::holder(db, repository_id, id)
+    }
+}
+
+/// The code a branch record's answer gives (section 9.3). A reconfirmation
+/// the consent no longer holds for answers as an external change does.
+pub(super) fn branch_code(answer: BranchAnswer) -> ResultCode {
+    match answer {
+        BranchAnswer::Merged
+        | BranchAnswer::Published
+        | BranchAnswer::WithdrawnSince
+        | BranchAnswer::Withdrawn => ResultCode::Ok,
+        BranchAnswer::Existing | BranchAnswer::KeptPublished | BranchAnswer::AlreadyClosing => {
+            ResultCode::AlreadyClosing
+        }
+        BranchAnswer::ClosedElsewhere
+        | BranchAnswer::TicketClosed
+        | BranchAnswer::AlreadyClosed
+        | BranchAnswer::ContextTicketClosed
+        | BranchAnswer::WithdrawClosed
+        | BranchAnswer::ClosedSince => ResultCode::TicketClosed,
+        BranchAnswer::AlreadyApplied => ResultCode::AlreadyApplied,
+        BranchAnswer::RemoteBranchDeleted | BranchAnswer::ContextRemoteBranchDeleted => {
+            ResultCode::RemoteBranchDeleted
+        }
+        // The code a direct close's `context_changed` cleanup stop answers.
+        BranchAnswer::RemoteChanged
+        | BranchAnswer::ContextHistoryUnresolved
+        | BranchAnswer::ContextChanged => ResultCode::RecoveryRequired,
+        BranchAnswer::ExternalChange | BranchAnswer::ReconfirmationRequired => {
+            ResultCode::ExternalChange
+        }
     }
 }
 

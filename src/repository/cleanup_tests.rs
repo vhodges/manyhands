@@ -1488,6 +1488,65 @@ fn cleanup_retirement_preserves_other_item_and_historical_observations() {
     RepositoryService::open_at(f.data.path()).unwrap();
 }
 
+/// What retiring an item's context does to the pull request links: the
+/// item's own row goes in the retirement's transaction, and no other item's
+/// does, whether of the other kind or of the same.
+#[test]
+fn retire_context_deletes_the_link() {
+    use super::super::pull_request_links::{insert_link_for_test, linked_items_for_test};
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let f = Fixture::new(kind);
+        let plan = f.setup_remote();
+        let db = f.db();
+        let registration: i64 = db
+            .query_row("SELECT id FROM repositories", [], |r| r.get(0))
+            .unwrap();
+        let own = authoring_kind_segment(&kind);
+        let other_kind = match kind {
+            AuthoringKind::Document => "ticket",
+            AuthoringKind::Ticket => "document",
+        };
+        for (kind, item) in [(own, ID), (other_kind, ID), (own, OTHER)] {
+            insert_link_for_test(&db, registration, kind, item);
+        }
+        let row = |kind: &str, item: &str| (kind.to_owned(), item.to_owned());
+        let mut all = vec![row(own, ID), row(other_kind, ID), row(own, OTHER)];
+        all.sort();
+        let kept: Vec<_> = all
+            .iter()
+            .filter(|linked| **linked != row(own, ID))
+            .cloned()
+            .collect();
+        assert_eq!(linked_items_for_test(&db), all);
+        let cleanup = f.cleanup();
+        let evidence = cleanup
+            .delete_tracking_ref(
+                Some(&plan),
+                kind,
+                &ID.parse().unwrap(),
+                Some(f.oid),
+                OperationId::new(),
+                f.oid,
+            )
+            .unwrap();
+        // A retirement that does not commit keeps the link.
+        db.execute_batch("CREATE TRIGGER fail_retirement BEFORE INSERT ON retired_contexts BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(
+            remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
+                retire_context(tx, id, &evidence)
+            })
+            .is_err()
+        );
+        assert_eq!(linked_items_for_test(&db), all, "{kind:?}: rolled back");
+        db.execute_batch("DROP TRIGGER fail_retirement").unwrap();
+        remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
+            retire_context(tx, id, &evidence)
+        })
+        .unwrap();
+        assert_eq!(linked_items_for_test(&db), kept, "{kind:?}");
+    }
+}
+
 fn foreign_link(f: &Fixture) -> (tempfile::TempDir, Repository) {
     let foreign = tempfile::tempdir().unwrap();
     let repo = Repository::clone(f.root.path().to_str().unwrap(), foreign.path()).unwrap();

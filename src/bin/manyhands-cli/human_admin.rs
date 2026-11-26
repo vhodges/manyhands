@@ -120,6 +120,7 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::ResolveHistory(d) => fields(d),
         PreviewDetailsDto::ResolveCacheLoss(d) => fields(d),
         PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
+        PreviewDetailsDto::PullRequestClosure(d) => pull_request_closure_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -162,6 +163,24 @@ fn lifecycle_details(details: &manyhands::repository::LifecyclePreviewDto) -> St
             fields.lines().take(line).map(|text| text.len() + 1).sum()
         });
     format!("{}{changes}{}", &fields[..at], &fields[at..])
+}
+
+/// A pull-request closure's details: its fields, and for a new branch each
+/// path the old context holds that the primary does not, on a line of its
+/// own, through the output's field escaping.
+fn pull_request_closure_details(
+    details: &manyhands::repository::PullRequestClosurePreviewDto,
+) -> String {
+    let mut out = fields_without(details, &["unheld"]);
+    for entry in &details.unheld {
+        out.push_str(&format!(
+            "not on {}: {} {}\n",
+            field(&details.primary_branch),
+            entry.change.as_str(),
+            field(&entry.path)
+        ));
+    }
+    out
 }
 
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
@@ -210,6 +229,9 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SetupBranchDeleted => "delete the local setup branch",
         PreviewEffect::SetupRecordRemoved => "remove the setup record",
         PreviewEffect::RepositoryUnregistered => "take the repository out of the list",
+        PreviewEffect::ContextPublished => "publish the editing branch",
+        PreviewEffect::PullRequestLink => "record the pull request link",
+        PreviewEffect::ClosureWithdrawn => "withdraw the closure from the editing branch",
     }
 }
 fn effects(effects: &Effects) -> String {

@@ -4,12 +4,16 @@
 
 use std::path::Path;
 
+use git2::Oid;
+
 use crate::results::{Effects, Envelope, ResultCode};
 
 use super::{
+    super::AuthoringKind,
     super::RepositoryService,
     bind::{self, Accepted, Answer},
     command::Command,
+    context::context_names,
     dto::{MutationDataDto, RequestState},
     evidence, outcome,
     records::RequestRecord,
@@ -54,8 +58,11 @@ impl RepositoryService {
         {
             let reachable = git2::Oid::from_str(commit).is_ok_and(|commit| {
                 record.scope.repository().is_some_and(|root| {
-                    evidence::still_reachable(
+                    result_commit_held(
                         Path::new(root),
+                        Command::parse(&record.command),
+                        result.data.as_ref(),
+                        &record.target,
                         accepted.position.base_ref.as_deref(),
                         commit,
                     )
@@ -78,6 +85,7 @@ impl RepositoryService {
             }
             None => None,
         };
+        reply.binding.settled(self, &accepted);
         // The one place an outcome is not derived: it is the stored one.
         let envelope = Envelope::mutation(
             record.command,
@@ -166,3 +174,42 @@ impl RepositoryService {
         )
     }
 }
+
+/// Whether `commit`, which a finished result names, can still be reached
+/// from where its request left it: the branch the request committed to, or
+/// primary once that branch is gone.
+///
+/// That is the request's recorded position, with one exception. A pull-request
+/// close's or a withdraw's result, told by its data's tag, names a commit on
+/// the ticket's own branch while the position is primary's: nothing of it
+/// reaches primary. So the ticket's branch is read while it stands, as a
+/// parent's checkpoint is, and the position, primary, once it is gone, never
+/// whatever is checked out. The record's target names the ticket for these
+/// two commands (`ticket/<ID>`); a resume's names its operation, so a resumed
+/// branch record is read at its position.
+fn result_commit_held(
+    root: &Path,
+    command: Option<Command>,
+    data: Option<&serde_json::Value>,
+    target: &str,
+    position: Option<&str>,
+    commit: Oid,
+) -> bool {
+    let branch = match (command, target.strip_prefix("ticket/")) {
+        (Some(Command::TicketClose | Command::TicketWithdrawClosure), Some(item))
+            if data.and_then(|d| d.get("type")).and_then(|t| t.as_str())
+                == Some("pull_request_closure") =>
+        {
+            Some(context_names(root, &AuthoringKind::Ticket, item).branch_ref)
+        }
+        _ => None,
+    };
+    let stands = branch.as_deref().filter(|name| {
+        git2::Repository::open(root).is_ok_and(|repository| repository.refname_to_id(name).is_ok())
+    });
+    evidence::still_reachable(root, stands.or(position), commit)
+}
+
+#[cfg(test)]
+#[path = "replay_tests.rs"]
+mod tests;

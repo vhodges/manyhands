@@ -336,7 +336,7 @@ impl RepositoryService {
             }
             (None, Place::Application) => None,
         };
-        let scope = binding.scope(repository, None);
+        let scope = binding.scope(repository.clone(), None);
         if let Some(answer) = failure {
             return without_preview(command, scope, answer);
         }
@@ -352,11 +352,15 @@ impl RepositoryService {
             session: &NoSession,
             confirmation: None,
         };
+        let previewed = binding.preview(&call);
+        // The preview may have told the binding what its scope names: a branch
+        // record's names the ticket's branch.
+        let scope = binding.scope(repository, None);
         let Previewed {
             observation,
             effects,
             details,
-        } = match binding.preview(&call) {
+        } = match previewed {
             Ok(previewed) => previewed,
             Err(answer) => return without_preview(command, scope, answer),
         };
