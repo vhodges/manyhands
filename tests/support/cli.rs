@@ -429,6 +429,8 @@ pub const CLI_CASES: &[&str] = &[
     "ticket_close_checkpoint_merge_refused",
     "ticket_close_prepare_held",
     "ticket_close_pull_request_preview",
+    "ticket_withdraw_closure_ticket_closed",
+    "ticket_withdraw_closure_publication_remote_required",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "poll_once_retirement_stopped_text",

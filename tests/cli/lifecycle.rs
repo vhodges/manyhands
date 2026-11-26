@@ -1485,6 +1485,11 @@ fn withdraw_of_a_closure_the_primary_holds_is_ticket_closed() {
         blocked["data"]["blockers"],
         serde_json::json!(["already_closed"])
     );
+    golden(
+        "ticket_withdraw_closure_ticket_closed",
+        &blocked,
+        &case.world.root,
+    );
     assert_eq!(case.refs(), refs);
 }
 
@@ -1653,6 +1658,11 @@ fn withdraw_prepare_answers_publication_remote_required_ahead_of_the_hold() {
     let bare = Case::new(WITHDRAW);
     let refused = bare.json(&["--prepare"], 3, "publication_remote_required", None);
     assert_eq!(refused["outcome"], "blocked", "{refused}");
+    golden(
+        "ticket_withdraw_closure_publication_remote_required",
+        &refused,
+        &bare.world.root,
+    );
 
     // An unfinished close holds the ticket: the withdraw is held, naming it.
     let case = Case::pull_request_with_a_key(CLOSE);

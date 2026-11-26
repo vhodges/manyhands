@@ -14,7 +14,7 @@ Every verb here takes `--repo <repo-root>`, the repository's main checkout root,
 1. `ticket create`: a new ticket, with its own branch and worktree (`manyhands/ticket/<id>`, `.manyhands/worktrees/<id>`). It is given a short code (`slug`) at once.
 2. `ticket show`, then `ticket save`: read, then change status, text or relationships, as often as needed. Each save is a checkpoint commit on the ticket's branch.
 3. Share it: [sharing and sync](../manyhands-sharing-and-sync/SKILL.md). Comments on it: [comments](../manyhands-comments/SKILL.md).
-4. `ticket close`: record the closure, merge the branch into the main branch, publish if there is a remote, remove the branch and worktree. Show the person first and wait ([autonomy](../manyhands-overview/references/autonomy.md)).
+4. `ticket close`: record the closure, merge the branch into the main branch, publish if there is a remote, remove the branch and worktree. Show the person first and wait ([autonomy](../manyhands-overview/references/autonomy.md)). In a pull-request repository it records the closure on the ticket's branch and publishes that branch instead, and the ticket reads `closing` until the pull request merges: "Close in a pull-request repository" below. `ticket withdraw-closure` takes a closure back while it is only on the branch.
 
 `type` and `status` are free text the person chooses (`task`, `bug`, `in_progress`, `review_ready`: none is special). Ask which words the project uses and look at `ticket list` before you invent one. A ticket is open until `closed_at` is set, whatever its status says: saving status `closed` closes nothing, and `ticket close` does not rewrite the status text. [Statuses and relationships](references/statuses-and-relationships.md) has the details.
 
@@ -142,7 +142,7 @@ Without `--confirm` the verb answers `confirmation_required` (exit 3). The previ
 
 ## Close: show the person first, then confirm
 
-Closing records `closed_at` and `closed_by`, merges the ticket's branch into the main branch, publishes the main branch when a publication remote is selected, and removes the branch and worktree. It cannot be undone from the CLI, so it is show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), even when the person said "close it": the request does not show them these effects. As part of showing the preview, ask the person whether the work has been reviewed and approved, and treat their OK as covering that too: closing is the last step after approval, and the CLI does not check it.
+This section is the direct repository's close; in a pull-request repository read "Close in a pull-request repository" below first. Closing records `closed_at` and `closed_by`, merges the ticket's branch into the main branch, publishes the main branch when a publication remote is selected, and removes the branch and worktree. It cannot be undone from the CLI, so it is show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), even when the person said "close it": the request does not show them these effects. As part of showing the preview, ask the person whether the work has been reviewed and approved, and treat their OK as covering that too: closing is the last step after approval, and the CLI does not check it.
 
 Before you prepare:
 
@@ -231,12 +231,88 @@ manyhands-cli ticket close --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMA
 
 At a terminal the CLI prompts for the passphrase and finishes the same operation. Verified end to end with a throwaway key: `publication` `published`, the remote's main branch holds the merge, the ticket's branch and worktree are gone. That ran within the confirmation's ten minutes; the contract says an accepted confirmation stands for its request, and a retry after expiry was not run. Afterwards read the ticket with `ticket show` and check `closure.state`. If the confirmation has expired, prepare again, show the person the preview again, and give them the new command. If the person does not finish it, the started close stays in `operation list` (a `close` operation, `confirmed`) and the ticket stays open on its branch: nothing is lost, and [`manyhands-recovery`](../manyhands-recovery/SKILL.md) covers finishing it (the same confirm at their terminal; `operation abandon` does not apply to a close and answers `operation_not_found`). See [keys and hosts](../manyhands-keys-and-hosts/SKILL.md).
 
+## Close in a pull-request repository
+
+`repo inspect` shows `data.configuration.integration`: `pull_request` means the repository works by pull requests ([repositories](../manyhands-repositories/SKILL.md), "Pull-request mode"), and on a build with the pull-request close (Wave 06 Cycle 03) `ticket close` there is a different verb in effect. It never commits to, merges into or pushes the main branch, and it does not remove the ticket's branch or worktree. It records the closure on the ticket's branch, publishes that branch, and answers with where to open the pull request. The person, or the forge, merges it later. This is for tickets only: `document promote` in a pull-request repository still merges into the primary and pushes it until Wave 06's Cycle 04. The preview, the answers and the stops below are from the contract and the library tests: none of it was run here against a real forge, and the one case that runs the whole path over SSH is a test in the source tree (`a_pull_request_close_publishes_only_the_ticket_branch`).
+
+It is still a confirmed verb: show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), prepare with `--prepare`, confirm with `--confirm` and a new `--request-id`, and keep the request ID. A prepare reads local state only. It does not look at the main checkout's branch or cleanliness, because nothing touches the main branch, so `primary_dirty` and `primary_not_checked_out` do not arise; a merge, rebase or cherry-pick in progress in the main checkout is still refused (`primary_conflicted`), and `primary_missing` still names a remote's main branch that was never read (`poll once`, then prepare again, as in "A prepare that is blocked" below).
+
+```sh
+manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITEM_ID> --prepare
+manyhands-cli --json --non-interactive ticket close --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
+```
+
+### The preview
+
+`data.details.type` is `pull_request_closure_preview`, and `details.action` is `close` (the usual case) or `new_branch` ("The ticket's branch is gone" below). Tell the person in plain words:
+
+- Which ticket: `details.slug` and `details.branch`. The preview carries no title: take it from `ticket show`.
+- `data.effects`, in order: `context_synchronized` (the ticket's branch is first brought up to date with its remote copy and the remote's main branch), `closure_recorded` (one commit on the branch holds `closed_at` and `closed_by`), `context_published` (the branch is pushed) and `pull_request_link`. When the branch already holds a closure (`details.closure.recording` `existing`) the effects are only `context_synchronized` and `pull_request_link`.
+- `details.closure.closed_by`: whose name goes on the closure, from the repository's commit identity.
+- `details.pull_request`: `source` (the ticket's branch), `target` (the main branch), `forge` and `url`. `url` is null when no link can be built from the remote and the forge setting: the person then opens the pull request by hand from `source` into `target`.
+- That nothing reaches the main branch until a pull request merges, that the ticket's branch and worktree stay, and that nothing is deleted. The "Ignored files in the worktree" steps above do not apply to this close.
+
+### The answer
+
+| Answer | Meaning and next step |
+| --- | --- |
+| exit 0, `ok`, `data.type` `pull_request_closure` | The closure is recorded and the branch is published. `data.closure.recording` is `recorded` with `closed_at`, `data.publication` is `published` or `current`, `data.checkpoint_oid` is the commit, and `data.pull_request` has the link (human output prints `pull request: <url>`, or `open a pull request from <source> into <target>` when there is no URL). Give the person the link. The data never holds `closed_by`, a title or a body. |
+| exit 0, `already_closing`, `outcome` `success` | The ticket's branch already held a closure (its own earlier one, or another clone's): nothing new was written, the branch was synchronized and published as needed, and the link is in `data.pull_request`. It is a success, not a no-op: give the person the link and do not retry. |
+| exit 3, `ticket_closed` | The main branch already holds the closure, also when the pull request merged while the close ran. Nothing to do. |
+| exit 3, `remote_branch_deleted` | The ticket's remote branch was deleted, usually because a pull request from it merged. Prepare again: once the deletion is recorded the preview offers the new branch (`details.action` `new_branch`); if it still previews `close`, run `poll once` and prepare again. |
+| `recovery_required` with `data.type` `pull_request_closure` | The publication remote was changed or removed while the close ran. The closure is on the local branch and nothing is lost. Once a publication remote is selected again ([repositories](../manyhands-repositories/SKILL.md)), run `item sync` of the ticket ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md)), which publishes it; human output names that command in its `next:` line. |
+| `recovery_required` naming a request | An unfinished close or withdraw holds the ticket: "A close that stopped" below. |
+| exit 3, `setup_pending` | The repository's setup has not merged yet: [recovery](../manyhands-recovery/SKILL.md), "A pending setup". |
+
+### The state afterwards
+
+`ticket show` reads the ticket `closing`: `closure.state` `closing`, with `closed_at` and `closed_by`, because the closure is on the ticket's branch and not on the main branch yet. `closure.publication` is `pending` until the branch is published and `published` after, and `pull_request` holds the link this clone gave. A closing ticket still counts as open for its dependents: they stay blocked, with the reason `closing_dependency`, until the main branch holds the closure. `ticket ready`, `ticket blocked` and `ticket plan` leave the closing ticket itself out, so find it with `ticket list --closure closing` ([finding work](../manyhands-finding-work/SKILL.md)). It reads `closed` once the pull request is merged and a `poll once` has brought the main branch forward. The close does not report the dependents it will make ready: read `ticket ready` after the merge. Its branch and worktree stay until they are retired, which is the existing `context retire` and `poll once --retire-completed`, and they need the remote branch to be gone.
+
+While it is closing, comments and saves of its text and status are allowed. A save that would change `closed_at` or `closed_by` is `invalid_input` (in both modes), and once the main branch holds the closure every write answers `ticket_closed`. A ticket whose closure is only on its branch can still be withdrawn.
+
+### A ticket whose branch merged first, or that has no branch
+
+If the pull request merged before the close and the remote branch still exists, the close records the closure on that branch after bringing the main branch in: the pull request then holds only the closure. If the remote branch is gone, or the ticket has no branch, the preview's `details.action` is `new_branch`: close makes the ticket's branch again from the remote's main branch as this clone last fetched it, with one commit that holds only the closure (a provisional closure the old branch held is kept), and publishes it. Nothing on the remote is deleted or replaced. For a `new_branch` preview, also tell the person:
+
+- `details.retired_context`: the old branch's tip, which is retired locally: its worktree and branch are removed.
+- `details.unheld`: each path (`path`, with `change` `added`, `modified` or `deleted`) that the old branch holds and the main branch does not. Human output prints them as `not on <primary>: <change> <path>`. An empty list means the main branch holds all of the old branch's work. A non-empty list means that work is not on the main branch, and after the close the old branch's commits are no longer referenced by a branch in this clone: the person must decide before you confirm.
+- `.manyhands/worktrees/<id>` must be free: otherwise the prepare answers `occupied_path`.
+
+Blockers of this prepare, besides those above: `remote_context_unmaterialized` (a remote branch of the ticket that neither main branch holds: the way out offered is `poll once`, then prepare again; if it persists, tell the person, because a tip that only the local main branch holds is not one a poll brings in), `remote_context_deleted` (the ticket's remote branch is gone and the remote's main branch does not hold the ticket; the way out is `item republish`, [sharing and sync](../manyhands-sharing-and-sync/SKILL.md), "A deleted branch") and `context_missing` for a ticket with no branch that the remote's main branch does not hold.
+
+### A close that stopped
+
+A step that stops on its synchronization (`transport_unavailable`, `unlock_required`, `host_approval_required`, `busy`, a conflict) answers as `item sync` answers that stop, with `recovery` offering `request.retry`: send the same `--confirm` with the same `--request-id` once the cause is gone, and the close continues where it stopped. A conflict is resolved by `conflict show` and `conflict resolve` with the close's operation ID ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md), "A conflict"), which are the person's choice. Before the closure commit is written the stop left nothing written. After it, `ticket show` reads the ticket `closing` with `publication` `pending`, and the record holds the ticket until its request runs again: saves, comments, `ticket repair`, `context retire`, `item sync` and the poll of that ticket answer `recovery_required` or `busy` naming the request, and a new request's prepare is `recovery_required` naming it. The held prepare's `next:` line names the holder's own verb with the holder's request ID (`ticket close` or `ticket withdraw-closure`), so run that line, not your own verb. Do not start a second close, and `operation abandon` does not apply. `operation resume` answers `original_request_required` naming the request. `request cancel` answers `cancelled` (exit 130) and leaves the close unfinished, and the same request continues it ([recovery](../manyhands-recovery/SKILL.md)).
+
+A request that finished cannot always be sent again late. Once the ticket's branch has been retired after the merge, the same request answers `recovery_required` unless the main branch holds the closure's commit: a merge commit or a fast-forward lets it replay, a squash or a rebase merge does not. Do not retry a finished close's request after the merge: read the ticket, and a new request would answer `ticket_closed`. A late retry of an `operation resume` that finished a close meets the same limit.
+
+## Withdraw a closure
+
+`ticket withdraw-closure` takes back a closure that is only on the ticket's branch: it commits the ticket without `closed_at` and `closed_by`, publishes the branch, and the ticket reads `open` again. It is not a reopen: it refuses when the main branch holds the closure. It needs a publication remote, works in either mode, is a confirmed verb and takes show then wait ([autonomy](../manyhands-overview/references/autonomy.md)), and the use for it is a pull request that was declined while its closure stays recorded: say that, and ask. After it the person declines or closes the pull request on the forge, or leaves it open for more work and closes again later with `ticket close`.
+
+```sh
+manyhands-cli --json --non-interactive ticket withdraw-closure --repo <repo-root> --id <ITEM_ID> --prepare
+manyhands-cli --json --non-interactive ticket withdraw-closure --repo <repo-root> --id <ITEM_ID> --confirm <CONFIRMATION_ID> --request-id <REQUEST_ID>
+```
+
+The preview is the close's, with `details.action` `withdraw`, `details.closure.recording` `existing` and a null `details.pull_request`; its effects are `context_synchronized`, `closure_withdrawn` and `context_published`. The answers:
+
+| Answer | Meaning and next step |
+| --- | --- |
+| exit 0, `ok`, `data.type` `pull_request_closure` | Withdrawn and published: `data.closure.recording` is `withdrawn`, and `ticket show` reads the ticket `open`. Its dependents are blocked by `open_dependency` again. The link record is kept. |
+| exit 0, `already_applied` at prepare, `noop`, no data | Neither the ticket's branch nor its remote copy holds a closure: nothing to confirm. |
+| exit 3, `ticket_closed` | The main branch holds the closure (`data.blockers` has `already_closed`), also when the pull request merged while the withdraw ran: it is too late. Nothing was reopened. |
+| exit 3, `publication_remote_required` | No publication remote is selected, and a withdraw publishes. [Repositories](../manyhands-repositories/SKILL.md). |
+| exit 3, `recovery_required` naming a request | A close or withdraw of this ticket is unfinished and holds it: "A close that stopped" above. A withdraw's stops, hold and cancellation are the close's. |
+| exit 3, `remote_branch_deleted` | The ticket's remote branch is gone: its withdraw stays on the local branch. `item republish` publishes it ([sharing and sync](../manyhands-sharing-and-sync/SKILL.md), "A deleted branch"), or a prepare again if nothing was written. |
+
 ## Codes you will meet
 
 | Code (exit) | Meaning and next step |
 | --- | --- |
 | `external_change` (3) | The token is stale. Read again, merge, save with the new token and a new request ID. |
-| `ticket_closed` (3) | The ticket is closed: no save, slug-assign or second close. |
+| `ticket_closed` (3) | The ticket is closed: no save, slug-assign or second close, and no withdraw. In a pull-request repository only the main branch's closure counts: a closing ticket still takes saves and comments. |
+| `already_closing` (0) | A pull-request close of a ticket whose branch already holds a closure: a success with the link, nothing new written. |
 | `relationship_cycle` (2) | The `deps` or `parent` would form a cycle. `data.rejected` names the tickets. Try with `ticket check`. |
 | `invalid_relationship` (2) | A `deps` or `parent` ID is not a ticket ID. |
 | `slug_already_assigned` (2) | The ticket has a code and the initials (given, or derived from the identity) differ from it. |
