@@ -1853,6 +1853,192 @@ fn a_withdraw_is_a_lifecycle_parent_wherever_its_command_is_read() {
     assert_eq!(asked, 1, "the parent's own flag");
 }
 
+/// D10, D20: which child a closure record's ID names, and whose child it is,
+/// by the record's shape (R-3). A branch record's current child is its
+/// publication child once it has one, and its context child before; a new
+/// branch has no first child at all. A direct close, whose second slot is
+/// the primary's, keeps naming its context child and holds no primary child
+/// (unchanged). The record is the holder of every child it maps, and
+/// `conflict show` and `conflict resolve` both name their synchronization
+/// through the one lookup.
+#[test]
+fn a_closure_record_names_its_current_child_and_holds_it_by_its_shape() {
+    use crate::repository::{
+        mutation::identity::ScopeKey,
+        request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation},
+    };
+    // (case, mode, action, context child, primary child), then the child the
+    // record's ID names, and the children the record holds.
+    #[allow(clippy::type_complexity)]
+    let table: [(&str, &str, &str, bool, bool, Option<&str>, &[&str]); 7] = [
+        (
+            "direct",
+            "direct",
+            "close",
+            true,
+            true,
+            Some("context"),
+            &["context"],
+        ),
+        (
+            "direct, no child",
+            "direct",
+            "close",
+            false,
+            false,
+            None,
+            &[],
+        ),
+        (
+            "close",
+            "pull_request",
+            "close",
+            true,
+            true,
+            Some("primary"),
+            &["context", "primary"],
+        ),
+        (
+            "close, context only",
+            "pull_request",
+            "close",
+            true,
+            false,
+            Some("context"),
+            &["context"],
+        ),
+        (
+            "withdraw",
+            "pull_request",
+            "withdraw",
+            true,
+            true,
+            Some("primary"),
+            &["context", "primary"],
+        ),
+        (
+            "new branch, empty first slot",
+            "pull_request",
+            "new_branch",
+            false,
+            true,
+            Some("primary"),
+            &["primary"],
+        ),
+        (
+            "new branch, no child",
+            "pull_request",
+            "new_branch",
+            false,
+            false,
+            None,
+            &[],
+        ),
+    ];
+    for (case, mode, action, has_context, has_primary, names, holds) in table {
+        let registered = Registered::new(false);
+        let scope = ScopeKey::for_repository(registered.root.path()).unwrap();
+        let (operation, request) = (OperationId::new(), RequestId::new());
+        let context = has_context.then(OperationId::new);
+        let primary = has_primary.then(OperationId::new);
+        let db = rusqlite::Connection::open(
+            registered
+                ._data
+                .path()
+                .join(crate::repository::REGISTRY_FILE),
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO ticket_closures
+               (repository_id, operation_id, item_id, expectation, step, updated_at,
+                closure_kind, integration_mode, action, remote_name,
+                context_attempt, context_sync_id, primary_attempt, primary_sync_id)
+             SELECT id, ?1, ?2, zeroblob(32), 'confirmed', 0,
+                    'existing', ?3, ?4, 'origin', ?5, ?6, ?7, ?8
+               FROM repositories",
+            rusqlite::params![
+                operation.to_string(),
+                ITEM,
+                mode,
+                action,
+                i64::from(has_context),
+                context.map(|id| id.to_string()),
+                i64::from(has_primary),
+                primary.map(|id| id.to_string()),
+            ],
+        )
+        .unwrap();
+        registered
+            .service
+            .insert_request(&NewRequest {
+                request_id: request,
+                scope: scope.clone(),
+                command: Command::TicketClose.name().into(),
+                target: String::new(),
+                intent_digest: IntentDigest::builder(
+                    DigestSalt::Request(request),
+                    Command::TicketClose.name(),
+                    &scope,
+                    "",
+                )
+                .finish(),
+                confirmation: None,
+                base_ref: None,
+                base_oid: None,
+                expected_digest: None,
+                operations: vec![RequestOperation {
+                    family: crate::repository::OperationFamily::Remote,
+                    operation_id: operation,
+                }],
+            })
+            .unwrap();
+        let repository: i64 = db
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap();
+        let child_of = |name: &str| if name == "context" { context } else { primary };
+        // What the record's ID names: the lookup both conflict verbs make.
+        let expected = match names {
+            Some(name) => Some(child_of(name)),
+            None => Some(None),
+        };
+        assert_eq!(
+            crate::repository::remote::state::lifecycle_context_child(&db, repository, operation)
+                .unwrap(),
+            expected,
+            "{case}"
+        );
+        assert_eq!(
+            crate::repository::mutation::bind::conflict::synchronization_named(
+                &db,
+                registered.root.path(),
+                repository,
+                operation
+            )
+            .unwrap(),
+            names.map(|name| child_of(name).unwrap()),
+            "{case}"
+        );
+        // Whose child each is: the record's, for every child it holds, and
+        // no one's for a direct close's primary child.
+        for (name, child) in [("context", context), ("primary", primary)] {
+            let Some(child) = child else { continue };
+            let held = holds.contains(&name);
+            assert_eq!(
+                crate::repository::remote::state::lifecycle_parent_of(&db, repository, child)
+                    .unwrap(),
+                held.then_some(operation),
+                "{case}: {name}"
+            );
+            assert_eq!(
+                records::operation_or_parent_holder(&db, scope.as_str(), repository, child)
+                    .unwrap(),
+                held.then(|| request.to_string()),
+                "{case}: {name}"
+            );
+        }
+    }
+}
+
 /// What a test of a process's liveness says exists.
 struct Processes(Vec<u32>);
 

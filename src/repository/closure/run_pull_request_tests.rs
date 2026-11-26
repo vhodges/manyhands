@@ -1302,6 +1302,52 @@ fn d10_a_publication_conflict_is_retained_and_the_same_request_continues() {
     p.assert_primary_untouched(&io);
 }
 
+/// D10, D20: the conflict verbs find a branch record's publication-child
+/// conflict by the record's ID, as they find a direct record's context-child
+/// conflict, and the record is the child's holder. The record has both slots
+/// (the context child completed, the publication child retained): the
+/// current child, the publication one, is the one the record's ID names.
+#[test]
+fn a_branch_record_s_publication_conflict_is_found_by_its_id() {
+    use crate::repository::remote::state::{lifecycle_context_child, lifecycle_parent_of};
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let (child, _) = conflicted_publication(&p, &req, &mut io);
+    let record = p.stored(&req);
+    let context_child = record.context_sync_id.expect("the context child");
+    assert_ne!(context_child, child);
+    let db = p.f.db();
+    let repository: i64 = db
+        .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    // The record's ID names its publication child, and the child's parent is
+    // the record, as is the finished context child's.
+    assert_eq!(
+        lifecycle_context_child(&db, repository, record.operation_id).unwrap(),
+        Some(Some(child))
+    );
+    assert_eq!(
+        lifecycle_parent_of(&db, repository, child).unwrap(),
+        Some(record.operation_id)
+    );
+    assert_eq!(
+        lifecycle_parent_of(&db, repository, context_child).unwrap(),
+        Some(record.operation_id)
+    );
+    // `conflict show` by the record's ID reads the publication child's
+    // conflict: the same one the child's own ID shows.
+    let resolved = p.f.service.resolve_repository(p.f.root()).unwrap();
+    let by_record =
+        p.f.service
+            .show_conflict(&resolved, record.operation_id)
+            .unwrap();
+    let by_child = p.f.service.show_conflict(&resolved, child).unwrap();
+    assert_eq!(by_record.operation_id, child.to_string());
+    assert_eq!(by_record.paths.len(), 1);
+    assert_eq!(by_record, by_child);
+}
+
 /// D12: a process lost before the context ref moved to the closure rebuilds
 /// the same commit, from the `closed_at` the record stored.
 #[test]
