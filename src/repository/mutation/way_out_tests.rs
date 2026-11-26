@@ -717,21 +717,38 @@ fn a_branch_record_names_its_way_out_from_its_data() {
             )));
             envelope
         };
-    for (action, expected) in [
-        (Action::Close, vec![PrepareAgain, Inspect]),
-        (Action::NewBranch, vec![PrepareAgain, Inspect]),
+    // A withdraw that wrote its commit (W5) has it on the local branch: only
+    // the republish is left, and the commit goes with it. One that wrote
+    // nothing asks for a new request after it. A close, or a new branch, asks
+    // for one at once.
+    for (action, wrote, expected) in [
+        (Action::Close, false, vec![PrepareAgain, Inspect]),
+        (Action::NewBranch, false, vec![PrepareAgain, Inspect]),
         (
             Action::Withdraw,
+            true,
+            vec![Republish { item_id: item() }, Inspect],
+        ),
+        (
+            Action::Withdraw,
+            false,
             vec![Republish { item_id: item() }, PrepareAgain, Inspect],
         ),
     ] {
-        let envelope = branch(
+        let mut envelope = branch(
             "ticket close",
             ResultCode::RemoteBranchDeleted,
             action,
             vec![inspect()],
         );
-        assert_eq!(lifecycle_way_out(&envelope), expected, "{action:?}");
+        if let Some(MutationDataDto::PullRequestClosure(data)) = &mut envelope.data {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            expected,
+            "{action:?} wrote {wrote}"
+        );
     }
     for code in [
         ResultCode::Ok,

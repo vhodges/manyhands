@@ -911,8 +911,10 @@ fn d3_a_closure_the_context_child_brings_in_abandons_as_already_closing() {
     assert_eq!(outcome.answer(), BranchAnswer::AlreadyClosing);
     assert_eq!(outcome.checkpoint_oid(), None);
     assert_eq!(outcome.publication(), None);
-    // An abandoned record did nothing to the closure.
-    assert_eq!(outcome.recording(), BranchRecording::Nothing);
+    // An `already_closing` answer leaves the closure the other clone made:
+    // it reads existing, whatever this record had begun, and it has no time
+    // of its own to give.
+    assert_eq!(outcome.recording(), BranchRecording::Existing);
     assert_eq!(outcome.closed_at(), None);
     assert_eq!(p.f.commits_in_odb(&close_subject()), 0);
     // The context is as the child left it: it holds the closure, whole.
@@ -2257,6 +2259,24 @@ fn answer_table_chooses_each_row_in_order() {
         script(&p, &req, &mut io);
         let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
         assert_eq!(outcome.answer(), answer, "{case}");
+        // The closure the answer leaves (rulings 59 and 60): another clone's
+        // kept closure and an existing one read `existing`, a close withdrawn
+        // elsewhere since reads `withdrawn`, and only a closure this record
+        // wrote has a time.
+        let left = match answer {
+            BranchAnswer::Existing | BranchAnswer::KeptPublished => Some(BranchRecording::Existing),
+            BranchAnswer::WithdrawnSince => Some(BranchRecording::Withdrawn),
+            BranchAnswer::Published => Some(BranchRecording::Recorded),
+            _ => None,
+        };
+        if let Some(left) = left {
+            assert_eq!(outcome.recording(), left, "{case}");
+            assert_eq!(
+                outcome.closed_at().is_some(),
+                left == BranchRecording::Recorded,
+                "{case}"
+            );
+        }
         let r = p.stored(&req);
         assert_eq!(r.step, ClosureStep::Complete, "{case}");
         assert_eq!(r.answer_code, Some(answer), "{case}");
@@ -5469,6 +5489,10 @@ fn f9_a_kept_provisional_closure_is_the_new_branch_s() {
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Existing);
     assert_eq!(outcome.action(), ClosureAction::NewBranch);
+    // The kept closure is not one this record wrote: its time is the
+    // record's, not the answer's.
+    assert_eq!(outcome.recording(), BranchRecording::Existing);
+    assert_eq!(outcome.closed_at(), None);
     let r = p.stored(&req);
     assert_eq!(r.step, ClosureStep::Complete);
     assert_eq!(r.closure_kind, Some(ClosureKind::Existing));

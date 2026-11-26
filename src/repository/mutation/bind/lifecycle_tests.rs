@@ -512,8 +512,10 @@ fn a_branch_record_answers_its_own_shape() {
         Some(oid("a")),
         Some(PromotionPublication::AlreadyCurrent { oid: oid("b") }),
     )
-    .for_testing_with(ClosureAction::NewBranch, R::Existing, at, Some(retired)));
+    .for_testing_with(ClosureAction::NewBranch, R::Existing, None, Some(retired)));
     let data = data_of(&new_branch).unwrap();
+    // A closure it kept has no time of the record's to give (ruling 60).
+    assert_eq!(data.closure.closed_at, None);
     assert_eq!(
         data.action,
         crate::repository::PullRequestClosureAction::NewBranch
@@ -600,6 +602,115 @@ fn a_branch_record_answers_its_own_shape() {
         false,
     );
     assert_eq!(data_of(&ran).unwrap().pull_request, None);
+}
+
+/// A repository with a configured remote, and a child synchronization of the
+/// ticket whose row says its push was accepted at `pushed`.
+fn pushed_child(registered: &Registered, pushed: git2::Oid) -> OperationId {
+    use crate::repository::{
+        RemoteRefPlan, RemoteReservationOutcome, SynchronizationTarget, remote::state,
+    };
+    let root = registered.root.path();
+    let scope = crate::repository::mutation::identity::ScopeKey::for_repository(root).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&registered.service, Path::new(scope.as_str()), |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+    };
+    let child = OperationId::new();
+    match registered
+        .service
+        .reserve_remote_operation(
+            Path::new(scope.as_str()),
+            child,
+            &target.operation_target(&plan),
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => drop(owner),
+        other => panic!("{other:?}"),
+    }
+    let db = rusqlite::Connection::open(
+        registered
+            ._data
+            .path()
+            .join(crate::repository::REGISTRY_FILE),
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE remote_operation_records
+            SET sync_checkpoint = 'push_verified', push_oid = ?2
+          WHERE operation_ulid = ?1",
+        [child.to_string(), pushed.to_string()],
+    )
+    .unwrap();
+    child
+}
+
+/// A commit in the registered repository.
+fn a_commit(registered: &Registered) -> git2::Oid {
+    let repository = git2::Repository::open(registered.root.path()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    let tree = repository
+        .find_tree(repository.index().unwrap().write_tree().unwrap())
+        .unwrap();
+    repository
+        .commit(None, &signature, &signature, "child", &tree, &[])
+        .unwrap()
+}
+
+/// R-32: a finished branch record that has no publication child's result of
+/// its own still shows what its context child published. A withdraw that
+/// finds, at step 3, another clone's withdraw already merged in
+/// (`already_applied`) wrote nothing and ran no publication child, but its
+/// context child pushed the pending work, and its effects say so.
+#[test]
+fn a_branch_record_s_answer_shows_what_its_context_child_published() {
+    use crate::repository::{BranchAnswer as A, BranchClosureOutcome, ClosureAction};
+    let registered = Registered::new(false);
+    let pushed = a_commit(&registered);
+    let child = pushed_child(&registered, pushed);
+    let binding = registered.binding();
+    let accepted = registered.accepted();
+    let nothing_published = BranchClosureOutcome::for_testing(A::AlreadyApplied, None, None)
+        .for_testing_with(
+            ClosureAction::Withdraw,
+            crate::repository::BranchRecording::Nothing,
+            None,
+            None,
+        );
+    let parent = |child| {
+        PARENT.with(|parent| {
+            *parent.borrow_mut() = Some(parent_of(
+                RecordPath::Branch,
+                ParentStep::Abandoned,
+                None,
+                [Some(child), None],
+            ));
+        })
+    };
+    parent(child);
+    let ran = binding.branch_reached(&registered.service, &accepted, &nothing_published, false);
+    // The code is still `already_applied`, and nothing of its own was
+    // written; what the child pushed is shown.
+    assert_eq!(ran.answer.code, ResultCode::AlreadyApplied);
+    let effects = &ran.answer.effects;
+    assert_eq!(effects.publication, PublicationEffect::Published);
+    assert_eq!(effects.commit_oid, Some(pushed.to_string()));
+    assert_eq!(effects.write, crate::results::WriteEffect::NotRequested);
+    assert_eq!(effects.checkpoint, CheckpointEffect::NotRequested);
+    // A child that pushed nothing shows nothing.
+    parent(OperationId::new());
+    let ran = binding.branch_reached(&registered.service, &accepted, &nothing_published, false);
+    assert_eq!(
+        ran.answer.effects.publication,
+        PublicationEffect::NotRequested
+    );
+    assert_eq!(ran.answer.effects.commit_oid, None);
 }
 
 /// A parent of the given path whose children are the given operations.
@@ -775,6 +886,84 @@ fn branch_stopped_with(step: ParentStep, stop: Stop) -> Ran {
         verb: PhantomData,
     };
     binding.stopped(&service, &accepted(), stop, true)
+}
+
+/// A branch record's busy stop names the operation it was refused for as
+/// `item sync`'s does (ruling 61): the one a repository error names, and the
+/// one that holds the reservation of a child that was refused it.
+#[test]
+fn a_branch_record_s_busy_stop_names_its_blocker() {
+    use crate::repository::{
+        Blocker, OperationFamily, RemoteRefPlan, RemoteReservationOutcome, SynchronizationError,
+        SynchronizationTarget, remote::state,
+    };
+    let registered = Registered::new(false);
+    let root = registered.root.path();
+    let scope = crate::repository::mutation::identity::ScopeKey::for_repository(root).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&registered.service, Path::new(scope.as_str()), |tx, id| {
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+    })
+    .unwrap();
+    let target = SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+    };
+    // Another operation holds the repository's reservation.
+    let holder = OperationId::new();
+    let _held = match registered
+        .service
+        .reserve_remote_operation(
+            Path::new(scope.as_str()),
+            holder,
+            &target.operation_target(&plan),
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    let binding = registered.binding();
+    let stopped = |stop| {
+        PARENT.with(|parent| {
+            *parent.borrow_mut() = Some(parent_of(
+                RecordPath::Branch,
+                ParentStep::PublicationPending,
+                None,
+                [None, None],
+            ));
+        });
+        binding.stopped(&registered.service, &registered.accepted(), stop, true)
+    };
+    let named = |ran: &Ran| {
+        assert_eq!(ran.answer.code, ResultCode::Busy);
+        assert!(matches!(ran.standing, Standing::Owed));
+        let blocker = ran
+            .answer
+            .blocker
+            .as_ref()
+            .expect("the operation in its way");
+        assert_eq!(blocker.operation_id, holder.to_string());
+        assert_eq!(blocker.family, OperationFamily::Remote);
+    };
+    // A refusal the repository gave, naming its holder.
+    let refused = RepositoryError::new(
+        RepositoryOperation::Read,
+        Some(root.to_owned()),
+        RepositoryErrorKind::RepositoryBusy,
+        "busy",
+    )
+    .with_blocker(Some(Blocker {
+        family: OperationFamily::Remote,
+        operation_id: holder,
+        live: None,
+        seen: None,
+    }));
+    named(&stopped(Stop::Repository(refused)));
+    // A child refused the reservation: the holder is read after the refusal.
+    named(&stopped(Stop::ContextSynchronization(Box::new(
+        SynchronizationError::Busy,
+    ))));
 }
 
 /// A child of a branch record that stops answers as `item sync` answers

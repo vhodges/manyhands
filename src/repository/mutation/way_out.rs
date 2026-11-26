@@ -137,7 +137,8 @@ pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleW
 /// record is finished, so its request would give the same answer again: the
 /// way on is a new prepare, and a new request (the deletion is then evidenced,
 /// and a close offers its new branch, keeping the closure). A withdraw needs
-/// the branch first, so it republishes it (`item republish`).
+/// the branch first, so it republishes it (`item republish`), and asks for a
+/// new request after only when it wrote nothing.
 fn branch_route(
     envelope: &Envelope<MutationDataDto>,
     data: &PullRequestClosureMutationDto,
@@ -149,17 +150,21 @@ fn branch_route(
         PullRequestClosureAction::Close | PullRequestClosureAction::NewBranch => {
             vec![LifecycleWayOut::PrepareAgain]
         }
+        // A withdraw that wrote its commit has it on the local branch (W5),
+        // and the republish publishes it with the rest; one that wrote
+        // nothing asks for a new request after the republish.
         PullRequestClosureAction::Withdraw => envelope
             .scope
             .item_id
             .as_ref()
             .map(|item_id| {
-                vec![
-                    LifecycleWayOut::Republish {
-                        item_id: item_id.clone(),
-                    },
-                    LifecycleWayOut::PrepareAgain,
-                ]
+                let mut route = vec![LifecycleWayOut::Republish {
+                    item_id: item_id.clone(),
+                }];
+                if data.checkpoint_oid.is_none() {
+                    route.push(LifecycleWayOut::PrepareAgain);
+                }
+                route
             })
             .unwrap_or_default(),
     }

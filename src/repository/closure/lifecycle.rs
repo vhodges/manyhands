@@ -652,16 +652,30 @@ impl Lifecycle for TicketClosureLifecycle {
     ) -> ClosureOutcome {
         let complete = r.step == record::ClosureStep::Complete;
         let checkpoint_oid = r.written_commit().filter(|_| complete);
-        // What the record did: an abandoned one did nothing, whatever it had
-        // begun, and a kept closure is not one this record wrote.
-        let recording = match (r.action, r.closure_kind) {
-            (ClosureAction::Withdraw, _) if checkpoint_oid.is_some() => BranchRecording::Withdrawn,
-            (ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Existing))
+        let answer = r
+            .answer_code
+            .expect("a finished branch record has its answer");
+        // The closure the answer leaves on the branch (ruling 59). Every
+        // `already_closing` answer leaves one that was there, whatever this
+        // record had begun, and a close that was withdrawn elsewhere since
+        // leaves none. Of any other, what the record did: an abandoned one
+        // did nothing, and a kept closure is not one this record wrote.
+        let recording = match (answer, r.action, r.closure_kind) {
+            (
+                BranchAnswer::Existing | BranchAnswer::KeptPublished | BranchAnswer::AlreadyClosing,
+                _,
+                _,
+            ) => BranchRecording::Existing,
+            (BranchAnswer::WithdrawnSince, _, _) => BranchRecording::Withdrawn,
+            (_, ClosureAction::Withdraw, _) if checkpoint_oid.is_some() => {
+                BranchRecording::Withdrawn
+            }
+            (_, ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Existing))
                 if complete =>
             {
                 BranchRecording::Existing
             }
-            (ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Record))
+            (_, ClosureAction::Close | ClosureAction::NewBranch, Some(ClosureKind::Record))
                 if checkpoint_oid.is_some() =>
             {
                 BranchRecording::Recorded
@@ -671,15 +685,15 @@ impl Lifecycle for TicketClosureLifecycle {
         ClosureOutcome::Branch(BranchClosureOutcome {
             operation_id: r.operation_id,
             action: r.action,
-            answer: r
-                .answer_code
-                .expect("a finished branch record has its answer"),
+            answer,
             checkpoint_oid,
             publication,
             recording,
+            // The time of a closure this record wrote, and of no other
+            // (ruling 60).
             closed_at: r
                 .closed_at
-                .filter(|_| complete)
+                .filter(|_| complete && recording == BranchRecording::Recorded)
                 .and_then(|at| record::closed_at_text(at).ok()),
             retired_oid: r.retired_oid.filter(|_| complete),
         })

@@ -65,8 +65,8 @@ use super::{
             ClosureRecording, OperationFamily, OperationId, PlannedClosure, PlannedIntegration,
             PlannedPublication, PromotionCleanup, PromotionCleanupPending, PromotionIntegration,
             PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
-            PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryOperation,
-            RepositoryService, SynchronizationError,
+            PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryErrorKind,
+            RepositoryOperation, RepositoryService, SynchronizationError,
             promotion::{
                 ParentView,
                 lifecycle::{ParentStep, RecordPath},
@@ -789,6 +789,16 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         // The index step is yet to run: only a close that answered `ok` says so.
         let pending = index_pending && code == ResultCode::Ok;
         let wrote = outcome.checkpoint_oid().is_some();
+        // What the record's publication child pushed is its own result. A
+        // record that ran none (an abandon) still shows what its context
+        // child pushed (R-32).
+        let published = match outcome.publication() {
+            Some(PromotionPublication::Published { oid }) => Some(oid),
+            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
+            Some(PromotionPublication::Pending { reason: _ }) | None => {
+                self.context_child_push(service, accepted)
+            }
+        };
         let effects = Effects {
             write: if wrote {
                 WriteEffect::Written
@@ -805,18 +815,14 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             } else {
                 DiscoveryEffect::Current
             },
-            publication: match outcome.publication() {
-                Some(PromotionPublication::Published { oid: _ }) => PublicationEffect::Published,
-                Some(PromotionPublication::AlreadyCurrent { oid: _ }) => PublicationEffect::Current,
-                Some(PromotionPublication::Pending { reason: _ }) | None => {
-                    PublicationEffect::NotRequested
+            publication: match (outcome.publication(), published) {
+                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
+                    PublicationEffect::Current
                 }
+                (_, Some(_)) => PublicationEffect::Published,
+                (_, None) => PublicationEffect::NotRequested,
             },
-            commit_oid: match outcome.publication() {
-                Some(PromotionPublication::Published { oid }) => Some(oid.to_string()),
-                Some(PromotionPublication::AlreadyCurrent { oid: _ }) | None => None,
-                Some(PromotionPublication::Pending { reason: _ }) => None,
-            },
+            commit_oid: published.map(|oid| oid.to_string()),
             ..Effects::not_requested()
         };
         // The five answers that report what the record did; the others are
@@ -851,6 +857,19 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 Standing::Final
             },
         }
+    }
+
+    /// The commit the record's context child pushed, which its row says the
+    /// remote accepted.
+    fn context_child_push(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+    ) -> Option<git2::Oid> {
+        let parent = V::parent(service, &accepted.root(), accepted.operation_id)
+            .ok()
+            .flatten()?;
+        landed_push(service, &accepted.scope, parent.children[0]?)
     }
 
     /// What a finished branch record did, as its answer's data: the record's
@@ -1071,6 +1090,20 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             },
             _ => None,
         };
+        // The operation it was refused for, named as `item sync` names it: the
+        // one a busy error of the repository names, and the one that holds the
+        // reservation a child was refused (ruling 61).
+        let blocker = match &stop {
+            Stop::Repository(error) if error.kind == RepositoryErrorKind::RepositoryBusy => {
+                error.blocker().cloned()
+            }
+            Stop::ContextSynchronization(error) => error.blocker().cloned().or_else(|| {
+                matches!(error.as_ref(), SynchronizationError::Busy)
+                    .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                    .flatten()
+            }),
+            _ => None,
+        };
         Ran {
             answer: Answer {
                 data,
@@ -1078,7 +1111,8 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 recovery: standing_recovery(code, accepted),
                 offers_nothing,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Owed,
         }
     }
