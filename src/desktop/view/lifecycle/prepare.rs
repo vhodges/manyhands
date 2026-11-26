@@ -122,6 +122,7 @@ pub(super) fn guidance(
         | LifecycleWayOut::PrepareAgain
         | LifecycleWayOut::CancelThenSendAgain { .. }
         | LifecycleWayOut::ResolveChildConflict { .. }
+        | LifecycleWayOut::SyncItem { .. }
         | LifecycleWayOut::Republish { .. } => None,
     }
 }

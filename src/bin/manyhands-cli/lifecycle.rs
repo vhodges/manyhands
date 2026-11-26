@@ -1,6 +1,6 @@
-//! `document promote` and `ticket close`: C2's confirmed flow around one
+//! `document promote`, `ticket close` and `ticket withdraw-closure`: C2's confirmed flow around one
 //! library mutation, in the Ctrl-C window (`mutate.rs`), with C2's bounded
-//! retry. Neither takes input, and neither reads the item first: the library
+//! retry. None takes input, and none reads the item first: the library
 //! answers an unknown ID or a wrong kind. Results are rendered by
 //! `human_lifecycle`.
 
@@ -11,6 +11,7 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, TicketCloseInput,
+        TicketWithdrawClosureInput,
     },
 };
 
@@ -51,6 +52,22 @@ pub fn ticket_close(
         args,
         ItemDtoKind::Ticket,
         |root, id| Mutation::TicketClose(TicketCloseInput { root, id }),
+    )
+}
+
+pub fn ticket_withdraw_closure(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    run(
+        service,
+        session,
+        spec,
+        args,
+        ItemDtoKind::Ticket,
+        |root, id| Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput { root, id }),
     )
 }
 

@@ -292,6 +292,7 @@ pub const CASES: &[&str] = &[
     "ticket_save_worktree_not_clean",
     "ticket_slug_assign",
     "ticket_slug_assign_already_assigned",
+    "ticket_withdraw_closure_already_applied",
 ];
 
 pub fn fixture_directory() -> PathBuf {

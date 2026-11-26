@@ -3142,6 +3142,7 @@ impl MutationDataDto {
             | Command::RepoSync
             | Command::OperationResume
             | Command::TicketClose
+            | Command::TicketWithdrawClosure
                 if stored.get("type").and_then(|t| t.as_str())
                     == Some(SynchronizationConflictType::SynchronizationConflict.as_str()) =>
             {
@@ -3164,7 +3165,7 @@ impl MutationDataDto {
                 .map(|data| Self::Lifecycle(Box::new(data))),
             // A direct close's data, and a blocked or a refused one's of
             // either mode, is the lifecycle's, told apart by its tag.
-            Command::TicketClose
+            Command::TicketClose | Command::TicketWithdrawClosure
                 if stored.get("type").and_then(|t| t.as_str())
                     == Some(LifecycleMutationType::Lifecycle.as_str()) =>
             {
@@ -3172,7 +3173,7 @@ impl MutationDataDto {
                     .map(|data| Self::Lifecycle(Box::new(data)))
             }
             // A branch record's, which finished.
-            Command::TicketClose
+            Command::TicketClose | Command::TicketWithdrawClosure
                 if stored.get("type").and_then(|t| t.as_str())
                     == Some(PullRequestClosureMutationType::PullRequestClosure.as_str()) =>
             {
@@ -3215,7 +3216,8 @@ impl MutationDataDto {
             | Command::RepoSync
             | Command::OperationResume
             | Command::ItemRepublish
-            | Command::TicketClose => {
+            | Command::TicketClose
+            | Command::TicketWithdrawClosure => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
             // A cancellation of a setup stores what became of it.
@@ -3416,149 +3418,146 @@ mod pull_request_closure_tests {
     /// reads as itself.
     #[test]
     fn pull_request_closure_data_reads_back() {
-        use PullRequestClosureAction as Action;
-        use PullRequestClosureRecording as Recording;
-        let mut answers = Vec::new();
-        for (action, recording) in [
-            (Action::Close, Recording::Recorded),
-            (Action::Close, Recording::Existing),
-            (Action::Close, Recording::Nothing),
-            (Action::Withdraw, Recording::Withdrawn),
-            (Action::Withdraw, Recording::Nothing),
-            (Action::NewBranch, Recording::Recorded),
-            (Action::NewBranch, Recording::Existing),
-        ] {
-            answers.push(data(action, recording));
-        }
-        // The link record's link, or none; a publication that did not
-        // complete; and what a blocked step 3 names.
-        answers.push(PullRequestClosureMutationDto {
-            pull_request: None,
-            publication: None,
-            blockers: vec![LifecycleBlocker::AlreadyClosed],
-            ..data(Action::Close, Recording::Nothing)
-        });
-        for answer in answers {
-            let stored = serde_json::to_value(&answer).unwrap();
-            assert_eq!(stored["type"], "pull_request_closure");
-            assert_eq!(
-                MutationDataDto::from_stored(Command::TicketClose, &stored),
-                Some(MutationDataDto::PullRequestClosure(Box::new(
-                    answer.clone()
-                ))),
-                "{stored}"
-            );
-            assert_eq!(
-                PullRequestClosureMutationDto::from_stored(&stored),
-                Some(answer)
-            );
-            // No other command reports it.
-            for other in [
-                Command::DocumentPromote,
-                Command::ItemSync,
-                Command::RepoSync,
-                Command::OperationResume,
+        // A withdraw is a branch record too, and its answers read back as a
+        // close's do.
+        for verb in [Command::TicketClose, Command::TicketWithdrawClosure] {
+            use PullRequestClosureAction as Action;
+            use PullRequestClosureRecording as Recording;
+            let mut answers = Vec::new();
+            for (action, recording) in [
+                (Action::Close, Recording::Recorded),
+                (Action::Close, Recording::Existing),
+                (Action::Close, Recording::Nothing),
+                (Action::Withdraw, Recording::Withdrawn),
+                (Action::Withdraw, Recording::Nothing),
+                (Action::NewBranch, Recording::Recorded),
+                (Action::NewBranch, Recording::Existing),
             ] {
-                assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+                answers.push(data(action, recording));
             }
-        }
+            // The link record's link, or none; a publication that did not
+            // complete; and what a blocked step 3 names.
+            answers.push(PullRequestClosureMutationDto {
+                pull_request: None,
+                publication: None,
+                blockers: vec![LifecycleBlocker::AlreadyClosed],
+                ..data(Action::Close, Recording::Nothing)
+            });
+            for answer in answers {
+                let stored = serde_json::to_value(&answer).unwrap();
+                assert_eq!(stored["type"], "pull_request_closure");
+                assert_eq!(
+                    MutationDataDto::from_stored(verb, &stored),
+                    Some(MutationDataDto::PullRequestClosure(Box::new(
+                        answer.clone()
+                    ))),
+                    "{stored}"
+                );
+                assert_eq!(
+                    PullRequestClosureMutationDto::from_stored(&stored),
+                    Some(answer)
+                );
+                // No other command reports it.
+                for other in [
+                    Command::DocumentPromote,
+                    Command::ItemSync,
+                    Command::RepoSync,
+                    Command::OperationResume,
+                ] {
+                    assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+                }
+            }
 
-        // The lifecycle's own data, a direct close's or a blocked one's,
-        // still reads as the lifecycle DTO.
-        let lifecycle = LifecycleMutationDto {
-            r#type: LifecycleMutationType::Lifecycle,
-            kind: ItemDtoKind::Ticket,
-            item_id: ITEM.to_owned(),
-            recording: None,
-            checkpoint_oid: None,
-            integration: None,
-            integration_oid: None,
-            publication: None,
-            publication_oid: None,
-            publication_pending: None,
-            cleanup: None,
-            cleanup_pending: None,
-            blockers: vec![LifecycleBlocker::ContextDirty],
-            made_ready: Some(Vec::new()),
-            made_ready_state: Some(LifecycleMadeReadyState::NotComputed),
-        };
-        let stored = serde_json::to_value(&lifecycle).unwrap();
-        assert_eq!(
-            MutationDataDto::from_stored(Command::TicketClose, &stored),
-            Some(MutationDataDto::Lifecycle(Box::new(lifecycle)))
-        );
-
-        // A branch record's child stops as `item sync` does: the tagged
-        // conflict, and a host that is not trusted.
-        let conflict = SynchronizationConflictMutationDto {
-            r#type: SynchronizationConflictType::SynchronizationConflict,
-            conflict: ConflictNextDto {
-                operation_id: ITEM.to_owned(),
-                next_action: ConflictNextAction::Resolve,
-            },
-        };
-        let stored = serde_json::to_value(&conflict).unwrap();
-        assert_eq!(
-            MutationDataDto::from_stored(Command::TicketClose, &stored),
-            Some(MutationDataDto::SynchronizationConflict(conflict))
-        );
-        let host = SynchronizationMutationDto {
-            host: "git.example".to_owned(),
-            port: 22,
-            presented_algorithm: "ssh-ed25519".to_owned(),
-            presented_fingerprint: "SHA256:abc".to_owned(),
-            pinned_algorithm: None,
-            pinned_fingerprint: None,
-        };
-        let stored = serde_json::to_value(&host).unwrap();
-        assert_eq!(
-            MutationDataDto::from_stored(Command::TicketClose, &stored),
-            Some(MutationDataDto::Synchronization(host))
-        );
-
-        // A tag with a malformed body is not read as another shape: a key
-        // missing, a key more, a value outside its vocabulary.
-        let valid = serde_json::to_value(data(Action::Close, Recording::Recorded)).unwrap();
-        for key in valid.as_object().unwrap().keys() {
-            let mut missing = valid.clone();
-            missing.as_object_mut().unwrap().remove(key);
+            // The lifecycle's own data, a direct close's or a blocked one's,
+            // still reads as the lifecycle DTO.
+            let lifecycle = LifecycleMutationDto {
+                r#type: LifecycleMutationType::Lifecycle,
+                kind: ItemDtoKind::Ticket,
+                item_id: ITEM.to_owned(),
+                recording: None,
+                checkpoint_oid: None,
+                integration: None,
+                integration_oid: None,
+                publication: None,
+                publication_oid: None,
+                publication_pending: None,
+                cleanup: None,
+                cleanup_pending: None,
+                blockers: vec![LifecycleBlocker::ContextDirty],
+                made_ready: Some(Vec::new()),
+                made_ready_state: Some(LifecycleMadeReadyState::NotComputed),
+            };
+            let stored = serde_json::to_value(&lifecycle).unwrap();
             assert_eq!(
-                MutationDataDto::from_stored(Command::TicketClose, &missing),
-                None,
-                "without {key}"
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::Lifecycle(Box::new(lifecycle)))
             );
-        }
-        let mut extra = valid.clone();
-        extra["source"] = "private".into();
-        assert_eq!(
-            MutationDataDto::from_stored(Command::TicketClose, &extra),
-            None
-        );
-        for (key, bad) in [
-            ("action", serde_json::json!("reopen")),
-            ("blockers", serde_json::json!(["not_a_blocker"])),
-            ("publication", serde_json::json!("pending")),
-            ("checkpoint_oid", serde_json::json!(7)),
-            (
-                "closure",
-                serde_json::json!({"recording": "kept", "closed_at": null}),
-            ),
-            (
-                "closure",
-                serde_json::json!({"recording": "recorded", "closed_at": null, "closed_by": "A <a@b>"}),
-            ),
-            (
-                "pull_request",
-                serde_json::json!({"source": "a", "target": "b", "forge": "svn", "url": null}),
-            ),
-        ] {
-            let mut changed = valid.clone();
-            changed[key] = bad;
+
+            // A branch record's child stops as `item sync` does: the tagged
+            // conflict, and a host that is not trusted.
+            let conflict = SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: ConflictNextDto {
+                    operation_id: ITEM.to_owned(),
+                    next_action: ConflictNextAction::Resolve,
+                },
+            };
+            let stored = serde_json::to_value(&conflict).unwrap();
             assert_eq!(
-                MutationDataDto::from_stored(Command::TicketClose, &changed),
-                None,
-                "{key}"
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::SynchronizationConflict(conflict))
             );
+            let host = SynchronizationMutationDto {
+                host: "git.example".to_owned(),
+                port: 22,
+                presented_algorithm: "ssh-ed25519".to_owned(),
+                presented_fingerprint: "SHA256:abc".to_owned(),
+                pinned_algorithm: None,
+                pinned_fingerprint: None,
+            };
+            let stored = serde_json::to_value(&host).unwrap();
+            assert_eq!(
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::Synchronization(host))
+            );
+
+            // A tag with a malformed body is not read as another shape: a key
+            // missing, a key more, a value outside its vocabulary.
+            let valid = serde_json::to_value(data(Action::Close, Recording::Recorded)).unwrap();
+            for key in valid.as_object().unwrap().keys() {
+                let mut missing = valid.clone();
+                missing.as_object_mut().unwrap().remove(key);
+                assert_eq!(
+                    MutationDataDto::from_stored(verb, &missing),
+                    None,
+                    "without {key}"
+                );
+            }
+            let mut extra = valid.clone();
+            extra["source"] = "private".into();
+            assert_eq!(MutationDataDto::from_stored(verb, &extra), None);
+            for (key, bad) in [
+                ("action", serde_json::json!("reopen")),
+                ("blockers", serde_json::json!(["not_a_blocker"])),
+                ("publication", serde_json::json!("pending")),
+                ("checkpoint_oid", serde_json::json!(7)),
+                (
+                    "closure",
+                    serde_json::json!({"recording": "kept", "closed_at": null}),
+                ),
+                (
+                    "closure",
+                    serde_json::json!({"recording": "recorded", "closed_at": null, "closed_by": "A <a@b>"}),
+                ),
+                (
+                    "pull_request",
+                    serde_json::json!({"source": "a", "target": "b", "forge": "svn", "url": null}),
+                ),
+            ] {
+                let mut changed = valid.clone();
+                changed[key] = bad;
+                assert_eq!(MutationDataDto::from_stored(verb, &changed), None, "{key}");
+            }
         }
     }
 
@@ -3580,6 +3579,7 @@ mod pull_request_closure_tests {
             Command::RepoSync,
             Command::OperationResume,
             Command::TicketClose,
+            Command::TicketWithdrawClosure,
         ] {
             assert_eq!(MutationDataDto::from_stored(other, &stored), None);
         }

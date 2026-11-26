@@ -286,6 +286,18 @@ pub(crate) trait Session {
         progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
+    /// Withdraws a ticket's provisional closure with the session's
+    /// credentials, as `close_ticket` closes it; see
+    /// `RepositoryService::withdraw_ticket_closure`. `None` when the session
+    /// has no credentials, or they are in use: nothing was called.
+    fn withdraw_closure(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+        asked_of: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
+
     /// Polls with the session's credentials, stopped by the call's token and by
     /// the flag of the request `asked_of`; see
     /// `RepositoryService::poll_publication_remote`. `None` when the session
@@ -506,6 +518,24 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         ))
     }
 
+    fn withdraw_closure(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+        asked_of: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.withdraw_ticket_closure_observed(
+            request,
+            &mut credentials,
+            probe,
+            progress,
+            time::OffsetDateTime::now_utc,
+        ))
+    }
+
     fn poll_once(
         &self,
         service: &RepositoryService,
@@ -654,6 +684,16 @@ impl Session for NoSession {
         None
     }
 
+    fn withdraw_closure(
+        &self,
+        _service: &RepositoryService,
+        _request: CloseTicketRequest,
+        _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        None
+    }
+
     fn poll_once(
         &self,
         _service: &RepositoryService,
@@ -765,7 +805,7 @@ const REQUEST_CANCEL: &str = "request cancel";
 fn asks_a_parent(record: &RequestRecord) -> bool {
     matches!(
         Command::parse(&record.command),
-        Some(Command::DocumentPromote | Command::TicketClose)
+        Some(Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure)
     )
 }
 
@@ -785,7 +825,9 @@ impl RepositoryService {
             Some(Command::DocumentPromote) => {
                 self.cancel_document_promotion(root, operation.operation_id)
             }
-            Some(Command::TicketClose) => self.cancel_ticket_closure(root, operation.operation_id),
+            Some(Command::TicketClose | Command::TicketWithdrawClosure) => {
+                self.cancel_ticket_closure(root, operation.operation_id)
+            }
             _ => Ok(false),
         }
     }

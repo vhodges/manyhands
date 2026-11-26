@@ -40,7 +40,8 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
         LifecyclePublicationPendingReason, LifecycleWayOut, MutationDataDto, PrepareDataDto,
-        lifecycle_prepare_way_out, lifecycle_way_out,
+        PullRequestClosureMutationDto, PullRequestClosureRecording, lifecycle_prepare_way_out,
+        lifecycle_way_out,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -271,6 +272,7 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
             // with its verb (Task 11).
             LifecycleWayOut::SendAgain
             | LifecycleWayOut::PrepareAgain
+            | LifecycleWayOut::SyncItem { .. }
             | LifecycleWayOut::Inspect
             | LifecycleWayOut::RepairOutside
             | LifecycleWayOut::RetryRequest { .. }
@@ -343,6 +345,7 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
             | LifecycleWayOut::ResolveChildConflict { .. }
             | LifecycleWayOut::Republish { .. }
             | LifecycleWayOut::PrepareAgain
+            | LifecycleWayOut::SyncItem { .. }
             | LifecycleWayOut::RepairOutside => {}
         }
     }
@@ -414,8 +417,105 @@ pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output
     output
 }
 
+/// What a record whose publication remote changed or went leaves to do (R-35).
+const SYNC_NOTE: &str = "this record's commit stays on the local branch; once a publication remote is selected, item sync publishes it.";
+
+/// A branch record's answer (Part H): what it did to the closure, how its
+/// branch was published, and the link to open, in that order, then the rest of
+/// its data and its way out, worded with this verb.
+fn branch_output(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestClosureMutationDto,
+    supplied: bool,
+) -> Output {
+    let mut body = String::new();
+    match data.closure.recording {
+        PullRequestClosureRecording::Recorded => {
+            let at = data.closure.closed_at.as_deref().unwrap_or_default();
+            body.push_str(&format!("closure: recorded {}\n", field(at)));
+        }
+        PullRequestClosureRecording::Existing => body.push_str("closure: already recorded\n"),
+        PullRequestClosureRecording::Withdrawn => body.push_str("closure: withdrawn\n"),
+        PullRequestClosureRecording::Nothing => {}
+    }
+    if let Some(publication) = data.publication {
+        body.push_str(&format!("publication: {}\n", publication.as_str()));
+    }
+    if let Some(link) = &data.pull_request {
+        let link = manyhands::forge::PullRequestLink {
+            source: link.source.clone(),
+            target: link.target.clone(),
+            forge: None,
+            url: link.url.clone(),
+        };
+        body.push_str(&format!("{}\n", field(&link.human_line())));
+    }
+    body.push_str(&blockers_line(&data.blockers));
+    body.push_str(&human_admin::fields_without(
+        data,
+        &["type", "closure", "publication", "pull_request", "blockers"],
+    ));
+    let mut notes = Vec::new();
+    if let (Some(root), Some(item)) = (
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+    ) {
+        for step in lifecycle_way_out(envelope) {
+            match step {
+                LifecycleWayOut::Republish { item_id } => {
+                    body.push_str(&format!("next: {}\n", republish(root, &item_id)));
+                }
+                LifecycleWayOut::PrepareAgain => body.push_str(&format!(
+                    "next: manyhands-cli {} --repo {} --id {} --prepare\n",
+                    field(&envelope.command),
+                    quoted(root),
+                    field(item)
+                )),
+                LifecycleWayOut::SyncItem { item_id } => {
+                    body.push_str(&format!(
+                        "next: manyhands-cli item sync --repo {} --id {}\n",
+                        quoted(root),
+                        field(&item_id)
+                    ));
+                    notes.push(SYNC_NOTE.to_owned());
+                }
+                LifecycleWayOut::ResolveChildConflict { operation_id } => {
+                    for line in child_conflict(root, &operation_id) {
+                        body.push_str(&format!("next: {line}\n"));
+                    }
+                    notes.push(CONFLICT_NOTE.to_owned());
+                }
+                LifecycleWayOut::SendAgain
+                | LifecycleWayOut::Inspect
+                | LifecycleWayOut::RetryRequest { .. }
+                | LifecycleWayOut::CancelThenSendAgain { .. }
+                | LifecycleWayOut::ResumeOperation { .. }
+                | LifecycleWayOut::RepairLocally { .. }
+                | LifecycleWayOut::SharePrimary
+                | LifecycleWayOut::PollOnce
+                | LifecycleWayOut::ResolveHistory
+                | LifecycleWayOut::SaveItem { .. }
+                | LifecycleWayOut::RepairOutside => {}
+            }
+        }
+    }
+    let mut shown = envelope.clone();
+    shown.data = None;
+    render::compact(
+        &shown,
+        supplied,
+        &body,
+        "",
+        envelope.recovery.clone(),
+        &note_lines(&notes),
+    )
+}
+
 /// The human output of a result of these verbs.
 pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
+    if let Some(MutationDataDto::PullRequestClosure(data)) = &envelope.data {
+        return branch_output(envelope, data, supplied);
+    }
     let Some(MutationDataDto::Lifecycle(data)) = &envelope.data else {
         return render::mutation_output(false, envelope, supplied);
     };

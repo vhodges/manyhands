@@ -723,6 +723,18 @@ impl RepositoryService {
     ) -> Result<TicketClosureResult, TicketClosureError> {
         lifecycle::close(self, request, session, Some(probe), progress, clock)
     }
+    /// `withdraw_ticket_closure`, stopping at each safe point when `probe` says
+    /// so, and telling `progress` of its steps (D5 decision 11).
+    pub(super) fn withdraw_ticket_closure_observed<P: SessionCredentialProvider>(
+        &self,
+        request: CloseTicketRequest,
+        session: &mut SessionCredentials<P>,
+        probe: CancellationProbe,
+        progress: &mut dyn RunObserver,
+        clock: fn() -> OffsetDateTime,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        lifecycle::withdraw(self, request, session, Some(probe), progress, clock)
+    }
     /// Ask an unfinished closure to stop at its next safe point. `false` when
     /// no unfinished closure has this ID.
     pub fn cancel_ticket_closure(

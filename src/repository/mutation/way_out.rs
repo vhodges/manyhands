@@ -44,6 +44,10 @@ pub enum LifecycleWayOut {
     /// A new prepare of the same verb, and a new request: a branch record
     /// that finished with this answer gives it again to its own request ID.
     PrepareAgain,
+    /// `item sync` of the item, once the publication remote is set: a branch
+    /// record whose remote changed or went left its commit on the local
+    /// branch (R-35), and the sync publishes whatever the branch holds.
+    SyncItem { item_id: String },
     /// `poll once`, which reads primary's tracking ref and whether a
     /// published context still stands.
     PollOnce,
@@ -123,7 +127,8 @@ pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleW
         // sync` does (R-5): the conflict verbs take the record's ID, as for a
         // direct close's child.
         Some(MutationDataDto::SynchronizationConflict(_))
-            if envelope.command == Command::TicketClose.name() =>
+            if envelope.command == Command::TicketClose.name()
+                || envelope.command == Command::TicketWithdrawClosure.name() =>
         {
             child_conflict(envelope)
         }
@@ -133,7 +138,10 @@ pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleW
     route
 }
 
-/// A finished branch record's way out. Only a deleted branch has one, and the
+/// A finished branch record's way out. A record whose publication remote
+/// changed or went (R-35, the one `recovery_required` answer that carries this
+/// data) left its commit on the local branch, and `item sync` publishes it
+/// once the remote is set. The other is a deleted branch, and the
 /// record is finished, so its request would give the same answer again: the
 /// way on is a new prepare, and a new request (the deletion is then evidenced,
 /// and a close offers its new branch, keeping the closure). A withdraw needs
@@ -143,6 +151,16 @@ fn branch_route(
     envelope: &Envelope<MutationDataDto>,
     data: &PullRequestClosureMutationDto,
 ) -> Vec<LifecycleWayOut> {
+    if envelope.code == ResultCode::RecoveryRequired {
+        return envelope
+            .scope
+            .item_id
+            .iter()
+            .map(|item_id| LifecycleWayOut::SyncItem {
+                item_id: item_id.clone(),
+            })
+            .collect();
+    }
     if envelope.code != ResultCode::RemoteBranchDeleted {
         return Vec::new();
     }

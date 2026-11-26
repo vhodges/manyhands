@@ -176,6 +176,7 @@ pub(crate) fn guidance(
         | LifecycleWayOut::PrepareAgain
         | LifecycleWayOut::RetryRequest { .. }
         | LifecycleWayOut::ResumeOperation { .. }
+        | LifecycleWayOut::SyncItem { .. }
         | LifecycleWayOut::SharePrimary => return None,
     })
 }

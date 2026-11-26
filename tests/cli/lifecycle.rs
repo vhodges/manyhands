@@ -1597,6 +1597,54 @@ fn operation_resume_of_an_unfinished_branch_record_is_original_request_required(
     }
 }
 
+/// A branch record no request holds is continued by a resume, as a direct
+/// close's is, with the input its action rebuilds: a withdraw's resume takes
+/// up the withdraw, whose child stops again at the closed port.
+#[test]
+fn operation_resume_of_an_unheld_withdraw_continues_it_as_a_withdraw() {
+    let case = Case::pull_request_with_a_key(WITHDRAW);
+    case.context_closed();
+    let stopped = case.stopped_at_the_context_child(REQUEST_1);
+    let operation = stopped["operation_id"].as_str().unwrap();
+    // The request that held it is gone.
+    items::index(case.world.data.path())
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid = ?1",
+            [REQUEST_1],
+        )
+        .unwrap();
+    let resumed = mutation::checked(
+        &[
+            "operation",
+            "resume",
+            "--repo",
+            case.root(),
+            "--operation-id",
+            operation,
+            "--request-id",
+            REQUEST_2,
+            "--json",
+        ],
+        &case.env,
+        &[],
+        5,
+        "transport_unavailable",
+        None,
+    );
+    assert_eq!(resumed["command"], "operation resume");
+    // It was taken up as the withdraw it is: its record is still the one
+    // withdraw record, unfinished and at its first step, and nothing was
+    // written to the branch.
+    let step: (String, String) = items::index(case.world.data.path())
+        .query_row(
+            "SELECT action, step FROM ticket_closures WHERE operation_id = ?1",
+            [operation],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(step, ("withdraw".to_owned(), "confirmed".to_owned()));
+}
+
 /// W12 and W4, in the order the binding answers them: no publication remote
 /// is answered before the hold, which names the unfinished close's request.
 #[test]

@@ -62,7 +62,7 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, Blocker, OperationFamily, OperationId, ReadError,
+            AuthoringKind, Blocker, ClosureAction, OperationFamily, OperationId, ReadError,
             RefreshRepositoryRequest, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             SynchronizationTarget, closure, keys, promotion,
             promotion::lifecycle::{LifecycleRecord, ParentStep},
@@ -79,7 +79,10 @@ use super::{
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Ran, Standing, comment, conflict,
-    lifecycle::{DocumentPromoteInput, LifecycleBinding, LifecycleVerb, TicketCloseInput},
+    lifecycle::{
+        DocumentPromoteInput, LifecycleBinding, LifecycleVerb, TicketCloseInput,
+        TicketWithdrawClosureInput,
+    },
     primary_position, sync,
 };
 
@@ -310,11 +313,18 @@ fn found_lifecycle(
     if recovery::has_table(connection, closure::record::TABLE)?
         && let Some(record) = closure::record::read_record(connection, repository, operation_id)?
     {
+        // A withdraw rebuilds its own input when a resume continues it; a
+        // close and a new branch rebuild a close's.
+        let command = if record.action == ClosureAction::Withdraw {
+            Command::TicketWithdrawClosure
+        } else {
+            Command::TicketClose
+        };
         return Ok(Some(lifecycle_standing(
             connection,
             root,
             operation_id,
-            Command::TicketClose,
+            command,
             &record,
         )?));
     }
@@ -1328,8 +1338,13 @@ impl OperationResumeBinding {
                 call,
                 &operation,
             ),
-            // Unreachable: `lifecycle_standing` names only those two. `Command`
-            // is kept here over a type of its own, for this one arm.
+            Command::TicketWithdrawClosure => continued(
+                LifecycleBinding::from(TicketWithdrawClosureInput { root, id: item_id }),
+                call,
+                &operation,
+            ),
+            // Unreachable: `lifecycle_standing` names only those three.
+            // `Command` is kept here over a type of its own, for this one arm.
             _ => {
                 return Ran {
                     answer: Answer::stopped(ResultCode::InternalError),

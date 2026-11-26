@@ -96,6 +96,7 @@ const DESIGN: &[(&str, &[&str])] = &[
         &[
             "document promote",
             "ticket close",
+            "ticket withdraw-closure",
             "poll once",
             "poll configure",
             "poll pause",

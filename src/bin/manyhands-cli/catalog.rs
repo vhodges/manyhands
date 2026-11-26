@@ -1077,6 +1077,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         },
     },
     CommandSpec {
+        resource: "ticket",
+        verb: "withdraw-closure",
+        summary: "Withdraw a ticket's closure from its branch.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
         resource: "poll",
         verb: "once",
         summary: "Poll a repository once.",

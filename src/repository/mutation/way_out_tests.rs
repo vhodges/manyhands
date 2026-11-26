@@ -769,6 +769,33 @@ fn a_branch_record_names_its_way_out_from_its_data() {
     nameless.scope.item_id = None;
     assert!(lifecycle_way_out(&nameless).is_empty());
 
+    // R-35: a record whose publication remote changed or went completes with
+    // its commit on the local branch, and `item sync` publishes it once the
+    // remote is set. Any such record has the way out, with a commit or with
+    // a closure it only kept.
+    for (command, action, wrote) in [
+        ("ticket close", Action::Close, true),
+        ("ticket close", Action::Close, false),
+        ("ticket close", Action::NewBranch, true),
+        ("ticket withdraw-closure", Action::Withdraw, true),
+        ("ticket withdraw-closure", Action::Withdraw, false),
+    ] {
+        let mut envelope = branch(
+            command,
+            ResultCode::RecoveryRequired,
+            action,
+            vec![inspect()],
+        );
+        if let Some(MutationDataDto::PullRequestClosure(data)) = &mut envelope.data {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            [SyncItem { item_id: item() }, Inspect],
+            "{command} {action:?} wrote {wrote}"
+        );
+    }
+
     // A close's child that stopped on a conflict.
     let conflicted = |command: &str, recovery| {
         let mut envelope = answer(
@@ -788,16 +815,19 @@ fn a_branch_record_names_its_way_out_from_its_data() {
         ));
         envelope
     };
-    assert_eq!(
-        lifecycle_way_out(&conflicted("ticket close", vec![retry(), inspect()])),
-        [
-            ResolveChildConflict {
-                operation_id: OPERATION.into()
-            },
-            SendAgain,
-            Inspect
-        ]
-    );
+    for command in ["ticket close", "ticket withdraw-closure"] {
+        assert_eq!(
+            lifecycle_way_out(&conflicted(command, vec![retry(), inspect()])),
+            [
+                ResolveChildConflict {
+                    operation_id: OPERATION.into()
+                },
+                SendAgain,
+                Inspect
+            ],
+            "{command}"
+        );
+    }
     // The same data of any other command is none of this module's.
     assert!(lifecycle_way_out(&conflicted("item sync", vec![retry(), inspect()])).is_empty());
 }

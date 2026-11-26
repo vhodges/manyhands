@@ -11,18 +11,20 @@ use crate::{
 use super::super::super::{
     super::{
         AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction,
-        ClosureBlocker, ClosureExpectation, ClosureRecording, DocumentPromotionError,
-        DocumentPromotionOutcome, DocumentPromotionPreflight, DocumentPromotionPreview,
-        DocumentPromotionResult, ItemDtoKind, OperationId, PathChange, PlannedCleanup,
-        PlannedClosure, PlannedIntegration, PlannedPublication, PreviewDocumentPromotionRequest,
-        PreviewTicketClosureRequest, PromoteDocumentRequest, PromotionBlocker, PromotionCleanup,
-        PromotionCleanupPending, PromotionExpectation, PromotionIntegration, PromotionPathChange,
-        PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
+        ClosureBlocker, ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight,
+        ConfigurationInspection, DocumentPromotionError, DocumentPromotionOutcome,
+        DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind,
+        OperationId, PathChange, PlannedCleanup, PlannedClosure, PlannedIntegration,
+        PlannedPublication, PreviewDocumentPromotionRequest, PreviewTicketClosureRequest,
+        PromoteDocumentRequest, PromotionBlocker, PromotionCleanup, PromotionCleanupPending,
+        PromotionExpectation, PromotionIntegration, PromotionPathChange, PromotionPublication,
+        PromotionPublicationPending, PromotionRemoteDeletionCategory,
         PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
         closure, promotion,
         promotion::{ParentView, lifecycle::LifecyclePreview, run::RunObserver},
+        read_configuration_for,
         remote::{state, sync},
         transport::SshTransportError,
     },
@@ -45,6 +47,13 @@ pub struct DocumentPromoteInput {
 /// The input of `ticket close`: the ticket.
 #[derive(Clone)]
 pub struct TicketCloseInput {
+    pub root: PathBuf,
+    pub id: ItemId,
+}
+
+/// The input of `ticket withdraw-closure`: the ticket.
+#[derive(Clone)]
+pub struct TicketWithdrawClosureInput {
     pub root: PathBuf,
     pub id: ItemId,
 }
@@ -86,6 +95,12 @@ pub(in super::super::super) struct Ready {
 pub(in super::super::super) enum Observed {
     Ready(Box<Ready>),
     Blocked(Vec<LifecycleBlocker>),
+    /// A withdraw of a ticket whose branch holds no closure: `already_applied`
+    /// with nothing to confirm (decision 11).
+    NothingToWithdraw,
+    /// A withdraw in a repository with no publication remote: its children
+    /// publish, so there is nowhere to (R-33).
+    PublicationRemoteRequired,
 }
 
 /// How far an operation that reached primary got, of either verb.
@@ -175,6 +190,9 @@ pub(in super::super::super) trait LifecycleVerb {
 
 pub(in super::super::super) struct Promote;
 pub(in super::super::super) struct Close;
+/// `ticket withdraw-closure`: the close's twin over the same record, whose
+/// action is `withdraw`.
+pub(in super::super::super) struct Withdraw;
 
 /// Whether a commit made now would have no usable identity. It only reads.
 fn identity_missing(root: &Path) -> Result<bool, RepositoryError> {
@@ -339,6 +357,49 @@ fn closure_reached(outcome: &TicketClosureOutcome, index_pending: bool) -> Reach
     }
 }
 
+/// A closure verb's answer as the binding reads it: how far it got, how a
+/// branch record answered, or what stopped it.
+fn called_of(result: Result<TicketClosureResult, TicketClosureError>) -> Result<Called, Stop> {
+    match result {
+        Ok(TicketClosureResult::Complete(outcome)) => {
+            Ok(Called::Reached(closure_reached(&outcome, false)))
+        }
+        Ok(TicketClosureResult::IndexPending(pending)) => Ok(Called::Reached(closure_reached(
+            &pending.authoritative,
+            true,
+        ))),
+        Ok(TicketClosureResult::Branch(outcome)) => Ok(Called::Branch {
+            outcome,
+            index_pending: false,
+        }),
+        Ok(TicketClosureResult::BranchIndexPending(pending)) => Ok(Called::Branch {
+            outcome: pending.authoritative,
+            index_pending: true,
+        }),
+        Err(error) => Err(match error {
+            TicketClosureError::Repository(error) => Stop::Repository(error),
+            TicketClosureError::Transport(error) => Stop::Transport(error),
+            TicketClosureError::Blocked(blockers) => {
+                Stop::Blocked(blockers.into_iter().map(closure_blocker).collect())
+            }
+            TicketClosureError::ExternalChange => Stop::ExternalChange,
+            TicketClosureError::ReconfirmationRequired => Stop::ReconfirmationRequired,
+            TicketClosureError::PrimaryAdvanced => Stop::PrimaryAdvanced,
+            TicketClosureError::IdentityRequired {
+                expected_configuration: _,
+            } => Stop::IdentityRequired,
+            TicketClosureError::ContextSynchronization(error) => {
+                Stop::ContextSynchronization(error)
+            }
+            TicketClosureError::Busy => Stop::Busy,
+            TicketClosureError::PollYielding => Stop::PollYielding,
+            TicketClosureError::Interrupted => Stop::Interrupted,
+            TicketClosureError::OperationMismatch => Stop::OperationMismatch,
+            TicketClosureError::RecoveryRequired => Stop::RecoveryRequired,
+        }),
+    }
+}
+
 impl LifecycleVerb for Promote {
     const COMMAND: Command = Command::DocumentPromote;
     const KIND: AuthoringKind = AuthoringKind::Document;
@@ -498,44 +559,7 @@ impl LifecycleVerb for Close {
             request_id,
             progress,
         )?;
-        Some(match result {
-            Ok(TicketClosureResult::Complete(outcome)) => {
-                Ok(Called::Reached(closure_reached(&outcome, false)))
-            }
-            Ok(TicketClosureResult::IndexPending(pending)) => Ok(Called::Reached(closure_reached(
-                &pending.authoritative,
-                true,
-            ))),
-            Ok(TicketClosureResult::Branch(outcome)) => Ok(Called::Branch {
-                outcome,
-                index_pending: false,
-            }),
-            Ok(TicketClosureResult::BranchIndexPending(pending)) => Ok(Called::Branch {
-                outcome: pending.authoritative,
-                index_pending: true,
-            }),
-            Err(error) => Err(match error {
-                TicketClosureError::Repository(error) => Stop::Repository(error),
-                TicketClosureError::Transport(error) => Stop::Transport(error),
-                TicketClosureError::Blocked(blockers) => {
-                    Stop::Blocked(blockers.into_iter().map(closure_blocker).collect())
-                }
-                TicketClosureError::ExternalChange => Stop::ExternalChange,
-                TicketClosureError::ReconfirmationRequired => Stop::ReconfirmationRequired,
-                TicketClosureError::PrimaryAdvanced => Stop::PrimaryAdvanced,
-                TicketClosureError::IdentityRequired {
-                    expected_configuration: _,
-                } => Stop::IdentityRequired,
-                TicketClosureError::ContextSynchronization(error) => {
-                    Stop::ContextSynchronization(error)
-                }
-                TicketClosureError::Busy => Stop::Busy,
-                TicketClosureError::PollYielding => Stop::PollYielding,
-                TicketClosureError::Interrupted => Stop::Interrupted,
-                TicketClosureError::OperationMismatch => Stop::OperationMismatch,
-                TicketClosureError::RecoveryRequired => Stop::RecoveryRequired,
-            }),
-        })
+        Some(called_of(result))
     }
 
     fn parent(
@@ -557,6 +581,93 @@ impl LifecycleVerb for Close {
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError> {
         promotion::unfinished_holder::<closure::record::ClosureRecord>(db, repository_id, id)
+    }
+}
+
+impl LifecycleVerb for Withdraw {
+    const COMMAND: Command = Command::TicketWithdrawClosure;
+    const KIND: AuthoringKind = AuthoringKind::Ticket;
+    const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
+    // As the close's: it makes the preview look up the ticket's slug. A branch
+    // record's answers never read a made-ready report.
+    const REPORTS_MADE_READY: bool = true;
+
+    fn observe(
+        service: &RepositoryService,
+        root: &Path,
+        id: &ItemId,
+    ) -> Result<Observed, RepositoryError> {
+        // The configuration first, before the domain looks at anything: a
+        // withdraw's children publish, so with no publication remote there is
+        // nothing to offer, and that answer comes ahead of the hold (R-33,
+        // decision 33).
+        if let ConfigurationInspection::Valid(configuration) =
+            read_configuration_for(root, RepositoryOperation::RepositorySnapshot)?
+            && configuration.publication_remote.is_none()
+        {
+            return Ok(Observed::PublicationRemoteRequired);
+        }
+        Ok(
+            match service.preview_closure_withdrawal(PreviewTicketClosureRequest {
+                root: root.to_owned(),
+                item_id: id.clone(),
+                confirmed_identity: None,
+            })? {
+                ClosureWithdrawalPreflight::Ready(preview) => {
+                    Observed::Ready(Box::new(ready_of_closure(&preview)))
+                }
+                ClosureWithdrawalPreflight::Blocked {
+                    blockers,
+                    identity_configuration: _,
+                } => Observed::Blocked(blockers.into_iter().map(closure_blocker).collect()),
+                ClosureWithdrawalPreflight::NothingToWithdraw => Observed::NothingToWithdraw,
+                ClosureWithdrawalPreflight::PublicationRemoteRequired => {
+                    Observed::PublicationRemoteRequired
+                }
+            },
+        )
+    }
+
+    fn call(
+        session: &dyn Session,
+        service: &RepositoryService,
+        root: PathBuf,
+        operation_id: OperationId,
+        item_id: ItemId,
+        expected: [u8; 32],
+        request_id: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<Called, Stop>> {
+        let result = session.withdraw_closure(
+            service,
+            CloseTicketRequest {
+                root,
+                operation_id,
+                item_id,
+                expected: ClosureExpectation::from_bytes(expected),
+                approval: None,
+                confirmed_identity: None,
+            },
+            request_id,
+            progress,
+        )?;
+        Some(called_of(result))
+    }
+
+    fn parent(
+        service: &RepositoryService,
+        root: &Path,
+        operation: OperationId,
+    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
+        Close::parent(service, root, operation)
+    }
+
+    fn holder(
+        db: &rusqlite::Connection,
+        repository_id: i64,
+        id: &ItemId,
+    ) -> Result<Option<OperationId>, ReadError> {
+        Close::holder(db, repository_id, id)
     }
 }
 

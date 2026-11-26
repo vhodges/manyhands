@@ -108,8 +108,8 @@ use verb::{BranchReady, Ready};
 use verb::{
     Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change, publication_pending,
 };
-pub(in super::super) use verb::{Close, LifecycleVerb, Promote};
-pub use verb::{DocumentPromoteInput, TicketCloseInput};
+pub(in super::super) use verb::{Close, LifecycleVerb, Promote, Withdraw};
+pub use verb::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput};
 
 pub(in super::super) struct LifecycleBinding<V> {
     root: PathBuf,
@@ -141,6 +141,19 @@ impl From<DocumentPromoteInput> for LifecycleBinding<Promote> {
 impl From<TicketCloseInput> for LifecycleBinding<Close> {
     fn from(input: TicketCloseInput) -> Self {
         let TicketCloseInput { root, id } = input;
+        Self {
+            root,
+            id,
+            expected: None,
+            closure_exists: false,
+            verb: PhantomData,
+        }
+    }
+}
+
+impl From<TicketWithdrawClosureInput> for LifecycleBinding<Withdraw> {
+    fn from(input: TicketWithdrawClosureInput) -> Self {
+        let TicketWithdrawClosureInput { root, id } = input;
         Self {
             root,
             id,
@@ -359,6 +372,14 @@ fn digest_of(command: Command, observed: &Observed) -> ObservationDigest {
         Observed::Blocked(blockers) => {
             let names: Vec<&str> = blockers.iter().map(|blocker| blocker.as_str()).collect();
             Observation::of(name).text("blockers", &names.join(","))
+        }
+        // What a withdraw offers nothing for: a state of its own, which no
+        // preview's consent was given for (Part E, Obligation 10).
+        Observed::NothingToWithdraw => {
+            Observation::of(name).text("unoffered", "nothing_to_withdraw")
+        }
+        Observed::PublicationRemoteRequired => {
+            Observation::of(name).text("unoffered", "publication_remote_required")
         }
     };
     ObservationDigest::of_state(name, state.finish())
@@ -827,15 +848,18 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         };
         // The five answers that report what the record did; the others are
         // the consent's or the remote's, and carry nothing of it.
-        let data = matches!(
+        // The sixth is R-35's: a record whose publication remote changed or
+        // went left its commit on the local branch, and the data says what it
+        // wrote, so that `item sync` is named as the way out.
+        let data = (matches!(
             code,
             ResultCode::Ok
                 | ResultCode::AlreadyClosing
                 | ResultCode::AlreadyApplied
                 | ResultCode::RemoteBranchDeleted
                 | ResultCode::TicketClosed
-        )
-        .then(|| self.branch_data(service, &accepted.root(), outcome));
+        ) || outcome.answer() == BranchAnswer::RemoteChanged)
+            .then(|| self.branch_data(service, &accepted.root(), outcome));
         Ran {
             answer: Answer {
                 effects,
@@ -1138,7 +1162,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             (Some(blockers), _) => Some(blockers),
             (None, true) => match V::observe(service, root, &self.id) {
                 Ok(Observed::Blocked(blockers)) => Some(blockers),
-                Ok(Observed::Ready(_)) | Err(_) => None,
+                Ok(
+                    Observed::Ready(_)
+                    | Observed::NothingToWithdraw
+                    | Observed::PublicationRemoteRequired,
+                )
+                | Err(_) => None,
             },
             (None, false) => None,
         }
@@ -1356,10 +1385,17 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             return Err(Answer::stopped(ResultCode::IdentityRequired)
                 .with_data(self.blocked_data(blockers.clone())));
         }
+        // No publication remote is no change of state to consent to, as a
+        // synchronization's is not: it is refused as it is at a preview.
+        if matches!(observed, Observed::PublicationRemoteRequired) {
+            return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+        }
         let position = primary_position(&root)?;
         self.expected = match &observed {
             Observed::Ready(ready) => Some(ready.expected),
-            Observed::Blocked(_) => None,
+            Observed::Blocked(_)
+            | Observed::NothingToWithdraw
+            | Observed::PublicationRemoteRequired => None,
         };
         self.closure_exists = closure_exists(&observed);
         Ok(Prepared {
@@ -1395,10 +1431,22 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (root, repository_id, observed) = self.observe(call.service)?;
+        // The configuration's answer comes ahead of the hold (R-33), and the
+        // hold ahead of a withdraw's "nothing to withdraw" (decision 33,
+        // ruling 35): an unfinished record of the ticket is what to go on with.
+        if matches!(observed, Observed::PublicationRemoteRequired) {
+            return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+        }
         self.held(call.service, repository_id)?;
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
+            Observed::NothingToWithdraw => {
+                return Err(Answer::stopped(ResultCode::AlreadyApplied));
+            }
+            Observed::PublicationRemoteRequired => {
+                return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+            }
             Observed::Blocked(blockers) => {
                 if names_no_item(call.service, &root, &self.id, &blockers) {
                     return Err(Answer::stopped(ResultCode::ItemNotFound));
@@ -1552,6 +1600,18 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 self.expected = Some(ready.expected);
                 Ok(Seen::State { found, own: None })
             }
+            // A withdraw that has nothing left to withdraw is a state the
+            // consent was not given for.
+            Observed::NothingToWithdraw => {
+                self.expected = None;
+                Ok(Seen::State { found, own: None })
+            }
+            Observed::PublicationRemoteRequired => Err(Ran {
+                answer: Answer::stopped(ResultCode::PublicationRemoteRequired),
+                standing: Standing::Stopped {
+                    journal: Some(JournalRow::Absent),
+                },
+            }),
             Observed::Blocked(blockers) => Err(Ran {
                 answer: self.blocked_again(call.service, &root, blockers),
                 standing: Standing::Stopped {
@@ -1825,6 +1885,7 @@ pub(in super::super) fn held_by_its_child(
     let parent = match command {
         Some(Command::DocumentPromote) => Promote::parent(service, root, operation),
         Some(Command::TicketClose) => Close::parent(service, root, operation),
+        Some(Command::TicketWithdrawClosure) => Withdraw::parent(service, root, operation),
         _ => return false,
     };
     matches!(parent, Ok(Some(parent)) if parent.children.contains(&Some(active)))

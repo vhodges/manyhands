@@ -1082,6 +1082,15 @@ fn pull_request_closure_lines() {
         }
         // Each line is its own, and the link's is the item's only.
         assert_eq!(text.matches("publication: ").count(), 1, "{text}");
+        // Part H's order: the closure, the publication, then the link.
+        let at = |line: &str| {
+            text.find(line)
+                .unwrap_or_else(|| panic!("{line:?} in {text}"))
+        };
+        assert!(at(lines[0]) < at(lines[1]), "{text}");
+        if let Some(link) = lines.get(2) {
+            assert!(at(lines[1]) < at(link), "{text}");
+        }
         no_raw_control(text);
     }
 
@@ -1155,4 +1164,78 @@ fn pull_request_closure_lines() {
         "{shown}"
     );
     no_raw_control(shown);
+}
+
+/// A branch record's way out is worded with its own verb (Part H, R-35): a
+/// deleted branch asks for a new prepare of the same verb, and a withdraw that
+/// wrote its commit republishes it first; a record whose remote went names
+/// `item sync`.
+#[test]
+fn a_branch_record_s_way_out_is_worded_with_its_verb() {
+    use PullRequestClosureAction::{Close, Withdraw};
+    let say = |command: &str, code, action, wrote: bool| {
+        let mut envelope = branch_answer(
+            action,
+            PullRequestClosureRecording::Nothing,
+            None,
+            None,
+            None,
+        );
+        envelope.command = command.into();
+        envelope.code = code;
+        envelope.outcome = manyhands::results::Outcome::Partial;
+        envelope.recovery = vec![inspect()];
+        if let Some(MutationDataDto::PullRequestClosure(data)) = envelope.data.as_mut() {
+            data.checkpoint_oid = wrote.then(|| OID.into());
+        }
+        let out = output(&envelope, false);
+        (stdout(&out).to_owned(), stderr(&out).to_owned())
+    };
+    let prepare =
+        |verb: &str| format!("next: manyhands-cli {verb} --repo '/repo' --id {ITEM} --prepare\n");
+    let republish =
+        format!("next: manyhands-cli item republish --repo '/repo' --id {ITEM} --prepare\n");
+    // A close, or a new branch: a new prepare of the same verb.
+    let (_, text) = say("ticket close", ResultCode::RemoteBranchDeleted, Close, true);
+    assert!(text.contains(&prepare("ticket close")), "{text}");
+    assert!(!text.contains("item republish"), "{text}");
+    // A withdraw that wrote its commit: the republish, which publishes it.
+    let (_, text) = say(
+        "ticket withdraw-closure",
+        ResultCode::RemoteBranchDeleted,
+        Withdraw,
+        true,
+    );
+    assert!(text.contains(&republish), "{text}");
+    assert!(
+        !text.contains(&prepare("ticket withdraw-closure")),
+        "{text}"
+    );
+    // One that wrote nothing: the republish, then a new prepare of itself.
+    let (_, text) = say(
+        "ticket withdraw-closure",
+        ResultCode::RemoteBranchDeleted,
+        Withdraw,
+        false,
+    );
+    assert!(text.contains(&republish), "{text}");
+    assert!(text.contains(&prepare("ticket withdraw-closure")), "{text}");
+    assert!(
+        text.find(&republish).unwrap() < text.find(&prepare("ticket withdraw-closure")).unwrap(),
+        "{text}"
+    );
+    // R-35: `item sync` once the remote is set, whatever the action.
+    for (command, action) in [
+        ("ticket close", Close),
+        ("ticket withdraw-closure", Withdraw),
+    ] {
+        let (_, text) = say(command, ResultCode::RecoveryRequired, action, true);
+        assert!(
+            text.contains(&format!(
+                "next: manyhands-cli item sync --repo '/repo' --id {ITEM}\n"
+            )),
+            "{command}: {text}"
+        );
+        assert!(text.contains("item sync publishes it"), "{text}");
+    }
 }

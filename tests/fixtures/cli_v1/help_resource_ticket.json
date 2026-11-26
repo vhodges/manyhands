@@ -536,6 +536,45 @@
         ],
         "repository": "required",
         "summary": "Close a ticket."
+      },
+      {
+        "available": true,
+        "command": "ticket withdraw-closure",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Withdraw a ticket's closure from its branch."
       }
     ]
   },

@@ -377,6 +377,7 @@ pub const CLI_CASES: &[&str] = &[
     "help_resource_ticket",
     "help_root",
     "help_ticket_close",
+    "help_ticket_withdraw_closure",
     "help_document_promote",
     "help_ticket_list",
     "cli_ticket_ready",
@@ -427,6 +428,7 @@ pub const CLI_CASES: &[&str] = &[
     "ticket_close_request_mismatch",
     "ticket_close_checkpoint_merge_refused",
     "ticket_close_prepare_held",
+    "ticket_close_pull_request_preview",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "poll_once_retirement_stopped_text",

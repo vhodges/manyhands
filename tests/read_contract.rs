@@ -731,8 +731,9 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        LocalBranch, PollMutationCompletion, PollTargetDisposition, RemoteBranch, SetupCancelType,
-        SetupPollOutcome, SetupPollType,
+        LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
+        PullRequestClosurePreviewType, RemoteBranch, SetupCancelType, SetupPollOutcome,
+        SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -908,6 +909,34 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "details.closure.recording",
             LifecycleRecording::ALL
                 .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.type",
+            PullRequestClosurePreviewType::ALL
+                .map(PullRequestClosurePreviewType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.unheld.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
                 .to_vec(),
         ),
         (

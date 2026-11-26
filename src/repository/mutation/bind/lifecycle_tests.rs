@@ -573,8 +573,19 @@ fn a_branch_record_answers_its_own_shape() {
             vec![LifecycleBlocker::AlreadyClosed],
         ),
         (A::ExternalChange, ResultCode::ExternalChange, false, vec![]),
+        // E-46 (owner, 2026-11-26, R-35): the one `recovery_required` answer
+        // that names what the record did, so `item sync` can be named as the
+        // way out. Its sisters, `context_changed` and
+        // `context_history_unresolved`, stay without data.
+        (A::RemoteChanged, ResultCode::RecoveryRequired, true, vec![]),
         (
-            A::RemoteChanged,
+            A::ContextChanged,
+            ResultCode::RecoveryRequired,
+            false,
+            vec![],
+        ),
+        (
+            A::ContextHistoryUnresolved,
             ResultCode::RecoveryRequired,
             false,
             vec![],
@@ -1572,6 +1583,17 @@ impl Session for Recorder {
         None
     }
 
+    fn withdraw_closure(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::CloseTicketRequest,
+        _: RequestId,
+        _: &mut dyn RunObserver,
+    ) -> Option<Result<crate::repository::TicketClosureResult, crate::repository::TicketClosureError>>
+    {
+        None
+    }
+
     fn poll_once(
         &self,
         _: &RepositoryService,
@@ -1716,4 +1738,117 @@ fn a_runs_steps_are_reported_as_stages() {
         stages_of(true, &[E::Recording, E::Integrating, E::CleaningUp]),
         [S::Integrating, S::CleaningUp]
     );
+}
+
+/// A withdraw is a closure's twin over the same record, and every site that
+/// reads a record's command for a lifecycle parent reaches it: whether a
+/// child is the parent's (`held_by_its_child`), what an unsettled request
+/// shows (`recorded_effects`), and what `request cancel` asks (`asks_a_parent`
+/// and `cancel_parent`, which set the record's own flag).
+#[test]
+fn a_withdraw_is_a_lifecycle_parent_wherever_its_command_is_read() {
+    use crate::repository::{
+        mutation::identity::ScopeKey,
+        request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation},
+    };
+    let registered = Registered::new(false);
+    let commit = a_commit(&registered);
+    let repository = git2::Repository::open(registered.root.path()).unwrap();
+    // The branch that holds the withdraw's commit.
+    repository
+        .reference(
+            &format!("refs/heads/manyhands/ticket/{ITEM}"),
+            commit,
+            true,
+            "",
+        )
+        .unwrap();
+    let scope = ScopeKey::for_repository(registered.root.path()).unwrap();
+    let (operation, child, request) = (OperationId::new(), OperationId::new(), RequestId::new());
+    let db = rusqlite::Connection::open(
+        registered
+            ._data
+            .path()
+            .join(crate::repository::REGISTRY_FILE),
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO ticket_closures
+           (repository_id, operation_id, item_id, expectation, step, updated_at,
+            closure_kind, integration_mode, action, withdraw_oid, base_oid, context_oid,
+            context_attempt, context_sync_id, remote_name)
+         SELECT id, ?1, ?2, zeroblob(32), 'closing', 0,
+                'existing', 'pull_request', 'withdraw', ?3, ?3, ?3, 1, ?4, 'origin'
+           FROM repositories",
+        rusqlite::params![
+            operation.to_string(),
+            ITEM,
+            commit.to_string(),
+            child.to_string()
+        ],
+    )
+    .unwrap();
+    registered
+        .service
+        .insert_request(&NewRequest {
+            request_id: request,
+            scope: scope.clone(),
+            command: Command::TicketWithdrawClosure.name().into(),
+            target: String::new(),
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(request),
+                Command::TicketWithdrawClosure.name(),
+                &scope,
+                "",
+            )
+            .finish(),
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: crate::repository::OperationFamily::Remote,
+                operation_id: operation,
+            }],
+        })
+        .unwrap();
+
+    // The child is the parent's, whichever verb's command asks.
+    for command in [Command::TicketClose, Command::TicketWithdrawClosure] {
+        assert!(
+            held_by_its_child(
+                &registered.service,
+                Some(command),
+                registered.root.path(),
+                operation,
+                child
+            ),
+            "{command:?}"
+        );
+    }
+    assert!(!held_by_its_child(
+        &registered.service,
+        Some(Command::TicketWithdrawClosure),
+        registered.root.path(),
+        operation,
+        OperationId::new()
+    ));
+
+    // What an unsettled request shows is what its parent wrote.
+    let record = registered.service.request_record(request).unwrap().unwrap();
+    let shown = crate::repository::mutation::bind::recorded_effects(&registered.service, &record);
+    assert_eq!(shown.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(shown.effects.write, crate::results::WriteEffect::Written);
+
+    // `request cancel` asks the parent as well as the request.
+    let cancelled = registered.service.cancel_request(request);
+    assert_eq!(cancelled.data.map(|data| data.requested), Some(true));
+    let asked: i64 = db
+        .query_row(
+            "SELECT cancel_requested FROM ticket_closures WHERE operation_id = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(asked, 1, "the parent's own flag");
 }
