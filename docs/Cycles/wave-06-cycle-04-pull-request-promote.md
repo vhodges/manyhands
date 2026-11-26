@@ -8,12 +8,13 @@ manyhands_kind: document
 
 Ticket: vh-rphcs (`01M87684C9GM9BJP5QQ429KMAK`), branch `manyhands/ticket/01M87684C9GM9BJP5QQ429KMAK`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 04 design](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md). Plan: [Cycle 04 implementation plan](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-implementation.md).
 
-Status: **draft**, revision 2, 2026-11-26. Not yet approved.
+Status: **draft**, revision 3, 2026-11-26. Not yet approved.
 
 Revision history:
 
 - Revision 1 (Cycle document `8e70a309`, design `4e1bbb2e`, plan `aa980cb1`): first draft, after the owner's decisions 1 to 8.
-- Revision 2: two independent reviews of revision 1 (source and feasibility: 1 Blocking, 11 Important, 7 Minor; contract, consistency and completeness: 2 Blocking, 15 Important, 16 Minor) and the owner's decisions 9 to 12. Revision 2 has not been independently reviewed.
+- Revision 2 (Cycle document `1914bc05`, design `6791a987`, plan `cf445a15`): two independent reviews of revision 1 (source and feasibility: 1 Blocking, 11 Important, 7 Minor; contract, consistency and completeness: 2 Blocking, 15 Important, 16 Minor) and the owner's decisions 9 to 12.
+- Revision 3: a scoped re-review (0 Blocking, 6 Important, 10 Minor) and an adversarial round (2 Blocking, 7 Important, 9 Minor) of revision 2, and the owner's decisions 13 and 14. Revision 3 has not been independently reviewed.
 
 ## Purpose And Authority
 
@@ -44,7 +45,7 @@ Authorities, in order:
 2. Promoting again while the link is outstanding: a synchronization, then `already_applied` with the same link (decision 2).
 3. The content proof as the only test of "promoted": the full proof in the pull-request prepare and confirm and in `item sync` (design R-3), and its cheaper twin in `document show`, in either mode (decision 9).
 4. `document show`'s `pull_request` for a document (Part E) and `item sync`'s link for a document (Part F).
-5. The record's rebuild, the new data and preview shapes, the way out of `remote_branch_deleted`, the human output (Parts A and D), and the amendments to the contracts, RFCs, audit and skills.
+5. The record's rebuild, the new data and preview shapes, the way out of `remote_branch_deleted`, the human output (Parts A and D), the retirement fence (decision 13), and the amendments to the contracts, RFCs, audit and skills.
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -55,9 +56,9 @@ Authorities, in order:
 
 **Notes owed to other tickets at approval** (the planning skill's step 9):
 
-- vh-ssepw: `primary_holds_document` (design R-3) is the content-proof rule for its detection of a promoted document; its confirmed manual cleanup and its surviving-branch deletion end a document's context and so must delete its link row, as both retirement paths do; promote already answers `already_applied` with `primary_holds` once a clone has seen the merge; K-9 and K-12 are edges its cleanup settles.
+- vh-ssepw: `primary_holds_document` (design R-3) is the content-proof rule for its detection of a promoted document; its confirmed manual cleanup and its surviving-branch deletion end a document's context and so must delete its link row, as both retirement paths do, and must respect the retirement fence of an unfinished pull-request promotion (decision 13); promote already answers `already_applied` once a clone has seen the merge; K-9 and K-12 are edges its cleanup settles.
 - vh-p7st2: the new preview `pull_request_promotion_preview` and data `pull_request_promotion`; `document show`'s `pull_request` for a document; "Approve and merge" in a pull-request repository; and `repo inspect`'s listing of outstanding links, for tickets and documents (decision 12).
-- vh-gy8gz: this Cycle extends its link helper to documents (design Part G item 9), its `item sync` link to documents (Part F), its library fake publisher to promotion (Part G item 13) and its SSH case with promote steps (decision 6); it changes its Contract 12's "`pull_request` null for documents" and its Part C rule that every `item sync` answer carrying a link writes the row.
+- vh-gy8gz: this Cycle extends its link helper to documents (design Part G item 9), its `item sync` link to documents (Part F), its library fake publisher to promotion (Part G item 13), its SSH case with promote steps (decision 6), and its retirement fence with a promotion twin (decision 13); it adds a defaulted lifecycle hook that the closure does not take (Part G item 6); it changes its Contract 12's "`pull_request` null for documents" and its Part C rule that every `item sync` answer carrying a link writes the row.
 - The Wave 06 document: Cycle 04's checklist (design D-6).
 
 ## Departures From The RFC
@@ -73,12 +74,12 @@ Authorities, in order:
 ## Required Contract
 
 1. **(owner's eye)** In a pull-request repository, `document promote` synchronizes the document's branch with its remote copy and the remote's primary and publishes it, as `item sync` does, and answers with the `pull_request` link. It writes nothing on the branch beyond that synchronization, and no command changed by this Cycle commits to or pushes the local or the remote primary in a pull-request repository (except a direct promote accepted before the repository switched, K-8). In direct mode `document promote` is unchanged.
-2. The pull-request promote's prepare, digest and steps are the design's Parts B and C, and its behaviour is the outcomes C1 to C24 and the two answer tables. The consent digest binds the mode, so a prepare made in one mode cannot be confirmed in the other.
+2. The pull-request promote's prepare, digest and steps are the design's Parts B and C, and its behaviour is the outcomes C1 to C27 and the two answer tables. The consent digest binds the mode, so a prepare made in one mode cannot be confirmed in the other.
 3. **(owner's eye)** Promoting again while the link is outstanding synchronizes again, publishing any saves since and merging the remote's primary in, and answers `already_applied` with the same link, the one first given; its effects show what it published (decision 2).
-4. **(owner's eye)** In a pull-request repository a document counts as promoted only when the primary holds it by the content proof (design R-3), never by presence or ancestry alone. Once it does, `document promote` answers `already_applied` with no link (at prepare when this clone has already fetched the merge, with no data; at confirm with `primary_holds` true) and writes nothing.
+4. **(owner's eye)** In a pull-request repository a document counts as promoted only when the primary holds it by the content proof (design R-3), never by presence or ancestry alone. Once it does, `document promote` answers `already_applied` with no link: at prepare when this clone has already fetched the merge, with no data and nothing written; at confirm with `primary_holds` true, after only the synchronization's own merge and push.
 5. **(owner's eye)** `document show` and `document show --path` of a document read from its active context report the link as `pull_request` while it is outstanding, and null once the primary holds the document (decisions 3 and 9); lists keep it null. Either retirement path deletes the link row.
 6. `item sync` of a document context in a pull-request repository that publishes or finds current a branch with an outstanding link answers with the link (decision 4). It never writes the link row.
-7. **(owner's eye)** The pull-request promote is a mode of the existing document-promotion lifecycle (decision 1), with its rules: a step that stops on its synchronization answers as `item sync` answers that stop and leaves the promote unfinished; the same request continues it; `request cancel` and Ctrl-C answer `cancelled` and leave it unfinished; a new request's prepare is held by it; a finished one replays its answer; `operation list` lists it as a `promote`.
+7. **(owner's eye)** The pull-request promote is a mode of the existing document-promotion lifecycle (decision 1), with its rules: a step that stops on its synchronization answers as `item sync` answers that stop and leaves the promote unfinished; the same request continues it; `request cancel` and Ctrl-C answer `cancelled` and leave it unfinished; a new request's prepare is held by it; a finished one replays its answer; `operation list` lists it as a `promote`. While it is unfinished, retirement skips its document (decision 13). Before its child completes, a remote that is no longer the configured one, or a branch tip that is no longer the consented one, ends it as a refused record (`external_change`) with nothing published by it; once its child has published, it finishes (decision 14).
 8. **(owner's eye)** A remote branch deleted without a merge answers `remote_branch_deleted`, whose way out is `item republish`, then a new promote (decision 11). `history_unknown` does not block the pull-request prepare (decision 10).
 9. The answer's data is the new `pull_request_promotion` shape and the preview's the new `pull_request_promotion_preview`; there is no new result code, blocker, verb or operation action.
 10. Direct mode is otherwise unchanged. Every existing answer, golden and test keeps its result, except the named edits, the record's new columns, and `document show`'s `pull_request` for a document that has a link row.
@@ -91,7 +92,7 @@ Authorities, in order:
 | A2 | 1, 4 | The same with a squash, and with a fast-forward | planned (Task 7) |
 | A3 | 4, 5 | The ticket's case: an edit of a merged document reads as not promoted (promote, the poll and `document show`) until its own pull request merges, for each merge style, and as promoted after | planned (Task 7) |
 | A4 | 3 | Promoting again after a save publishes it, after the remote's primary moved merges it in, and after a forge-setting change gives the first link | planned (Task 3) |
-| A5 | 2, 7, 8, 10 | The required outcomes C1 to C24 and both answer tables, C24 being direct mode unchanged | planned (Tasks 3, 4) |
+| A5 | 2, 7, 8, 10 | The required outcomes C1 to C27 and both answer tables, C24 being direct mode unchanged | planned (Tasks 3, 4) |
 | A6 | 4 | The content-proof rule: a table over document kind, merge style, local and tracking primary, the remote tracking tip and the proof's refusals | planned (Task 2) |
 | A7 | 2, 8 | The observation: dispatch per mode, the situations in order, the effects, the blockers kept and dropped, each digest field | planned (Task 2) |
 | A8 | 5 | `document show`'s link, and the cheap check agreeing with the proof | planned (Task 6) |
@@ -100,6 +101,7 @@ Authorities, in order:
 | A11 | 8, 9 | Every registration, the way out, the human lines, and the CLI goldens with no network: the preview, a prepare's `already_applied`, a blocked prepare | planned (Tasks 5, 8) |
 | A12 | 10 | The amended contracts, audit and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | planned (Task 9) |
 | A13 | 10 | The fast tier and the SSH targets AGENTS.md's table selects, once at review-ready | planned (Task 10) |
+| A14 | 7 | The retirement fence: the poll's retirement, `context retire` and the backstop skip a document with an unfinished pull-request promotion, and retire it once the record finishes | planned (Task 4) |
 
 Nothing has been run. Every status above is planned.
 
@@ -117,21 +119,24 @@ Nothing has been run. Every status above is planned.
 10. **`history_unknown` does not block the pull-request prepare** (after review round 1). A first push leaves no tracking ref, so the usual path, `item sync` and then promote, would otherwise need a poll first; the confirm's fetch settles the history, and a deleted branch answers `remote_branch_deleted` at confirm. This departs from the CLI contract's known limit (its decision 35) and from Cycle 03's close.
 11. **`remote_branch_deleted`'s way out is `item republish`** (after review round 1), then a new promote, keyed on the new data so that the direct promote, the close and `item sync` keep theirs. The skill says that if the pull request did merge, cleanup is Cycle 05's.
 12. **`repo inspect`'s listing of outstanding links goes to Cycle 06** (after review round 1), for tickets and documents, with the desktop's link actions.
+13. **Retirement is fenced while a pull-request promotion is unfinished** (after review round 2). The poll's, `context retire`'s and the desktop's retirement skip a document whose pull-request promotion record is unfinished, as they already skip a ticket whose closure is unfinished; re-running the request then finds the branch deleted and the primary holding the document, answers `already_applied`, and the next poll retires it. Chosen over recording the consented tip and ending through `ContextGone`.
+14. **A stopped promote that changed since consent ends as `external_change`** (after review round 2). Before its child completes, a re-run whose publication remote is no longer the configured one, or whose branch tip is no longer the consented one, ends as a refused record (`external_change`), with nothing published by it; a new prepare starts over. Once the child has published, the promote finishes regardless, because the rest needs no network. Chosen over leaving it to Cycle 03's runner rule, under which it would wait for good.
 
 ## Known Limits
 
 - K-1: The link is kept per clone (RFC). Another clone that promotes the same document gives and records its own.
-- K-2: After a forge merge whose remote branch survives, cleanup waits for Cycle 05's confirmed deletion; meanwhile promote answers `already_applied` with `primary_holds`, and `document show` gives no link.
+- K-2: After a forge merge whose remote branch survives, cleanup waits for Cycle 05's confirmed deletion; meanwhile promote answers `already_applied` (at prepare with no data, at confirm with `primary_holds`), and `document show` gives no link.
 - K-3: A squash after which the primary changed the same document again gives the context child a merge conflict; the person resolves it, or waits for Cycle 05's confirmed manual cleanup.
 - K-4: No verb abandons a published document context (`context release` refuses one), so the link ends by the content proof or by retirement only; Cycle 05's manual cleanup adds a third ending.
-- K-5: A promote whose child stopped holds the document's prepare until its request runs again, as a direct promote does.
+- K-5: A promote whose child stopped holds, until its request runs again, what an unfinished promotion holds today: the document's prepare, a change of the repository's setting, and `context sync-local` of every item; and, by decision 13, the document's retirement. Neither it nor its child can be abandoned; the same request finishes it.
 - K-6: The proof is as fresh as the last fetch: until a poll or a synchronization fetches the merge, `document show` still gives the link.
 - K-7: Until Cycle 06 the desktop's "Approve and merge" in a pull-request repository shows a generic preview, and the answer's link is not offered as actions.
 - K-8: A direct promote accepted before the repository switched to pull-request mode finishes in direct mode, and pushes the primary, as Cycle 01 decision 11 says for every operation.
 - K-9: After a forge merge whose remote branch survives, a new edit saved on that branch makes the next promote an `again`: it answers `already_applied` with the first link, whose page opens a new pull request from the same branch; the skill says so. Cycle 05's cleanup of the surviving branch removes the case.
 - K-10: Until Cycle 06, `repo inspect` does not list outstanding links (decision 12); `document show` and `ticket show` give them.
-- K-11: `document show`'s cheaper check can disagree with the full proof in a repository with missing objects or a document ID held at two paths (decision 9).
+- K-11: `document show`'s cheaper check can disagree with the full proof in a repository with missing objects, a document ID held at two paths, a primary copy that does not parse, or a document moved on the primary (decision 9).
 - K-12: After a squash on which the primary moved on, a deleted branch answers `remote_branch_deleted`, and its way out, `item republish`, would revive a branch whose pull request merged; the skill points to Cycle 05's confirmed manual cleanup instead.
+- K-13: After the publication remote or the forge setting changes between two promotes, `again` gives the first link, built for the old setting, until the row ends (design R-17).
 
 ## Open Questions
 
@@ -159,3 +164,9 @@ None at this revision.
 | Review round 1 | `repo inspect` offering the link | decision | Cycle 06 (decision 12) | RFC "The pull request link" |
 | Review round 1 | A prepare's `already_applied` with data had no shape to ride on | ruling | No data, as Cycle 03's withdraw prepare (R-4) | `PrepareDataDto`; Cycle 03 Part E |
 | Review round 1 | A stale link reused after a merge with a surviving branch | settled | K-9, and skill text | Design R-11 |
+| Review round 2, scoped re-review | 0 Blocking, 6 Important, 10 Minor | — | All resolved in revision 3; see the design's Review Record | This revision |
+| Review round 2, adversarial | 2 Blocking, 7 Important, 9 Minor | — | All resolved in revision 3, with decisions 13 and 14 | This revision |
+| Review round 2 (both) | A retirement while a stopped promote waits leaves a request that can never finish | decision | The retirement fence (decision 13) | `context_retirement/source.rs` `capture_target`; `remote/sync.rs` `TargetNotMaterialized` |
+| Review round 2, adversarial | A changed remote leaves a promote `interrupted` for good; a save while it waits would be published | decision | End as a refused record before the child completes (decision 14) | `promotion/run.rs` about 934-938 |
+| Review round 2 | Refused records carry no answer; the answer CHECK must be one-sided | correction | As Cycle 03's (design Part A) | `promotion/record.rs` `refuse_record`; `closure/record.rs` about 421-422 |
+| Review round 2 | The preview omitted a publication the synchronization makes | correction | All three effects, as the RFC (design R-24) | RFC "Document promote in pull-request mode" |
