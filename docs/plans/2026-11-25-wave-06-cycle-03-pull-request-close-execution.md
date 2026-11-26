@@ -143,6 +143,23 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 - Design checkpoint (Step 3), written by an Opus designer, checked by an independent Opus checker (sound with fixes), approved with the controller's corrections on 2026-11-25; it is Appendix F. U-1 does not stop for the owner: `finish_parent` (`remote/reservation.rs` about 1217-1249) is generalized by widening its SQL (about 1236) to a new branch's `retired` end, its checks unchanged (`finish_remote_operation` refuses non-poll, non-synchronization targets). Slices: A, prepare and consent (`unheld_entries`, situations 2 and 3, the digest's new fields, the preview, an interim guard); B, a new branch with nothing to retire (steps 1 and 3, the context-at-commit function); C, the retirement and U-1.
 - **E-44** (controller-approved): replaces the two "until Task 9" rows Task 7 wrote in `closure/observe_tests.rs` (about 1797-1809) with the Task 9 situations.
 - Rulings 36 to 49, in Appendix F's corrections and the designer's open questions: situation 2 gets 3.1's ancestor check (36), counting every push `push_absence` counts (45); F8's wording (37); refusals under the reservation release it as `cancelled` through `finish_parent` (38); the cleanup's code is `context_changed`, `recovery_required` (39); a kept closure's record stores the kept `closed_at`, and one not in whole-second UTC form blocks prepare with `TicketInvalidAfterClosure` (40); with no context, ambiguous or unknown push evidence blocks prepare with `history_unknown` or `history_unresolved` (41); a local branch with no worktree keeps `context_missing` (42); a dirty worktree at confirm answers `Blocked([ContextDirty])` (43); the digest binds `retired_oid`, 3.1 falls back to the deletion record's `last_published`, "occupied" includes a worktree registration, a cancel under the reservation stops at `retired` (44); a retry after this record's own tracking deletion accepts the bound evidence (46); a stale tracking-ref lock after a crash is a known limit with the operator's removal as its way out, as for the direct close (47, a Known Limit at Task 15); a configuration change during the retirement answers `recovery_required` until restored (48); a pull-request close that meets a deletion recorded between its context child and step 3 abandons with `external_change` before writing, and a new prepare offers the new branch (49, replacing row 3's answer for that window).
+- Ruling 50: situation 2 (a context exists) takes only `DeletionEvidence::Fetched` as evidenced deletion. `republish_evidence`'s `Pushed` is any proven push with no fetch record, which every first publication produces, so counting it would turn a close's own first publication into a new branch at step 3; situation 3.1 (no context) keeps `deleted()`, since the publication never forces — a design correction to Part D situation 2's "by a fetch or a push" (Task 15) — cost: a deletion seen only by a push needs a poll before a new prepare offers the new branch.
+- Ruling 51, as narrowed by 51a: situation 2's evidenced deletion also counts the push endpoint's own finding, read from the ticket's newest closure record whose context child ran (`context_sync_id IS NOT NULL`), when that record was abandoned with answer `remote_branch_deleted`, is newer than the newest proven push of the context, and no fetch since has recorded the branch present. The `context_sync_id` filter excludes refused-at-insertion rows and new-branch rows (a new-branch record never runs a context child); a withdraw's record counts — cost: a deletion only a push saw takes one ticket close that answers `remote_branch_deleted` before the next prepare offers the new branch. First reliance on implicit rowid order in `ticket_closures` (a future rebuild must copy in rowid order or copy the rowid).
+- Slice A, prepare and consent: commits `c1507173`, fixes `249ee1ee` and `a2b0d224` (two rounds). `unheld_entries`, `push_absence`'s third value and `republish_evidence_in`, `NewBranchHistory`, situations 2 and 3, the digest's new fields, the preview's `new_branch` facts, `ClosureBlocker::RemoteContextUnmaterialized`, and the interim guard that refused every new-branch confirm. E-45 (mechanical): `pending_work`'s fifth parameter in two observe tests. Review minor recorded: Fetched evidence plus a later proven push with no tracking ref makes 3.1 retire the fetch's advertised OID, and the ancestor check blocks `history_unresolved` (safe).
+- Slice B, a new branch with nothing to retire (situations 3.2 to 3.4): commit `2f888965`, fix `38e871e6`. `closure/new_branch.rs` (step 1: the commit, its pending ref `refs/manyhands/closures/<op>` and the hold; step 3: the branch and worktree), `RepositoryService::context_at_commit`, `FailurePoint::NewBranchCommitRecorded` and `NewBranchCommitHeld`, `LifecycleRecord::synchronizes_context` gating the context child, `begin_publication` refusing while a pending ref is set; the interim guard narrowed to new branches with something to retire. Departures accepted on review: the kept-closure commit, `begin_new_branch_record`, `insert_record`'s `retired` and the per-action abandon were deferred to slice C, which calls them; step 1 makes one identity check (the digest binds `closed_by` under the lease); the four f10 step-1 and step-3 crash tests are two table tests. Fix round: the red run of `context_at_commit_has_its_own_preconditions` (three mutations) and two tighter rows.
+- Ruling 53: `context_at_commit` keeps its `directory != registered` refusal although other checks already refuse the same cases (checkpoint §5.2 lists it; it fails closed) — cost: one redundant line.
+- Main merged (Wave 06 Cycle 02 landed, owner FYI 2026-11-26). Ruling 52: merge main now, between slices B and C, not at Task 11 — AGENTS.md repeats the merge whenever main moves, and the conflicts are in shared contract files slice C does not touch — cost: a merge review now. An `item sync` meant to publish `38e871e6` merged local main (`6c7937c8`: Cycle 02's `c56b6ef1` plus a docs-only promotion) itself, stopped on ten code conflicts with `external_repair`, left a Git merge in progress in the worktree and held every other item's publication until finished. Ruling 54: finish that merge in place rather than cancel it, as the CLI contract says (repaired outside with Git, then the same request again) — cost: other publications held for the merge's duration (about 15 minutes). A read-only Opus research agent mapped the merge (Appendix G): 13 hunks, all one thing defined twice or two lists both sides appended to, and four semantic conflicts in clean files fixed in the merge commit (S1, a duplicate `PullRequestDto` in `read/dto.rs`; S2, the `pull_request.schema.json` `forge` enum registered twice in `tests/read_contract.rs`; S3, `CODES_NO_*` lengths 5 and 9 and `DESIGN_CODES` 75 in `tests/mutation_contract.rs`; S4, the preview-effect order, main's seven then Cycle 03's three, in Rust and schema). Merge commit `bd7286fd` (parents `38e871e6`, `6c7937c8`), then the same sync request published it and released the hold. Review (Opus, on `git show --remerge-diff`): approved, nothing lost from either side, every count equal to its list.
+- Cycle 02's note for whichever lands second (its review-ready comment on vh-c97se), reconciled: the ten conflicts and E-1's table count of 69 are done in `bd7286fd`; `ticket withdraw-closure` takes `SetupGate::Refused` and joins `setup/change.rs`'s race list in Task 11; "its closure steps count as in the way" already holds, since `in_the_way` counts every `ticket_closures` row not `complete`, `abandoned` or `superseded`, and Task 11 adds rows proving an unfinished withdraw and an unfinished new-branch record are in the way.
+- Slice C, the retirement and U-1: commit `bef571fd`, fix `6e86eef9`. Step 2's local part under the lease and its remote part under the parent's own `close` reservation; `finish_parent` generalized to end a new branch's reservation by its end (`completed` or `cancelled`), the direct close's query unchanged; `build_kept_closure_commit`; `begin_new_branch_record` storing `retired_oid` in the same commit that removes the interim guard; `abandon_branch_record`'s allowed steps per action and `pending_ref = NULL`; `new_branch::abandon` deleting the pending ref first; `BranchAnswer::ContextChanged`. Test edits on review: f8's interim-guard block removed (it pinned only the guard §11 C removes); record_tests' kept refused row replaced by a success block (the relaxation the controller named); f14's writer checks extracted unchanged; `finish_close_case` became `finish_case(parent, setup)`, same body; visibility edits. None removes an assertion's intent. Fix round: R40's prepare blocker (a kept `closed_at` with a fraction blocks with `TicketInvalidAfterClosure`, and the record stores `kept_at` itself), F4's tracking-ref assertion, and ruling 57.
+- Ruling 55: slice C's tests stay in `run_pull_request_tests.rs` (no split mid-task; moving slice B's tests would rename every recorded guard path) — cost: one large test file until the final review.
+- Ruling 56: the controller ran the `repository::closure::run_tests::pull_request::` library module once as checkpoint §10.3's guard on `bef571fd` (83 passed, 166 s), as slice B ran it (71); it is a library module of this Cycle's own tests, not an SSH target — cost: none.
+- Ruling 57: a `Replay` of the parent reservation reloads the record and, at `retired`, takes the lease and goes on to step 3 (checkpoint §2.2.2), so a second run of the same request continues — cost: none.
+- Ruling 58: the retirement marks only the item's context owed an indexing, not the primary too, since a new branch never moves the primary — cost: a stale primary index row if wrong, which a refresh repairs.
+- Tests run at this checkpoint (no tier yet): each slice's new tests by exact name, red first or red by deliberate mutation (exempt rows named in the slice reports); the pull_request library module whole on `bef571fd` (83 passed); slice B's guards (76 and 82 named tests); slice C's guards (direct close and `finish_parent` sharers, record tests, 40 plus 16 named); after the merge, the merge map's tests by exact name (results, read and mutation contract, `repository_enablement`'s two, `mutation_replay`'s migration test, the CLI root help) and f3; static gates on every commit. Not run: the fast tier and the SSH tier (review-ready; slice C touches `remote/reservation.rs`, `closure/` and `promotion/`).
+- Deferred to the final review: f8's doc claims a re-run its body does not do; a dummy-parameter count query; f14 rebuilds `assert_save_held`'s request and does not put F11's branch-made, no-worktree state to the writers; the F10 seam test's first retry asserts `phase != completed` where R47 wants the row unchanged; `Busy` and `PollYielding` of the reservation untested; `retire_new_branch` repeats about 25 lines of `complete_record` and has drifted (the index mark's error is propagated there, mapped to `recovery_required` in `complete_record`); `begin_retiring` also backs the non-retiring `begin_branch_record`; `abandon` reopens the repository; `new_branch.rs` at 712 lines and `run_pull_request_tests.rs` at 5937; the human CLI rebuilds a `PullRequestLink` from a `PullRequestDto` in two places.
+- For Task 10 (carried): the preview DTO for the pull-request prepare; `TicketClosurePreview::new_branch()` with its first caller; the `write` effect through `parent_effects`.
+- For Task 11 (carried, binding): `TicketWithdrawClosure` in `Command::setup_gate()`'s `Refused` arm and its design-table test; the verb in `setup/change.rs` `in_the_way`'s accepted-request list; rows proving an unfinished withdraw and an unfinished new-branch record are in the way; pull-request fixtures keep committing the version 2 configuration directly (turning the mode on through `repo enable` or `remote select` now records a pending setup); the setup test to name is `remote_select_takes_the_path_of_the_design` (the map's `the_pull_request_path_records_a_change_and_never_commits` is a helper). Counts in the plan that Cycle 02 made stale are listed in Appendix G ("Stale numbers"); use the actual list lengths.
+- For Task 15 (carried): ruling 50's correction to Part D situation 2's "by a fetch or a push"; R37's F8 wording; R47 as a Known Limit; ruling 21's D20 correction; the R-9 text.
 
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
@@ -2797,3 +2814,261 @@ Task 10's DTO, Task 11's CLI and Task 12's conflict lookups are not touched.
    - 3.1 falls back to the deletion record's `last_published` when there is no tracking tip or proven push, and blocks `history_unresolved` with none;
    - "occupied" includes a worktree registration named `<ID>`, which `git2` cannot add a worktree over;
    - a cancellation that arrives under the reservation is honoured at `retired`.
+
+## Appendix G: Merge map for main c56b6ef1 (research agent, verbatim)
+
+# Merge map: origin/main c56b6ef1 (Wave 06 Cycle 02, vh-c97se) into the Cycle 03 ticket branch
+
+Read-only research, 2026-11-26. Inputs: ticket HEAD `2f888965`, merge base `3df52dcb`, origin/main `c56b6ef1`. `git merge-tree --write-tree HEAD origin/main` gives tree `ef4223415ce7917b1cdefbceaacff244db3cadd2`. "Merged line N" means line N of `git show ef422341:<path>` (the file with conflict markers). "C03" is this branch (HEAD), "C02" is origin/main.
+
+Summary: 10 conflicted files, 13 conflict hunks. Every hunk is either the same item both Cycles built (the pull-request link) or two lists that both Cycles appended to. Nothing is truly contradictory. On top of the hunks there are 6 semantic conflicts. 4 of them break the build or a test after a textual merge that looks clean: a duplicate `PullRequestDto`, a duplicate enum registration, two array lengths that are wrong, and the effect order across two files. The other 2 are things Task 11 must do. Some numbers in the plan are now stale.
+
+Merge procedure: `git fetch && git merge origin/main` from the worktree (never rebase). Resolve the 13 hunks below. Apply S1 to S4 of section 2 in files git merged cleanly. Then `cargo fmt`, the three static gates, and the tests of section 4.
+
+---
+
+## 1. Each conflicted file
+
+### 1.1 `schemas/v1/preview_effect.schema.json` (2 hunks; C03 `c38f5adc`, C02 `12dffa95`, `c5926c84`)
+
+Hunk A, merged lines 4-8, the one-line `description`. C03 changed two things. It widened the `context_created` sentence: "made from a primary branch, the local one or the remote's when only the remote holds it, … ; a pull-request closure lists it too when it makes its context." It also appended "Three are a pull-request closure's and a withdrawal's. context_published: … pull_request_link: … closure_withdrawn: …". C02 appended "Three are a pull-request enable's. setup_recorded … setup_branch_committed … setup_branch_published …. Four are a setup's cancellation's … setup_branch_deleted_remotely … setup_branch_deleted … setup_record_removed … repository_unregistered …" after "the context is retired.". These are not the same thing. Resolution: combine. Start from C03's line, so the widened `context_created` sentence is kept. Insert C02's two sentences ("Three are a pull-request enable's. … nothing under its root changes.") immediately after "remote_branch_deleted, worktree_removed and branch_deleted: the context is retired." and before C03's "Three are a pull-request closure's and a withdrawal's. …". This puts the description in the same order as the enum (1.1 hunk B, 1.7 hunk B).
+
+Hunk B, merged lines 53-65, the `effect` enum tail after `"branch_deleted",`. C03 has `context_published`, `pull_request_link`, `closure_withdrawn`. C02 has `setup_recorded`, `setup_branch_committed`, `setup_branch_published`, `setup_branch_deleted_remotely`, `setup_branch_deleted`, `setup_record_removed`, `repository_unregistered`. Resolution: union, with C02's seven first (they are on main) and C03's three appended after them: `…"repository_unregistered", "context_published", "pull_request_link", "closure_withdrawn"`. The order must be identical to the `PreviewEffect` declaration order in `src/repository/mutation/dto.rs` (1.7 hunk B). `tests/read_contract.rs` (merged line ~1301) compares `PreviewEffect::ALL` with this enum, in order (S4). The total is 47 values (37 base + 7 + 3).
+
+### 1.2 `schemas/v1/pull_request.schema.json` (add/add, 1 hunk; C03 `7cf3f9c2`, C02 `ffa2c1dc`, `12dffa95`)
+
+Merged lines 4-7. The two files are identical except for C03's `description` line ("Where to open the pull request of a ticket's branch: … Null where a read has no link to give."). Both are the same item, `{source, target, forge, url}` with type `["object","null"]` and closed `additionalProperties`. C02 adopted C03's nullable type (C02 ledger Ruling R-Q). Resolution: take C02's file as it is (theirs). That leaves zero diff against main. No test reads schema descriptions, and many schemas have none. C03's wording is about tickets only and would be wrong for the setup link (`manyhands/setup/<id>`). If a description is wanted, Task 15 can add one that covers both uses. Nothing in C03's code depends on the description. `item.schema.json` (C03) and `repository_setup.schema.json` (C02) both `$ref` this file.
+
+### 1.3 `src/bin/manyhands-cli/human.rs` (1 hunk; C03 `7cf3f9c2`, C02 `ffa2c1dc`)
+
+Merged lines 2-20, the `use` block. C03 has a nested `use manyhands::{forge::PullRequestLink, repository::{…}}`. C02 has `use manyhands::forge;` plus a flat `use manyhands::repository::{…, RepositorySetupDto}`. Resolution: take C02's block. Then change C03's bare `PullRequestLink {` in `item_show` (merged line 405) to `forge::PullRequestLink {`. Without this change the file does not compile, because the name `PullRequestLink` is no longer imported. C02's `setup_lines` (merged lines 86-107) already uses `forge::PullRequestLink`. An alternative is `use manyhands::forge::{self, PullRequestLink};`. Either works; C02's shape is preferred. Optional cleanup: both `setup_lines` and `item_show` turn a `PullRequestDto` into `forge::PullRequestLink { forge: None, .. }.human_line()`. That logic could become one `fn link_line(&PullRequestDto) -> String`.
+
+### 1.4 `src/bin/manyhands-cli/human_admin.rs` (1 hunk; C03 `c38f5adc`, C02 `12dffa95`, `c5926c84`)
+
+Merged lines 206-218, the tail of `effect_phrase` (fn at merged line 167). C03 has the arms `ContextPublished`, `PullRequestLink` and `ClosureWithdrawn`. C02 has the seven `Setup*` and `RepositoryUnregistered` arms. Resolution: union, both sets of arms, C02's first to follow the enum order. All ten phrases are distinct and have no `_`, so `human_admin::tests::every_preview_effect_has_a_distinct_phrase` holds. For example, "publish the editing branch" and "publish the setup branch" are different phrases.
+
+### 1.5 `src/canonical.rs` (1 hunk; C03 `7cf3f9c2`, C02 `12dffa95`)
+
+Merged lines 114-133, inside `impl ForgeKind`. C03 added `pub fn parse(text) -> Option<Self>` over an inline array. C02 added `pub const ALL: [Self; 4]`. These are different items. Each side has callers for its own:
+
+- C03 `parse`: `src/repository/pull_request_links.rs:27` (`link_of`).
+- C02 `ALL`: `src/bin/manyhands-cli/admin.rs:205`, `src/repository/read/dto.rs` `PullRequestDto::from_stored` (merged line 174), and `tests/read_contract.rs` (setup_preview `details.forge.kind`).
+
+Resolution: union. Keep `ALL` first, then `parse` rewritten as `Self::ALL.into_iter().find(|kind| kind.as_str() == text)`. Optionally, C02's two `ALL.into_iter().find(…)` sites could call `parse`. That is cosmetic; leave it.
+
+### 1.6 `src/repository/discovery.rs` (1 hunk; C03 `7cf3f9c2`, C02 `7e8931a6`)
+
+Merged lines 2759-2763, the last line of `migrate_registry`. C03 has `migrate_pull_request_links(connection)`, which makes table `pull_request_links` and marker `wave_06_pull_request_links_v1`. C02 has `migrate_repository_setup(connection)`, which makes table `repository_setups` and marker `wave_06_repository_setup_v1`. The two migrations are independent: each makes its own table, and both reference only `repositories(id)`. Both are read-only when complete and transactional when not. Resolution: union, main's first:
+
+```rust
+    migrate_pull_request_mode(connection)?;
+    migrate_repository_setup(connection)?;
+    migrate_pull_request_links(connection)
+```
+
+Neither migration assumes the other's schema. Migration ordering is covered in section 2.
+
+### 1.7 `src/repository/mutation/dto.rs` (2 hunks; C03 `c38f5adc`, C02 `12dffa95`, `c5926c84`)
+
+Hunk A, merged lines 163-182, the doc comment of `PreviewEffect`. C03 has the paragraph about `context_published`, `pull_request_link` and `closure_withdrawn`. C02 has the two setup paragraphs. Resolution: union, C02's paragraphs first, then a `///` blank line, then C03's paragraph. C03's widened `context_created` doc (merged lines 127-133) merged cleanly; keep it.
+
+Hunk B, merged lines 221-233, the `PreviewEffect` variants. Resolution: union. Put C02's seven (`SetupRecorded` … `RepositoryUnregistered`) first, then C03's `ContextPublished`, `PullRequestLink`, `ClosureWithdrawn`. This must be the same order as 1.1 hunk B (S4). C03's `LifecycleBlocker::RemoteContextUnmaterialized` merged cleanly; C02 did not touch `LifecycleBlocker`.
+
+### 1.8 `src/repository/read/mod.rs` (1 hunk; C03 `7cf3f9c2`, C02 `ffa2c1dc`, `12dffa95`)
+
+Merged lines 51-80, `pub use dto::{…}`. C03's list adds `ClosurePublication` and `PullRequestDto`. C02's list adds `PullRequestDto` and `RepositorySetupDto`. Resolution: C02's list plus `ClosurePublication`, with `PullRequestDto` once. Run `cargo fmt`. A second `PullRequestDto` in the list is E0252. `src/repository.rs` re-exports `read::*`, so nothing else needs editing.
+
+### 1.9 `src/results_tests.rs` (1 hunk; C03 `c38f5adc`, C02 `c6a03c3b`, `15e42060`)
+
+Merged lines 34-38, the length of `DESIGN_CODES`. C03 has 72 (base 71 + `already_closing`). C02 has 74 (base 71 + `setup_pending`, `remote_primary_missing`, `remote_already_set_up`). Both sides' rows are already in the clean parts: C02's after `primary_has_local_commits`, C03's `already_closing` after `already_applied`. Resolution: neither side's number. The array holds 75 entries, so write `const DESIGN_CODES: [(&str, Option<FailureClass>); 75] = [`. The messages vector of `result_code_messages_are_fixed` merged cleanly in the same order. `ResultCode::ALL` (C02 after `PrimaryHasLocalCommits`, C03 after `AlreadyApplied`), `envelope.schema.json` and `request.schema.json` all merged cleanly in the same order.
+
+### 1.10 `tests/mutation_contract.rs` (2 hunks; C03 `c38f5adc`, C02 `c6a03c3b`, `b4cecf0b` and others)
+
+Hunk A, merged lines 1815-1824, the last entry of `CODES_NO_FIXTURE_CAN_PRODUCE`. C03 has `(ResultCode::AlreadyClosing, "golden written in Task 14")`. C02 has `(ResultCode::RemoteAlreadySetUp, "a library test pins it (setup::publish_tests) …")`. Resolution: union, both entries.
+
+Hunk B, merged lines 1890-1897, the last entry of `CODES_NO_MUTATION_GOLDEN_HAS`. C03 has `AlreadyClosing`. C02 has `RemoteAlreadySetUp`. Resolution: union, both entries.
+
+Both hunks also need the array lengths fixed, and those lines sit outside the hunks (S3). The `AlreadyClosing` entries stay until Task 14 writes their golden. Task 14 then removes them, giving lengths 4 and 8.
+
+---
+
+## 2. Semantic conflicts in files git merged cleanly (and across files)
+
+### S1 (compile error): two `PullRequestDto` definitions in `src/repository/read/dto.rs`
+
+Both Cycles built the DTO. After the merge the file holds C02's `pub struct PullRequestDto` (merged lines 150-159), C02's `impl PullRequestDto { pub(crate) fn from_stored }` (161-187) and C02's `impl From<&crate::forge::PullRequestLink>` (190-199). It also holds C03's identical `pub struct PullRequestDto` (625-636) and `impl From<&PullRequestLink>` (638-647). The result is E0428 (duplicate type) and E0119 (conflicting impls).
+
+Resolution: delete C03's block, merged lines 624-647 (the doc comment from "/// Where to open a pull request: a ticket's branch" through the closing `}` of the `From` impl). Then also delete `use crate::forge::PullRequestLink;` at merged line 9. C02's impl spells `crate::forge::PullRequestLink` in full, so after the deletion the import is unused and `clippy -D warnings` fails on it.
+
+Keep C02's placement, after `RepositorySetupDto`. Nothing in C03 depends on its own copy:
+
+- `read/items.rs:1548` uses `PullRequestDto::from`, which C02's impl provides.
+- `human_tests.rs:351` and `tests/read_items.rs` build the struct with the same four fields.
+
+C02's extra `from_stored` is what Task 10's `PullRequestLinkDataDto::from_stored` should reuse (section 3).
+
+### S2 (test failure): `pull_request.schema.json` `forge` registered twice in `tests/read_contract.rs`
+
+`contract_enumerations()` holds C02's entry `("pull_request.schema.json", "forge", [...])` at merged lines 757-768 and C03's identical entry at merged lines 1108-1119. C03's design E-9 said "unless Cycle 02 registered it", and C02 did. `published_enumerations_list_exactly_the_registered_values` asserts `published == enumerations.len() + 1`, so a duplicate entry fails it.
+
+Resolution: delete C03's entry, merged lines 1108-1119. Keep C03's `closure.publication` entry just above it (1101-1107) and its `ClosurePublication` import.
+
+### S3 (compile error): array lengths in `tests/mutation_contract.rs` merged "cleanly" but are wrong
+
+Both sides bumped `CODES_NO_FIXTURE_CAN_PRODUCE` from 3 to 4 (merged line 1797) and `CODES_NO_MUTATION_GOLDEN_HAS` from 7 to 8 (merged line 1859). Because the two bumps are identical, git took them without a conflict. After the union of 1.10 the arrays hold 5 and 9 entries, which is E0308.
+
+Resolution: set `[(ResultCode, &str); 5]` and `[(ResultCode, &str); 9]`. `DESIGN_CODES` has the same problem, but there it is inside a hunk; it must be 75 (1.9).
+
+### S4 (test failure): the effect order must agree across two files
+
+`PreviewEffect::ALL` is in declaration order (`contract_enum!` in `mutation/dto.rs`). `published_enumerations_list_exactly_the_registered_values` compares it with `preview_effect.schema.json`'s `effect` enum as an ordered `Vec`. 1.1 hunk B and 1.7 hunk B must therefore use the same order. This map uses C02's seven, then C03's three.
+
+### S5 (latent; Task 11): `setup/change.rs` `in_the_way` lists closure commands by name
+
+Location: C02's `src/repository/setup/change.rs:455-524`. A pull-request `remote select` (a change setup) refuses while any `ticket_closures` or `document_promotions` row is unfinished. That part already covers every branch record, whatever its `action`. The same check also refuses while an accepted request of `Command::TicketClose`, `Command::DocumentPromote` or `Command::RemoteSelect` is in scope (SQL params at lines 507-511).
+
+When Task 11 adds `Command::TicketWithdrawClosure`, it must add `Command::TicketWithdrawClosure.name()` to that `r.command IN (…)` list and widen the placeholders. Otherwise a withdraw request that was accepted but stopped before its record has a row lets a mode-change setup in. Nothing fails at compile time.
+
+### S6 (compile-enforced; Task 11): `Command::setup_gate()` is exhaustive
+
+Location: C02's `src/repository/mutation/command.rs:321-370`. Adding `TicketWithdrawClosure` will not compile until it gets an arm. Put it in the `SetupGate::Refused` arm with `TicketClose` (C02's ledger: "the gate row for `ticket withdraw-closure` (`Refused`, like close)"). Add `"ticket withdraw-closure"` to the `Refused` row of `every_command_has_the_setup_gate_of_the_design` (`command.rs:1158`); that test checks that every command appears exactly once. Append the variant after C02's `RepoSetupCancel => "repo setup-cancel"` (`command.rs:84`) in `commands!`, and in every other `Command` method that lists `RepoSetupCancel`: `has_operation`, `was_accepted_without_operation`, `restores_index`, `creates_its_repository`, `stops_at_safe_points`, `finishes_as_a_synchronization`, `stage`, `hands_off_to_any_refresh` and `needs_confirmation`.
+
+### Checked and found clean (no action)
+
+- **Registry and SQLite migrations.** C03's `wave_06_closure_modes_v1` rebuilds `ticket_closures` inside `closure::record::migrate`, in the registry-schema transaction, before both new migrations. C02 does not touch `ticket_closures`'s schema. C02 does read and write it in two places, and both are valid under C03's rebuilt `SCHEMA` (`closure/record.rs:360-418`):
+  - `setup/change.rs:479-493` selects `operation_id` WHERE `step NOT IN ('complete','abandoned','superseded')`. That still means "unfinished" for branch records, `retired` included.
+  - The test fixture `setup/change_tests.rs:548-568` (`w.parent`, used by `the_pull_request_path_records_a_change_and_never_commits`) inserts `(repository_id, operation_id, item_id, expectation, step, updated_at, closure_kind='record')`. This is valid because `integration_mode` defaults to `'direct'` and `action` to `'close'`, and every new CHECK passes for a direct close at `confirmed` or `complete`.
+  
+  C03 never reads `repository_setups`. `tests/recovery_foundation_gate.rs`'s marker list covers only the registry-schema transaction, where C02 adds nothing. `tests/repository_enablement.rs` `registry_creates_repository_and_discovery_metadata_schema` has both `pull_request_links` (C03) and `repository_setups` (C02) in sorted order after the merge. `tests/mutation_replay.rs` `the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else` excludes `pull_request_links` from its "no name contains request" check, and C02's `repository_setups` objects hold no such name (C02's `repository_setup_migration_adds_the_table_once` pins that).
+- **Exhaustive matches.**
+  - `ResultCode`: the only exhaustive match is `outcome.rs` `recovery`. It has C02's `SetupPending` arm (merged line 861), C03's `AlreadyClosing` (936) and C02's `RemotePrimaryMissing`/`RemoteAlreadySetUp` (1016-1021), all merged cleanly.
+  - `PreviewEffect`: only `effect_phrase` matches exhaustively (1.4).
+  - Other enums one side extended have no match on the other side: `SynchronizationError::TicketClosed` (C03), `ClosureState::Closing`, `ClosureFilter::Closing`, `DependencyState`, `LifecycleBlocker`, `ClosureBlocker`/`CLOSURE_BLOCKERS` (C03 only), `FailurePoint::NewBranchCommit*` (C03), `RepositoryOperation::CancelSetup`, `OperationAction::CancelSetup`, `LocalStep::SetupRecorded`/`SetupCancelRecorded` and `Command::RepoSetupCancel` (C02).
+  - `MutationDataDto`: C02 added `Setup`, `SetupPoll` and `SetupCancel` arms to `dto.rs` `authority` and `from_stored`, to the six matches in `tests/support/mutation.rs` and to `tests/support/repair.rs`. C03 has not added variants yet; Task 10 adds its own next to C02's.
+  - C02's four new `Session` trait methods (`verify_setup_transport`, `publish_setup`, `poll_setup`, `cancel_setup`) are implemented on `lifecycle_tests.rs`'s `Recorder`, which merged cleanly. C03 adds no `Session` impl. C03's new `Lifecycle` and `PromotionIo` impls have no counterpart on main.
+- **Struct literals.** C02's code builds no `ItemDto` or `ClosureDto`, which gained `pull_request` and `publication` in C03. C03's code builds no `RemoteSelectInput`, `RepoEnableInput`, `RepositoryInspectionDto` or `RepositorySummaryDto`, which gained `integration`/`forge` and `setup` in C02.
+- **Changed signatures.** C03's signature changes (`require_ticket_open(+integration)`, `close_ticket_observed(+clock)`, and visibility-only changes in `context_retirement`) have no caller on main. C02's changes (`local_only_commits` made `pub(in super::super)` with the same signature, `repository_lease_waiting`, `LEASE_TIMEOUT` made `pub(super)`) break no caller in C03.
+- **Schema code lists and CLI files.** The code lists in `envelope.schema.json` and `request.schema.json` merged in `ResultCode::ALL` order. `help_root.json` merged both changes in separate places: C02's `repo setup-cancel` entry and C03's `open|closed|closing|all`. The same goes for `catalog.rs`, `catalog_tests.rs` and `dispatch.rs`.
+- **Repository files.** Neither side adds an integration test target. `AGENTS.md` and `.github/workflows/build.yml` are unchanged on both sides. Skills (`skills/` and `.agents/skills/`), `docs/RFC/*`, `docs/Waves/wave-06-pull-request-workflow.md` and `docs/research/wave-03-api-audit.md` changed on main only, so Task 15 edits main's versions.
+
+### Stale numbers in the Cycle 03 plan and design (Baseline Facts 20 and 23), to use from now on
+
+- `DESIGN_CODES`: 74 before C03, 75 with `already_closing`.
+- `PreviewEffect`: 44 before C03 (Fact 20 says 37), 47 with C03's three.
+- `DATA_ROOTS` (`tests/mutation_contract.rs:1605`): now 74. E-21 becomes "74 to 75" in Task 11 (`pull_request_closure_preview.schema.json`). Task 14's two data schemas then bring it to 77.
+- `tests/cli/inventory.rs`: `mutating.len()` 45 becomes 46, and `catalogued.len()` 82 becomes 83.
+- `tests/support/conformance.rs` `HOMES`: 47 becomes 48.
+- `tests/mutation_confirmation/conformance.rs` `ROWS`: 9 becomes 10 (E-12).
+- `tests/cli/skills.rs` `AUTONOMY` now has `repo setup-cancel`.
+- `recovery_tables.rs`: `LIFECYCLE` and `c5_codes` (`verbs.len() == 10`) are unchanged by C02.
+- The CLI audit counts moved on main. In `tests/cli/exits.rs` F2 is now 54/57. `collaboration_exits.rs` is 50/52 and 47/50, and `authoring_exits.rs` 41/43. Use these as bases if Task 15's audit edit adds `already_closing`.
+- Fact 23: `migrate_registry` now ends `migrate_pull_request_mode`, then `migrate_repository_setup`, then `migrate_pull_request_links`.
+- Fact 21: `PullRequestLink` is now used outside `forge.rs`, by C02's `read/dto.rs`, `read/pending_setup.rs`, `setup/poll.rs`, `setup/publish.rs` and `human.rs`.
+
+---
+
+## 3. Cycle 02's contract that Cycle 03's remaining tasks depend on
+
+### `setup_gate` and `setup_pending` (ruling 2, Task 11 Step 1)
+
+- **Definition.** `src/repository/mutation/setup_gate.rs` (module `mutation::setup_gate`, `mod setup_gate;` at `mutation/mod.rs:64`) provides:
+  - `pub(super) fn root_of(place: Place<'_>) -> Option<&Path>`.
+  - `pub(super) fn check(service: &RepositoryService, command: Command, root: &Path) -> Result<(), Answer>`, for a first call or a prepare. It reads the registry and finishes a setup the primary already holds through `setup::complete::finish`. A registry it cannot read refuses nothing.
+  - `pub(super) fn check_in(tx, command, root) -> Result<(), Answer>`, read-only, inside the acceptance transaction.
+  - `pub(super) fn admit(tx, command, place) -> Result<(), ReadError>`, which wraps `check_in` for the acceptance closures.
+  - The private `look` holds the decision. A root the registry does not hold, or holds with no record, gives `Ok`. An unreadable record gives `Answer::stopped(RecoveryRequired)`. `RefusedBeforeEnable` with a `Change` record gives `Ok`. A record whose setup the local primary already holds (`complete::is_complete`) gives `Ok` and is marked complete. Anything else gives `Answer::stopped(ResultCode::SetupPending)`.
+- **How a command opts in.** Through the exhaustive `pub(crate) const fn setup_gate(self) -> SetupGate` on `Command` (`command.rs:321-370`). `SetupGate` (`command.rs:89-97`) is `Carries`, `RefusedBeforeEnable` or `Refused`. No binding code calls the gate. The framework calls it for every command whose `binding.place()` is `Place::Repository` or `Place::NewRepository`:
+  - `confirm.rs` `prepare_call`, lines 343-348: after scope resolution, before `binding.preview`, through `without_preview(command, scope, answer)`.
+  - `execute.rs` first call, lines 273-279: before anything is accepted.
+  - `execute.rs` acceptance, line 359 (`insert_request_admitted`) and line 415.
+  - It does not run on the re-entry or replay of an accepted request, so a stopped close or withdraw resumed by its own request continues.
+- **Which verbs use which class.**
+  - `Refused` (any pending setup): `ticket close`, `document promote`, `remote select`, `remote remove`, `repo enable`.
+  - `RefusedBeforeEnable` (first-time setup only): document create/save/move/repair, ticket create/save/slug-assign/repair, folder create, comment add, item sync, repo sync, item republish, item resolve-history, remote resolve-history, conflict resolve, context sync-local/resolve-local/prepare/release/retire.
+  - `Carries`: everything else (repo create/remove/setup-cancel/identity-set, remote add, key verbs, host verbs, operation resume/abandon, the poll verbs, index refresh/rebuild).
+- **Answer shape** (golden `tests/fixtures/mutation_v1/ticket_close_setup_pending.json`, written by `tests/repository_enablement.rs` `turning_pull_request_mode_on_without_a_key_records_a_change`):
+  - `code: "setup_pending"`, `outcome: "blocked"`, class Blocked (exit 3).
+  - `message`: "The repository's Manyhands setup has not merged yet.".
+  - `data: null`, all effects `not_requested`, `operation_id: null`, `request_id: null` for a prepare.
+  - `recovery: [{action: "repo.inspect", arguments: {root}}]` (`outcome.rs` merged line 861).
+  - `scope: {repository: <root>, item_id: <id>}`.
+  - It is the envelope's own code and never an entry of `blockers`, so it comes before the ticket's own blockers. That is ruling 2's order.
+- **Status of `ticket close`.** It already answers `setup_pending` on main, and both gate tests exercise it:
+  - `repository::mutation::setup_gate::tests::a_pending_setup_refuses_a_first_call_an_acceptance_and_a_prepare_but_not_a_reentry` (`setup_gate_tests.rs:209`, `close(f)` at line 143).
+  - The repository_enablement test above.
+  
+  K-5's sentence "Until whichever of Cycles 02 and 03 lands second, close does not answer `setup_pending`" is therefore obsolete, as is the "in planning" status of vh-c97se in the Cycle document (lines 45, 65, 70, 140). Fix both in Task 15.
+- **What Task 11 does.** It calls nothing. It adds three things:
+  1. `Self::TicketWithdrawClosure` to the `SetupGate::Refused` arm, plus its row in `every_command_has_the_setup_gate_of_the_design` (S6).
+  2. `Command::TicketWithdrawClosure.name()` to `setup/change.rs`'s accepted-request list (S5).
+  3. A test row: a `withdraw(f)` helper beside `close(f)` in `setup_gate_tests.rs`, asserted with `assert_pending` for the first call and the prepare.
+  
+  For the gate to apply, the withdraw's `LifecycleBinding` must answer `place() == Place::Repository(&self.root)` (`bind/lifecycle.rs:967-969` already does) and `command() == Command::TicketWithdrawClosure`. A CLI golden is optional, since `every_bound_command_has_a_golden` needs only one golden per command. Two docs edits belong to Task 11 or 15, and `tests/cli/recovery_tables.rs` parses both tables:
+  - Add `ticket withdraw-closure` to `docs/RFC/cli-contract.md`'s new gate table row "Refused for any pending setup, first-time or a change".
+  - Add it to the recovery-table row "`document promote`, `ticket close` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/ticket_close_setup_pending.json`".
+
+### Other things Cycle 02 added that Cycle 03's design or plan assumed absent or differently shaped
+
+- **`pull_request` object.** It is on main in exactly design Part C's shape. `PullRequestDto { source, target, forge: Option<String>, url: Option<String> }` sits at `read/dto.rs` merged lines 150-199, with `From<&forge::PullRequestLink>`. The schema is nullable. C02 also added `PullRequestDto::from_stored(&Value) -> Option<Self>` (closed object of 4 keys, `forge` checked against `ForgeKind::ALL`). Task 10's `PullRequestLinkDataDto::from_stored` and `PullRequestClosureMutationDto::from_stored` should call it for their `pull_request` field instead of re-parsing. C02's `SetupMutationDto::from_stored` (`mutation/dto.rs`) is the pattern.
+- **`forge` registration.** C02 already registered it in `contract_enumerations` (S2).
+- **`ForgeKind::ALL`.** It now exists (1.5).
+- **The per-item link record.** It is not on main. C02's design says "The per-item record of given links is Cycle 03's". C02 builds the setup's link when read, from its record (`read/pending_setup.rs:72-78`, `setup/poll.rs:257`, `setup/publish.rs:314`). It uses the same recipe as C03's `closure/checkpoint.rs:995` `branch_link` (`forge::recognise(url, configuration.forge())` plus `forge::pull_request_link`). There is no shared helper on main, and none is needed.
+- **`Integration` and mode reads.** No shape change. `canonical::Integration` and `RepositoryConfig::integration()`/`forge()` are as Cycle 01 left them. C02 adds `base_configuration`/`apply_forge` (`setup/intent.rs`) and `canonical_configuration_with`/`_for` (`repository.rs`).
+- **Configuring pull-request mode now goes through a setup.** A pull-request `repo enable`, a `remote select` with `integration: pull_request`, or any setting change of a repository already in pull-request mode now records a pending setup instead of committing a config. `setup/change.rs` `path_of`, lines 82-130, also refuses a change of the remote in pull-request mode as `invalid_input`. After that, `ticket close` and `ticket withdraw-closure` answer `setup_pending`. C03's fixtures must keep committing the version 2 config directly, as `closure/run_pull_request_tests.rs:25-34` (`PULL_REQUEST_CONFIG`) does, including the Task 11 CLI tests and the Task 14 SSH case. `RemoteSelectInput` and `RepoEnableInput` gained `integration` and `forge` (pass `None`).
+- **Mode switch while a ticket is closing.** C02's change setup refuses while any closure record is unfinished, branch records included (S5 covers the accepted-request half). A switch of mode after a branch record has completed reaches C03's existing rules for a closing ticket in either mode (Part A, W1, D17), so nothing new is needed.
+- **Lease waits in tests.** Main adds `RepositoryService::with_lease_wait_for_testing(Duration)` (`blocker.rs:219`) and `coordination::repository_lease_waiting`. Use them in place of real waits for a lease's `busy` answer (AGENTS.md: no real waits).
+- **`Session` trait.** Any new test fake of `Session` (Tasks 13 and 14) must implement C02's four new methods. Returning `None` is enough; `lifecycle_tests.rs`'s `Recorder` shows how.
+- **Other Task 11 edits on main's versions.**
+  - `progress.rs`'s `asks_a_parent`/`cancel_parent` (now around merged lines 762 and 782).
+  - `bind/resume.rs`, where C02 added a `SetupRecorded` arm in `found_local`.
+  - `mutation/records.rs`, where C02 added `finish_for_removal`/`finished_by_removal`; Task 12 edits it.
+  - `tests/cli/inventory.rs` `DATA`.
+  - `skills/manyhands-overview/references/autonomy.md` and its `.agents` copy.
+- **Duplicates of a Cycle 02 facility in Cycle 03's already-written code.**
+  - The `PullRequestDto` struct and `From` impl (S1).
+  - `pull_request.schema.json` (1.2).
+  - The `forge` registration (S2).
+  - `ForgeKind::parse`, which repeats C02's `ALL.into_iter().find(…)` idiom; keep it, rewritten over `ALL`.
+  - The DTO-to-line rendering in `human.rs` (1.3, optional helper).
+  
+  Nothing else duplicates. C02 has no link table, no closure code and no `item sync` link.
+
+---
+
+## 4. Tests to run after the merge
+
+Run each through Devenv, one cargo command at a time, by exact name with `-- --exact`. Run the static gates first (`cargo check --all-features --locked`, `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`); they catch S1, S3, the human.rs import and the read/mod.rs export list. Then run `devenv shell -- cargo check --locked --features desktop-test-support --tests`. This list is only what the merge itself can break; the fast tier at Task 16 still runs once.
+
+### Library (`cargo test --all-features --locked --lib <path> -- --exact`)
+
+- `results::tests::result_codes_match_the_design_table_exactly`: 1.9.
+- `results::tests::result_code_messages_are_fixed`: both message lists merged into one vector.
+- `repository::discovery::tests::pull_request_links_migration_creates_its_table_once`: 1.6.
+- `repository::discovery::tests::repository_setup_migration_adds_the_table_once`: 1.6.
+- `repository::setup::change::tests::the_pull_request_path_records_a_change_and_never_commits`: C02's raw `ticket_closures` inserts against C03's rebuilt schema.
+- `repository::mutation::setup_gate::tests::a_pending_setup_refuses_a_first_call_an_acceptance_and_a_prepare_but_not_a_reentry`: C02's gate in front of C03's changed `ticket close` binding.
+
+### Bin (`cargo test --all-features --locked --bin manyhands-cli <path> -- --exact`)
+
+- `human_admin::tests::every_preview_effect_has_a_distinct_phrase`: 1.4.
+- `human::tests::show_names_the_publication_and_the_pull_request_link_when_it_has_them`: 1.3, C03's link line through main's DTO.
+- `human::tests::repository_inspection_names_a_pending_setup`: 1.3, C02's link line.
+- `catalog::tests::catalog_matches_every_command_and_delivering_cycle_without_duplicates` and `catalog::tests::catalog_publishes_only_the_available_verbs_options_and_requirements`: both sides edited `catalog.rs` and `catalog_tests.rs`.
+
+### Integration (`cargo test --all-features --locked --test <target> <name> -- --exact`)
+
+- `read_contract`:
+  - `published_enumerations_list_exactly_the_registered_values`: S2, S4, the code-list order and the 47 effects.
+  - `a_pending_setup_matches_its_schema`: 1.2.
+- `read_items` `ticket_show_gives_the_link_and_the_publication`: C03's link under C02's DTO and schema.
+- `mutation_contract`:
+  - `every_result_code_has_a_mutation_golden_or_a_reason_none_has_it`: 1.10 and S3.
+  - `every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it`: 1.10 and S3.
+  - `every_schema_is_reachable_from_a_published_root`: the single `pull_request.schema.json`.
+- `repository_enablement`:
+  - `registry_creates_repository_and_discovery_metadata_schema`: both tables.
+  - `turning_pull_request_mode_on_without_a_key_records_a_change`: the `ticket_close_setup_pending` golden through C03's close.
+- `mutation_replay` `the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`: both new registry tables meet the "nothing else changes" dump.
+- `cli` `help::root_help_and_bare_call_match_in_both_modes_without_data`: `help_root.json`, which both sides edited.
+
+None of these is an SSH-harness target. The merge touches no `src/repository/transport/`, `keys/` or `tests/support/ssh_*` code on C03's side. C02's transport changes are already on main and covered by its own gates. So the SSH tier at review-ready is decided by C03's own paths, as before (`ticket_closure`, `mutation_remote`, `document_promotion`, and `remote_synchronization`/`remote_merge_recovery` for `remote/sync.rs`).
