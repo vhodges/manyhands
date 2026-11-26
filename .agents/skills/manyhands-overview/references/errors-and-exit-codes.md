@@ -45,7 +45,7 @@ Each row is a real answer from a scratch repository. "Human" shows the line the 
 | `confirmation_used` | 3 | Confirmed a second time with the same confirmation ID under a new request ID. | The first confirm already ran. Check the item's state before doing more. |
 | `confirmation_mismatch` | 2 | Confirmed for a different item than was prepared. | Prepare again for the right item. |
 | `already_applied` | 0 | Repeated a write that is already in effect. | Success with `outcome` `noop` and `effects.write` `unchanged`. Nothing to do. |
-| `already_closing` | 0 | Ran `ticket close` in a pull-request repository for a ticket whose branch already holds a closure. | Success, `outcome` `success`: the ticket's branch holds the closure, nothing new was written, and `data.pull_request` has the link to open the pull request. Not a no-op and not a failure: give the person the link, and do not retry. |
+| `already_closing` | 0 | Ran `ticket close` in a pull-request repository for a ticket whose branch already holds a closure. (This row is from the contract and the SSH test `a_pull_request_close_publishes_only_the_ticket_branch`, not from a run here.) | Success, `outcome` `success`: the ticket's branch holds the closure, nothing new was written, and `data.pull_request` has the link to open the pull request. Not a no-op and not a failure: give the person the link, and do not retry. |
 
 Other codes exist, and each verb's `--help` and the contract list them. A code that is not in this table and is not exit `0` means: stop, read `message`, `data` and `recovery`, and tell the person if you cannot act on it.
 
