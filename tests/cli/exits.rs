@@ -14,10 +14,14 @@ use std::{
 };
 
 // Exact Task 0 audit union: 49 F2 codes, followed by the three CLI additions.
-const AUDIT_F2: &str = "already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_mismatch host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote key_not_deletable key_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok publication_remote_in_use publication_remote_required push_rejected recovery_required registration_pending remote_name_conflict remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch request_not_found selected_key_in_use transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch";
+// Wave 06 Cycle 02 (vh-c97se) adds five (54 F2 codes) for a setup on a branch.
+const AUDIT_F2: &str = "already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_mismatch host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote key_not_deletable key_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok primary_has_local_commits publication_remote_in_use publication_remote_required push_rejected recovery_required registration_pending remote_already_set_up remote_name_conflict remote_primary_missing remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch request_not_found selected_key_in_use setup_pending transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch";
 const CLI_ONLY: &[&str] = &["usage_error", "command_unavailable", "invalid_id"];
 
-// No host_approval_required: the audit explicitly excludes it from C2.
+// host_approval_required is in the union since Wave 06 Cycle 02: a pull-request
+// enable or remote selection connects to publish its setup. Its fixtures need
+// a pending setup, which this table has none of, so the five codes of that
+// Cycle are reasons here (the CLI contract's recovery tables hold their rows).
 const REASONS: &[(&str, &str)] = &[
     (
         "command_unavailable",
@@ -41,7 +45,27 @@ const REASONS: &[(&str, &str)] = &[
     ),
     (
         "push_rejected",
-        "Defensive host error mapping; C2 host verification never pushes.",
+        "Defensive host error mapping; C2 host verification never pushes. The one verb of C2 that deletes a ref, repo setup-cancel, answers it for a delete the server refused or lost, which the library's cancel tests pin (src/repository/setup/cancel_tests.rs) and no CLI fixture reaches without an SSH server.",
+    ),
+    (
+        "host_approval_required",
+        "A setup's host stop, in a pull-request repo enable or remote select, needs an SSH server that has not been pinned; tests/mutation_remote.rs a_setup_branch_is_published_activated_changed_and_cancelled reaches it and approves the host. host observe answers a missing pin as data, never as this code.",
+    ),
+    (
+        "primary_has_local_commits",
+        "A pull-request repo enable or remote select refuses a local primary with commits the remote's primary lacks after it fetches the base, which needs an SSH server: the library's decision test pins it (src/repository/setup/publish_tests.rs s1_to_s4_publish_decides_on_the_fetched_base), as the C4 table records for repo sync.",
+    ),
+    (
+        "remote_already_set_up",
+        "The remote's primary already holds a Manyhands configuration: decided after the fetch, so it needs a server; the library's decision test pins it (src/repository/setup/publish_tests.rs s2_to_s4_a_refused_setup_is_ended), and tests/mutation_contract.rs records the code with that reason.",
+    ),
+    (
+        "remote_primary_missing",
+        "The remote advertises no primary: decided after the fetch, so it needs a server; the SSH case in tests/mutation_remote.rs (a_setup_branch_is_published_activated_changed_and_cancelled) reaches it and writes the golden repo_enable_remote_primary_missing.",
+    ),
+    (
+        "setup_pending",
+        "Needs a recorded setup, which this table's fixtures have none of: tests/cli/repository.rs a_pull_request_enable_without_a_key_stops_with_no_selected_key reaches it through the binary with remote select (exit 3, blocked, nothing written), and the C3, C4 and C5 tables hold the same code for their verbs.",
     ),
 ];
 
@@ -597,9 +621,9 @@ fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
 #[test]
 fn the_table_and_reasons_account_for_every_code_of_the_audit() {
     let f2 = set(AUDIT_F2.split_whitespace());
-    assert_eq!(f2.len(), 49);
+    assert_eq!(f2.len(), 54);
     let expected = set(f2.iter().copied().chain(CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 52);
+    assert_eq!(expected.len(), 57);
     // Pin the literal to Task 0's actual published source, not just its count.
     let audit = include_str!("../../docs/research/wave-03-api-audit.md");
     let section = audit.split("#### C2 exit-coverage union").nth(1).unwrap();

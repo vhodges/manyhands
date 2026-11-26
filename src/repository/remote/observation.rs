@@ -113,21 +113,51 @@ impl ObservationConfiguration {
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.
     pub(in super::super) fn endpoint_digest(&self) -> [u8; 32] {
-        let mut digest = blake3::Hasher::new();
-        for endpoint in [&self.fetch, &self.push] {
-            match endpoint {
-                Ok(endpoint) => {
-                    digest.update(&[1]);
-                    digest.update(&(endpoint.connection_url.len() as u64).to_le_bytes());
-                    digest.update(endpoint.connection_url.as_bytes());
-                }
-                Err(_) => {
-                    digest.update(&[0]);
-                }
+        digest_endpoints(&self.fetch, &self.push)
+    }
+}
+
+/// The digest of the endpoints of the remote `remote_name`, as
+/// `ObservationConfiguration::endpoint_digest` digests them for the remote
+/// of the plan: the fetch and the push endpoint, each as the transport
+/// connects to it, or as the absence of a usable one. The setup record holds
+/// this digest, and the setup channel's rechecks compare it.
+pub(in super::super) fn endpoint_digest_of(
+    repository: &git2::Repository,
+    remote_name: &str,
+) -> [u8; 32] {
+    digest_endpoints(
+        &crate::repository::transport::endpoint::configured_remote_endpoint(
+            repository,
+            remote_name,
+            SshDirection::Fetch,
+        ),
+        &crate::repository::transport::endpoint::configured_remote_endpoint(
+            repository,
+            remote_name,
+            SshDirection::Push,
+        ),
+    )
+}
+
+fn digest_endpoints(
+    fetch: &Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
+    push: &Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    for endpoint in [fetch, push] {
+        match endpoint {
+            Ok(endpoint) => {
+                digest.update(&[1]);
+                digest.update(&(endpoint.connection_url.len() as u64).to_le_bytes());
+                digest.update(endpoint.connection_url.as_bytes());
+            }
+            Err(_) => {
+                digest.update(&[0]);
             }
         }
-        *digest.finalize().as_bytes()
     }
+    *digest.finalize().as_bytes()
 }
 
 impl RepositoryService {

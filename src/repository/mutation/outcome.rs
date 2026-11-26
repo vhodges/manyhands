@@ -853,6 +853,9 @@ fn recovery(
         ResultCode::RecoveryRequired
         | ResultCode::InvalidSlugConfiguration
         | ResultCode::InvalidConfiguration => vec![at_root(RecoveryActionKind::RepoInspect)],
+        // A pull-request setup that has not merged yet: the repository's
+        // `setup` says where it stands, and the inspection shows it.
+        ResultCode::SetupPending => vec![at_root(RecoveryActionKind::RepoInspect)],
         // A rebuild is of one repository and takes its root. A result
         // that names no repository, as that of a key command on an index
         // that cannot be read is, has no root to give: an action without
@@ -1007,6 +1010,11 @@ fn recovery(
         | ResultCode::RemoteBranchDeleted
         | ResultCode::PushRejected
         | ResultCode::PrimaryHasLocalCommits
+        // A setup that finds no primary branch on the remote to set up
+        // from, or one that already holds a Manyhands configuration:
+        // the remote is what is to change, which is the caller's to do.
+        | ResultCode::RemotePrimaryMissing
+        | ResultCode::RemoteAlreadySetUp
         | ResultCode::NoSelectedKey
         | ResultCode::KeyRejected
         | ResultCode::UnlockRequired
@@ -1135,6 +1143,26 @@ fn with_host_action(
         ),
     );
     recovery
+}
+
+/// The approval of a host as a result of a request offers it when the
+/// error that stopped the request names the host and the result's data
+/// does not, as a setup's does not: `host.approve` or `host.replace` for
+/// a stop of `code`, none for any other.
+pub(crate) fn host_action(
+    code: ResultCode,
+    root: &str,
+    authority: &str,
+    request_id: super::RequestId,
+) -> Vec<RecoveryAction> {
+    // A suggestion replaces what the code offers on its own, so the same
+    // request, which the approval is followed by, is part of it.
+    with_host_action(
+        vec![same_request(request_id)],
+        code,
+        Some(root),
+        Some(authority),
+    )
 }
 
 /// Adds `operation.abandon` to what a result of a request that stopped

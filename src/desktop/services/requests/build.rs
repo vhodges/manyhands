@@ -73,6 +73,9 @@ impl Intent {
                 primary_branch: primary_branch.clone(),
                 identity: identity(id),
                 slug_prefix: slug_prefix.clone(),
+                publication_remote: None,
+                integration: None,
+                forge: None,
             }),
             Self::RepoRemove { root } => {
                 Mutation::RepoRemove(RepoRemoveInput { root: root.clone() })
@@ -100,6 +103,8 @@ impl Intent {
             Self::RemoteSelect { root, name } => Mutation::RemoteSelect(RemoteSelectInput {
                 root: root.clone(),
                 name: name.clone(),
+                integration: None,
+                forge: None,
             }),
             Self::IndexRefresh { root } => {
                 Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() })
