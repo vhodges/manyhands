@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 
 use crate::{
-    canonical::ItemId,
+    canonical::{Integration, ItemId},
     results::{
         DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, RecoveryAction,
         RecoveryActionKind, ResultCode, Scope,
@@ -86,8 +86,9 @@ use super::{
         context::context_names,
         dto::{
             ConflictNextAction, ConflictNextDto, LocalCommitDto, MutationDataDto,
-            PrimaryLocalCommitsDto, PrimaryLocalCommitsType, SynchronizationConflictMutationDto,
-            SynchronizationConflictType, SynchronizationMutationDto,
+            PrimaryLocalCommitsDto, PrimaryLocalCommitsType, PullRequestLinkDataDto,
+            SynchronizationConflictMutationDto, SynchronizationConflictType,
+            SynchronizationMutationDto,
         },
         evidence::Position,
         identity::{IntentDigestBuilder, RequestId},
@@ -1095,10 +1096,89 @@ impl SyncBinding {
         Ran {
             answer: Answer {
                 effects,
+                data: self.link_given(service, accepted, outcome),
                 ..Answer::stopped(outcome::synchronization_result_code(result))
             },
             standing,
         }
+    }
+
+    /// The pull request link of a ticket whose branch this `item sync`
+    /// published, or found current, holding a closure no primary holds (design
+    /// Part H, decision 12), and the link record's row, given here. Every
+    /// other synchronization gives no data: a republish, the primary's, a
+    /// document's, a direct repository's, a ticket that is open or closed.
+    /// A link that cannot be recorded is not given, and the next `item sync`
+    /// gives it.
+    fn link_given(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        outcome: &SynchronizationOutcome,
+    ) -> Option<MutationDataDto> {
+        let SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id,
+        } = &self.target
+        else {
+            return None;
+        };
+        let (SynchronizationOutcome::Published { target: _, oid }
+        | SynchronizationOutcome::AlreadyCurrent { target: _, oid }) = outcome
+        else {
+            return None;
+        };
+        if self.republish.is_some() {
+            return None;
+        }
+        let root = accepted.root();
+        let ConfigurationInspection::Valid(config) =
+            read_configuration_for(&root, RepositoryOperation::RepositorySnapshot).ok()?
+        else {
+            return None;
+        };
+        let remote = config.publication_remote.as_deref()?;
+        if config.integration() != Integration::PullRequest {
+            return None;
+        }
+        let repository = git2::Repository::open(&root).ok()?;
+        let primaries: Vec<git2::Oid> = [
+            format!("refs/heads/{}", config.primary_branch),
+            format!("refs/remotes/{remote}/{}", config.primary_branch),
+        ]
+        .iter()
+        .filter_map(|name| repository.refname_to_id(name).ok())
+        .collect();
+        if !crate::repository::closure::observe::holds_provisional_closure(
+            &repository,
+            item_id,
+            *oid,
+            &primaries,
+        ) {
+            return None;
+        }
+        let link = crate::repository::closure::checkpoint::branch_link(
+            &repository,
+            &config.primary_branch,
+            config.forge().as_ref(),
+            remote,
+            item_id,
+        );
+        crate::repository::remote::state::with_transaction(service, &root, |tx, repository_id| {
+            crate::repository::pull_request_links::upsert_link(
+                tx,
+                repository_id,
+                authoring_kind_segment(&AuthoringKind::Ticket),
+                &item_id.to_string(),
+                &link,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+            )
+            .map_err(|_| crate::repository::remote::state::recovery_required())
+        })
+        .ok()?;
+        Some(MutationDataDto::PullRequestLink(Box::new(
+            PullRequestLinkDataDto::of(&link),
+        )))
     }
 
     /// The domain returned an error. What the request is answered with
@@ -1121,13 +1201,18 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
-        // The domain ends an operation on unresolved history, or on the
-        // local commits of a pull-only primary, as it ends a cancelled one,
-        // but neither is the caller's cancellation: the answer is the
-        // error's. The first names the repair; the second offers none.
+        // The domain ends an operation on unresolved history, on the local
+        // commits of a pull-only primary, or on a ticket closed on the
+        // primary (R-30), as it ends a cancelled one, but none is the
+        // caller's cancellation: the answer is the error's. The first names
+        // the repair; the others offer none.
         let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
-        let own_end =
-            unresolved || matches!(error, SynchronizationError::PrimaryHasLocalCommits { .. });
+        let own_end = unresolved
+            || matches!(
+                error,
+                SynchronizationError::PrimaryHasLocalCommits { .. }
+                    | SynchronizationError::TicketClosed
+            );
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,

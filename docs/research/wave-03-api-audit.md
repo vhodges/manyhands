@@ -61,6 +61,26 @@ Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): onboarding and setting change
 | `operation resume` | no new code | A setup request's operation is `original_request_required`, naming the request |
 | C3's writing verbs, C4's `comment add`, `item sync`, `repo sync`, `item republish`, `conflict resolve`, C5's `ticket close`, `document promote`, `context sync-local`, `context resolve-local` | `setup_pending` | The gate; the unions and rows below hold it |
 
+### Wave 06 Cycle 03 refresh (2026-11-25)
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the pull-request close, the closing state and withdraw (ticket `01M87683QK8E34EYY8KS4VQG9Y`) add one verb and one result code, and amend the answers of `ticket close`, `item sync`, `operation resume` and the conflict verbs. The sources are the Cycle's design (`docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`, Parts A to H) and its execution ledger, which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New code.** `already_closing`: class none, exit 0, outcome `success`, no recovery action. The ticket's branch already holds a closure. It is appended after `already_applied`, and answered by a pull-request `ticket close` only; `ticket withdraw-closure` never answers it.
+
+**New verb.** `ticket withdraw-closure`: F2(`TicketWithdrawClosure`, `TicketWithdrawClosureInput { root, id }`), no JSON input, confirmed, delivered under the label `C5`, with an operation (a branch record of the ticket-closure lifecycle, listed by `operation list` as a `close`) that stops at safe points and finishes as a synchronization. Its row is in the C5 result-set table below, and the gate refuses it for any pending setup as it refuses `ticket close`.
+
+**What each verb newly answers.** Each is an upper bound, as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `ticket close` | `already_closing` | A pull-request close whose branch already holds a closure. Its data is `pull_request_closure`, and a blocked prepare may name the new blocker `remote_context_unmaterialized` |
+| `ticket withdraw-closure` | the codes of `ticket close` except `already_closing` | Its prepare answers `already_applied` for a ticket with no closure, `ticket_closed` when the primary holds it, `publication_remote_required` without a publication remote and `recovery_required` while a record holds the ticket |
+| `item sync` | no new code | A ticket context's synchronization of either mode answers `ticket_closed` for a head that lacks a closure the fetched primary holds, and in a pull-request repository answers with the data `pull_request_link` when it publishes or finds current a closing ticket's branch |
+| `operation resume` | `already_closing` | It gains the union of `ticket close`; a branch record that its accepted request holds answers `original_request_required` |
+| `conflict show`, `conflict resolve` | no new code | A branch record's ID maps to its current child, in either child slot |
+
+The C5 result-set table and the unions below are amended where the CLI audit tests read them (`tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`): the C5 union grows from 47 to 48 codes by `already_closing`, and the table has eleven verbs.
+
 ### Completed-context retirement delivery (2026-11-06)
 
 **Integration re-grounding, 2026-11-07 UTC:** the retirement branch now
@@ -527,7 +547,8 @@ an upper bound, not a promise that a fixture can force the path. C5 adds no
 | Verb | Codes | Count | Design anchor |
 | --- | --- | --- | --- |
 | `document promote` | M + R + C + I + T + Y + `setup_pending` | 42 | Answers table; Identity; Cache loss. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
-| `ticket close` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | The same, and Made-Ready Report. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `ticket close` | M + R + C + I + T + Y + `ticket_closed setup_pending already_closing` | 44 | The same, and Made-Ready Report. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `already_closing` is added: a pull-request close of a ticket whose branch already holds a closure answers it. |
+| `ticket withdraw-closure` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Wave 06 Cycle 03's design, Part E. Added 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the verb is new and answers `ticket close`'s codes except `already_closing`; `already_applied` (a ticket with no closure) and `publication_remote_required` are in the groups. |
 | `poll once` | M + R + U + T + `poll_yielding discovery_pending` | 30 | Polling Verbs, frozen table |
 | `poll configure` | S + R + U + `request_mismatch invalid_input already_applied` | 15 | Policy verbs |
 | `poll pause` | S + R + U + `request_mismatch already_applied` | 14 | Policy verbs |

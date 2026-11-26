@@ -1,8 +1,11 @@
 use crate::{
     canonical::{self, CanonicalItem, ItemId},
-    repository::AuthoringKind,
+    repository::{AuthoringKind, PathChange},
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum PreservationProof {
@@ -80,6 +83,70 @@ pub(in super::super) fn preservation(
         }
     }
     Ok(PreservationProof::Folded)
+}
+
+/// One path the branch holds that the primary does not (Part F, R-19).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct UnheldEntry {
+    pub(in super::super) path: Vec<u8>,
+    pub(in super::super) change: PathChange,
+}
+
+/// Each path whose entry in `local` differs from its entry in the one merge
+/// base of `local` and `primary`, and also from its entry in `primary`, with
+/// its change against `primary`; compared per path as `preservation`
+/// compares, without rename detection, unbounded, sorted by path. Only entries
+/// are compared, so objects are not verified.
+pub(in super::super) fn unheld_entries(
+    repository: &git2::Repository,
+    local: git2::Oid,
+    primary: git2::Oid,
+) -> Result<Vec<UnheldEntry>, ProofRefusal> {
+    use ProofRefusal::*;
+    if repository.is_shallow() {
+        return Err(ShallowHistory);
+    }
+    if local == primary
+        || repository
+            .graph_descendant_of(primary, local)
+            .map_err(|_| MissingObject)?
+    {
+        return Ok(Vec::new());
+    }
+    let bases = repository.merge_bases(local, primary).map_err(|error| {
+        if error.code() == git2::ErrorCode::NotFound {
+            UnrelatedHistory
+        } else {
+            MissingObject
+        }
+    })?;
+    let base = match bases.as_ref() {
+        [base] => *base,
+        [] => return Err(UnrelatedHistory),
+        _ => return Err(MultipleMergeBases),
+    };
+    let local_tree = entries(repository, local, false)?;
+    let primary_tree = entries(repository, primary, false)?;
+    let base_tree = entries(repository, base, false)?;
+    let paths: BTreeSet<&Vec<u8>> = base_tree.keys().chain(local_tree.keys()).collect();
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let local_entry = local_tree.get(path);
+            if base_tree.get(path) == local_entry || primary_tree.get(path) == local_entry {
+                return None;
+            }
+            let change = match (local_entry, primary_tree.get(path)) {
+                (Some(_), Some(_)) => PathChange::Modified,
+                (Some(_), None) => PathChange::Added,
+                (None, _) => PathChange::Deleted,
+            };
+            Some(UnheldEntry {
+                path: path.clone(),
+                change,
+            })
+        })
+        .collect())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

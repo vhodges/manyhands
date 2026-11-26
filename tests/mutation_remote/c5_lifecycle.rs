@@ -244,6 +244,10 @@ const ONE: &[ssh_harness::Case] = &[
         "c5_lifecycle_busy_after_a_checkpoint_close",
         busy_after_a_checkpoint,
     ),
+    (
+        "a_pull_request_close_publishes_only_the_ticket_branch",
+        a_pull_request_close_publishes_only_the_ticket_branch,
+    ),
 ];
 
 const SINGLE: [ssh_harness::Case; ONE_VERB.len() + ONE.len()] = joined_cases(ONE_VERB, ONE);
@@ -323,7 +327,12 @@ pub(super) fn called(
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     if !value["data"].is_null() {
-        schema::check_published(MUTATION, &value["data"]).expect("the lifecycle data schema");
+        // A pull-request close's answers are its own data, by its tag.
+        let data_schema = match value["data"]["type"].as_str() {
+            Some("pull_request_closure") => PULL_REQUEST_CLOSURE,
+            _ => MUTATION,
+        };
+        schema::check_published(data_schema, &value["data"]).expect("the lifecycle data schema");
     }
     envelope
 }
@@ -3591,5 +3600,335 @@ fn never_pushed_context_is_published_then_deleted(verb: Verb) -> Result<(), Fixt
         fixed(w.bare())?.find_reference(verb.branch()).is_err(),
         "deleted"
     );
+    Ok(())
+}
+
+// A pull-request repository's close: the ticket's branch, and nothing else.
+
+const PULL_REQUEST_PREVIEW: &str = "pull_request_closure_preview.schema.json";
+const PULL_REQUEST_CLOSURE: &str = "pull_request_closure_mutation.schema.json";
+const PULL_REQUEST_LINK: &str = "pull_request_link.schema.json";
+/// The configuration's template: the harness's URL is no forge's.
+const FORGE_TEMPLATE: &str = "https://forge.example/new?from={source}&to={target}";
+
+/// `prepared`, for a pull-request close or a withdraw: the preview is the
+/// pull-request closure's.
+fn pull_request_prepared(w: &World, mutation: &Mutation) -> Envelope<PrepareDataDto> {
+    let envelope = w.service.prepare(mutation);
+    let rendered = serde_json::to_vec(&envelope).expect("an envelope serializes");
+    ssh_privacy::clean(
+        &rendered,
+        &[BODY.as_bytes().to_vec(), TITLE.as_bytes().to_vec()],
+    )
+    .expect("neither source nor title in a preview");
+    let value = serde_json::to_value(&envelope).expect("an envelope serializes");
+    schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
+    assert!(
+        matches!(
+            &envelope.data,
+            Some(PrepareDataDto::Preview(preview))
+                if matches!(preview.details, PreviewDetailsDto::PullRequestClosure(_))
+        ),
+        "{:?}",
+        envelope.data
+    );
+    schema::check_published(PULL_REQUEST_PREVIEW, &value["data"]).expect("the preview schema");
+    envelope
+}
+
+/// `called`, for a pull-request close or a withdraw, then the scan of what the
+/// world keeps.
+fn pull_request_called(
+    w: &World,
+    id: &str,
+    confirmation: &str,
+    mutation: Mutation,
+) -> Envelope<MutationDataDto> {
+    let envelope = called(&w.service, id, Some(confirmation), mutation);
+    w.privacy().expect("redacted durable state");
+    envelope
+}
+
+fn pull_request_closure_of(
+    envelope: &Envelope<MutationDataDto>,
+) -> Option<&PullRequestClosureMutationDto> {
+    match envelope.data.as_ref() {
+        Some(MutationDataDto::PullRequestClosure(data)) => Some(data),
+        _ => None,
+    }
+}
+
+/// A pull-request repository's close, the same close again, `item sync`, a
+/// withdraw and a close again publish the ticket's branch and nothing else.
+///
+/// Why SSH: no non-SSH publication remote can be selected, and the property
+/// is that only the ticket's branch reaches the server (decision 11): the
+/// server's primary is never pushed, and no other ref is. The decisions
+/// behind each answer are pinned by library tests; this case checks that the
+/// pieces connect, and writes the goldens that only a server can make.
+fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), FixtureError> {
+    const SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV1";
+    const CLOSE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV2";
+    const CLOSE_AGAIN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV3";
+    const ITEM_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV4";
+    const WITHDRAW: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV5";
+    const CLOSE_LAST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV6";
+    let verb = Verb::Close;
+    let w = World::plain_key()?;
+    trust(&w)?;
+    let bare = w.bare()?;
+    let served = |reference: &str| bare.refname_to_id(reference).ok();
+    let ticket = || served(verb.branch()).ok_or(FixtureError);
+    // Whether the ticket's file at `commit`, on the server, holds a closure.
+    let closure_on_server = |commit: git2::Oid| -> Result<bool, FixtureError> {
+        let entry = fixed(fixed(bare.find_commit(commit))?.tree().and_then(|tree| {
+            tree.get_path(Path::new(&format!(".manyhands/tickets/{ITEM}/ticket.md")))
+        }))?;
+        let blob = fixed(bare.find_blob(entry.id()))?;
+        Ok(String::from_utf8_lossy(blob.content()).contains("closed_at:"))
+    };
+    let source = verb.branch().strip_prefix("refs/heads/").unwrap();
+    let url = format!("https://forge.example/new?from={source}&to=main");
+    let link = PullRequestDto {
+        source: source.to_owned(),
+        target: "main".to_owned(),
+        forge: None,
+        url: Some(url.clone()),
+    };
+
+    // 1. The peer commits a pull-request configuration and pushes it, and a
+    // sync of the clone brings its primary up to it (Cycle 01 K-2). A
+    // configuration the peer committed records no setup.
+    let workdir = w.peer.workdir().ok_or(FixtureError)?;
+    let mut config = fixed(canonical::parse_repository_config(&fixed(
+        std::fs::read_to_string(workdir.join(".manyhands/config.toml")),
+    )?))?;
+    config.unknown.insert(
+        "integration".into(),
+        toml::Value::String("pull_request".into()),
+    );
+    let mut forge = toml::Table::new();
+    forge.insert(
+        "pull_request_url".into(),
+        toml::Value::String(FORGE_TEMPLATE.into()),
+    );
+    config
+        .unknown
+        .insert("forge".into(), toml::Value::Table(forge));
+    let source_text = fixed(canonical::serialize_repository_config(&config))?;
+    let base = fixed(w.peer.refname_to_id(MAIN))?;
+    let configured = commit_path(
+        &w.peer,
+        base,
+        ".manyhands/config.toml",
+        source_text.as_bytes(),
+    )?;
+    fixed(w.peer.reference(MAIN, configured, true, "fixture"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    let synced = execute(&w, SYNC, repo_sync(&w));
+    assert_current(&synced);
+    let inspected = fixed(w.service.inspect_repository(&w.root))?;
+    assert_eq!(
+        inspected.configuration.integration.as_deref(),
+        Some("pull_request")
+    );
+    assert_eq!(inspected.setup, None);
+    let primary = served(MAIN).ok_or(FixtureError)?;
+    assert_eq!(primary, configured);
+    verb.save(&w.service, &w.root)?;
+    let local_primary = fixed(w.repo()?.refname_to_id(MAIN))?;
+    assert_eq!(local_primary, primary);
+    let before = w.server.receive_updates().len();
+    // Only the ticket's branch reaches the server, and every push of it is
+    // taken: a push of any other ref, or one refused, fails here.
+    let only_the_ticket_branch = |since: usize| {
+        let updates = w.server.receive_updates();
+        assert!(updates.len() >= since);
+        for update in &updates[since..] {
+            assert_eq!(update.reference, verb.branch(), "{update:?}");
+            assert!(update.accepted, "{update:?}");
+        }
+        updates.len()
+    };
+
+    // 2. The close: its preview is the pull-request closure's, and the
+    // answer is `ok`, with the link and the branch at the closure's commit.
+    let mutation = || verb.mutation(&w.root, verb.id());
+    let preview = pull_request_prepared(&w, &mutation());
+    let confirmation = confirmation_of(&preview);
+    let Some(PrepareDataDto::Preview(details)) = &preview.data else {
+        return Err(FixtureError);
+    };
+    let PreviewDetailsDto::PullRequestClosure(details) = &details.details else {
+        return Err(FixtureError);
+    };
+    assert_eq!(details.action, PullRequestClosureAction::Close);
+    assert_eq!(details.closure.recording, LifecycleRecording::Record);
+    assert_eq!(details.pull_request.as_ref(), Some(&link));
+    let closed = pull_request_called(&w, CLOSE, &confirmation, mutation());
+    assert_eq!(closed.code, ResultCode::Ok, "{:?}", closed.data);
+    assert_eq!(closed.outcome, Outcome::Success);
+    assert_eq!(closed.recovery, []);
+    let data = pull_request_closure_of(&closed).ok_or(FixtureError)?;
+    // The server holds the closure's commit on the ticket's branch, and has
+    // had nothing but that branch pushed.
+    let checkpoint = ticket()?;
+    assert_eq!(data.checkpoint_oid, Some(checkpoint.to_string()));
+    assert!(closure_on_server(checkpoint)?);
+    assert_eq!(served(MAIN), Some(primary));
+    let pushed = only_the_ticket_branch(before);
+    assert!(pushed > before);
+    assert_eq!(data.action, PullRequestClosureAction::Close);
+    assert_eq!(
+        data.closure.recording,
+        PullRequestClosureRecording::Recorded
+    );
+    assert!(data.closure.closed_at.is_some());
+    assert_eq!(
+        data.publication,
+        Some(PullRequestClosurePublication::Published)
+    );
+    assert_eq!(data.retired_context, None);
+    assert_eq!(data.pull_request.as_ref(), Some(&link));
+    assert_eq!(data.blockers, []);
+    assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, primary);
+    // The branch and its worktree stay: a pull request is what finishes it.
+    assert_eq!(fixed(w.repo()?.refname_to_id(verb.branch()))?, checkpoint);
+    assert_eq!(state_of(&w, CLOSE), Some(RequestState::Finished));
+    golden_at(
+        &w.root,
+        "ticket_close_pull_request_ok",
+        Some(PULL_REQUEST_CLOSURE),
+        &closed,
+    );
+
+    // 3. The close again finds the closure and says so: `already_closing`,
+    // with nothing new on the server.
+    let preview = pull_request_prepared(&w, &mutation());
+    let confirmation = confirmation_of(&preview);
+    let again = pull_request_called(&w, CLOSE_AGAIN, &confirmation, mutation());
+    assert_eq!(again.code, ResultCode::AlreadyClosing, "{:?}", again.data);
+    assert_eq!(again.outcome, Outcome::Success);
+    let data = pull_request_closure_of(&again).ok_or(FixtureError)?;
+    assert_eq!(
+        data.closure.recording,
+        PullRequestClosureRecording::Existing
+    );
+    assert_eq!(data.closure.closed_at, None);
+    assert_eq!(data.checkpoint_oid, None);
+    assert_eq!(data.pull_request.as_ref(), Some(&link));
+    assert_eq!(ticket()?, checkpoint);
+    assert_eq!(served(MAIN), Some(primary));
+    assert_eq!(only_the_ticket_branch(before), pushed);
+    golden_at(
+        &w.root,
+        "ticket_close_already_closing",
+        Some(PULL_REQUEST_CLOSURE),
+        &again,
+    );
+
+    // 4. `item sync` finds the branch current, and gives the link.
+    let synchronized = execute(&w, ITEM_SYNC, item_sync(&w));
+    assert_eq!(
+        synchronized.code,
+        ResultCode::AlreadyApplied,
+        "{:?}",
+        synchronized.data
+    );
+    assert_eq!(synchronized.effects.publication, PublicationEffect::Current);
+    let value = serde_json::to_value(&synchronized.data).expect("data serializes");
+    assert_eq!(value["type"], "pull_request_link", "{:?}", synchronized);
+    match &synchronized.data {
+        Some(MutationDataDto::PullRequestLink(data)) => assert_eq!(data.pull_request, link),
+        other => panic!("not a link: {other:?}"),
+    }
+    assert_eq!(ticket()?, checkpoint);
+    assert_eq!(served(MAIN), Some(primary));
+    assert_eq!(only_the_ticket_branch(before), pushed);
+    golden_at(
+        &w.root,
+        "item_sync_pull_request_link",
+        Some(PULL_REQUEST_LINK),
+        &synchronized,
+    );
+
+    // 5. The withdraw removes the closure from the branch and publishes it:
+    // the server's branch moves to the withdraw's commit, and its primary
+    // does not.
+    let withdrawal = || {
+        Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput {
+            root: w.root.clone(),
+            id: verb.id().parse().unwrap(),
+        })
+    };
+    let preview = pull_request_prepared(&w, &withdrawal());
+    let withdraw_confirmation = confirmation_of(&preview);
+    let withdrawn = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, withdrawal());
+    assert_eq!(withdrawn.code, ResultCode::Ok, "{:?}", withdrawn.data);
+    assert_eq!(withdrawn.outcome, Outcome::Success);
+    let data = pull_request_closure_of(&withdrawn).ok_or(FixtureError)?;
+    let withdraw_commit = ticket()?;
+    assert_ne!(withdraw_commit, checkpoint);
+    assert!(!closure_on_server(withdraw_commit)?);
+    assert_eq!(data.action, PullRequestClosureAction::Withdraw);
+    assert_eq!(
+        data.closure.recording,
+        PullRequestClosureRecording::Withdrawn
+    );
+    assert_eq!(data.closure.closed_at, None);
+    assert_eq!(data.checkpoint_oid, Some(withdraw_commit.to_string()));
+    assert_eq!(
+        data.publication,
+        Some(PullRequestClosurePublication::Published)
+    );
+    assert_eq!(served(MAIN), Some(primary));
+    let pushed_after = only_the_ticket_branch(before);
+    assert!(pushed_after > pushed);
+    assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, primary);
+    golden_at(
+        &w.root,
+        "ticket_withdraw_closure_ok",
+        Some(PULL_REQUEST_CLOSURE),
+        &withdrawn,
+    );
+
+    // 6. The close again records a new closure. Then the same requests sent
+    // again answer the identical envelopes, with no connection and no push,
+    // and the withdraw's request ID sent with another ticket is a mismatch:
+    // rules 1 and 2 of the withdraw's conformance row, which E-12 exempts
+    // since a finished withdraw needs a server. The close's replay is of the
+    // branch's tip; the withdraw's, sent after it, is of a commit behind it.
+    let preview = pull_request_prepared(&w, &mutation());
+    let confirmation = confirmation_of(&preview);
+    let last = pull_request_called(&w, CLOSE_LAST, &confirmation, mutation());
+    assert_eq!(last.code, ResultCode::Ok, "{:?}", last.data);
+    let data = pull_request_closure_of(&last).ok_or(FixtureError)?;
+    assert_eq!(
+        data.closure.recording,
+        PullRequestClosureRecording::Recorded
+    );
+    assert_eq!(data.checkpoint_oid, Some(ticket()?.to_string()));
+    assert_ne!(ticket()?, withdraw_commit);
+    assert!(closure_on_server(ticket()?)?);
+    assert_eq!(served(MAIN), Some(primary));
+    let pushed_last = only_the_ticket_branch(before);
+    assert!(pushed_last > pushed_after);
+    let opened = connections(&w);
+    let replayed = pull_request_called(&w, CLOSE_LAST, &confirmation, mutation());
+    assert_eq!(replayed, last);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    let resent = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, withdrawal());
+    assert_eq!(resent, withdrawn);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    let other = Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput {
+        root: w.root.clone(),
+        id: OTHER_ITEM.parse().unwrap(),
+    });
+    let mismatched = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, other);
+    assert_eq!(mismatched.code, ResultCode::RequestMismatch);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(only_the_ticket_branch(before), pushed_last);
     Ok(())
 }

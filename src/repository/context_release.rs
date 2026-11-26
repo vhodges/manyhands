@@ -228,8 +228,15 @@ impl Release<'_> {
             ));
         }
         if matches!(self.context.kind, AuthoringKind::Ticket) {
-            ticket_guard::require_ticket_open(&self.repository, self.primary_branch, item)
-                .map_err(|error| error.for_operation(OPERATION, self.root))?;
+            // Whatever the repository's mode: a closure on the branch
+            // keeps its context, which a pull-request close reads.
+            ticket_guard::require_ticket_open(
+                &self.repository,
+                self.primary_branch,
+                item,
+                canonical::Integration::Direct,
+            )
+            .map_err(|error| error.for_operation(OPERATION, self.root))?;
         }
         Ok(())
     }

@@ -221,6 +221,46 @@ fn retirement_claimed_refresh_cannot_release_blocker_without_final_result() {
     assert!(RepositoryService::open_at(f.data.path()).is_ok());
 }
 
+// A finished retirement deletes the retired item's pull request link, in the
+// transaction that completes it, and no other item's: not the same ID as a
+// document, not another ticket.
+#[test]
+fn a_finalized_retirement_deletes_the_link() {
+    use crate::repository::pull_request_links::{insert_link_for_test, linked_items_for_test};
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let f = Fixture::new();
+    let operation = OperationId::new();
+    f.inert_absent_handoff(operation);
+    let db = f.db();
+    let registration: i64 = db
+        .query_row("SELECT id FROM repositories", [], |r| r.get(0))
+        .unwrap();
+    for (kind, item) in [("ticket", ITEM), ("document", ITEM), ("ticket", OTHER)] {
+        insert_link_for_test(&db, registration, kind, item);
+    }
+    let row = |kind: &str, item: &str| (kind.to_owned(), item.to_owned());
+    assert_eq!(
+        linked_items_for_test(&db),
+        [
+            row("document", ITEM),
+            row("ticket", ITEM),
+            row("ticket", OTHER)
+        ]
+    );
+    let refreshed = f
+        .service
+        .refresh_repository(RefreshRepositoryRequest {
+            root: f.root.path().into(),
+            operation_id: operation,
+        })
+        .unwrap();
+    assert!(matches!(refreshed, RefreshOutcome::Refreshed { .. }));
+    assert_eq!(
+        linked_items_for_test(&db),
+        [row("document", ITEM), row("ticket", OTHER)]
+    );
+}
+
 #[test]
 fn retirement_all_absent_is_local_only_and_completed_replay_does_not_inspect_recreation() {
     let f = Fixture::new();

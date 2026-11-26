@@ -84,7 +84,7 @@ fn verb_command(spec: &CommandSpec) -> Command {
                 arg = match name {
                     "kind" => arg.value_parser(["ticket", "document"]),
                     "closure" => arg
-                        .value_parser(["open", "closed", "all"])
+                        .value_parser(["open", "closed", "closing", "all"])
                         .default_value("all"),
                     "direction" => arg
                         .value_parser(["down", "up", "both"])

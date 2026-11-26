@@ -1243,3 +1243,61 @@ fn only_a_resume_s_deleted_branch_without_a_cancellation_carries_the_note() {
     assert_eq!(json["recovery"], serde_json::json!([]));
     assert!(!json.to_string().contains("reservation"));
 }
+
+/// Part H: an `item sync` that gives a ticket's pull-request link prints the
+/// link's own line, as `ticket show` and the closure verbs do, whatever else
+/// its answer says, through the field escaping.
+#[test]
+fn an_item_sync_that_gives_a_link_prints_its_line() {
+    let link = |url: Option<&str>| {
+        let data = manyhands::repository::PullRequestLinkDataDto::from_stored_for_testing(
+            &serde_json::json!({
+                "type": "pull_request_link",
+                "pull_request": {
+                    "source": "manyhands/ticket/x",
+                    "target": "main",
+                    "forge": null,
+                    "url": url,
+                },
+            }),
+        )
+        .unwrap();
+        let mut envelope = Envelope::<MutationDataDto>::classified_mutation(
+            "item sync",
+            Scope {
+                repository: Some("/work/repo".into()),
+                item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".into()),
+                ..Scope::default()
+            },
+            false,
+            ResultCode::Ok,
+            Effects::not_requested(),
+            false,
+        );
+        envelope.data = Some(MutationDataDto::PullRequestLink(Box::new(data)));
+        envelope
+    };
+    let with_url = output(
+        &link(Some("https://forge.example/pr/7")),
+        false,
+        &Seen::default(),
+    );
+    assert_eq!(with_url.status, 0);
+    assert!(
+        stdout(&with_url).contains("pull request: https://forge.example/pr/7\n"),
+        "{}",
+        stdout(&with_url)
+    );
+    let without = output(&link(None), false, &Seen::default());
+    assert!(
+        stdout(&without).contains("open a pull request from manyhands/ticket/x into main\n"),
+        "{}",
+        stdout(&without)
+    );
+    let odd = output(
+        &link(Some("https://forge.example/\u{1b}[31m")),
+        false,
+        &Seen::default(),
+    );
+    no_raw_control(stdout(&odd));
+}

@@ -58,6 +58,7 @@ fn ticket_filter(args: &ArgMatches) -> TicketFilter {
         closure: match text("closure").as_deref() {
             Some("open") => ClosureFilter::Open,
             Some("closed") => ClosureFilter::Closed,
+            Some("closing") => ClosureFilter::Closing,
             _ => ClosureFilter::All,
         },
         readiness: if flag("ready") {
@@ -592,6 +593,9 @@ pub fn dispatch(
             return crate::lifecycle::document_promote(service, session, command, args);
         }
         "ticket close" => return crate::lifecycle::ticket_close(service, session, command, args),
+        "ticket withdraw-closure" => {
+            return crate::lifecycle::ticket_withdraw_closure(service, session, command, args);
+        }
         "poll once" => return crate::polling::once(service, session, command, args),
         "poll configure" => return crate::polling::configure(service, session, command, args),
         "poll pause" => return crate::polling::pause(service, session, command, args),

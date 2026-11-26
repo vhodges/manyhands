@@ -803,6 +803,12 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Primary", Some(lifecycle.primary_branch.clone()));
             put("Remote", lifecycle.remote.clone());
         }
+        // Nor for this one: the desktop has no pull-request close yet (R-22).
+        PreviewDetailsDto::PullRequestClosure(closure) => {
+            put("Branch", Some(closure.branch.clone()));
+            put("Primary", Some(closure.primary_branch.clone()));
+            put("Remote", closure.remote.clone());
+        }
     }
     fields
 }

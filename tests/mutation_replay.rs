@@ -439,7 +439,13 @@ fn the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothin
             .iter()
             .any(|(name, _, rows)| name == "repositories" && rows.len() == 1)
     );
-    assert!(!before.iter().any(|(name, _, _)| name.contains("request")));
+    // The request journal's tables; `pull_request_links` is the link record,
+    // which a registry holds from before the request tables too.
+    assert!(
+        !before
+            .iter()
+            .any(|(name, _, _)| name.contains("request") && name != "pull_request_links")
+    );
     drop(connection);
 
     RepositoryService::open_at(data.path()).unwrap();

@@ -101,6 +101,7 @@ pub const CASES: &[&str] = &[
     "item_resolve_history_invalid_input",
     "item_resolve_history_preview",
     "item_sync_publication_remote_required",
+    "item_sync_pull_request_link",
     "item_sync_remote_branch_deleted",
     "key_clear",
     "key_clear_noop",
@@ -231,6 +232,7 @@ pub const CASES: &[&str] = &[
     "request_cancel_not_stoppable",
     "request_show_accepted",
     "request_show_finished",
+    "ticket_close_already_closing",
     "ticket_close_already_current",
     "ticket_close_blocked",
     "ticket_close_blocked_at_run",
@@ -251,6 +253,7 @@ pub const CASES: &[&str] = &[
     "ticket_close_made_ready",
     "ticket_close_ok",
     "ticket_close_poll_yielding",
+    "ticket_close_pull_request_ok",
     "ticket_close_preview",
     "ticket_close_primary_advanced",
     "ticket_close_push_rejected",
@@ -292,6 +295,8 @@ pub const CASES: &[&str] = &[
     "ticket_save_worktree_not_clean",
     "ticket_slug_assign",
     "ticket_slug_assign_already_assigned",
+    "ticket_withdraw_closure_already_applied",
+    "ticket_withdraw_closure_ok",
 ];
 
 pub fn fixture_directory() -> PathBuf {

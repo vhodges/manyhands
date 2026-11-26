@@ -7,8 +7,8 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
-        DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
+        Accessibility, ChangeSource, ClosurePublication, ClosureState, ConfigurationState,
+        CycleKind, DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
         ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
         KeyPublicMetadataState, OperationAction, OperationAttributionDto, OperationFamily,
@@ -731,8 +731,10 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        LocalBranch, PollMutationCompletion, PollTargetDisposition, RemoteBranch, SetupCancelType,
-        SetupPollOutcome, SetupPollType,
+        LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
+        PullRequestClosureMutationType, PullRequestClosurePreviewType,
+        PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
+        RemoteBranch, SetupCancelType, SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -908,6 +910,74 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "details.closure.recording",
             LifecycleRecording::ALL
                 .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.type",
+            PullRequestClosurePreviewType::ALL
+                .map(PullRequestClosurePreviewType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.unheld.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "type",
+            PullRequestClosureMutationType::ALL
+                .map(PullRequestClosureMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "closure.recording",
+            PullRequestClosureRecording::ALL
+                .map(PullRequestClosureRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "publication",
+            PullRequestClosurePublication::ALL
+                .map(PullRequestClosurePublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "pull_request_link.schema.json",
+            "type",
+            PullRequestLinkDataType::ALL
+                .map(PullRequestLinkDataType::as_str)
                 .to_vec(),
         ),
         (
@@ -1097,6 +1167,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "item.schema.json",
             "closure.state",
             ClosureState::ALL.map(ClosureState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "closure.publication",
+            ClosurePublication::ALL
+                .map(ClosurePublication::as_str)
+                .to_vec(),
         ),
         (
             "item.schema.json",

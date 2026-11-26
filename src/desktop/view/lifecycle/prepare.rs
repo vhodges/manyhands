@@ -51,7 +51,7 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, known: Option<&str>) -> S
         DocumentInvalidAfterIntegration, HistoryUnknown, HistoryUnresolved, IdentityRequired,
         IntegrationConflict, LocalOperationPending, NotADocument, NotATicket, PrimaryAheadOfRemote,
         PrimaryConflicted, PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened,
-        RemoteContextDeleted, TicketInvalidAfterClosure,
+        RemoteContextDeleted, RemoteContextUnmaterialized, TicketInvalidAfterClosure,
     };
     let subject = primary_subject(known);
     let primary = primary_name(known);
@@ -75,6 +75,7 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, known: Option<&str>) -> S
         ContextBehindRemote => "This item's working copy is behind its shared copy.",
         IntegrationConflict => return format!("This item's changes conflict with {primary}."),
         RemoteContextDeleted => "This item's shared copy was deleted.",
+        RemoteContextUnmaterialized => "This item's shared copy is not on this computer yet.",
         HistoryUnknown => "Whether this item's shared copy still stands is not known.",
         HistoryUnresolved => HISTORY_UNRESOLVED_BLOCKER,
         AlreadyClosed => "This ticket is already closed.",
@@ -118,8 +119,10 @@ pub(super) fn guidance(
         | LifecycleWayOut::RetryRequest { .. }
         | LifecycleWayOut::ResumeOperation { .. }
         | LifecycleWayOut::SendAgain
+        | LifecycleWayOut::PrepareAgain
         | LifecycleWayOut::CancelThenSendAgain { .. }
         | LifecycleWayOut::ResolveChildConflict { .. }
+        | LifecycleWayOut::SyncItem { .. }
         | LifecycleWayOut::Republish { .. } => None,
     }
 }

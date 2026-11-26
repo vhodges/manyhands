@@ -1,7 +1,7 @@
 #![allow(dead_code)] // Composed by the later promotion runner and Cycle 10.
 use super::{
     AuthoringKind, OperationId, RemoteRefPlan, RepositoryError, RepositoryLease,
-    RepositoryOperation, authoring_kind_segment, item_context,
+    RepositoryOperation, authoring_kind_segment, item_context, pull_request_links,
     remote::{state, sync},
     repository_lease, validate_context_worktree_identity,
 };
@@ -1015,6 +1015,9 @@ pub(super) fn retire_context(
     )
     .map_err(|_| state::recovery_required())?;
     tx.execute("INSERT INTO retired_contexts(repository_id,kind,item_id,operation_id,retired_oid) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(repository_id,kind,item_id) DO UPDATE SET operation_id=excluded.operation_id,retired_oid=excluded.retired_oid",rusqlite::params![repository_id,kind,evidence.item_id.to_string(),evidence.operation_id.to_string(),evidence.retired_oid.to_string()]).map_err(|_|state::recovery_required())?;
+    // The link goes with the context it was given for.
+    pull_request_links::delete_link(tx, repository_id, kind, &evidence.item_id.to_string())
+        .map_err(|_| state::recovery_required())?;
     Ok(())
 }
 

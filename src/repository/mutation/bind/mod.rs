@@ -959,6 +959,12 @@ pub(crate) trait Binding {
     /// no branch or worktree, since none may exist.
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope;
 
+    /// Called before a stored result of the accepted request is given again,
+    /// when no prepare has run to tell the binding what its record is. A
+    /// binding whose `scope` depends on that reads it from the record here.
+    /// Nothing by default.
+    fn settled(&self, _service: &RepositoryService, _accepted: &Accepted) {}
+
     /// Validates the input and makes the checks that need no lease. An
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.
@@ -1082,6 +1088,11 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
                 service, &accepted,
             ));
         }
+        Some(Command::TicketWithdrawClosure) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Withdraw>(
+                service, &accepted,
+            ));
+        }
         _ => {}
     }
     let journal = accepted.journal_row(service);
@@ -1193,7 +1204,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             Recorded::of(repair::recorded_effects(record, &accepted))
         }
         // Answered above, from the parent record: this is not reached.
-        Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
+        Some(Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure) => {
+            Recorded::nothing()
+        }
         // A poll names refs and items in its data and has no effect to show:
         // what it moved of an unfinished request is its report's to say.
         Some(Command::PollOnce) => Recorded::nothing(),

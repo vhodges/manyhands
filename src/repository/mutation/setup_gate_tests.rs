@@ -10,7 +10,7 @@ use crate::{
         CancellationToken, DocumentPromoteInput, FailurePoint, IndexRefreshInput, Mutation,
         MutationCall, MutationDataDto, NoProgress, REGISTRY_FILE, RelationshipWrite,
         RemoteRemoveInput, RepositoryService, RequestId, TicketCloseInput, TicketCreateInput,
-        TicketDraft, TicketSaveInput,
+        TicketDraft, TicketSaveInput, TicketWithdrawClosureInput,
         command_index_tests::{Fixture, TICKET, item},
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
         open_registry,
@@ -147,6 +147,13 @@ fn close(f: &Fixture) -> Mutation {
     })
 }
 
+fn withdraw(f: &Fixture) -> Mutation {
+    Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput {
+        root: f.root.clone(),
+        id: item(TICKET),
+    })
+}
+
 fn promote(f: &Fixture) -> Mutation {
     Mutation::DocumentPromote(DocumentPromoteInput {
         root: f.root.clone(),
@@ -231,6 +238,8 @@ fn a_pending_setup_refuses_a_first_call_an_acceptance_and_a_prepare_but_not_a_re
     assert_eq!(count(&f, "confirmation_records"), confirmations);
     let prepared = f.service.prepare(&close(&f));
     assert_pending(&prepared, "ticket close --prepare");
+    let prepared = f.service.prepare(&withdraw(&f));
+    assert_pending(&prepared, "ticket withdraw-closure --prepare");
 
     // A command that carries on is not refused.
     let refreshed = run(
@@ -283,6 +292,8 @@ fn a_pending_setup_refuses_a_first_call_an_acceptance_and_a_prepare_but_not_a_re
     assert_eq!(created.code, ResultCode::Ok, "{created:?}");
     let refused = run(&f.service, RequestId::new(), close(&f));
     assert_pending(&refused, "ticket close");
+    let refused = run(&f.service, RequestId::new(), withdraw(&f));
+    assert_pending(&refused, "ticket withdraw-closure");
     let refused = f.service.prepare(&remove_remote(&f));
     assert_pending(&refused, "remote remove --prepare");
     let refused = run(&f.service, RequestId::new(), remove_remote(&f));
