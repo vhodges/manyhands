@@ -4213,6 +4213,21 @@ impl PullRequest {
             confirmed_identity: None,
         }
     }
+    /// A publication of the context that put `oid` on the remote, proven (its
+    /// authority is `oid`), as a completed synchronization leaves one.
+    fn proven_push(&self, oid: Oid) {
+        let plan = self.f.configure_endpoints();
+        let target = self.f.manual_context_sync(&plan);
+        let operation = OperationId::new();
+        assert!(matches!(
+            self.f
+                .service
+                .reserve_remote_operation(self.f.root(), operation, &target)
+                .unwrap(),
+            RemoteReservationOutcome::Reserved(_)
+        ));
+        self.f.db().execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',reconciliation_required=0,sync_checkpoint='discovery_pending',authoritative_kind='published',authoritative_oid=?2,expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2 WHERE operation_ulid=?1", rusqlite::params![operation.to_string(), oid.to_string()]).unwrap();
+    }
     /// A commit over `parent` that adds `name`: a tip nothing holds.
     fn off(&self, parent: Oid, name: &str) -> Oid {
         support::tree_commit(
@@ -4476,4 +4491,41 @@ fn r49_a_deletion_recorded_after_the_context_child_abandons_as_external_change()
     assert!(!p.held());
     assert_eq!(p.ready().path(), NEW_BRANCH);
     p.assert_primary_untouched(&io.inner);
+}
+
+/// R51: a context published once and deleted remotely before any fetch
+/// advertised it has no fetch to say so. The close's own context child finds
+/// it gone at the push endpoint and is abandoned with `remote_branch_deleted`;
+/// that record is the evidence, and the next prepare offers the new branch.
+/// A proven push after it (an `item republish`) is a branch that stands
+/// again, and a close is offered once more.
+#[test]
+fn r51_a_deletion_a_close_s_push_found_is_a_new_branch_until_a_later_push() {
+    let close = (Integration::PullRequest, ClosureAction::Close);
+    let p = PullRequest::new();
+    p.proven_push(p.f.context_oid());
+    // Published, and nothing says it is gone.
+    assert_eq!(p.ready().path(), close);
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Context,
+            SynchronizationError::RemoteContextDeleted,
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ContextRemoteBranchDeleted);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(
+        r.answer_code,
+        Some(BranchAnswer::ContextRemoteBranchDeleted)
+    );
+    assert_eq!(p.ready().path(), NEW_BRANCH);
+    // A later proven push: the branch stands again.
+    p.proven_push(p.f.context_oid());
+    assert_eq!(p.ready().path(), close);
+    p.assert_primary_untouched(&io);
 }

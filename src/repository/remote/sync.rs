@@ -8247,16 +8247,17 @@ fn push_absence(
         } else {
             None
         },
-        newest.map(|(_, published)| published),
+        newest,
         counted,
     ))
 }
 
-/// What `push_absence` classifies: the boundary, the commit of the newest
-/// proven publication, and the commit of every publication it counts.
+/// What `push_absence` classifies: the boundary, the journal row and the
+/// commit of the newest proven publication, and the commit of every
+/// publication it counts.
 type PushAbsence = (
     Option<PushAbsenceBoundary>,
-    Option<git2::Oid>,
+    Option<(i64, git2::Oid)>,
     Vec<Option<git2::Oid>>,
 );
 
@@ -8315,10 +8316,14 @@ pub(crate) struct RepublishConsent {
     pub(crate) local: git2::Oid,
 }
 
+/// What `republish_evidence_in` reads: the evidence, the commit of every
+/// publication the push-absence classification counts in row order (`None`
+/// for one whose commit is not recorded), and the journal row of the newest
+/// proven one.
+pub(crate) type RepublishRead = (RepublishEvidence, Vec<Option<git2::Oid>>, Option<i64>);
+
 /// `republish_evidence` over a registry transaction, for the plan of the
-/// repository at `root`: the evidence, and the commit of every publication
-/// the push-absence classification counts, in row order (`None` for one
-/// whose commit is not recorded). A closure's prepare reads it in its own
+/// repository at `root`. A closure's prepare reads it in its own
 /// read-only transaction.
 pub(crate) fn republish_evidence_in(
     tx: &rusqlite::Connection,
@@ -8327,7 +8332,7 @@ pub(crate) fn republish_evidence_in(
     plan: &RemoteRefPlan,
     kind: AuthoringKind,
     item_id: &crate::canonical::ItemId,
-) -> Result<(RepublishEvidence, Vec<Option<git2::Oid>>), RepositoryError> {
+) -> Result<RepublishRead, RepositoryError> {
     use rusqlite::OptionalExtension;
     let target = SynchronizationTarget::Context {
         kind,
@@ -8335,7 +8340,8 @@ pub(crate) fn republish_evidence_in(
     }
     .operation_target(plan);
     let generation = state::generation(tx, id)?;
-    let (boundary, proven, counted) = push_absence(tx, id, root, generation, &target, None, None)?;
+    let (boundary, newest, counted) = push_absence(tx, id, root, generation, &target, None, None)?;
+    let proven = newest.map(|(_, published)| published);
     let fetched: Option<(String, Option<String>)> = tx
         .query_row(
             "SELECT state, last_advertised_oid FROM remote_context_states
@@ -8405,7 +8411,7 @@ pub(crate) fn republish_evidence_in(
         },
         (None, _) => none(DeletionEvidence::None),
     };
-    Ok((evidence, counted))
+    Ok((evidence, counted, newest.map(|(row, _)| row)))
 }
 
 impl RepositoryService {
@@ -8434,7 +8440,7 @@ impl RepositoryService {
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
             .map_err(|_| state::recovery_required())?;
         state::with_transaction(self, root, |tx, id| {
-            republish_evidence_in(tx, id, root, &plan, kind, item_id).map(|(evidence, _)| evidence)
+            republish_evidence_in(tx, id, root, &plan, kind, item_id).map(|(evidence, ..)| evidence)
         })
     }
 

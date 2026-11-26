@@ -386,6 +386,9 @@ fn unheld_entries_against_the_primary() {
         "a_rename_is_a_deletion_and_an_addition",
         "equal_to_the_primary",
         "a_primary_that_descends_from_the_branch",
+        "a_path_only_the_primary_changed_is_not_listed",
+        "a_change_the_primary_deleted_is_an_addition",
+        "an_addition_the_primary_made_differently_is_a_modification",
         "unrelated_history",
         "multiple_merge_bases",
         "shallow",
@@ -435,6 +438,32 @@ fn unheld_entries_against_the_primary() {
                 let local = commit(&repo, &with("code", "branch"), &[base]);
                 let primary = commit(&repo, &with("code", "moved on"), &[local]);
                 (local, primary, Ok(vec![]))
+            }
+            "a_path_only_the_primary_changed_is_not_listed" => {
+                // The branch adds `new.txt`. After the base the primary
+                // modified `code` and deleted `other`, which the branch left
+                // alone: neither is the branch's to hold.
+                let base = commit(&repo, &with("other", "other"), &[]);
+                let local = commit(&repo, &with("new.txt", "branch"), &[base]);
+                let mut moved = with("other", "other");
+                moved.insert(b"code".to_vec(), (b"moved on".to_vec(), 0o100644));
+                moved.remove(b"other".as_slice());
+                let primary = commit(&repo, &moved, &[base]);
+                (local, primary, Ok(vec![entry("new.txt", Added)]))
+            }
+            "a_change_the_primary_deleted_is_an_addition" => {
+                // The change is read against the primary, which lacks `code`,
+                // not against the base, which has it.
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let mut deleted = files(false);
+                deleted.remove(b"code".as_slice());
+                let primary = commit(&repo, &deleted, &[base]);
+                (local, primary, Ok(vec![entry("code", Added)]))
+            }
+            "an_addition_the_primary_made_differently_is_a_modification" => {
+                let local = commit(&repo, &with("new.txt", "branch"), &[base]);
+                let primary = commit(&repo, &with("new.txt", "primary"), &[base]);
+                (local, primary, Ok(vec![entry("new.txt", Modified)]))
             }
             "unrelated_history" => {
                 let local = commit(&repo, &with("code", "branch"), &[base]);

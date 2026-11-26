@@ -387,6 +387,9 @@ struct PendingWork {
 struct NewBranchHistory {
     evidence: sync::RepublishEvidence,
     counted: Vec<Option<Oid>>,
+    /// A close's own context child found the branch gone at the push
+    /// endpoint (see `close_found_deleted`).
+    found_deleted: bool,
 }
 
 /// Prepared outside the lease (discovery), revalidated inside it without
@@ -656,9 +659,14 @@ fn pending_work(
     };
     let history = history
         .map(|(root, plan)| {
-            let (evidence, counted) =
+            let (evidence, counted, newest_proven) =
                 sync::republish_evidence_in(tx, repository_id, root, plan, KIND.authoring(), item)?;
-            Ok::<_, RepositoryError>(NewBranchHistory { evidence, counted })
+            let found_deleted = close_found_deleted(tx, repository_id, item, newest_proven)?;
+            Ok::<_, RepositoryError>(NewBranchHistory {
+                evidence,
+                counted,
+                found_deleted,
+            })
         })
         .transpose()?;
     Ok(PendingWork {
@@ -668,6 +676,42 @@ fn pending_work(
         record_unfinished: branch && super::record::holds_new_requests(tx, repository_id, item)?,
         history,
     })
+}
+
+/// Whether the push endpoint's finding, as a close recorded it, is the
+/// deletion of the ticket's context (ruling 51). A published context that was
+/// deleted before any fetch advertised it has no fetch to say so, so the
+/// evidence is the ticket's newest closure record (the latest by row order,
+/// whatever its mode and action) when all three hold:
+///
+/// 1. it was abandoned by its context child with the answer
+///    `context_remote_branch_deleted` (D6);
+/// 2. its context child's journal row is newer than the newest proven push of
+///    the context (`newest_proven`, a journal row id; a context with no proven
+///    push has nothing it is newer than);
+/// 3. no fetch since has recorded the branch present: a fetch that did leaves
+///    an `observed` row, which makes the evidence of the deletion `None`, so
+///    the caller asks only when the evidence reads `Pushed`.
+///
+/// A read of existing records: nothing of the remote state changes.
+fn close_found_deleted(
+    tx: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+    item: &ItemId,
+    newest_proven: Option<i64>,
+) -> Result<bool, RepositoryError> {
+    tx.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM (SELECT step, answer_code, context_sync_id FROM ticket_closures
+                            WHERE repository_id=?1 AND item_id=?2 ORDER BY rowid DESC LIMIT 1) c
+              JOIN remote_operation_records r
+                ON r.repository_id=?1 AND r.operation_ulid=c.context_sync_id
+             WHERE c.step='abandoned' AND c.answer_code='context_remote_branch_deleted'
+               AND r.id>?3)",
+        rusqlite::params![repository_id, item.to_string(), newest_proven.unwrap_or(0)],
+        |row| row.get::<_, bool>(0),
+    )
+    .map_err(RepositoryError::sqlite)
 }
 
 /// The plan a pull-request close reads the remote history by, when it has a
@@ -937,15 +981,20 @@ fn observe_git(
             }
             ContextPresence::Missing => {
                 context_missing = true;
-                context_absent =
-                    shared::reference_oid(repository, &KIND.context_ref(item), root)?.is_none();
-                let name = item.to_string();
-                worktree_occupied = root
-                    .join(".manyhands/worktrees")
-                    .join(&name)
-                    .symlink_metadata()
-                    .is_ok()
-                    || repository.find_worktree(&name).is_ok();
+                // Only a pull-request close reads them: the direct close and
+                // the withdraw keep today's answer for a ref that cannot be
+                // read.
+                if branch && verb == Verb::Close {
+                    context_absent =
+                        shared::reference_oid(repository, &KIND.context_ref(item), root)?.is_none();
+                    let name = item.to_string();
+                    worktree_occupied = root
+                        .join(".manyhands/worktrees")
+                        .join(&name)
+                        .symlink_metadata()
+                        .is_ok()
+                        || repository.find_worktree(&name).is_ok();
+                }
             }
             ContextPresence::Nonconforming => {
                 blockers.insert(ContextNonconforming);
@@ -1553,16 +1602,19 @@ fn branch_observation(
     let history = pending.history.as_ref().filter(|_| !facts.not_ticket);
     let deleted = history.is_some_and(|history| history.evidence.deleted());
     // A context that was published is not deleted for want of a fetch: its
-    // proven push alone reads as `Pushed` until the next poll, so a context
-    // is a deleted one only when a fetch saw its branch gone.
-    let fetched_deleted = history.is_some_and(|history| {
+    // proven push alone reads as `Pushed` until the next poll. A context is a
+    // deleted one when a fetch saw its branch gone, or when a close's own
+    // push found it gone (`close_found_deleted`).
+    let context_deleted = history.is_some_and(|history| {
         matches!(history.evidence.deletion, sync::DeletionEvidence::Fetched)
+            || (matches!(history.evidence.deletion, sync::DeletionEvidence::Pushed)
+                && history.found_deleted)
     });
     let mut new_branch: Option<(Option<Oid>, Option<Oid>)> = None;
     let mut unmaterialized = false;
     if let Some(history) = history {
         if let Some(tip) = context_oid
-            && fetched_deleted
+            && context_deleted
         {
             new_branch = Some((Some(tip), Some(tip)));
         } else if context_absent {
