@@ -1348,6 +1348,64 @@ fn a_branch_record_s_publication_conflict_is_found_by_its_id() {
     assert_eq!(by_record, by_child);
 }
 
+/// R-5, R-17 (ruling 67): `conflict resolve` by a branch record's ID
+/// checkpoints the resolution and continues the publication child, which the
+/// record's hold on the context exempts as it exempts the child's own
+/// attempt: the continuation is not `busy`. The fixture's remote is
+/// unreachable, so what follows the resolution is a transport stop of the
+/// child; the child's publication itself is the SSH tier's. Any other
+/// synchronization of the same context is still refused by the hold.
+#[test]
+fn a_branch_record_s_resolve_continues_its_own_publication_child() {
+    use crate::repository::{
+        AuthoringKind, Mutation,
+        remote::{RemoteOperationAction, RemoteOperationTarget},
+    };
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let (child, _) = conflicted_publication(&p, &req, &mut io);
+    let record = p.stored(&req).operation_id;
+    let resolved = p.f.service.resolve_repository(p.f.root()).unwrap();
+    let shown = p.f.service.show_conflict(&resolved, record).unwrap();
+    let value = execute(
+        &p.f,
+        Mutation::ConflictResolve(crate::repository::ConflictResolveInput {
+            root: p.f.root().into(),
+            operation_id: record,
+            observation: shown.observation.clone().expect("a live conflict"),
+            resolutions: shown
+                .paths
+                .iter()
+                .map(|path| crate::repository::ConflictResolutionInput {
+                    token: path.token.clone(),
+                    source: path.local.clone().expect("a side"),
+                })
+                .collect(),
+        }),
+    );
+    // The resolution is checkpointed under the child, and the continuation
+    // is not fenced.
+    assert_eq!(value["data"]["operation_id"], child.to_string(), "{value}");
+    assert_ne!(value["code"], "busy", "{value}");
+    assert_eq!(value["effects"]["checkpoint"], "committed", "{value}");
+    // Another synchronization of the context is still `busy`.
+    let plan = p.f.service.configure_origin_plan_for_testing(p.f.root());
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        ID.parse().unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        p.f.service
+            .reserve_remote_operation(p.f.root(), OperationId::new(), &target)
+            .unwrap(),
+        crate::repository::remote::RemoteReservationOutcome::Busy
+    ));
+}
+
 /// D12: a process lost before the context ref moved to the closure rebuilds
 /// the same commit, from the `closed_at` the record stored.
 #[test]

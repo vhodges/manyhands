@@ -4756,14 +4756,22 @@ fn closure_hold_lets_through_only_its_own_publication_child() {
     let child = parent.primary_sync_id.unwrap();
     let own = closure::child_execution(&parent, ChildRole::Publication).unwrap();
     let target = context_sync_target(AuthoringKind::Ticket);
-    let holds = |execution: Option<&crate::repository::promotion::record::ChildExecution>| {
+    let holds_as = |execution: Option<&crate::repository::promotion::record::ChildExecution>,
+                    operation: OperationId| {
         state::with_transaction(&service, root.path(), |tx, id| {
-            closure_holds_context(tx, id, &target, execution)
+            closure_holds_context(tx, id, &target, execution, operation)
         })
         .unwrap()
     };
+    let holds = |execution| holds_as(execution, OperationId::new());
     assert!(holds(None), "nothing else of the context passes");
     assert!(!holds(Some(&own)), "its own publication child does");
+    // `conflict resolve`'s continuation of that child carries no attempt, and
+    // is let through by its ID alone; another synchronization is not, nor the
+    // record's own ID, nor a stale attempt's.
+    assert!(!holds_as(None, child), "its continuation does");
+    assert!(holds_as(None, op), "the record's ID is no synchronization");
+    assert!(holds_as(None, OperationId::new()));
     // The reserve caller: the child reserves, and a synchronization that is
     // no child is refused by the hold, as an attempt the record replaced is
     // refused by the fence before it.
@@ -4812,7 +4820,7 @@ fn closure_hold_lets_through_only_its_own_publication_child() {
         Some(ClosureStep::Integrated)
     );
     let held = state::with_transaction(&service, root.path(), |tx, id| {
-        closure_holds_context(tx, id, &target, Some(&execution))
+        closure_holds_context(tx, id, &target, Some(&execution), OperationId::new())
     })
     .unwrap();
     assert!(held, "a direct holder refuses every execution");

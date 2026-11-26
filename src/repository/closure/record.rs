@@ -1654,6 +1654,23 @@ pub(in super::super) fn written_closure_holder(
     })
     .transpose()
 }
+/// Whether `child` is the publication child of the branch record `record`
+/// (its `primary_sync_id`): the one synchronization a hold on the context
+/// lets through besides an attempt (R-17). A direct close's primary child is
+/// not one.
+pub(in super::super) fn is_publication_child(
+    db: &Connection,
+    id: i64,
+    record: OperationId,
+    child: OperationId,
+) -> Result<bool, RepositoryError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE repository_id=?1 AND operation_id=?2 AND primary_sync_id=?3 AND NOT (integration_mode='direct' AND action='close'))",
+        params![id, record.to_string(), child.to_string()],
+        |row| row.get(0),
+    )
+    .map_err(|_| state::recovery_required())
+}
 /// The branch record that holds the item's ticket, if one does (R-17): the
 /// writers of the ticket answer `recovery_required` naming it. A direct
 /// record keeps the answers it has today, so it is not a hold here.
