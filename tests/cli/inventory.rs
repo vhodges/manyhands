@@ -147,7 +147,12 @@ const DATA: &[(&str, &[&str])] = &[
     ("repo remove", &["repository_removal_preview"]),
     (
         "repo setup-cancel",
-        &["blocked", "setup_cancel_preview", "setup_cancel"],
+        &[
+            "blocked",
+            "setup_cancel_preview",
+            "setup_cancel",
+            "setup_mutation",
+        ],
     ),
     (
         "repo identity-set",

@@ -27,6 +27,7 @@ use crate::{
         recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
         setup::{
             cancel::{CancelSetupRequest, SetupCancelError, current_setup, state_key},
+            data as setup_data,
             record::{SetupKind, SetupRecord},
         },
         transport::SshTransportError,
@@ -113,13 +114,8 @@ impl RepoSetupCancelBinding {
     fn observe(&self, service: &RepositoryService) -> Result<SetupRecord, Answer> {
         let (_, root) = canonical_repository_root(&self.root, RepositoryOperation::CancelSetup)
             .map_err(refused)?;
-        if service
-            .registration(&root)
-            .map_err(|error| Answer::of_read(&error))?
-            .is_none()
-        {
-            return Err(Answer::stopped(ResultCode::RepositoryNotRegistered));
-        }
+        // A root that is not registered has no setup: the command's end
+        // state, as for `repo remove`.
         setup_of(service, &root)?.ok_or_else(|| Answer::stopped(ResultCode::AlreadyApplied))
     }
 
@@ -170,6 +166,12 @@ impl RepoSetupCancelBinding {
                 match &error {
                     SetupCancelError::InTheWay(blocker) => {
                         answer = answer.naming(service, &root, blocker.as_ref());
+                    }
+                    // The setup the remote's primary already holds is named by
+                    // the refusal's data, which tells it from every other
+                    // `recovery_required` of the command: the way out is a poll.
+                    SetupCancelError::Merged => {
+                        answer.data = setup_data::of(service, &root, None);
                     }
                     SetupCancelError::Transport(transport) => {
                         if let (Some(authority), Some(root)) = (host_of(transport), root.to_str()) {

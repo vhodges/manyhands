@@ -518,16 +518,28 @@ impl Cancelling<'_> {
         Ok(blob.is_some() && blob != record.base_configuration_oid)
     }
 
-    /// Step 3: the local setup branch, only at the recorded commit (kept
-    /// anywhere else), and the private base ref. Both are idempotent.
+    /// Step 3: the local setup branch, only at the recorded commit and while
+    /// HEAD does not name it (kept otherwise), and the private base ref. Both
+    /// are idempotent.
     fn local_step(
         &self,
         record: &SetupRecord,
         scope: &crate::repository::transport::SetupScope,
     ) -> Result<LocalBranch, SetupCancelError> {
+        // A branch that HEAD names is kept as well: deleting it would leave
+        // HEAD on a branch that is not there (K-15).
+        let checked_out = self
+            .repository
+            .find_reference("HEAD")
+            .ok()
+            .and_then(|head| head.symbolic_target().map(str::to_owned))
+            .is_some_and(|target| target == scope.branch_ref());
         let branch = match self.repository.find_reference(&scope.branch_ref()) {
             Ok(mut reference) => {
-                if reference.target().is_some() && reference.target() == record.commit_oid {
+                if !checked_out
+                    && reference.target().is_some()
+                    && reference.target() == record.commit_oid
+                {
                     reference.delete().map_err(|error| self.git(error))?;
                     LocalBranch::Deleted
                 } else {

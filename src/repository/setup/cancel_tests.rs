@@ -482,6 +482,17 @@ fn cases() -> Vec<Case> {
             )
         },
         Case {
+            // A person checked the setup branch out: deleting it would leave
+            // HEAD naming a branch that is not there.
+            arrange: |world| {
+                world.git().set_head(&world.branch_ref()).unwrap();
+            },
+            ..case(
+                "the setup branch is checked out: kept, and the rest goes on",
+                deleted(RemoteBranch::Deleted, LocalBranch::Kept, false),
+            )
+        },
+        Case {
             arrange: |world| {
                 let other = world.c0;
                 world

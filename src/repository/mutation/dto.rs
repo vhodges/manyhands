@@ -1285,6 +1285,12 @@ pub struct SetupCancelDto {
 }
 
 impl SetupCancelDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
     /// The data of a cancel's report.
     pub(crate) fn of(report: &crate::repository::SetupCancelReport) -> Self {
         Self {

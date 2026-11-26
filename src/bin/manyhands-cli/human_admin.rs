@@ -266,11 +266,14 @@ pub fn mutation_success(envelope: &Envelope<MutationDataDto>) -> Human {
 /// opens its pull request. Nothing for any other data.
 fn setup_lines(data: &MutationDataDto) -> String {
     if let MutationDataDto::SetupCancel(cancel) = data {
-        return match (cancel.remote_branch.as_str(), cancel.local_branch.as_str()) {
-            ("kept", _) => "The setup branch on the remote is at another commit than the one set up, and was left.\n".to_owned(),
-            (_, "kept") => "The local setup branch is at another commit than the one set up, and was left.\n".to_owned(),
-            _ => String::new(),
-        };
+        let mut lines = String::new();
+        if cancel.remote_branch == "kept" {
+            lines.push_str("The setup branch on the remote is at another commit than the one set up, and was left.\n");
+        }
+        if cancel.local_branch == "kept" {
+            lines.push_str("The local setup branch was left: it is at another commit than the one set up, or it is checked out.\n");
+        }
+        return lines;
     }
     let MutationDataDto::Setup(setup) = data else {
         return String::new();
@@ -296,11 +299,19 @@ fn setup_lines(data: &MutationDataDto) -> String {
 }
 pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> String {
     let mut out = metadata(envelope);
+    // A setup that the remote's primary already holds: the refusal names the
+    // setup in its data, which no other refusal of the command does.
+    let merged = envelope.command == "repo setup-cancel"
+        && envelope.code == ResultCode::RecoveryRequired
+        && matches!(envelope.data, Some(MutationDataDto::Setup(_)));
     if let Some(data) = &envelope.data {
         out.push_str(&fields(data));
-        out.push_str(&setup_lines(data));
+        // Its words say the setup is waiting for a merge, which is not so.
+        if !merged {
+            out.push_str(&setup_lines(data));
+        }
     }
-    if envelope.command == "repo setup-cancel" && envelope.code == ResultCode::RecoveryRequired {
+    if merged {
         out.push_str(
             "hint: a setup that the remote's primary already holds cannot be cancelled; run manyhands-cli poll once so that the repository finishes it\n",
         );

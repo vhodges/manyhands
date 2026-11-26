@@ -4970,6 +4970,13 @@ fn cancelling_a_recorded_setup_unregisters_it() {
     let replayed = desk.execute(REQUEST_3, &confirmation_id, cancel(&plain.root));
     assert_eq!(replayed, cancelled);
 
+    // A fresh cancel of the repository just unregistered has nothing to
+    // cancel either: no setup is the end state, as for `repo remove`.
+    let again = desk.prepare(&cancel(&plain.root));
+    assert_eq!(again.code, ResultCode::AlreadyApplied, "{}", again.message);
+    assert_eq!(again.outcome, Outcome::Noop);
+    assert!(again.data.is_none());
+
     // A repository with no setup has nothing to cancel.
     let direct = Plain::new();
     let (direct_confirmation, _) = desk.preview(&direct.enable());
@@ -5088,8 +5095,11 @@ fn repo_remove_always_removes_a_pending_setup() {
             .repository
             .reference(&private_base, head, false, "a private base")
             .unwrap();
+        // The root is moved aside, so that it is gone for the removal and its
+        // refs can still be read afterwards.
+        let aside = plain.root.with_extension("aside");
         if gone {
-            std::fs::remove_dir_all(&plain.root).unwrap();
+            std::fs::rename(&plain.root, &aside).unwrap();
         }
 
         let (removal, _) = desk.preview(&remove());
@@ -5110,33 +5120,30 @@ fn repo_remove_always_removes_a_pending_setup() {
             ResultCode::Cancelled,
             "{what}"
         );
-        // Both branches are left.
-        if !gone {
-            let repository = git2::Repository::open(&plain.root).unwrap();
-            assert!(repository.find_reference(&local_branch).is_ok(), "{what}");
-            assert!(repository.find_reference(&private_base).is_ok(), "{what}");
+        // The root comes back, and both setup refs were left.
+        if gone {
+            std::fs::rename(&aside, &plain.root).unwrap();
         }
+        let repository = git2::Repository::open(&plain.root).unwrap();
+        assert!(repository.find_reference(&local_branch).is_ok(), "{what}");
+        assert!(repository.find_reference(&private_base).is_ok(), "{what}");
         // No connection was made.
         assert!(!manyhands::runtime::git_transport_initialized(), "{what}");
 
         // The same request, sent again, answers `cancelled` and records no
-        // second setup. With the root gone the request cannot be matched to
-        // its record again (a root's identity needs the root), and its stored
-        // result, read above, is what it keeps.
-        if !gone {
-            let again = if change {
-                execute_with(&desk.service, REQUEST_2, select())
-            } else {
-                desk.execute(REQUEST_2, &confirmation, enable())
-            };
-            assert_eq!(
-                again.code,
-                ResultCode::Cancelled,
-                "{what}: {}",
-                again.message
-            );
-            assert_eq!(again.outcome, Outcome::Cancelled, "{what}");
-        }
+        // second setup.
+        let again = if change {
+            execute_with(&desk.service, REQUEST_2, select())
+        } else {
+            desk.execute(REQUEST_2, &confirmation, enable())
+        };
+        assert_eq!(
+            again.code,
+            ResultCode::Cancelled,
+            "{what}: {}",
+            again.message
+        );
+        assert_eq!(again.outcome, Outcome::Cancelled, "{what}");
         assert_eq!(
             desk.count("SELECT COUNT(*) FROM repository_setups"),
             0,
