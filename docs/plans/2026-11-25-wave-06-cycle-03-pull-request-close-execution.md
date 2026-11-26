@@ -138,6 +138,12 @@ Ticket vh-gy8gz (`01M87683QK8E34EYY8KS4VQG9Y`). Plan: `docs/plans/2026-11-25-wav
 - Deferred to the final review: an optional open-ticket check in `stored_withdraw`; `w13` could assert one child; the abandon now reachable at `closing` with nothing written has no test; two of the cross-verb runs lacked primary checks (fixed in slice C); answer-table row 1 is not shown ahead of rows 2 and 5.
 - For Task 11 (carried): the binding must apply decision 33's hold before showing a ready withdrawal; binding rows for W4 (`recovery_required` naming the holder) and W12 (`publication_remote_required`); `publication_remote_required` pre-empts the hold unless Task 11's configuration check runs first.
 
+## Task 9: The New Branch
+
+- Design checkpoint (Step 3), written by an Opus designer, checked by an independent Opus checker (sound with fixes), approved with the controller's corrections on 2026-11-25; it is Appendix F. U-1 does not stop for the owner: `finish_parent` (`remote/reservation.rs` about 1217-1249) is generalized by widening its SQL (about 1236) to a new branch's `retired` end, its checks unchanged (`finish_remote_operation` refuses non-poll, non-synchronization targets). Slices: A, prepare and consent (`unheld_entries`, situations 2 and 3, the digest's new fields, the preview, an interim guard); B, a new branch with nothing to retire (steps 1 and 3, the context-at-commit function); C, the retirement and U-1.
+- **E-44** (controller-approved): replaces the two "until Task 9" rows Task 7 wrote in `closure/observe_tests.rs` (about 1797-1809) with the Task 9 situations.
+- Rulings 36 to 49, in Appendix F's corrections and the designer's open questions: situation 2 gets 3.1's ancestor check (36), counting every push `push_absence` counts (45); F8's wording (37); refusals under the reservation release it as `cancelled` through `finish_parent` (38); the cleanup's code is `context_changed`, `recovery_required` (39); a kept closure's record stores the kept `closed_at`, and one not in whole-second UTC form blocks prepare with `TicketInvalidAfterClosure` (40); with no context, ambiguous or unknown push evidence blocks prepare with `history_unknown` or `history_unresolved` (41); a local branch with no worktree keeps `context_missing` (42); a dirty worktree at confirm answers `Blocked([ContextDirty])` (43); the digest binds `retired_oid`, 3.1 falls back to the deletion record's `last_published`, "occupied" includes a worktree registration, a cancel under the reservation stops at `retired` (44); a retry after this record's own tracking deletion accepts the bound evidence (46); a stale tracking-ref lock after a crash is a known limit with the operator's removal as its way out, as for the direct close (47, a Known Limit at Task 15); a configuration change during the retirement answers `recovery_required` until restored (48); a pull-request close that meets a deletion recorded between its context child and step 3 abandons with `external_change` before writing, and a new prepare offers the new branch (49, replacing row 3's answer for that window).
+
 ## Appendix A: References, Baseline Facts and Parts A to C (research agent, verbatim)
 
 ### Task 0 reference check, design sections Conventions, Baseline Facts 1-23, Parts A-C
@@ -2179,3 +2185,615 @@ Task 10 gives the withdraw's data (`recording: withdrawn` or `none`, `checkpoint
 1. **Row 6, "the published head holds a closure (R-30 restored it in a merge)".** R-30 gives a merge the closure the fetched primary holds, so the tracking primary names it and row 1 answers first; row 6 is reachable only when no primary holds a closure and the published head does, that is another clone's closure merged in (for example a re-recorded closure kept by a conflict repair, G6's shape). Part E answers `ticket_closed`, which says the ticket is closed when it is closing. Built as the design says (`ticket_closed`), stored as its own value `closed_since`, so a ruling of `already_closing` changes only `branch_code`'s arm and its test row.
 2. **Row 1's "the withdrawn closure".** Built as "the tracking primary names any closure": another closure there is still a closed ticket, and the alternative ("otherwise `ok`") would report a withdraw of a ticket the primary has closed. Evidence: R-27, the Cycle document's item 7 ("`ticket_closed` when the primary holds it"). If ruled otherwise, row 1 compares both fields and another closure falls to a new row.
 3. **No mode in the withdraw's digest.** R-2 says a mode switch between prepare and confirm is `external_change`, by the digest's domain; a withdraw's observation and domain are the same in both modes and Part E's field list binds no mode, so a switch is not refused and the record begins in the live mode. Nothing of a withdraw's run depends on the mode (the hold and the guard read the configuration at each call). Built per Part E. If R-2 must hold, the narrowest fix is one mode byte after the action tag in `branch_expectation_with_head` for `Withdraw` only (the close's wire format is unchanged).
+
+## Appendix F: Task 9 design checkpoint, approved (verbatim)
+
+# Task 9 Design Checkpoint: The New Branch
+
+## Controller approval and corrections (binding; they override the text below where they differ)
+
+Approved by the controller on 2026-11-25 after an independent check (verdict: sound with fixes; U-1 holds by generalizing `finish_parent`). Rulings R36 to R44 on the designer's open questions stand, and E-44 is approved (it replaces two rows this Cycle wrote in Task 7). The check's fixes, ruled:
+
+1. **R45, the ancestor check counts every push `push_absence` counts.** The third value of situations 2 and 3.1 (R36) is every row `push_absence` counts, proven or intent, compatible or not, with its published OID; an earlier push that is not the retired tip's ancestor blocks prepare with `history_unresolved` (the design says "an earlier push", not only proven ones), so the boundary after the retirement can never read `Ambiguous` or `Unknown` for a record prepare offered.
+2. **R46, a retry after this record's own tracking deletion.** When the tracking ref is absent and the record bound `remote_context_oid` (Fact 16: an absent ref was deleted by this record), §2.2.5 accepts the bound evidence instead of re-reading it (lost-history evidence is read from the tracking ref, sync.rs:8355-8404), so the retry continues the retirement rather than abandoning with the old worktree and branch already removed.
+3. **R47, a stale tracking-ref lock is a known limit.** A process death at the TRACKING or COMMIT seam leaves the tracking ref's `.lock` (held in `RetirementEvidence`, cleanup.rs:600-631), as for the direct close today (closure/run_tests.rs:1216-1230): the record stops with `recovery_required` until an operator removes the lock, and the same request then continues. Record it as a Known Limit (Task 15). F10's tracking-deletion test asserts the sequence (first retry restarts the row, epoch +1, and stops at `lock_ref` with the row reserved; the simulated operator removes the lock; the second retry, epoch +2, continues), and F17 removes the lock as the simulated operator and asserts the epoch then.
+4. **R48, R-35 during the retirement path.** A remote or configuration change after step 1 answers `recovery_required` at §2.1.1, and the way out is restoring the configuration; the same request then continues. `require_configuration` is re-validated before each step, as `finish_steps` does.
+5. **Step 3** re-checks `context_synchronization_unfinished` (busy), for symmetry with `branch_step` and Part D's "its step 3 waits".
+6. **3.1's fallback** to `last_advertised_oid` requires `find_commit` at prepare; a commit not in the local object store gives `history_unresolved`.
+7. **R40's knock-ons:** a kept closure's `closed_at` is T's (not the clock's) in §1.6 and §8 row 3; `build_kept_closure_commit`'s commit time is the injected clock's; F9 asserts the record's `closed_at` equals T's.
+8. **R49, a pull-request close that meets a recorded deletion.** `branch_step` re-observes (checkpoint.rs:1144): if a poll records the remote deletion between the context child and step 3, the observation becomes `new_branch`, the digest differs, and the close abandons with `external_change` before writing; a new `ticket close --prepare` then offers the new branch. This replaces Task 7's behaviour (closure written, then `remote_branch_deleted` by row 3) for that window. Add a slice A test row for it.
+9. **Slice A static gates.** Defer `TicketClosurePreview::new_branch()` to Task 10, its first caller, so no dead accessor lands. `build_kept_closure_commit` and `begin_new_branch_record` take `#[allow(clippy::too_many_arguments)]`, as record.rs:790 and 885 do.
+10. **The interim guard.** A changed-digest confirm in slice A stores a refused `(PullRequest, NewBranch)` row through `refuse_record_on`: terminal and valid, accepted. "No new-branch record before slice B" means none that runs.
+11. **Test fixes.**
+    - F5's confirm row expects the refused row on path `(PullRequest, Close)`, since a blocked revalidation leaves `observed` empty (run.rs:541, 563-564; lifecycle.rs:318).
+    - E-44's no-context rows prune the worktree instead of `remove_dir_all`, as `already_closed` does (observe_tests.rs:706-719).
+    - F11 and F16 capture the digest before the run, because `p.request()` panics on a blocked preview.
+    - F1 and F4 assert the tracking ref's deletion from a hook at `BeforeContextBranchCreation`, or else assert the ref is at C, because the fake publication force-sets it.
+    - F16 removes its boundary hooks before the retry.
+12. **Wording and minors.**
+    - §0's "nothing stops while holding" is reworded: `validate_cleanup_owner`, `RecoveryRequired` from `require_local_cleanup_absent` or `delete_tracking_ref`, and SQL errors stop with the row reserved, as the direct close does.
+    - §8's "ref at C (an abandon whose transaction failed)": the abandon deletes the ref first, so the ref is absent and the retry recreates it.
+    - §2.2.7 includes `boundary(PromotionAfterTrackingDeletion)` (run.rs:2097).
+    - A call entering with `closure_oid` already stored still takes the repository lease.
+    - `withdraw_observation`'s destructuring of `Gathered` (observe.rs:1561-1569) is a mechanical edit.
+    - Every pull-request close prepare now runs `push_absence`, which can answer `recovery_required` on an inconsistent sync row, as `item sync` and `item republish` already can.
+
+
+Designer's checkpoint for Task 9 (plan Step 3), written before any Task 9 test or code. HEAD is `4c285865`; every anchor is `file:line` in today's source at that commit. Paths without a prefix are under `src/repository/`. "The design" is `docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`; "Task 7's" and "Task 8's checkpoint" are the approved `task-7-checkpoint.md` and `task-8-checkpoint.md`, whose controller corrections apply here unchanged. Rulings 14 to 35 are the execution ledger's.
+
+## 0. Decisions in one place
+
+- **Where it lives.** A new module `closure/new_branch.rs` (`pub(super) mod new_branch;` beside `closure/mod.rs:26-29`) runs steps 1 to 3 of Part F under the closure's own leases. It calls the lifecycle's cleanup functions (`cleanup.rs` `ContextCleanup`) directly, in `finish_steps`'s order (`promotion/run.rs:1953-2122`), as the plan's file list says ("step 2's retirement through the lifecycle's cleanup functions").
+- **Dispatch.** `TicketClosureLifecycle::branch_step` (`closure/lifecycle.rs:520-533`) sends a `new_branch` record to `new_branch::step` and every other record to `checkpoint::branch_step`, as today. `promote_branch` (`promotion/run.rs:917-997`) skips the context child for a record that has none, through a new defaulted `LifecycleRecord::synchronizes_context`. `finish_branch` (`run.rs:999-1107`) serves the publication child and the answer table unchanged.
+- **U-1: yes, by generalizing `finish_parent`** (`remote/reservation.rs:1217-1249`). Its checks (owned row, action `close`, manual priority, `completed_step == AfterAdvertisement`) all hold for the new branch's reservation. Only its one SQL ties it to `step='complete'` and to `retired_oid = coalesce(adopted, closure, context)`. Section 3 widens that SQL to a new branch's `retired` end, and to its abandon under the reservation. Every direct and promotion condition stays as it is. `finish_remote_operation` (`reservation.rs:2125-2228`) cannot be generalized: it refuses any target that is not a poll or a synchronization (`2182-2186`).
+- **The reservation is held only for the remote part** (R-31). Between `Reserved` and the retirement's transaction nothing stops while holding it. A cancellation is honoured at the next boundary after `retired` (section 2.3).
+- **Prepare.** Part D's situations 2 and 3 become real in `branch_observation` (`closure/observe.rs:1390-1523`). The situation is read from a new remote-history read in the observation's own registry transaction: `republish_evidence`'s body, and every proven push. `unheld_entries` (`context_retirement/proof.rs`) lists what the old tip holds that the tracking primary lacks. The digest gains the new branch's fields. The preview carries them.
+- **Rust-only values (ruling 17).** One new `BranchAnswer`, `ContextChanged` (`context_changed`, an abandon). One preflight-only `ClosureBlocker`, `RemoteContextUnmaterialized`, appended after `HistoryUnresolved` and left out of `CLOSURE_BLOCKERS` (ruling 15). Two new `FailurePoint`s, `NewBranchCommitRecorded` and `NewBranchCommitHeld`. No schema change: Task 7's rebuild already holds `retired_oid`, `pending_ref`, step `retired`, `new_branch`'s permits and CHECKs (`closure/record.rs:95-126`, `360-418`).
+- **The hold from step 1 is built** (Task 7). `written_closure_holder`'s SQL (`record.rs:1375-1395`) holds a `new_branch` at `confirmed` once `closure_oid` is stored, and at every later unfinished step. Task 9 adds no fence code; F14 pins it.
+
+## 1. Step 1: the commit, its pending ref, the hold
+
+`new_branch::step` (section 0) first runs, when `r.step == Confirmed` and `r.closure_oid.is_none()`:
+
+1. **Observe outside the lease**, as `branch_step` does (`checkpoint.rs:1038-1046`):
+   - `observe::prepare_observation_in(service, &request, Some(r.integration_mode))`.
+   - A foreign synchronization of the context (`observe::foreign_synchronization`) gives `Err(foreign_synchronization_busy(..))`, named; nothing is written.
+   - Then `repository_lease(&repo, root, RepositoryOperation::RepositorySnapshot)`. This one lease covers steps 1 and 2's local part (`ContextCleanup::holding`, `cleanup.rs:154-165`).
+2. **Revalidate under the lease:** `observe::revalidate_under_lease(&prepared, service, &repo)`.
+   - `Err` of kind `ExternalChange`, or `Ok(Err(blockers))`, abandons with `ReconfirmationRequired` / `BranchAnswer::ReconfirmationRequired`, as `branch_step` does (`checkpoint.rs:1124-1141`). The one exception: blockers holding `RemoteContextUnmaterialized` are a situation that changed, so they abandon `ExternalChange` / `ExternalChange` (Part D confirm step 1).
+   - The observation's path must be `(PullRequest, NewBranch)`, and `observation.expectation == r.expectation`. Otherwise abandon `ExternalChange` / `ExternalChange` (F8: `P`, `T`, a tracking tip or the unheld entries changed). No context child ran, so the whole digest compares, its head included.
+3. **`record::context_synchronization_unfinished`** (`record.rs:1417-1427`) gives `Err(TicketClosureError::Busy)`, with nothing written.
+4. **The identity**, as `branch_step` does (`checkpoint.rs:1178-1191`): `integrate::promotion_identity(service, &repo, root, confirmation)?`.
+   - For a `record` closure, `closed_by_text(&identity)` must be the consented `closed_by`, and the live selection must agree. Otherwise abandon `ExternalChange`.
+   - For a kept closure the identity is only the commit's author, so it is not compared.
+5. **Build `C` on `P = observation.base`** (the tracking primary). The ticket is `P`'s, given the closure's fields. `C` is unreferenced.
+   - Record: `checkpoint::build_closure_commit(&repo, item, &path, P, whole_utc_seconds(now), &identity)` (`checkpoint.rs:161-191`). Its `context` parameter is the parent, here `P`. It edits only the ticket path, through `commit_edited_ticket` (`248-291`).
+   - Kept (closure kind `existing`, R-21): a new `checkpoint::build_kept_closure_commit(repo, item, path, P, at, identity, kept_at, kept_by)`, built on the same `commit_edited_ticket` with `|original| observe::closure_replaced_bytes(original, kept_at, &kept_by)` (`observe.rs:109-115`) and the subject `checkpoint_subject(item)`.
+     - `kept_at` and `kept_by` are read now from `T`'s tree: the canonical `Ticket` at the ticket path of `r.consented_context_oid`.
+     - Item 2's digest compare has just proven they are the consented `PlannedClosure::Existing`.
+   - `None` (not a canonical regular file, or the edit refused) abandons `ReconfirmationRequired`.
+6. **One transaction.** `context_synchronization_unfinished` gives `Busy` with nothing stored. Otherwise the new `record::begin_new_branch(tx, id, op, base: P, closed_at, commit: C, tracking: observation.tracking_context)`:
+   - It requires a `new_branch` record at `confirmed` with no `closure_oid`, and non-zero OIDs.
+   - It writes, in one UPDATE: `closed_at`, `closure_oid=C`, `base_oid=P`, `remote_context_oid=<tracking>` (the tracking context tip the consent bound; none when there is no tracking ref), and `pending_ref='refs/manyhands/closures/'||operation_id`. The step stays `confirmed`. The re-read validates it (`record.rs:656-750`; the pending-ref and `closed_at` rules already allow it).
+   - `closed_at` is the clock's whole seconds, the same for both kinds (open question 5). C6 holds for a `record` closure: the time is stored with the commit before anything refers to it.
+   - **From this commit on, the record holds the ticket** (`record.rs:1385`, `(action='new_branch' AND closure_oid IS NOT NULL)`).
+7. `run::boundary(.., FailurePoint::NewBranchCommitRecorded)` (new: "a new branch's commit is recorded, unreferenced; its pending ref is not made").
+8. **The pending ref** `refs/manyhands/closures/<operation ULID>` is pointed at `C`:
+   - absent: create it;
+   - at `C`: keep it;
+   - anywhere else: `Err(RecoveryRequired)`. The name is the record's own, and SQL is written before the ref, so a ref elsewhere is not Manyhands'.
+
+   This order means a retry never meets a stray ref of its own with no `closure_oid` stored.
+9. `run::boundary(.., FailurePoint::NewBranchCommitHeld)` (new: "a new branch's commit is held by its pending ref; the old context is untouched").
+
+On a later call that finds `closure_oid` stored, step 1 only ensures the pending ref:
+- absent: recreate it at `closure_oid`, which must exist (`find_commit`), else `RecoveryRequired`;
+- at `C`: go on;
+- elsewhere: `RecoveryRequired`.
+
+No re-observation, rebuild or second commit follows (F10).
+
+Every abandon in sections 1 and 2 is `new_branch::abandon` (section 2.4).
+
+## 2. Step 2: the retirement (situations 2 and 3.1: `r.retired_oid.is_some()`)
+
+The oid every cleanup function is given is `r.merged_context()`. It is `retired_oid` from `confirmed` through `retired` (`record.rs:279-292`, Task 7 slice A's fix): `T` in situation 2, the 3.1 target otherwise. "An old context" means `r.consented_context_oid.is_some()` (`T`, section 7.2).
+
+### 2.1 The local part: under the lease, no reservation
+
+The order and the checks are `finish_steps`' (`run.rs:1953-2031`):
+
+1. **Checks before the removals.**
+   - `run::cancelled::<TicketClosureLifecycle>(service, request, r)` gives `Err(Interrupted)`, at the stored step.
+   - `run::require_configuration(root, primary, r.remote_name())` (`run.rs:2164-2174`) gives `Err(RecoveryRequired)` with nothing reserved. `primary` is `run::recorded_config(root, r)?.primary_branch` (`run.rs:437-454`), read from `P`'s tree.
+2. **`confirmed`.**
+   - With an old context: `cleanup.full_check(service, Ticket, item, oid)` (`cleanup.rs:369-377`). Anything but `Precheck::Ok` abandons with `Refusal::ReconfirmationRequired` / `BranchAnswer::ContextChanged` and deletes the pending ref (Part F step 2: "a refusal abandons the record with the cleanup's code").
+   - In 3.1 there is no context to check.
+   - Then `checkpoint::context_moving(service, root, item)` marks the ticket's context owed an indexing before Git is touched, as `checkpoint.rs:711-724` does (R-SDD-49; made `pub(super)`).
+   - Then step `worktree_removing` (`r.step = WorktreeRemoving; r.cleanup = None`), through `record::save_record` (`branch_permits`: `Confirmed → WorktreeRemoving`). `fresh = true` for this call only.
+3. **`worktree_removing`.**
+   - `run::boundary(.., DuringWorktreeRemoval)`, then the cancellation check.
+   - The removal:
+     - an old context: `remove_fresh_context_worktree` when `fresh`, else `remove_context_worktree` (`cleanup.rs:334-362`);
+     - 3.1: always `remove_context_worktree`, which reads a worktree that is not there as `AlreadyAbsent` before any check (`cleanup.rs:427-436`).
+   - `Removed` (with `#[cfg(test)] promotion::run_tests::local_effect(.., "worktree_remove")`) or `AlreadyAbsent` goes on. `Changed` stops with `ContextChanged`; `RecoveryRequired` stops with `RecoveryRequired` (2.3).
+   - Then step `worktree_removed`, with `cleanup = None`.
+4. **`worktree_removed`.**
+   - The cancellation check, `run::boundary(.., BeforeBranchDeletion)`, the cancellation check again.
+   - `cleanup.delete_context_branch(Ticket, item, oid)` (`cleanup.rs:477-484`). `Deleted` (with `local_effect(.., "branch_delete")`) or `AlreadyAbsent` goes on. `Changed` stops with `ContextChanged`.
+   - Then step `branch_deleted`.
+5. **`branch_deleted`.** The cancellation check, then `run::boundary(.., BeforeCompletion)`. This point is before the reservation; finish_steps' own is under its owner (`run.rs:2049`). Then the cleanup capability, and so the lease, is dropped before reserving, as `run.rs:1777-1782` drops it.
+
+### 2.2 The remote part: the parent's own `close` reservation (R-31, U-1)
+
+As `finish_steps` takes it (`run.rs:1788-1849`):
+
+1. **The plan and the endpoints.** `plan = RemoteRefPlan::from_configuration(remote, primary)`, `frozen = service.observation_configuration(root, &plan)`, then `state::configure_endpoints` in a transaction.
+2. **The reservation.** `target = RemoteOperationTarget::for_context(&plan, KIND.action() /* close */, Ticket, item)`.
+   - If the parent's row exists: `service.restart_remote_lifecycle(KIND, root, op, &target)`. Otherwise `service.reserving(root, op, || service.reserve_remote_operation(root, op, &target))`.
+   - `Reserved(owner)` goes on.
+   - `Busy` gives `Err(Busy)` and `PollYielding` gives `Err(PollYielding)`. Either way nothing is held: the row is unreserved, and the record stays at `branch_deleted` for the same request.
+   - `Replay` means the row is completed. Reload the record: at `retired` go to Part F step 3 (section 5); otherwise `Err(RecoveryRequired)`.
+3. **`service.remote_safe_point(root, &owner, BeforeTransport)`, then `service.remote_safe_point(root, &owner, AfterAdvertisement)`.** Nothing is fetched or pushed between them, as finish_steps' restart from a local step does (`run.rs:1941-1948`): "Nothing on the remote changes". `finish_parent` requires `AfterAdvertisement` (`reservation.rs:1224-1230`), so every release below, the abandon's included, comes after it.
+   - `Continue`, `Cancelled` or `Interrupted` all go on. A `close` row acknowledged for a cancellation stays `reserved` and owned, with `completed_step` set (`reservation.rs:634-647`). The record's own `cancel_requested` is kept for the next boundary (2.3).
+   - `Err` gives `Err(RecoveryRequired)` with the row reserved, for `restart_remote_lifecycle`.
+4. **`ContextCleanup::acquire(root)`** (the lease), then `run::validate_cleanup_owner(service, root, Some(&owner), Some(&plan), Some(&frozen), primary)` (`run.rs:2139-2162`). A refusal is `Err(RecoveryRequired)` with the row reserved, as a direct cleanup's. This is the one stop that holds it, and only for a configuration changed inside this part.
+5. **The re-check under the reservation** (Part F step 2). In one transaction, `sync::republish_evidence_in(tx, id, root, &plan, Ticket, item)?.0.deleted()` (section 7.1) must hold. The tracking context ref `plan.context(Ticket, item).tracking_ref()` must be `r.remote_context_oid` or absent. Absent is accepted: fetches never prune a tracking ref (Fact 16), so only this record's earlier attempt deleted it under the hold. Otherwise abandon under the reservation: `ExternalChange` / `ExternalChange`, releasing it (2.4).
+6. **Local absence.** `cleanup.require_local_cleanup_absent(Ticket, item)` (`cleanup.rs:540-565`). `Changed` abandons under the reservation with `ExternalChange`. `RecoveryRequired` is `Err(RecoveryRequired)` with the row reserved.
+7. **The tracking ref.** `evidence = cleanup.delete_tracking_ref(Some(&plan), Ticket, item, r.remote_context_oid, op, oid)` (`cleanup.rs:572-640`). `Changed` abandons under the reservation with `ExternalChange`. `RecoveryRequired` is `Err(RecoveryRequired)` with the row reserved. Then `#[cfg(test)] promotion::run_tests::tracking_deleted(service, root)` (the TRACKING seam, F10).
+8. **The retirement's transaction.** `cleanup.require_local_cleanup_absent(..)` again, inside it (as `run.rs:2098-2101`), then `record::retire_new_branch(tx, service, id, op, &evidence, &owner)` (section 3). Then `#[cfg(test)] promotion::run_tests::completion_returned(..)` (the COMMIT seam, F10/F17) and `run::boundary(.., PromotionAfterCompletionCommit)`.
+   - On an error: `record::reconcile_retirement(tx, id, op)`. `true` goes on; `false` is `Err(RecoveryRequired)` with the row reserved (as `run.rs:2108-2117`).
+9. **After it.** Drop `evidence`; keep the lease (`cleanup.into_lease()`) for Part F step 3. The reservation is gone: `finish_parent` completed it in the transaction.
+
+### 2.3 Stops, categories and re-checks
+
+| Where | Cause | Answer | Record |
+| --- | --- | --- | --- |
+| 2.1 before `worktree_removing` | the full check refused: dirty, moved, locked, nested repository | `Ok(Branch)` with `ContextChanged` | abandoned; pending ref deleted; old context intact |
+| `worktree_removing` | `WorktreeRemoval::Changed` / `::RecoveryRequired` | `Err(RecoveryRequired)` | unfinished; `cleanup = context_changed` / `recovery_required`; nothing reserved (F16) |
+| `worktree_removed` | `BranchDeletion::Changed` | `Err(RecoveryRequired)` | unfinished; `cleanup = context_changed`; nothing reserved |
+| any 2.1 boundary | cancellation | `Err(Interrupted)` | unfinished at its step (F13) |
+| 2.1 | live configuration not the record's | `Err(RecoveryRequired)` | unfinished; nothing reserved |
+| 2.2 step 2 | `Busy` / `PollYielding` | `Err(Busy)` / `Err(PollYielding)` | `branch_deleted`; nothing reserved |
+| 2.2 steps 5, 6, 7 | the deletion no longer evidenced, the tracking tip moved, a local branch or worktree back, the tracking ref changed | `Ok(Branch)` with `ExternalChange` | abandoned from `branch_deleted` (ruling 18); pending ref deleted; reservation released `cancelled` (F8) |
+| 2.2 | SQL or Git error, owner lost | `Err(RecoveryRequired)` | `branch_deleted`; row reserved; the retry restarts it |
+
+- A stop saves `r.cleanup` through `save_record`, which `validate_branch` allows only at a `new_branch`'s `worktree_removing`, `worktree_removed` and `branch_deleted` (`record.rs:703-705`).
+- The next successful step clears it (`cleanup = None` in the save). The abandon writer and the retirement writer clear it too (carried note): `abandon_branch_record` already sets `cleanup_category=NULL` (`record.rs:1194`), and `retire_new_branch` writes it so.
+- **Never superseded** (F16): `supersedable` is false for a branch record (`record.rs:737-741`), so a new request's prepare is held (decision 33) and its confirm is `busy` (`record.rs:805-807`).
+- **Cancellation under the reservation.** Steps 2 to 8 of 2.2 have no cancellation check. A `request cancel` arriving then is acknowledged by the safe point without releasing the row. The part runs on, bounded and with no transport, to its release. The record's `cancel_requested` stays set (`retire_new_branch` does not clear it), so Part F step 3's first check (5.1) stops at `retired`, holding nothing (F13's last row). This is how "a reservation held across … any stop" (R-31) is avoided.
+
+### 2.4 `new_branch::abandon(service, root, r, refusal, answer, owner: Option<&RemoteReservation>)`
+
+1. **Git first.** The pending ref, when it is at `r.closure_oid`, is deleted. Absent is fine; elsewhere is `Err(RecoveryRequired)`. An abandoned record holds no ref: the CHECK `pending_ref IS NULL OR … step NOT IN ('complete','abandoned','superseded')` (`record.rs:415`).
+2. **One transaction.**
+   - Without an owner: `record::abandon_branch_record(tx, id, op, &refusal, answer, None, given_at)`.
+   - With one: the new `record::abandon_reserved_new_branch(tx, service, id, op, &refusal, answer, &owner)`, which calls `abandon_branch_record` and then `reservation::finish_parent(KIND, service, tx, id, &owner)`. That ends the row `cancelled` (section 3).
+3. `Ok(BranchStep::Finished)`. The runner reloads and answers from `answer_code` (`run.rs:983-996`).
+
+`abandon_branch_record` (`record.rs:1173-1199`) changes:
+- The allowed steps become per action. `NewBranch`: `Confirmed | BranchDeleted | Retired`, as `branch_permits` has them (`record.rs:121`). The others keep `Confirmed | ContextSynchronized | Closing`.
+- Its UPDATE gains `pending_ref=NULL`. That is a no-op for the other actions, whose rows never hold one (`record.rs:415`).
+- No link is given for a new branch's abandon (`link: None`).
+- No Task 9 path abandons from `retired`: step 3's refusals are `recovery_required` (Part F step 3). The permit stays, as Task 7 built it.
+
+## 3. U-1: the reservation and the transition that releases it
+
+**Taken only for the remote part:** section 2.2, after `branch_deleted` is stored. There is no reservation for situations 3.2 to 3.4, nor for any local step.
+
+**The transition: `finish_parent`, generalized** (`remote/reservation.rs:1217-1249`):
+- The checks at `1224-1230` are unchanged: owned, action `close`, manual priority, `completed_step == AfterAdvertisement`.
+- The `TicketClosure` arm of the `complete` query (`1236`) becomes a query of the row's end:
+  ```sql
+  SELECT CASE
+    WHEN EXISTS(<today's query at 1236, verbatim>) THEN 'completed'
+    WHEN EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r
+                  ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket'
+                 AND r.operation_id=c.operation_id AND r.retired_oid=c.retired_oid
+                 WHERE c.repository_id=?1 AND c.operation_id=?2
+                   AND c.action='new_branch' AND c.step='retired') THEN 'completed'
+    WHEN EXISTS(SELECT 1 FROM ticket_closures c
+                 WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.action='new_branch'
+                   AND c.step='abandoned' AND c.retired_oid IS NOT NULL AND c.pending_ref IS NULL) THEN 'cancelled'
+  END
+  ```
+  - `DocumentPromotion`'s arm (`1235`) gives `'completed'` exactly when it does today.
+  - No end (`NULL`) is `recovery_required`, as `!complete` is today (`1239-1241`).
+- The UPDATE at `1242` writes `phase=?3, outcome=?3` from the end instead of the literal `'completed'`. The rest of it is unchanged.
+- `cancelled` is the end `supersede` gives a parent row it ends without completion (`promotion/lifecycle_record.rs:442`).
+- The doc comment says the row ends with its record's end: complete and retired, a new branch's retirement, or a new branch abandoned under it.
+
+**Why this is a generalization and not a new transition.**
+- The function already is "the parent's own reservation ends in the caller's transaction, given that the parent's table records its end".
+- The direct callers are unchanged: `parent::complete_record` (`lifecycle_record.rs:1037-1039`) reaches the first `WHEN`, which is today's query verbatim.
+- A completed row replays on a restart (`reservation.rs:1327-1328`), which U-1 notes. The new branch never restarts its row after `retired` (F17).
+- The final completion's `reconcile_completion` (`lifecycle_record.rs:1043-1068`) reads the parent's own row as `Completed`. For a new branch that retired, it is.
+
+**The retirement's transaction: `record::retire_new_branch(tx, service, id, op, evidence: &RetirementEvidence<'_>, owner: &RemoteReservation)`**, new in `closure/record.rs`. It is modelled on `parent::complete_record` (`lifecycle_record.rs:974-1041`), whose end it does not take.
+
+1. **Checks:**
+   - the record is a `new_branch` at `branch_deleted`, with `retired_oid` set;
+   - `evidence.matches(Ticket, op, item, retired_oid)` (`cleanup.rs:124-136`);
+   - `remote_polling_state.remote_name` is the record's (as `999-1004`);
+   - the parent's row exists, and `reservation::owned` and `validate_remote_identity` pass (as `1005-1014`).
+2. `cleanup::retire_context(tx, id, evidence)` (`cleanup.rs:953-1022`). This also deletes the link (R-14, `1018-1020`).
+3. `recovery::invalidate_index_observations(tx, id)`, then `mark_registered_lifecycle_contexts_dirty(tx, id, root, &lifecycle_contexts(item))`, as `1016-1035`.
+4. `UPDATE ticket_closures SET step='retired', cleanup_category=NULL, updated_at=max(updated_at,?2) WHERE operation_id=?1`. This is `BranchDeleted → Retired` (`record.rs:119`), and `cancel_requested` is kept (2.3).
+5. `reservation::finish_parent(KIND, service, tx, id, owner)` (the second `WHEN`).
+6. The re-read validates it.
+
+**`record::reconcile_retirement(tx, id, op) -> Result<bool, RepositoryError>`**, after an uncertain commit.
+- `true`: the record is a `new_branch` at `retired` or later, unfinished, and the parent's row is `Completed`.
+- `false`: at `branch_deleted`.
+- Otherwise `recovery_required`. As `reconcile_completion`, absence in Git is not evidence.
+
+## 4. `retire_context`'s evidence, with and without a context
+
+- **Where it comes from.** The evidence is the `RetirementEvidence` that `delete_tracking_ref` returns. It is the only constructor (`cleanup.rs:106-121, 572-640`): `delete_tracking_ref(Some(&plan), Ticket, item, expected = r.remote_context_oid, op, oid = r.retired_oid)`. `retire_context` then writes `retired_contexts(…, operation_id=op, retired_oid=oid)` (`1013`). It also deletes `remote_context_states`, rewrites the current observation batch without the item (`986-1011`), and deletes the link.
+- **With a context (situation 2).** `retired_oid` is `T`, the old context's tip, and the consent's head. `expected` is the stale tracking ref's tip the digest bound, or none. The deletion is "evidenced, by a fetch or a push", as `republish_evidence` reads it (`remote/sync.rs:8316-8431`, `deleted()` at `8286-8291`).
+- **Without a context (situation 3.1).** `retired_oid` is chosen at prepare (section 7.2), from the history read in the observation's registry transaction:
+  1. the tracking context ref's tip, when there is one (F4's stale ref);
+  2. else the newest proven push: the second value `push_absence` returns (`sync.rs:8103-8247`), as `RepublishEvidence::last_published` holds it for `Pushed` (`8406-8409`);
+  3. else the deletion record's `last_published` (`Fetched`, `8383-8393`); with none at all, `HistoryUnresolved` (open question 9).
+- **`history_unresolved` for an earlier push that is not its ancestor.** In 3.1, every proven push's published OID must be `retired_oid` or an ancestor of it (`graph_descendant_of(retired, published)`). Otherwise the prepare is blocked with `HistoryUnresolved`.
+  - The reason: after the retirement, `push_absence` skips a proven push only when it is the retired tip or its ancestor (`8207-8214`).
+  - Any other push stays verified, so the boundary reads `Deleted`, and the publication child would be refused as a deleted branch (answer row 3) instead of publishing fresh.
+- **The proven pushes.** `push_absence` returns them as a third value: every publication it counts `verified` (`8216-8222`), in row order. Its two callers take `.0` (`7491-7500`) and `(boundary, newest, _)` (`8338`).
+- **Not in situation 2.** The design states the ancestor check only for 3.1 (open question 1).
+
+## 5. Step 3: the branch, and the new context-at-commit function
+
+### 5.1 Step 3 in `new_branch::step`
+
+It runs at `confirmed` with `closure_oid` and no `retired_oid` (situations 3.2 to 3.4), at `retired`, and, reconciling, at `closing`. It runs under the lease: step 2's, or a new `repository_lease` when step 3 starts the call.
+
+1. **Not yet `closing`.** The cancellation check gives `Err(Interrupted)`.
+2. **Not yet `closing`.** The pending ref is ensured as in section 1, then `record::begin_new_branch_closing(tx, id, op)` (new) stores step `closing` and `context_oid = closure_oid`.
+   - It requires a `new_branch` with `closure_oid` and `pending_ref`, and either `step == Retired` or `(step == Confirmed && retired_oid.is_none())` (`branch_permits` `Confirmed → Closing`, `Retired → Closing`; `record.rs:116, 120`).
+   - `validate_branch` requires `context_oid` and `base_oid` from `closing` (`record.rs:674-675`).
+   - From here the answer table reads "this record's closure" at `closure_oid` for a `record` closure and at `context_oid` (also `C`) for a kept one (`checkpoint.rs:1426-1430`). It is the same commit.
+3. **`checkpoint::context_moving`**, which marks the ticket's context before Git is touched.
+4. **The branch and its worktree:** `service.context_at_commit(root, AuthoringKind::Ticket, item, closure_oid)` (5.2).
+   - The branch: absent, create it; at `C`, keep it; anything else, `RecoveryRequired` (Part F step 3).
+   - The worktree: add it if missing.
+5. **The pending ref.** Delete it if it is at `C`. Absent is fine; elsewhere is `RecoveryRequired`. Then `record::clear_pending_ref(tx, id, op)` (new): a `new_branch` at `closing` writes `pending_ref=NULL`, and one that has none is left as it is.
+6. `checkpoint::context_moving` again, then `Ok(BranchStep::Closing)`.
+   - The index is refreshed outside the lease by the runner's exit (`finish_branch` → `refresh`, `run.rs:1104`; `refresh_with_publication` for `[Item]`).
+   - `finish_branch` mints the publication child. `record::begin_publication` (`record.rs:1085-1097`) gains `|| r.action == NewBranch && r.pending_ref.is_some()` among its refusals: no child mints before step 3 is done.
+
+**At `closing` on a retry**, the same 4 to 6 run. Each is idempotent: the branch at `C` is kept, an existing worktree is checked as 5.2 says, an absent ref and a cleared column are left. A branch moved past `C` before the mint is `RecoveryRequired`. Once `primary_attempt > 0` the runner never calls the hook (`run.rs:931-933`).
+
+### 5.2 `RepositoryService::context_at_commit` (new, private, in `src/repository.rs` beside `prepare_context_unlocked` at `2455`)
+
+```rust
+/// A ticket's editing context made at `commit`: its branch
+/// `manyhands/<kind>/<ID>` at `commit` and its worktree at
+/// `.manyhands/worktrees/<ID>` (Part F step 3). Unlike
+/// `prepare_context_unlocked` it does not require the root to be on the
+/// primary, nor the item to be on the local primary: the commit, built on
+/// the tracking primary, holds it. The caller holds the repository lease
+/// and the item's closure hold, so no other writer makes the context.
+fn context_at_commit(&self, root: &Path, kind: AuthoringKind, item_id: &canonical::ItemId,
+    commit: git2::Oid) -> Result<ItemContext, RepositoryError>
+```
+
+**Preconditions,** each an `Err` with nothing changed. The operation is `RepositoryOperation::PrepareContext` and the kinds are `prepare_context_unlocked`'s, so the binding maps them as it does today: `MismatchedAuthoringContext` gives `recovery_required` (`mutation/outcome.rs:63-65`).
+- `canonical_repository_root(root, ..)`. The configuration is valid (`read_configuration_for`), and the branch name is not the primary's (as `2510-2517`).
+- `commit` exists (`find_commit`).
+- `validate_deterministic_worktree_path_chain(&worktree, &root, ..)` (`11593`) and `ensure_authoring_worktree_base(&root, ..)` (`11069`).
+- The branch is not checked out in another worktree (`branch_checked_out_in_another_worktree`, `11621`), as `2542-2555`.
+- **The branch.** Absent: `check_failure(BeforeContextBranchCreation)`, then `repository.branch(&branch, &commit, false)`. At `commit`: kept. Anywhere else: `MismatchedAuthoringContext` ("the deterministic authoring branch exists at another commit").
+- **The worktree.** Directory and registration both absent: `check_failure(BeforeWorktreeCreation)`, then `repository.worktree(&id, &worktree, Some(WorktreeAddOptions::new().reference(Some(&reference))))`, as `2602-2626`. Both present: `validate_context_worktree_identity` (`11522`), and its HEAD must be `commit`. Exactly one present, or a HEAD elsewhere: `MismatchedAuthoringContext`. There is no `canonical_context_at` walk under the lease: `commit`'s tree is `P`'s with the ticket edited.
+
+**Not done**, unlike `prepare_context_unlocked`:
+- `require_index_available` (`2462`);
+- the root's checked-out branch (`2484-2491`) and `ensure_configuration_path_clean` (`2493`);
+- `canonical_context_at(&root)` and `primary_has_target` (`2525-2538`, `2568-2575`);
+- the Create intent's occupancy check;
+- the Edit intent's "branch at the primary's head" rule (`2575-2588`);
+- any lifecycle row's step (`advance_lifecycle`).
+
+## 6. `unheld_entries` (`context_retirement/proof.rs`)
+
+```rust
+/// One path the branch holds that the primary does not (Part F, R-19).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct UnheldEntry {
+    pub(in super::super) path: Vec<u8>,
+    pub(in super::super) change: PathChange, // crate::repository::PathChange, promotion/mod.rs:239
+}
+/// Each path whose entry in `local` differs from its entry in the one merge
+/// base of `local` and `primary`, and also from its entry in `primary`, with
+/// its change against `primary`; compared per path as `preservation`
+/// compares, without rename detection, unbounded, sorted by path.
+pub(in super::super) fn unheld_entries(repository: &git2::Repository, local: git2::Oid,
+    primary: git2::Oid) -> Result<Vec<UnheldEntry>, ProofRefusal>
+```
+
+Rules, in order:
+1. `repository.is_shallow()` gives `ShallowHistory`.
+2. `local == primary`, or `primary` descends from `local`, gives `Ok(vec![])`. The one merge base is `local` then, and every entry is the base's.
+3. `merge_bases(local, primary)`: `NotFound` gives `UnrelatedHistory`, another error `MissingObject` (as `proof.rs:45-51`). `[]` gives `UnrelatedHistory` and more than one `MultipleMergeBases` (`52-56`).
+4. Read `entries(repository, x, false)` (`proof.rs:103-142`) for `local`, `primary` and the base. Objects are not verified, because only entries are compared. Empty trees are leaves, as `preservation` reads them.
+5. For each path in the sorted union of the base's and `local`'s keys (a `BTreeSet<&Vec<u8>>`), with `l = local.get`, `b = base.get`, `p = primary.get`:
+   - skip when `b == l` or `p == l`;
+   - otherwise `(Some, Some)` is `Modified`, `(Some, None)` is `Added`, and `(None, Some)` is `Deleted`.
+   - A rename on the branch is its old path `Deleted` and its new path `Added`.
+   - There is no exception for the ticket's own file: the function takes no kind or ID.
+
+`preservation` (`proof.rs:24-82`) is unchanged.
+
+## 7. Prepare: situations 2 and 3 made real, the digest, the preview
+
+### 7.1 The history read
+
+- **`remote/sync.rs`.** `republish_evidence`'s transaction body (`8336-8412`) moves into `pub(crate) fn republish_evidence_in(tx: &rusqlite::Connection, id: i64, root: &Path, plan: &RemoteRefPlan, kind: AuthoringKind, item_id: &ItemId) -> Result<(RepublishEvidence, Vec<git2::Oid>), RepositoryError>`.
+  - The second value is `push_absence`'s proven list (section 4).
+  - `republish_evidence` keeps its signature and returns `.0`. `RepublishEvidence` is unchanged.
+- **`closure/observe.rs`.**
+  - `PendingWork` (`349-361`) gains `history: Option<NewBranchHistory>`, with `struct NewBranchHistory { evidence: sync::RepublishEvidence, proven: Vec<Oid> }`.
+  - It is filled in the same read-only registry transaction as `pending_work`, at `464-466` and `527-530`. The read runs only for a pull-request close (`mode == PullRequest && verb == Close`) with a publication remote. It calls `sync::republish_evidence_in` with the plan from the observation's own `config`, which is not read again.
+  - A direct prepare and a withdraw read nothing new.
+
+### 7.2 `branch_observation` (`observe.rs:1390-1523`)
+
+`Gathered` (`1368-1376`) gains two fields, filled in `observe_git` where the presence is read (`830-856`):
+- `context_absent`: `ContextPresence::Missing` and no local branch `refs/heads/manyhands/ticket/<ID>`;
+- `worktree_occupied`: `ContextPresence::Missing`, and either `.manyhands/worktrees/<ID>` exists (`symlink_metadata`) or a worktree registration of that name does.
+
+Order:
+1. **Situation 1 and the foreign synchronization's `busy`:** unchanged (`1420-1437`; rulings 28 and 29).
+2. **The situation.** This replaces `1439-1446`, "until Task 9". `deleted` is `history.evidence.deleted()`.
+   - **2:** a context with its tip `T` (`context_oid` with `!context_missing`) and `deleted`. A new branch; `old_tip = Some(T)`, `retired_oid = Some(T)`.
+   - **3:** `context_absent`, then the first that applies:
+     - **3.1** `deleted`: a new branch with `old_tip = None` and `retired_oid` as section 4 chooses it. A proven push that is neither `retired_oid` nor its ancestor, or no `retired_oid`, inserts `HistoryUnresolved`.
+     - **3.2** the tracking context tip `S` is `P` or an ancestor of it: a new branch with no retirement.
+     - **3.3** a tracking ref otherwise: `RemoteContextUnmaterialized`, plus `PrimaryAheadOfRemote` when `S` is an ancestor of the local primary (Task 7 checkpoint §10.1; `way_out.rs:296-336` routes them to `PollOnce` then `SharePrimary`).
+     - **3.4** no tracking ref: a new branch with no retirement.
+   - **Otherwise** (a context whose deletion is not evidenced, or a local branch with no worktree): situations 4 and 5 as today, and today's `ContextMissing` for `context_missing` (open question 7).
+   - **The history blocker:** when there is no tracking context, `remote_history_blocker` (`1248-1255`) is extended into the blockers as today. Its `RemoteContextDeleted` is dropped when `deleted` chose situation 2 or 3.1. Its `HistoryUnknown` and `HistoryUnresolved` stay ("as the direct close reports them").
+3. **For a new branch:**
+   - **F7.** `P`'s ticket (`tree_ticket(repository, commit_tree(P), path, root)`) must be there, as a canonical regular entry. Missing: `RemoteContextDeleted` (situation 2) or `ContextMissing` (situation 3). Not canonical: `TicketInvalidAfterClosure`.
+   - **The effect.** Situation 2: `T`'s ticket (`context_ticket_at`). `Open` is `Record`, `Closed` is `Existing` (the kept closure, R-21), and `Malformed` is `TicketInvalidAfterClosure`. Situation 3: `Record`.
+   - **The closure check on `P`'s bytes.** `Record`: `closed_ticket_bytes(P_bytes, at, closed_by)`. Kept: the kept fields parsed from `T`'s canonical ticket, then `closure_replaced_bytes(P_bytes, kept_at, &kept_by)`. Either refusal is `TicketInvalidAfterClosure`.
+   - **The identity** is selected as `needed` for both kinds, `select_identity(.., true)`: the commit's author. For a kept closure, `IdentityRequired` is inserted when nothing else blocks, as `withdraw_observation` does (`observe.rs:1640-1655`).
+   - **The unheld entries** (situation 2 only): `proof::unheld_entries(repository, T, P)`. Any `ProofRefusal` is `Err(state::recovery_required())` ("no merge base or more than one is `recovery_required`").
+   - **Occupied** (situation 3): with no blocker, `worktree_occupied` is `Err(RepositoryError::new(.., RepositoryErrorKind::OccupiedItemPath, ..))`. The binding answers `occupied_path` (`mutation/outcome.rs:69`), F15.
+   - **With an unfinished record that holds new requests** (`pending.record_unfinished`), neither error is raised, so the binding's `held` answers (decision 33; ruling 35's rule applied to these two errors). The occupied check is skipped, and a `ProofRefusal` gives an empty list.
+   - The entries are always computed otherwise. This matters at step 1: its re-observation runs while its own record is unfinished, which `pending_work` counts (`observe.rs:610`), and it must bind the same entries the consent did. An empty placeholder there would make every step 1 an `external_change`.
+   - **The observation:**
+     - `path: (PullRequest, NewBranch)`, `base: P`;
+     - `context_oid: T.unwrap_or(P)`, documented: for a new branch, `new_branch.old_tip` says whether there is a context;
+     - `needs_context_child: false`, `changes: []`;
+     - `cleanup: PlannedCleanup { worktree: old_tip.is_some(), local_branch: old_tip.is_some(), remote_branch: false }`;
+     - `integration: MergeCommit` (unused, as today);
+     - `new_branch: Some(NewBranchFacts { old_tip, retired_oid, unheld })`.
+4. **Situations 4 and 5** are as today, with `new_branch: None`.
+
+**`ClosureObservation`** (`observe.rs:240-274`) gains `new_branch: Option<NewBranchFacts>`. Its three constructions (`1184`, `1497`, `1679`) set it. `NewBranchFacts` is defined in `closure/mod.rs`: `#[derive(Clone, Debug, PartialEq, Eq)] pub(in super::super) struct NewBranchFacts { pub(in super::super) old_tip: Option<Oid>, pub(in super::super) retired_oid: Option<Oid>, pub(in super::super) unheld: Vec<UnheldEntry> }`. A new method gives the head the consent binds:
+
+```rust
+pub(in super::super) fn consented_head(&self) -> Option<Oid> {
+    match &self.new_branch { Some(n) => n.old_tip, None => Some(self.context_oid) }
+}
+```
+
+`begin_closure_record` (`closure/lifecycle.rs:223-235`) passes `observation.consented_head()`. For a `NewBranch` path it calls the new `record::begin_new_branch_record(tx, id, op, item, expectation, remote, kind, consented, retired: observation.new_branch.retired_oid)`. That is `begin_branch_record`'s body (`record.rs:791-821`), with `insert_record` (`885-911`) gaining `retired: Option<Oid>` for its INSERT's `retired_oid`. Its two other callers pass `None`, so `begin_branch_record`'s signature is unchanged.
+
+**`ready`** (`closure/lifecycle.rs:434-444`) gains `Err(blockers) if blockers.contains(&ClosureBlocker::RemoteContextUnmaterialized) => Err(Refusal::ExternalChange)`. The preflight-only value is never encoded: `Refusal::encoded` would panic on it (`promotion/lifecycle_record.rs:122-130`). A confirm whose situation changed is `external_change` (Part D confirm step 1; Obligation 10).
+
+### 7.3 The digest's new fields
+
+`branch_expectation` (`observe.rs:1765-1767`) becomes `branch_expectation_with_head(o, o.consented_head())`. In `branch_expectation_with_head` (`1775-1801`), after `closure_effect` and only when `o.new_branch` is `Some(n)`:
+- `hash.update(o.base.as_bytes())`: the tracking primary `P`;
+- `n.retired_oid` framed as the head is (`[0]`, or `[1]` and 20 bytes): what step 2 retires;
+- `o.tracking_context` framed the same: a remote tracking ref's tip;
+- `(n.unheld.len() as u64).to_be_bytes()`, then for each entry `digest::field(path)` and a change byte (`Added` 0, `Modified` 1, `Deleted` 2).
+
+The old context's tip `T` is the head (`[1]‖T`, or `[0]` with no context), under the action tag 2 (`1784-1788`). The kept closure is bound by `closure_effect`'s `existing` arm with both fields (`1746-1761`). A record closure's `closed_at` is not bound (C6). The close and withdraw digests are byte-identical to today's, because `new_branch` is `None` and `consented_head()` is `Some(context_oid)`.
+
+### 7.4 The preview
+
+- `TicketClosurePreview` (`closure/mod.rs:237-254`) gains `new_branch: Option<NewBranchFacts>`, set in `ClosureObservation::preview` (`observe.rs:276-301`), with `pub(in super::super) fn new_branch(&self) -> Option<&NewBranchFacts>`. It names `P` (`tracking_primary()`), `T` (`old_tip`), the retired OID and the unheld entries.
+- Its `Debug` (`310`) adds whether it is a new branch and the number of entries.
+- Task 10 maps it to the DTO. Until then the binding renders it through `ready_of_closure`, direct-shaped (carried note).
+
+## 8. The retry from each step
+
+| The record as it stands | What the same request does |
+| --- | --- |
+| no record | a new confirm: the digest is compared again |
+| `confirmed`, no `closure_oid` (a crash at `AfterConfirmed`, or `busy`/`interrupted` before step 1's write) | step 1 from the start: observe, compare, build with the clock (nothing was stored) |
+| `confirmed`, `closure_oid`, ref absent (`NewBranchCommitRecorded`) | the ref is made at `closure_oid`, with no rebuild: the same `closed_at` and one `C`; then step 2 or 3 |
+| `confirmed`, `closure_oid`, ref at `C` (`NewBranchCommitHeld`; an abandon whose transaction failed) | step 2 (with `retired_oid`) or step 3 |
+| `worktree_removing`, stopped or crashed | `remove_context_worktree` (no `fresh`); the category is cleared on success |
+| `worktree_removed` | branch deletion |
+| `branch_deleted`, no parent row (a crash at `BeforeCompletion`, a `busy` reservation) | `reserving` |
+| `branch_deleted`, parent row reserved (a crash under it; TRACKING seam) | `restart_remote_lifecycle`, the re-checks with an absent tracking ref accepted, `delete_tracking_ref` with nothing to delete, the transaction |
+| `retired` (COMMIT seam; a cancellation under the reservation) | Part F step 3, with no reservation (F17) |
+| `closing` (`BeforeContextBranchCreation`, `BeforeWorktreeCreation`, or a crash before the mint) | 5.1's reconciliation, then the mint |
+| `publication_pending` | `finish_branch`, `child()` (D8, D13) |
+| `complete` / `abandoned` | the answer from `answer_code` (D19) |
+
+The hold covers every row from `NewBranchCommitRecorded` on, until `complete` or `abandoned`.
+
+## 9. The answers, F1 to F17
+
+The one new `BranchAnswer` is `ContextChanged`, stored `context_changed`. It is an abandon's (the full check refused), not `after_child`'s (`record.rs:1123-1140`). `name` and `parse` gain arms (`closure/mod.rs:128-177`). `branch_code` (`mutation/bind/lifecycle_verb.rs:505-531`) gains `ContextChanged => ResultCode::RecoveryRequired`, the code a direct close's `context_changed` cleanup stop answers (`mutation/bind/lifecycle.rs:322-331`; open question 4). `closure_blocker` (`lifecycle_verb.rs:196-221`) gains `RemoteContextUnmaterialized => LifecycleBlocker::RemoteContextUnmaterialized` (Task 5's value, `mutation/dto.rs:390`).
+
+| F | Ends at | Domain answer | Binding code |
+| --- | --- | --- | --- |
+| F1, F2, F3, F4, F6 | answer row 7 (the head holds this closure) | `Branch(Published)` | `ok` |
+| F9 | answer row 6 (closure kind `existing`) | `Branch(Existing)` | `already_closing` |
+| rows 1 to 5 after the child | Part D's table, unchanged (`checkpoint.rs:1420-1493`) | `Merged`, `ClosedElsewhere`, `RemoteBranchDeleted`, `TicketClosed`, `RemoteChanged` | as Task 7 |
+| F5 | prepare | `Blocked([RemoteContextUnmaterialized])`, or with `PrimaryAheadOfRemote` | the blocked code; way out `PollOnce` (then `SharePrimary`) |
+| F5, confirm | refused at insertion | `Err(ExternalChange)` (`ready`) | `external_change` |
+| F7 | prepare and confirm | `Blocked([RemoteContextDeleted])` / `Blocked([ContextMissing])` | as today |
+| F8, confirm (`P`, `T`, tracking tip) | refused at insertion | `Err(ExternalChange)` | `external_change` |
+| F8, confirm (dirty worktree) | refused at insertion | `Err(Blocked([ContextDirty]))` (open question 8) | as today |
+| F8, before step 1's write | abandoned | `Branch(ExternalChange)` / `Branch(ReconfirmationRequired)` | `external_change` |
+| F8, the full check | abandoned | `Branch(ContextChanged)` | `recovery_required` |
+| F8, under the reservation | abandoned, released `cancelled` | `Branch(ExternalChange)` | `external_change` |
+| F10, F17 | as F1 after the retry | `Branch(Published)` | `ok` |
+| F11 | prepare: `recovery_required` naming the holder (binding `held`); confirm: `Err(Busy)` | | `recovery_required` / `busy` |
+| F12 | `publication_pending` | `Err(ContextSynchronization(stop))` | as `item sync`'s stop |
+| F13 | the stored step | `Err(Interrupted)` | `cancelled` |
+| F14 | — | writers' `Err(RecoveryRequired)` naming the record (`hold_refusal`, `record.rs:1411-1414`) | `recovery_required` |
+| F15 | prepare | `Err(Repository(OccupiedItemPath))` | `occupied_path` |
+| F16 | `worktree_removing` / `worktree_removed`, with its category | `Err(RecoveryRequired)` | `recovery_required` |
+
+## 10. The test plan
+
+Every new check is run red once before its code, and the red run is recorded. Run tests are in `repository::closure::run_tests::pull_request` (`closure/run_pull_request_tests.rs`), each by exact name, and each ends with `p.assert_primary_untouched(&io)` for every io it ran (`run_pull_request_tests.rs:412-416`).
+
+### 10.1 New helpers (pull_request module; no existing helper changes meaning)
+
+- `PullRequest::deleted_on_remote(&self)` inserts a `remote_context_states` row with `state='remotely_deleted'`, `publication_evidence='observed_published'` and `last_advertised_oid` at the tracking context's tip, as `observe_tests.rs:151-161` does.
+- `remove_context(&self)` prunes the worktree and deletes the local branch (as `observe_tests.rs:706-719`). `drop_tracking_context(&self)` deletes `tracking_context_ref()`.
+- `merged_on_tracking(&self) -> Oid`: `squash_merge(self, T)` (`run_pull_request_tests.rs:3024-3031`), with `refs/remotes/origin/main` moved to it. The local primary does not move.
+- `pending_ref(&self, op) -> Option<Oid>`; `parent_row(&self, op) -> Option<(String, i64)>` (phase, owner epoch); `retired_row(&self) -> Option<(OperationId, Oid)>`.
+- `assert_new_branch(&self, r, p_oid)`:
+  - the context ref is `r.closure_oid`, whose only parent is `P`;
+  - the diff of `P`'s tree and `C`'s tree is exactly one delta, at `ticket()`;
+  - the worktree's HEAD is `C`; no pending ref; `!held()`.
+- `assert_nothing_deleted_remotely(io)`: `io.inner.calls.borrow().deletes == 0`.
+- `NEW_BRANCH_EXITS: [FailurePoint; 4] = [NewBranchCommitRecorded, NewBranchCommitHeld, BeforeContextBranchCreation, BeforeWorktreeCreation]` and `NEW_BRANCH_EXIT_BASE = 100`, in `closure/run_tests.rs`. `closure_exit_child` (`1109-1162`) gains the arm `point >= NEW_BRANCH_EXIT_BASE => open_at_with_exit_point_for_testing(.., NEW_BRANCH_EXITS[point - BASE])` before its seams arm. `EXITS`, `F10_SEAM` and `F11_SEAM` are unchanged.
+
+### 10.2 Tests, by slice
+
+**Slice A** (observation and consent; nothing runs past insertion):
+
+| Test | Setup | Asserts | Red by |
+| --- | --- | --- | --- |
+| `unheld_entries_against_the_primary` (`repository::context_retirement::tests`, after `retirement_proof_history_refusals` at 306) | `commit(&repo, &files, &parents)` (`tests.rs:20-54`). Base `B = {ticket, code}`. Rows: held exactly (`T = B+code'`, `P` its squash on `B`); a squash after which `P` changed `code` again; `T` adds `new.txt`; `T` deletes `code` and `P` keeps it; `T` renames `code` to `moved`; `T` equal to `P`, and `P` a descendant of `T`; unrelated roots; a criss-cross (`T = M(A1,A2)`, `P = M(A2,A1)`) | `[]`; `[code Modified]`; `[new.txt Added]`; `[code Deleted]`; `[code Deleted, moved Added]` in path order; `[]`, `[]`; `Err(UnrelatedHistory)`; `Err(MultipleMergeBases)` | a stub returning `Ok(vec![])` |
+| E-44's rows in `pull_request_prepare_decides_the_situation_and_its_blockers` (`observe_tests.rs:1797-1809`) | as 12.1 says | as 12.1 says | today's situation-2 and situation-3 code |
+| `new_branch_digest_wire_format` (`closure::observe::tests`, beside `pull_request_digest_wire_format`) | a `ClosureObservation` literal, path `(PullRequest, NewBranch)`, `Record`, `new_branch: Some(..)` with one entry | `expectation(&o) == blake3(domain ‖ 2 ‖ item ‖ branch ‖ main ‖ remote ‖ [1]T ‖ 0 ‖ closed_by ‖ P ‖ retired ‖ tracking ‖ 1 ‖ path ‖ change)`; a change to the entry's change, `P`, the retired OID or the tracking tip changes it | the head and fields not bound |
+| `f5_a_remote_branch_neither_primary_holds_is_unmaterialized` | `remove_context`; the tracking context at a commit off `base` that neither primary holds; a second row with that commit on the local primary (`primary_before` reset) | prepare `Blocked([RemoteContextUnmaterialized])`, then `[PrimaryAheadOfRemote, RemoteContextUnmaterialized]`; a confirm with the digest of a ready preview taken before the ref moved is `Err(ExternalChange)`, the refused row `(PullRequest, NewBranch)`, nothing written | today's `ContextMissing` |
+| `f7_a_tracking_primary_without_the_ticket_keeps_today_s_blocker` | `P` a commit removing `ticket()`; rows: an old context with `deleted_on_remote`; `remove_context` | `Blocked([RemoteContextDeleted])`; `Blocked([ContextMissing])` | exempt for the second row (today's answer); the first row red: today it is a ready `close` |
+| `f8_a_change_before_the_retirement_is_external_change_or_abandons` (slice A rows) | F1's setup; between preview and confirm, rows: the tracking primary moved; a commit on the context; the tracking context ref moved; a dirty worktree | `Err(ExternalChange)` with the refused row `(PullRequest, NewBranch)`, no pending ref and no `close_subject()` commit; the dirty row `Err(Blocked([ContextDirty]))` with the refused row `(PullRequest, Close)` (a blocked revalidation has no observation, so `refuse_record` takes the configuration's path, `closure/lifecycle.rs:318`) | today there is no ready new-branch preview to confirm (the tracking ref hides the deletion and the close is offered instead); the `P` and tracking rows are red again against a digest without those fields |
+| `f15_an_occupied_worktree_path_is_occupied_path_at_prepare` | `remove_context`, `drop_tracking_context`; a plain directory at `.manyhands/worktrees/<ID>` | `preview_ticket_closure` is `Err(e)` with `e.kind == OccupiedItemPath`; `f.service.prepare(&Mutation::TicketClose(..))` answers `occupied_path`; removing the directory makes it ready | today's `ContextMissing` |
+
+**Slice B** (step 1 and step 3 with no retirement; the runner's dispatch):
+
+| Test | Setup | Asserts |
+| --- | --- | --- |
+| `f3_a_ticket_with_no_context_never_published_gets_a_new_branch` | `remove_context`, `drop_tracking_context` | preview `new_branch` with `old_tip == None`, `retired_oid == None`, no entries; `Published`; `assert_new_branch`; `assert_nothing_deleted_remotely`; no parent row and no `retired_contexts` row (no retirement); `closed_at == clock()`; the tracking context at `C` |
+| `f6_a_surviving_branch_the_tracking_primary_holds_is_fast_forwarded` | `remove_context`; the tracking context left at `base`, which `P` descends from | no retirement; `Published`; `C` descends from the old tracking tip; the tracking context at `C` |
+| `f8_…` (slice B row) | F3's setup; a hook at `AfterConfirmed` moves the tracking primary | `Branch(ExternalChange)`, abandoned; `closure_oid` none; no pending ref |
+| `f10_a_crash_after_the_commit_is_recorded_reuses_it` | F3's setup; `exit_at` at `NEW_BRANCH_EXIT_BASE + 0`; the stored `closed_at` read after the exit | the record held `closure_oid` with no ref; the retry: `Published`, one `close_subject()` commit in the ODB, the same `closed_at` and `closure_oid` |
+| `f10_a_crash_after_the_commit_is_held_continues` | `+1` | as above, with the ref present before the retry |
+| `f10_a_crash_before_the_branch_is_made_continues_at_closing` | `+2` | the record at `closing` with no branch; the retry makes it at `C`; one commit |
+| `f10_a_crash_after_the_branch_before_the_worktree_adds_it` | `+3` | the branch at `C`, no worktree; the retry adds it; `assert_new_branch` |
+| `f11_a_new_request_while_unfinished_is_held` | a record stopped at `closing` (`p.f.failing(BeforeWorktreeCreation)`) | `holder()` names it; the binding's prepare answers `recovery_required` with the holder's recovery action (as `d14_…`); a new confirm `Err(Busy)`; nothing written |
+| `f12_a_stopped_publication_child_leaves_the_branch_local_and_closing` | F3's setup; `stops = [(Publication, transport, true)]` | `Err(ContextSynchronization(_))`; `publication_pending`; the branch at `C`; `listed_state() == Closing`; `held()`; the same request gives `Published` |
+| `f13_a_cancelled_new_branch_is_continued_by_the_same_request` (slice B row) | F3's setup; `CancelAtPublication` (`run_pull_request_tests.rs:1481-1522`) | `Err(Interrupted)`; `publication_pending`, `Cancelled`; the same request gives `Published` |
+| `f14_the_hold_refuses_a_save_and_a_comment_and_makes_no_branch` (slice B row) | F11's record at `closing` | `assert_save_held` and a comment checkpoint (`checkpoint_comment_locally_with`) through `assert_held`, both naming the record; no new commit on the branch |
+
+**Slice C** (step 2 and U-1):
+
+| Test | Setup | Asserts |
+| --- | --- | --- |
+| `finish_close_ends_a_new_branch_s_reservation_by_its_end` (`remote/reservation_tests.rs`, after `finish_close_requires_complete_closure_and_ticket_retirement_at_merged_context`, about 4054) | a new-branch parent built with `begin_new_branch_record`, `begin_new_branch` and `save_record` through `branch_deleted`; its close reservation reserved and advanced as `finish_close_case` (4016-4041) | `retired` and retired at `retired_oid`: `completed`; `retired` and retired at another OID: refused; `branch_deleted`: refused; `abandoned` with no pending ref: `cancelled`; the direct rows stay in the existing test (exempt, its guard) |
+| `f1_a_merged_old_context_is_retired_and_its_closure_is_the_new_branch_s_only_commit` | `merged_on_tracking`, `deleted_on_remote` | preview `new_branch`, `old_tip == Some(T)`, no entries; `Published`; `assert_new_branch`; `assert_nothing_deleted_remotely`; `effects("worktree_remove") == 1`, `effects("branch_delete") == 1`; the stale tracking ref deleted by step 2, and the tracking context at `C` after the publication; `retired_contexts` at `T` with the record's operation; no `remote_context_states` row; the parent row `completed`; the link given at completion |
+| `f2_unheld_entries_are_listed_and_the_old_commits_are_unreferenced` | rows: a squash after which the tracking primary changed the ticket again; a declined request (`P` unchanged); both with `notes.txt` committed on the context; `deleted_on_remote` | the preview's entries `[ticket Modified, notes.txt Added]` in path order; after confirm, as F1; no ref of `refs(&repo)` is `T` or a descendant of it (K-6) |
+| `f4_a_deleted_history_and_its_stale_tracking_ref_are_retired` | `remove_context`, `deleted_on_remote`; the tracking ref left | `retired_oid` is the tracking tip; no removal effects; the tracking ref deleted; `retired_contexts` at it; `Published`; nothing deleted remotely |
+| `f8_…` (slice C rows) | F1's setup. Rows: (e) a hook at `NewBranchCommitHeld` writes `draft.txt` into the worktree; (f) a hook at `BeforeCompletion` sets the history row `state='observed'`; (g) a hook at `BeforeCompletion` moves the tracking context ref | (e) `Branch(ContextChanged)`, abandoned, no pending ref, the old worktree and branch at `T`, no parent row. (f) and (g) `Branch(ExternalChange)`, abandoned from `branch_deleted`, no pending ref, the parent row `cancelled`, no `retired_contexts` row |
+| `f9_a_kept_provisional_closure_is_the_new_branch_s` | `p.hold(p.closed_commit_on(T, 1_700_000_000, CLOSED_BY))`, `deleted_on_remote` | preview `Existing` with both fields; `Branch(Existing)`; the record's kind `existing`; `C`'s ticket holds `closed_at` and `closed_by` as `T` has them; `C`'s parent is `P` |
+| `f10_a_crash_while_removing_the_worktree_continues` | F1's setup; `exit_at` `EXITS[10]` (`DuringWorktreeRemoval`) | the record at `worktree_removing`; the retry `Published`; one removal effect; one commit |
+| `f10_a_crash_before_the_branch_deletion_continues` | `EXITS[11]` | at `worktree_removed`; then as above |
+| `f10_a_crash_before_the_reservation_reserves_again` | `EXITS[12]` (`BeforeCompletion`) | at `branch_deleted`, no parent row; the retry reserves and retires |
+| `f10_a_crash_after_the_tracking_deletion_restarts_the_reservation` | `F10_SEAM` | at `branch_deleted`, the parent row reserved, the tracking ref gone; the retry: owner epoch +1, `completed`, `Published` |
+| `f13_…` (slice C rows) | a hook at `DuringWorktreeRemoval` calls `cancel_ticket_closure`; a TRACKING hook calls it under the reservation | `Err(Interrupted)` at `worktree_removing`, nothing reserved; `Err(Interrupted)` at `retired` with the parent row `completed`; each time the same request then gives `Published` |
+| `f14_…` (slice C rows) | records at `worktree_removing` (F16) and at `retired` (F13's second row) | the save and the comment refused naming the record; at `retired`, no branch `refs/heads/manyhands/ticket/<ID>` is made |
+| `f16_a_refused_removal_stops_unfinished_holding_nothing_remote` | rows: a hook at `DuringWorktreeRemoval` writes `draft.txt`; a hook at `BeforeBranchDeletion` moves the branch ref to `base` | `Err(RecoveryRequired)`; `worktree_removing` / `worktree_removed` with `cleanup == ContextChanged`; no parent row; `holds_new_requests`; a new confirm `Err(Busy)`; the cause removed (draft deleted, ref put back), the same request gives `Published` with the category cleared |
+| `f17_a_crash_after_the_retirement_goes_to_step_three_without_the_reservation` | `F11_SEAM` | after the exit: `retired`, the parent row `completed` at epoch `e`, `retired_contexts` at `T`; the retry: `Published`, the parent row unchanged (epoch `e`, no restart) |
+| `a_branch_answer_gives_its_code` row | (`mutation/bind/lifecycle_tests.rs:350`) `(ContextChanged, RecoveryRequired, "context_changed")` | red against a stub arm |
+
+### 10.3 Guards run in each slice (unchanged behaviour)
+
+- **A:**
+  - every `closure::observe::tests` test, `closure_digest_golden_vector`, `pull_request_digest_wire_format` and `withdraw_digest_wire_format` included;
+  - `withdraw_prepare_decides_its_answers_and_blockers`;
+  - the pull_request module's `d17_…`, `d18_…`, `a_new_request_observes_live_and_a_continuation_its_record_s_mode`, `a_foreign_context_synchronization_is_busy_at_prepare_and_confirm`;
+  - every `context_retirement::tests::retirement_proof_*`;
+  - `remote::resolve_tests::republish_reads_lost_history_with_a_tracking_ref_and_a_current_batch_as_a_deletion`;
+  - in `remote::sync::tests`: `released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_attempt`, `an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambiguous`, `a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguous` (the `push_absence` callers).
+- **B:**
+  - every test in `repository::closure::run_tests::pull_request` (the `d…` and `w…` tests take `promote_branch` and `begin_publication`);
+  - `closure::record::tests`;
+  - `process_exit_at_every_boundary_reopens_without_repeated_effects` (`closure_exit_child` edited), `d12_…`, `d13_…`, `w8_…`, `w13_…`;
+  - `a_branch_parent_view_is_never_integrated`;
+  - promotion's `every_interruption_reopens_with_one_candidate_and_only_unfinished_children` and `remote_children_publication_cleanup_and_replay_are_once_only`.
+- **C:**
+  - `finish_close_requires_complete_closure_and_ticket_retirement_at_merged_context`;
+  - the closure run tests `a_child_publication_guards_the_delete_and_the_checkpoint_is_retired` and `without_a_child_or_tracking_context_nothing_is_reserved_or_deleted`;
+  - promotion's `cancellation_before_and_after_integration_preserves_and_retry_finishes`;
+  - `process_exit_at_every_boundary_reopens_without_repeated_effects` (the seams' visibility);
+  - every test of the pull_request module.
+
+No SSH target runs between steps. `ticket_closure`, `document_promotion` and `mutation_remote` compile through these files and run at review-ready (Task 16).
+
+## 11. Slices
+
+Each compiles, passes the static gates, adds no function without a production caller, and leaves the direct, close and withdraw tests green.
+
+**A. The observation and consent.**
+- `context_retirement/proof.rs`: `UnheldEntry`, `unheld_entries`.
+- `remote/sync.rs`: `push_absence`'s third value, `republish_evidence_in`.
+- `closure/observe.rs`: `NewBranchHistory` and its read, the `Gathered` fields, 7.2 and 7.3, `consented_head`, the preview's field.
+- `closure/mod.rs`: `ClosureBlocker::RemoteContextUnmaterialized` (appended, not in `CLOSURE_BLOCKERS`), `NewBranchFacts`, `TicketClosurePreview.new_branch`.
+- `closure/lifecycle.rs`: `ready`'s arm, `consented_head` in `begin_closure_record`, and an interim `require_identity` override (`promotion/lifecycle.rs:518-524`). The override answers `Err(TicketClosureError::RecoveryRequired)` for an unchanged confirm of a `(PullRequest, NewBranch)` preview, so no record is written until slice B. Refusals at insertion are unaffected: `require_identity` runs only when the digest is unchanged (`run.rs:566-569`).
+- `mutation/bind/lifecycle_verb.rs`: `closure_blocker`'s arm.
+- Tests: `unheld_entries_against_the_primary`, E-44, `new_branch_digest_wire_format`, `f5_…`, `f7_…`, `f8_…`'s confirm rows, `f15_…`.
+- Mechanical: `new_branch: None` in the three literals (`observe_tests.rs:1562, 2060, 2457`).
+
+**B. A new branch with nothing to retire (situations 3.2 to 3.4).**
+- `closure/new_branch.rs` (new): `step`, step 1, step 3 with its reconciliation, `abandon` with no owner. A `retired_oid` record answers `Err(RecoveryRequired)` there; slice A's override now refuses only previews with `retired_oid.is_some()`, so it cannot be reached.
+- `closure/record.rs`: `begin_new_branch_record` and `insert_record`'s `retired`, `begin_new_branch`, `begin_new_branch_closing`, `clear_pending_ref`, `abandon_branch_record`'s per-action steps and `pending_ref=NULL`, `begin_publication`'s pending-ref guard.
+- `closure/checkpoint.rs`: `build_kept_closure_commit`; `context_moving` made `pub(super)`.
+- `closure/lifecycle.rs`: `begin_closure_record` → `begin_new_branch_record`; `branch_step`'s dispatch.
+- `promotion/lifecycle.rs`: `LifecycleRecord::synchronizes_context` (default `true`; `ClosureRecord`: `action != NewBranch`).
+- `promotion/run.rs`: `promote_branch` runs `context_step` only when `r.synchronizes_context()` (`948`); `boundary` (`241`) and `cancelled` (`276`) made `pub(in super::super)`.
+- `src/repository.rs`: `context_at_commit`; `FailurePoint::NewBranchCommitRecorded` and `NewBranchCommitHeld`, after `AfterClosureCheckpoint` (`1158`), each documented.
+- `closure/run_tests.rs`: `NEW_BRANCH_EXITS` and `closure_exit_child`'s arm.
+- Tests: `f3_…`, `f6_…`, `f8_…`'s step-1 row, the four step-1 and step-3 `f10_…`, `f11_…`, `f12_…`, `f13_…`'s publication row, `f14_…`'s `closing` row.
+
+**C. The retirement and U-1.**
+- `closure/new_branch.rs`: section 2 (2.1, 2.2, the reserved abandon). The interim `require_identity` override is removed.
+- `closure/record.rs`: `retire_new_branch`, `reconcile_retirement`, `abandon_reserved_new_branch`.
+- `remote/reservation.rs`: `finish_parent` (section 3).
+- `closure/mod.rs`: `BranchAnswer::ContextChanged`. `mutation/bind/lifecycle_verb.rs`: `branch_code`'s arm.
+- `promotion/run.rs`: `validate_cleanup_owner` (`2139`) and `require_configuration` (`2164`) made `pub(in super::super)`.
+- `promotion/run_tests.rs`: `completion_returned` (34), `tracking_deleted` (46) and `local_effect` (483) made `pub(in super::super)` (mechanical).
+- Tests: `finish_close_ends_a_new_branch_s_reservation_by_its_end`, `f1_…`, `f2_…`, `f4_…`, `f8_…`'s full-check and reservation rows, `f9_…`, the four step-2 `f10_…`, `f13_…`'s step-2 rows, `f14_…`'s other rows, `f16_…`, `f17_…`, and `a_branch_answer_gives_its_code`'s row.
+
+The step-2 `f10_…` and `f17_…` need slice C. The plan's single commit subject, "feat(closure): close through a new branch", goes on slice C; A and B take "feat(closure): a new branch's prepare" and "feat(closure): a new branch with nothing to retire", unless the controller prefers one subject with three commits.
+
+## 12. Named and mechanical edits
+
+### 12.1 E-44 (named; for the controller's approval)
+
+`closure/observe_tests.rs:1797-1809`, in `pull_request_prepare_decides_the_situation_and_its_blockers`, has two rows commented "Situations 2 and 3, as the direct close has them until Task 9". They assert `[RemoteContextDeleted]` (a context with `history("observed_published")`) and `[ContextMissing]` (no context).
+
+Their intent was temporary, and Task 9 reverses them as Part D says. They are replaced by the Task 9 situations:
+- **2:** ready; path `(PullRequest, NewBranch)`; `base` the tracking primary; `old_tip` and `retired_oid` the context's tip; entries `[ticket Modified]` (the context's body against the base's); `needs_context_child == false`.
+- **3.4:** no context and no tracking ref: ready, `old_tip == None`, `retired_oid == None`.
+- **3.1 by a stale tracking ref:** no context, `history("observed_published")`, the tracking ref at `base`: `retired_oid == Some(base)`.
+- **3.1 by pushes only:** no context and no tracking ref; two proven pushes (a new observe-fixture helper `proven_push(oid)`, beside `reserve_context` at `observe_tests.rs:207`: a `synchronize_context` row of the ticket, reserved as `reserve_context` reserves one, then completed with its authority at `oid` as `promotion::run_tests::complete_child_row`'s UPDATE completes one), the newer a descendant of the older: `retired_oid` = the newer. With the older not its ancestor: `[HistoryUnresolved]`.
+- **3.2:** no context, the tracking ref at `base` (which the tracking primary holds), no history: ready, no retirement.
+- **3.3:** no context, the tracking ref at a commit off `base` that neither primary holds: `[RemoteContextUnmaterialized]`.
+
+No other existing assertion changes intent.
+
+### 12.2 Mechanical
+
+- **A:** `new_branch: None` in `observe_tests.rs` at 1562, 2060 and 2457.
+- **B:** `closure_exit_child`'s arm (`run_tests.rs:1125-1144`); `boundary` and `cancelled` visibility.
+- **C:** visibility of `validate_cleanup_owner`, `require_configuration`, `completion_returned`, `tracking_deleted` and `local_effect`; the `a_branch_answer_gives_its_code` row.
+- `push_absence`'s callers take the new third value (`sync.rs:7491-7500, 8338`). That is production code, with no assertion changed.
+
+Task 10's DTO, Task 11's CLI and Task 12's conflict lookups are not touched.
+
+## Open questions for the controller
+
+1. **Situation 2 has no ancestor check on its pushes.** A proven push of the old branch that is not an ancestor of `T` is not skipped after the retirement (`sync.rs:8207-8214`). The publication child then meets a `Deleted` boundary and answers `remote_branch_deleted` (row 3) instead of publishing.
+   - Built as the design says: the check is 3.1's only.
+   - Narrowest fix: the same check in situation 2 against `T`, blocking `history_unresolved`.
+2. **F8's "nothing else changed" cannot hold for an abandon under the reservation.** R-31's order removes the old worktree and branch before the re-check. An abandon from `branch_deleted` leaves them removed and `T` unreferenced (K-6), with nothing retired.
+   - Step 1's re-observation re-checks the evidence before the removals, which narrows the window.
+   - Fix: the F8 row's wording; no code.
+3. **Every refusal under the reservation abandons and releases** (the re-check, local absence, the tracking ref `Changed`), so that no stop holds the reservation (R-31). The design names only the re-check's abandon.
+   - The release on abandon ends the parent's row `cancelled`, as `supersede` ends one, through the same generalized `finish_parent` (section 3).
+   - Confirm both.
+4. **"The cleanup's code" for a full-check refusal** is built as `BranchAnswer::ContextChanged` → `recovery_required`, the code a direct close's `context_changed` cleanup stop answers (`bind/lifecycle.rs:322-331`). The alternative is `reconfirmation_required`, a one-arm change.
+5. **The stored `closed_at` of a kept closure** is the clock's time when `C` is built, not the kept value. The column and `validate` require whole UTC seconds (`record.rs:494-499, 583`), and a kept closure need not have them (`canonical.rs:1256-1272`). `C`'s ticket holds the kept fields as `T` has them. Confirm.
+6. **Push evidence `Ambiguous` or `Unknown` with no context.** It is not 3.1, and the direct close reports no blocker for it, since it reads fetch history only (`observe.rs:1248-1255`). So 3.4 offers a new branch whose publication child the push-absence boundary would stop.
+   - Built as written.
+   - Narrowest fix: `history_unknown` for `Ambiguous`, `history_unresolved` for `Unknown`.
+7. **A local ticket branch with no worktree** is neither "a context" nor "no context", and step 3 could not make the branch at `C`. Built as today's `context_missing`.
+8. **F8's "the old worktree changed between prepare and confirm"** answers as today at the confirm: `Blocked([ContextDirty])` (`promotion/run.rs:564`, `closure/lifecycle.rs:442`), not `external_change`, because the digest binds no cleanliness. Only a change after step 1 is the cleanup's refusal. The test asserts that.
+9. **Readings, for confirmation:**
+   - the digest also binds `retired_oid`, reading "the old context's tip" as what step 2 retires (`T`, or the 3.1 target);
+   - 3.1 falls back to the deletion record's `last_published` when there is no tracking tip or proven push, and blocks `history_unresolved` with none;
+   - "occupied" includes a worktree registration named `<ID>`, which `git2` cannot add a worktree over;
+   - a cancellation that arrives under the reservation is honoured at `retired`.
