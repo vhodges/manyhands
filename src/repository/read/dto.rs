@@ -410,19 +410,24 @@ contract_enum!(
 
 contract_enum!(
     /// Whether a ticket carries lifecycle closure metadata. Its `status`
-    /// text does not decide this.
+    /// text does not decide this. `closed` when the primary's copy of the
+    /// ticket carries it; `closing` when only another copy does, such as
+    /// the ticket's own worktree, so the closure is not the primary's yet.
     ClosureState {
         Open => "open",
         Closed => "closed",
+        Closing => "closing",
     }
 );
 
 contract_enum!(
-    /// What a dependency's target is, among the tickets now present.
+    /// What a dependency's target is, among the tickets now present: an
+    /// open ticket, a closing one, a closed one, or nothing.
     DependencyState {
         Open => "open",
         Closed => "closed",
         Unresolved => "unresolved",
+        Closing => "closing",
     }
 );
 
@@ -437,11 +442,14 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// Why an open ticket is blocked.
+    /// Why an open ticket is blocked. `closing_dependency` is a dependency
+    /// that is a closing ticket, which is not closed until the primary's
+    /// copy holds the closure.
     ReadinessReasonCode {
         OpenDependency => "open_dependency",
         UnresolvedDependency => "unresolved_dependency",
         DependencyCycle => "dependency_cycle",
+        ClosingDependency => "closing_dependency",
     }
 );
 
@@ -554,6 +562,13 @@ pub struct ItemDto {
     /// differ from the list's until the index is refreshed. Null for a
     /// document and for a nonconforming entry.
     pub readiness: Option<ReadinessDto>,
+    /// The pull request link this clone gave a ticket: its branch, the
+    /// primary it targets, the forge and the address that opens it. Only a
+    /// complete read of a ticket (`show`, and `show --path`) fills it, and
+    /// only for a ticket this clone gave a link; it is null in every list
+    /// (where it reads "not read here"), for a document and for a ticket
+    /// that has none.
+    pub pull_request: Option<PullRequestDto>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
     /// are not here. A value JSON cannot express, and a list or mapping
@@ -578,29 +593,49 @@ pub struct ItemDto {
     pub index: IndexStateDto,
 }
 
-/// `closed_at` is set exactly when `state` is `closed`. `closed_by` is set
-/// with it, except in a list from an index written before `closed_by` was
-/// stored, where it is null until the next refresh.
+contract_enum!(
+    /// Whether a closing ticket's closure is on the remote: `published` when
+    /// the ticket at the remote's tracking ref of its branch holds the same
+    /// closure, `pending` otherwise, including when there is no tracking ref.
+    ClosurePublication {
+        Published => "published",
+        Pending => "pending",
+    }
+);
+
+/// `closed_at` is set exactly when `state` is `closed` or `closing`.
+/// `closed_by` is set with it, except in a list from an index written
+/// before `closed_by` was stored, where it is null until the next refresh.
+/// A `closed` ticket shows the closure of the primary's copy, which decides
+/// the state whichever copy is read; a `closing` one shows the closure of
+/// the copy read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClosureDto {
     pub state: ClosureState,
     pub closed_at: Option<String>,
     pub closed_by: Option<String>,
+    /// Only a complete read (`show`, and `show --path`) of a closing ticket
+    /// in a pull-request repository fills it. Null for any other state, in
+    /// direct mode, where a branch-only closure is never published, and in
+    /// every list, where it reads "not read here".
+    pub publication: Option<ClosurePublication>,
 }
 
 /// A ticket another ticket depends on or has as its parent. `state` is
-/// what `id` names in the index when it is read: an open ticket, a closed
-/// one, or nothing in any context it has seen.
+/// what `id` names in the index when it is read: an open ticket, a closing
+/// one, a closed one, or nothing in any context it has seen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DependencyDto {
     pub id: String,
     pub state: DependencyState,
 }
 
-/// `closed` for a ticket with lifecycle closure metadata, whatever its
-/// `status` says and whatever it depends on. An open ticket is `ready` when
-/// every dependency is a closed ticket, and `blocked` otherwise: a closed
-/// dependency never blocks, whatever it depends on in turn. `reasons` is
+/// `closed` for a ticket whose primary's copy has lifecycle closure
+/// metadata, whatever its `status` says and whatever it depends on. An open
+/// ticket is `ready` when every dependency is a closed ticket, and `blocked`
+/// otherwise: a closed dependency never blocks, whatever it depends on in
+/// turn, and a closing one does. A closing ticket's own readiness is
+/// decided as an open ticket's, though no readiness query returns it. `reasons` is
 /// empty unless it is `blocked`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReadinessDto {
@@ -1139,7 +1174,10 @@ pub struct PlanDto {
 
 /// Tickets that can be worked at once, in ID order. `batch` counts from 1
 /// in the plan of every ticket, whatever the filter: each ticket here has
-/// all its open dependencies in batches with a lower number.
+/// all its open dependencies in batches with a lower number. A closing
+/// ticket counts as an open one in the numbering and is left out of the
+/// batches as a filter leaves tickets out, so a batch keeps its number and
+/// the numbers listed can skip.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PlanBatchDto {
     pub batch: u64,

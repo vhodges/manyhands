@@ -114,7 +114,7 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
-    lifecycle::{DocumentPromoteInput, TicketCloseInput},
+    lifecycle::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput},
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
     poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
@@ -154,13 +154,16 @@ pub use dto::{
     PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
     PreviewIdentitySource, PrimaryLocalCommitsDto, PrimaryLocalCommitsType,
-    RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
-    RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SetupCancelDto, SetupCancelPreviewDto, SetupCancelType,
-    SetupForgeDto, SetupMutationDto, SetupMutationType, SetupPollDto, SetupPollType,
-    SetupPreviewDto, SynchronizationConflictMutationDto, SynchronizationConflictType,
-    SynchronizationMutationDto, TicketMutationDto,
+    PullRequestClosureAction, PullRequestClosureDto, PullRequestClosureMutationDto,
+    PullRequestClosureMutationType, PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
+    PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataDto,
+    PullRequestLinkDataType, RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto,
+    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SetupCancelDto, SetupCancelPreviewDto,
+    SetupCancelType, SetupForgeDto, SetupMutationDto, SetupMutationType, SetupPollDto,
+    SetupPollType, SetupPreviewDto, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -687,6 +690,7 @@ pub enum Mutation {
     ContextRetire(ContextRetireInput),
     DocumentPromote(DocumentPromoteInput),
     TicketClose(TicketCloseInput),
+    TicketWithdrawClosure(TicketWithdrawClosureInput),
     PollConfigure(PollConfigureInput),
     PollPause(PollPauseInput),
     PollResume(PollResumeInput),
@@ -746,6 +750,7 @@ impl Mutation {
             Self::ContextRetire(_) => Command::ContextRetire,
             Self::DocumentPromote(_) => Command::DocumentPromote,
             Self::TicketClose(_) => Command::TicketClose,
+            Self::TicketWithdrawClosure(_) => Command::TicketWithdrawClosure,
             Self::PollConfigure(_) => Command::PollConfigure,
             Self::PollPause(_) => Command::PollPause,
             Self::PollResume(_) => Command::PollResume,
@@ -789,6 +794,9 @@ impl Mutation {
             Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::DocumentPromote(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
             Self::TicketClose(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketWithdrawClosure(input) => {
+                Some(Box::new(LifecycleBinding::from(input.clone())))
+            }
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -864,6 +872,7 @@ impl Mutation {
             Self::ContextRetire(input) => Box::new(ContextRetireBinding::from(input)),
             Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
             Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketWithdrawClosure(input) => Box::new(LifecycleBinding::from(input)),
             Self::PollConfigure(input) => Box::new(PollPolicyBinding::from(input)),
             Self::PollPause(input) => Box::new(PollPolicyBinding::from(input)),
             Self::PollResume(input) => Box::new(PollPolicyBinding::from(input)),

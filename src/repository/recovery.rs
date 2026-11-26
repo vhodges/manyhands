@@ -1037,7 +1037,11 @@ impl RowOrigin {
 }
 
 /// The commands of a promotion and a closure, as their records name them.
-const LIFECYCLE_COMMANDS: [&str; 2] = ["document promote", "ticket close"];
+const LIFECYCLE_COMMANDS: [&str; 3] = [
+    "document promote",
+    "ticket close",
+    "ticket withdraw-closure",
+];
 
 /// Records on the local row `id` that `holder` holds it now. Nothing else of
 /// the row changes. A row an index owner holds is left to its claim, which

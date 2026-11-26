@@ -1,0 +1,44 @@
+{
+  "code": "ok",
+  "command": "ticket close",
+  "data": {
+    "action": "close",
+    "blockers": [],
+    "checkpoint_oid": "<checkpoint>",
+    "closure": {
+      "closed_at": "<closed-at>",
+      "recording": "recorded"
+    },
+    "publication": "published",
+    "pull_request": {
+      "forge": null,
+      "source": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      "target": "main",
+      "url": "https://forge.example/new?from=manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW&to=main"
+    },
+    "retired_context": null,
+    "type": "pull_request_closure"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<checkpoint>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "published",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FV2",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+  }
+}

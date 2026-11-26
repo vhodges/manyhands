@@ -62,7 +62,7 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, Blocker, OperationFamily, OperationId, ReadError,
+            AuthoringKind, Blocker, ClosureAction, OperationFamily, OperationId, ReadError,
             RefreshRepositoryRequest, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             SynchronizationTarget, closure, keys, promotion,
             promotion::lifecycle::{LifecycleRecord, ParentStep},
@@ -79,7 +79,10 @@ use super::{
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Ran, Standing, comment, conflict,
-    lifecycle::{DocumentPromoteInput, LifecycleBinding, LifecycleVerb, TicketCloseInput},
+    lifecycle::{
+        self, DocumentPromoteInput, LifecycleBinding, LifecycleVerb, TicketCloseInput,
+        TicketWithdrawClosureInput,
+    },
     primary_position, sync,
 };
 
@@ -127,6 +130,9 @@ pub(crate) struct OperationResumeBinding {
     /// This call entered the request again: an earlier call of it
     /// started and its end was not recorded.
     entered_again: bool,
+    /// The ticket whose branch record this resume continued, once it has:
+    /// its answers name that ticket's branch and worktree (decision 17).
+    branch_item: std::sync::OnceLock<ItemId>,
 }
 
 impl From<OperationResumeInput> for OperationResumeBinding {
@@ -138,6 +144,7 @@ impl From<OperationResumeInput> for OperationResumeBinding {
             root,
             operation_id,
             entered_again: false,
+            branch_item: std::sync::OnceLock::new(),
         }
     }
 }
@@ -310,11 +317,18 @@ fn found_lifecycle(
     if recovery::has_table(connection, closure::record::TABLE)?
         && let Some(record) = closure::record::read_record(connection, repository, operation_id)?
     {
+        // A withdraw rebuilds its own input when a resume continues it; a
+        // close and a new branch rebuild a close's.
+        let command = if record.action == ClosureAction::Withdraw {
+            Command::TicketWithdrawClosure
+        } else {
+            Command::TicketClose
+        };
         return Ok(Some(lifecycle_standing(
             connection,
             root,
             operation_id,
-            Command::TicketClose,
+            command,
             &record,
         )?));
     }
@@ -860,13 +874,13 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
 /// guards prove it safe. The parent's own flag would not do: a call that finds
 /// it clears it and goes on. What is answered is still the stop.
 fn continued<V: LifecycleVerb>(
-    mut binding: LifecycleBinding<V>,
+    binding: &mut LifecycleBinding<V>,
     call: &CallContext<'_>,
     operation: &Accepted,
 ) -> Ran {
-    match Confirmed::row(&mut binding, call, operation, &NO_ROW) {
+    match Confirmed::row(binding, call, operation, &NO_ROW) {
         Row::Unfinished => {
-            let first = Binding::rerun(&binding, call, operation, &Entered::Unfinished);
+            let first = Binding::rerun(binding, call, operation, &Entered::Unfinished);
             if !outcome::never_gets_past(first.answer.code)
                 || !matches!(first.standing, Standing::Owed)
                 || !matches!(
@@ -874,14 +888,14 @@ fn continued<V: LifecycleVerb>(
                     Ok(true)
                 )
             {
-                return consent_refusal_named(first, &binding);
+                return consent_refusal_named(first, binding);
             }
-            let second = Binding::rerun(&binding, call, operation, &Entered::Unfinished);
+            let second = Binding::rerun(binding, call, operation, &Entered::Unfinished);
             if second.answer.code == ResultCode::Cancelled {
                 return first;
             }
             let _ = call.service.take_cancellation(operation.request_id);
-            consent_refusal_named(second, &binding)
+            consent_refusal_named(second, binding)
         }
         Row::Answers(ran) => *ran,
         // It was there a moment ago. Nothing is known: the record is left.
@@ -1319,17 +1333,30 @@ impl OperationResumeBinding {
         let operation = accepted.taking_up(self.operation_id);
         let ran = match command {
             Command::DocumentPromote => continued(
-                LifecycleBinding::from(DocumentPromoteInput { root, id: item_id }),
+                &mut LifecycleBinding::from(DocumentPromoteInput { root, id: item_id }),
                 call,
                 &operation,
             ),
-            Command::TicketClose => continued(
-                LifecycleBinding::from(TicketCloseInput { root, id: item_id }),
-                call,
-                &operation,
-            ),
-            // Unreachable: `lifecycle_standing` names only those two. `Command`
-            // is kept here over a type of its own, for this one arm.
+            Command::TicketClose => {
+                let mut binding = LifecycleBinding::from(TicketCloseInput {
+                    root,
+                    id: item_id.clone(),
+                });
+                let ran = continued(&mut binding, call, &operation);
+                self.named_branch(binding.names_branch(), item_id);
+                ran
+            }
+            Command::TicketWithdrawClosure => {
+                let mut binding = LifecycleBinding::from(TicketWithdrawClosureInput {
+                    root,
+                    id: item_id.clone(),
+                });
+                let ran = continued(&mut binding, call, &operation);
+                self.named_branch(binding.names_branch(), item_id);
+                ran
+            }
+            // Unreachable: `lifecycle_standing` names only those three.
+            // `Command` is kept here over a type of its own, for this one arm.
             _ => {
                 return Ran {
                     answer: Answer::stopped(ResultCode::InternalError),
@@ -1338,6 +1365,14 @@ impl OperationResumeBinding {
             }
         };
         self.lifecycle_kept(ran, accepted, command)
+    }
+
+    /// Remembers that the resume continued the branch record of `item_id`, so
+    /// that its answers name that ticket's branch (decision 17).
+    fn named_branch(&self, branch_record: bool, item_id: ItemId) {
+        if branch_record {
+            let _ = self.branch_item.set(item_id);
+        }
     }
 
     /// The action that takes the named operation up again.
@@ -1601,14 +1636,29 @@ impl Binding for OperationResumeBinding {
             operation_id: _,
             // What a call found, and no part of the request.
             entered_again: _,
+            branch_item: _,
         } = self;
         builder
     }
 
+    /// The resume's own scope names the repository. One that continued a
+    /// branch record names that ticket's branch and worktree as well, as the
+    /// record's own request does (decision 17).
     fn scope(&self, repository: Option<String>, _position: Option<&Position>) -> Scope {
-        Scope {
-            repository,
-            ..Scope::default()
+        match self.branch_item.get() {
+            Some(id) => lifecycle::branch_scope(&AuthoringKind::Ticket, id, repository, &self.root),
+            None => Scope {
+                repository,
+                ..Scope::default()
+            },
+        }
+    }
+
+    /// A stored answer of a resume that continued a branch record is given
+    /// again with the scope it was first given with.
+    fn settled(&self, service: &RepositoryService, _accepted: &Accepted) {
+        if let Some(id) = lifecycle::branch_record_of(service, &self.root, self.operation_id) {
+            let _ = self.branch_item.set(id);
         }
     }
 

@@ -205,12 +205,21 @@ pub(crate) fn run(
         |envelope| render::prepare_output(false, envelope),
         |envelope, supplied| {
             // An `operation resume` that continued a promotion or a closure.
-            if matches!(envelope.data, Some(MutationDataDto::Lifecycle(_))) {
+            if continued_a_lifecycle(envelope) {
                 return human_lifecycle::output(envelope, supplied);
             }
             let seen = seen(service, envelope, named);
             human_collaboration::output(envelope, supplied, &seen)
         },
+    )
+}
+
+/// Whether the result is that of a promotion or a closure an `operation
+/// resume` continued: its data is the lifecycle's, or a branch record's.
+pub(crate) fn continued_a_lifecycle(envelope: &Envelope<MutationDataDto>) -> bool {
+    matches!(
+        envelope.data,
+        Some(MutationDataDto::Lifecycle(_) | MutationDataDto::PullRequestClosure(_))
     )
 }
 

@@ -184,8 +184,9 @@ pub struct ConflictPathDto {
 impl RepositoryService {
     /// The conflict of the synchronization `operation_id` names: the
     /// synchronization's own ID, the operation of a comment it publishes
-    /// (R-5), or a promotion's or a closure's, for its context child
-    /// (decision 34).
+    /// (R-5), or a promotion's or a closure's, for its current child
+    /// (decision 34): the context child, and a branch record's publication
+    /// child once it has one.
     ///
     /// A local-context sync's ID is `invalid_input` (decision 19), as is an
     /// operation that is no synchronization, or a synchronization that met
@@ -338,6 +339,10 @@ struct Recorded {
     request_id: Option<String>,
     /// The merge metadata its merge left, as it recorded it.
     merge_metadata: Option<MergeMetadataEvidence>,
+    /// The primary side of the step's window, for the validators' closure
+    /// rule (R-12): a ticket context's pinned window's `primary_oid`, none
+    /// for a primary target or window zero.
+    primary_side: Option<git2::Oid>,
 }
 
 fn conflict(
@@ -440,7 +445,7 @@ fn lookup(
     let (comment_operation_id, synchronization) =
         match mutation::comment_synchronization(db, repo.root(), operation_id)? {
             Some((comment, synchronization)) => (Some(comment), synchronization),
-            // A promotion's or a closure's ID names its context child
+            // A promotion's or a closure's ID names its current child
             // (decision 34); one with no child yet recorded no conflict.
             None => match state::lifecycle_context_child(db, repo.registration_id(), operation_id)?
             {
@@ -501,6 +506,7 @@ fn lookup(
     };
     let merge_metadata =
         state::integration_merge_metadata(db, &record, step.window_number, step.intent.ordinal)?;
+    let primary_side = state::window_primary_side(db, &record, step.window_number)?;
     Ok(Lookup::Found(Box::new(Recorded {
         operation_id: synchronization,
         comment_operation_id,
@@ -511,6 +517,7 @@ fn lookup(
         resolution_attempted,
         request_id,
         merge_metadata,
+        primary_side,
     })))
 }
 
@@ -765,8 +772,14 @@ fn repair_accepted(root: &Path, recorded: &Recorded) -> Result<bool, ReadError> 
     {
         return Ok(false);
     }
-    validate::validates_external_integration(&repository, local, incoming, head.id())
-        .map_err(|error| read_error(error.into()))
+    validate::validates_external_integration(
+        &repository,
+        local,
+        incoming,
+        recorded.primary_side,
+        head.id(),
+    )
+    .map_err(|error| read_error(error.into()))
 }
 
 /// The cleanliness a restart requires of a repaired target, by its own
@@ -834,6 +847,7 @@ fn read_error(error: SynchronizationError) -> ReadError {
         | SynchronizationError::IdentityRequired { .. }
         | SynchronizationError::MergeRequired { .. }
         | SynchronizationError::PrimaryHasLocalCommits { .. }
+        | SynchronizationError::TicketClosed
         | SynchronizationError::PushRejected => ReadError::new(ResultCode::InternalError),
     }
 }

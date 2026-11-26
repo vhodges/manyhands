@@ -13,7 +13,7 @@ use std::fs;
 
 use manyhands::{
     repository::{
-        AddRemoteRequest, AuthoringKind, CloseTicketRequest, ContextPrepareInput,
+        AddRemoteRequest, AuthoringKind, CloseTicketRequest, CommentAddInput, ContextPrepareInput,
         ContextPrepareIntent, ContextReleaseInput, FailurePoint, IndexRefreshInput, Mutation,
         MutationDataDto, OperationAbandonInput, OperationId, OperationResumeInput,
         PreviewTicketClosureRequest, RemoteOperationAction, RemoteOperationTarget,
@@ -304,6 +304,79 @@ fn prepare_edit_of_a_closed_ticket_is_ticket_closed_and_makes_nothing() {
     world.assert_nothing_exists(REQUEST_1, TICKET_CLOSED);
     assert_eq!(journal(&world), rows);
     assert_eq!(contexts(&world), (vec![], vec![]));
+}
+
+/// A pull-request repository whose publication remote is on a URL nothing
+/// answers at: a comment that is checkpointed stays unpublished.
+fn pull_request_world() -> World {
+    let world = World::new();
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .remote("origin", "ssh://unreachable.invalid/team/repo.git")
+        .unwrap();
+    super::support::commit_tracked_configuration(
+        &world.fixture,
+        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    );
+    items::refresh_completely(&world.service, &world.root);
+    world
+}
+
+fn comment_on(world: &World, id: &str) -> Mutation {
+    Mutation::CommentAdd(CommentAddInput {
+        root: world.root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: items::item_id(id),
+        comment_id: items::item_id("01ARZ3NDEKTSV4RRFFQ69G5FCC"),
+        parent_id: None,
+        body: "A comment.\n".to_owned(),
+        created_by: None,
+    })
+}
+
+/// R-10: in a pull-request repository a ticket whose closure is only on
+/// its branch is closing, and takes saves and comments; with the closure
+/// on the primary both are `ticket_closed`.
+#[test]
+fn a_closing_ticket_takes_comments_and_saves() {
+    git_home::isolated();
+    let world = pull_request_world();
+    let prepared = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+    assert_ok(&prepared);
+    let path = items::ticket_path(items::TICKET_A);
+    world.commit_in_context(
+        items::TICKET_A,
+        &path,
+        &items::ticket_source(items::TICKET_A, "Open ticket", items::CLOSURE),
+    );
+    items::refresh_completely(&world.service, &world.root);
+    let commits = world.branch_commits(items::TICKET_A);
+
+    let token = world.token(items::TICKET_A);
+    let saved = world.execute(REQUEST_2, world.save(items::TICKET_A, &token));
+    assert_eq!(saved.code, ResultCode::Ok, "{saved:?}");
+    assert_eq!(world.branch_commits(items::TICKET_A), commits + 1);
+    let source = world.worktree_source(items::TICKET_A);
+    assert!(source.contains(mutation::TITLE), "{source}");
+    assert!(source.contains(items::CLOSURE), "{source}");
+
+    let commented = world.execute(REQUEST_3, comment_on(&world, items::TICKET_A));
+    assert_ne!(commented.code, ResultCode::TicketClosed, "{commented:?}");
+    assert_eq!(world.branch_commits(items::TICKET_A), commits + 2);
+    assert!(
+        world
+            .worktree(items::TICKET_A)
+            .join(".manyhands/comments")
+            .is_dir()
+    );
+
+    // The closure on the primary: the same two writes are refused.
+    let token = world.token(TICKET_CLOSED);
+    let saved = world.execute(REQUEST_4, world.save(TICKET_CLOSED, &token));
+    assert_eq!(saved.code, ResultCode::TicketClosed, "{saved:?}");
+    let commented = world.execute(REQUEST_5, comment_on(&world, TICKET_CLOSED));
+    assert_eq!(commented.code, ResultCode::TicketClosed, "{commented:?}");
+    world.assert_nothing_exists(REQUEST_5, TICKET_CLOSED);
 }
 
 #[test]

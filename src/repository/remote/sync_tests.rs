@@ -4012,8 +4012,13 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
             let objects = inspection_odb_inventory(&repository);
             let before = inspection_git_image(root.path());
             assert_eq!(
-                RepositoryService::validates_external_integration(&repository, &step, candidate)
-                    .unwrap(),
+                RepositoryService::validates_external_integration(
+                    &repository,
+                    &step,
+                    None,
+                    candidate
+                )
+                .unwrap(),
                 shape == "valid_code_control",
                 "{shape}"
             );
@@ -4693,6 +4698,43 @@ fn child_file(repo: &git2::Repository, parent: git2::Oid, name: &str, bytes: &[u
     let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
     repo.commit(None, &sig, &sig, "fixture", &tree, &[&parent])
         .unwrap()
+}
+
+/// A child of `parent` that adds the file at `path`, which may be nested.
+fn child_path(repo: &git2::Repository, parent: git2::Oid, path: &str, bytes: &[u8]) -> git2::Oid {
+    merge_path(repo, &[parent], path, bytes)
+}
+
+/// A commit with the parents given whose tree is the first parent's with the
+/// file at `path` set to `bytes`.
+fn merge_path(
+    repo: &git2::Repository,
+    parents: &[git2::Oid],
+    path: &str,
+    bytes: &[u8],
+) -> git2::Oid {
+    let parents = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).unwrap())
+        .collect::<Vec<_>>();
+    let tree = inspection_tree_insert(
+        repo,
+        &parents[0].tree().unwrap(),
+        path,
+        repo.blob(bytes).unwrap(),
+        0o100644,
+    );
+    let tree = repo.find_tree(tree).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    repo.commit(
+        None,
+        &sig,
+        &sig,
+        "fixture",
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    )
+    .unwrap()
 }
 
 /// number, previous intent, previous advertisement, disposition, phase, candidate.
@@ -11115,6 +11157,291 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
     }
 }
 
+/// R-12 through the production callers' side: a ticket context's pinned window
+/// gives the validators the fetched primary, a primary target gives none.
+mod ticket_context_closure_rule {
+    use super::*;
+
+    pub(super) const PATH: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAV/ticket.md";
+
+    pub(super) fn ticket(closed: bool, body: &str) -> String {
+        let closure = if closed {
+            "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"\n"
+        } else {
+            "status: \"open\"\n"
+        };
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Ticket\"\ntype: \"task\"\n{closure}---\n\n{body}\n"
+        )
+    }
+
+    /// Both validators, through the wrappers the callers use, for a result
+    /// merging `local` and `incoming` under the recorded window's primary
+    /// side: (resolution, external integration).
+    fn verdicts(
+        service: &RepositoryService,
+        root: &Path,
+        operation: OperationId,
+        repository: &git2::Repository,
+        step: &state::IntegrationStepEvidence,
+        result: &str,
+    ) -> (bool, bool) {
+        let primary_side = service
+            .synchronization_primary_side(root, operation, step.window_number)
+            .unwrap();
+        let (local, incoming) = (step.intent.local_oid, step.intent.incoming_oid);
+        let base = repository.merge_base(local, incoming).unwrap();
+        let blob_at = |commit: git2::Oid| {
+            repository
+                .find_commit(commit)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .get_path(Path::new(PATH))
+                .ok()
+                .map(|entry| entry.id())
+        };
+        let token = merge::ConflictPathToken {
+            observation: merge::ConflictObservation::for_testing([7; 32]),
+            ordinal: 0,
+            path: PATH.as_bytes().to_vec(),
+            base: blob_at(base),
+            base_mode: Some(0o100644),
+            local: blob_at(local),
+            local_mode: Some(0o100644),
+            incoming: blob_at(incoming),
+            incoming_mode: Some(0o100644),
+        };
+        let candidate = merge_path(repository, &[local, incoming], PATH, result.as_bytes());
+        (
+            RepositoryService::validates_resolution_sides(
+                repository,
+                &token,
+                primary_side,
+                result.as_bytes(),
+            )
+            .unwrap(),
+            RepositoryService::validates_external_integration(
+                repository,
+                step,
+                primary_side,
+                candidate,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A context-stage conflict of the pass's ticket context over three
+    /// commits that hold `closed` in every side.
+    fn context_step(pass: &ContextPass, closed: bool) -> state::IntegrationStepEvidence {
+        let base = child_path(
+            &pass.repository,
+            pass.main,
+            PATH,
+            ticket(closed, "base").as_bytes(),
+        );
+        let local = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "local").as_bytes(),
+        );
+        let incoming = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "incoming").as_bytes(),
+        );
+        state::IntegrationStepEvidence {
+            window_number: 1,
+            intent: state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Context,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: pass.repository.find_commit(local).unwrap().tree_id(),
+                baseline_index_digest: [0; 32],
+            },
+            phase: state::IntegrationStepPhase::ConflictPending,
+            candidate_oid: None,
+            result_oid: None,
+            observed_tree_oid: None,
+            conflict_digest: None,
+        }
+    }
+
+    #[test]
+    fn a_pinned_ticket_context_window_gives_the_fetched_primary_to_both_validators() {
+        // The fetched primary holds a closure: the result must keep exactly it.
+        let pass = ContextPass::with_primary_file(PATH, ticket(true, "primary").as_bytes());
+        let step = context_step(&pass, false);
+        let root = pass.root.path();
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 1)
+                .unwrap(),
+            Some(pass.primary_incoming)
+        );
+        // Window zero is no pinned window: it has no primary side.
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 0)
+                .unwrap(),
+            None
+        );
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary closed, result closed: {result}"
+            );
+        }
+        // The fetched primary is open: a closure only the context holds is
+        // provisional and may be dropped.
+        let pass = ContextPass::new();
+        let step = context_step(&pass, true);
+        let root = pass.root.path();
+        for result in [false, true] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (true, true),
+                "primary open, result closed: {result}"
+            );
+        }
+    }
+
+    /// A primary-target synchronization is given real pinned windows too: only
+    /// the target's kind keeps them from giving a primary side.
+    #[test]
+    fn a_primary_target_pinned_window_gives_no_primary_side() {
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let incoming = child_file(&fixture.repository(), fixture.base, "incoming.txt", b"in\n");
+        fixture.fetch(incoming, 2);
+        fixture.append_window(1, incoming).unwrap();
+        let db = fixture.db();
+        assert_eq!(
+            db.query_row(
+                "SELECT kind, primary_oid FROM remote_integration_windows WHERE number=1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap(),
+            ("pinned".to_owned(), incoming.to_string())
+        );
+        assert_eq!(
+            fixture
+                .service
+                .synchronization_primary_side(fixture.root.path(), fixture.operation, 1)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_primary_target_gives_no_primary_side_and_keeps_every_side_closure() {
+        let (root, _data, service, operation, _, _) = resolution_fixture(&[(
+            PATH,
+            &ticket(true, "base"),
+            &ticket(true, "local"),
+            &ticket(true, "incoming"),
+        )]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let step = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            state::integration_step(tx, record.id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            service
+                .synchronization_primary_side(root.path(), operation, 0)
+                .unwrap(),
+            None
+        );
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &service,
+                    root.path(),
+                    operation,
+                    &repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary target, result closed: {result}"
+            );
+        }
+    }
+}
+
+/// R-12 at a real call site: the preflight of `resolve_synchronization` for a
+/// ticket context's Context-stage conflict under a pinned window, whose fetched
+/// primary holds the ticket's closure.
+mod ticket_context_resolution_call_site {
+    use super::ticket_context_closure_rule::{PATH, ticket};
+    use super::*;
+
+    #[test]
+    fn resolve_synchronization_keeps_the_closure_the_pinned_primary_holds() {
+        let pass = ContextPass::with_files(
+            (PATH, ticket(true, "primary").as_bytes()),
+            (PATH, ticket(false, "incoming").as_bytes()),
+            Some((PATH, ticket(false, "local").as_bytes())),
+        );
+        let root = pass.root.path();
+        assert!(matches!(
+            pass.integrate(),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let stage = pass.stage(0).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Context);
+        assert_eq!(stage.window_number, 1);
+        let repository = git2::Repository::open(pass.repository.workdir().unwrap()).unwrap();
+        let (index, head) = (
+            fs::read(repository.path().join("index")).unwrap(),
+            repository.head().unwrap().target(),
+        );
+        // The result opens the ticket the pinned primary has closed.
+        let outcome = try_resolve_fixture(
+            root,
+            &pass.service,
+            pass.operation,
+            &["", &ticket(false, "result"), ""],
+        );
+        assert_eq!(
+            outcome.unwrap(),
+            ResolveSynchronizationOutcome::ValidationFailed
+        );
+        assert_eq!(repository.head().unwrap().target(), head);
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+        // The same resolution keeping the primary's closure is accepted.
+        assert!(matches!(
+            try_resolve_fixture(
+                root,
+                &pass.service,
+                pass.operation,
+                &["", &ticket(true, "result"), ""],
+            ),
+            Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+        ));
+    }
+}
+
 mod closure_conflict_classification {
     use super::*;
 
@@ -11477,7 +11804,7 @@ fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read
     for old in values {
         for new in values {
             assert_eq!(
-                validate::preserves_item_invariants(&comment(old), &comment(new)),
+                validate::preserves_item_invariants(&comment(old), &comment(new), None),
                 old == new,
                 "{old:?} -> {new:?}"
             );
@@ -13709,6 +14036,57 @@ struct ContextPass {
 
 impl ContextPass {
     fn new() -> Self {
+        Self::with_files(
+            ("remote-primary.txt", b"primary\n"),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
+    }
+
+    /// As `new`, with the fetched primary adding `primary_path` (which may be
+    /// nested) instead of the default file.
+    fn with_primary_file(primary_path: &str, primary_bytes: &[u8]) -> Self {
+        Self::with_files(
+            (primary_path, primary_bytes),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
+    }
+
+    /// As `new`, with the fetched primary and the fetched context each adding
+    /// the file given (a path may be nested). With `diverge`, the local
+    /// context branch first gains a commit that sets that file, and the
+    /// fetched context is a sibling of it, so the file the context already
+    /// holds conflicts in the Context stage with the saved ticket as its base.
+    fn with_files(
+        primary: (&str, &[u8]),
+        context: (&str, &[u8]),
+        diverge: Option<(&str, &[u8])>,
+    ) -> Self {
+        Self::build(primary, Some(context), diverge, None)
+    }
+
+    /// As `with_files`, over a context branch whose head first sets the file
+    /// `base` gives: both fetched commits are children of that head, so it is
+    /// the merge base of every stage. With no `context` the fetched context
+    /// is that head itself, already integrated, and only the primary stage
+    /// merges.
+    fn with_base(
+        base: (&str, &[u8]),
+        primary: (&str, &[u8]),
+        context: Option<(&str, &[u8])>,
+        diverge: (&str, &[u8]),
+    ) -> Self {
+        Self::build(primary, context, Some(diverge), Some(base))
+    }
+
+    fn build(
+        primary: (&str, &[u8]),
+        context: Option<(&str, &[u8])>,
+        diverge: Option<(&str, &[u8])>,
+        base: Option<(&str, &[u8])>,
+    ) -> Self {
+        let (primary_path, primary_bytes) = primary;
         let (root, data, service) = fixture();
         let primary_repository = git2::Repository::open(root.path()).unwrap();
         primary_repository
@@ -13731,9 +14109,32 @@ impl ContextPass {
         })
         .unwrap();
         let repository = materialized_target(root.path(), "main", &target).unwrap();
-        let local = repository.head().unwrap().target().unwrap();
-        let context_incoming = child_file(&repository, main, "remote-context.txt", b"context\n");
-        let primary_incoming = child_file(&repository, main, "remote-primary.txt", b"primary\n");
+        let advance = |oid| {
+            let name = repository.head().unwrap().name().unwrap().to_owned();
+            repository.reference(&name, oid, true, "fixture").unwrap();
+            repository
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .unwrap();
+        };
+        let mut head = repository.head().unwrap().target().unwrap();
+        if let Some((path, bytes)) = base {
+            head = child_path(&repository, head, path, bytes);
+            advance(head);
+        }
+        let (local, context_parent) = match diverge {
+            Some((path, bytes)) => {
+                let local = child_path(&repository, head, path, bytes);
+                advance(local);
+                (local, head)
+            }
+            None => (head, main),
+        };
+        let context_incoming = match context {
+            Some((path, bytes)) => child_path(&repository, context_parent, path, bytes),
+            None => context_parent,
+        };
+        let primary_parent = if base.is_some() { head } else { main };
+        let primary_incoming = child_path(&repository, primary_parent, primary_path, primary_bytes);
         let selected = target_ref(&plan, &target);
         for (reference, oid) in [
             (plan.primary().tracking_ref(), primary_incoming),
@@ -19421,4 +19822,296 @@ fn o11_o12_o13_the_mode_is_inserted_once_and_read_back() {
             .is_err()
     );
     assert_eq!(stored_pull_only(data.path(), poll), 0);
+}
+
+/// R-30 and Part G in a ticket context's remote synchronization: the closure
+/// the fetched primary holds is kept, and a conflict of two provisional
+/// closures settles with the remote's.
+mod primary_closure_in_a_ticket_context {
+    use super::ticket_context_closure_rule::PATH;
+    use super::*;
+
+    /// A ticket as a product save writes it, holding `closure` (`closed_at`,
+    /// `closed_by`) when it has one.
+    fn canonical_ticket(closure: Option<(&str, &str)>) -> String {
+        crate::canonical::serialize_item(&crate::canonical::CanonicalItem::Ticket(
+            crate::canonical::Ticket {
+                id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                closed_at: closure.map(|(at, _)| {
+                    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+                        .unwrap()
+                }),
+                closed_by: closure.map(|(_, by)| by.to_owned()),
+                body: "body\n".into(),
+                unknown: serde_yaml::Mapping::new(),
+            },
+        ))
+        .unwrap()
+    }
+
+    const ORIGINAL: (&str, &str) = ("2026-01-01T00:00:00Z", "original author");
+    const OTHER: (&str, &str) = ("2026-02-01T00:00:00Z", "other author");
+
+    fn ticket_at(repository: &git2::Repository, commit: git2::Oid) -> String {
+        let blob = repository
+            .find_commit(commit)
+            .unwrap()
+            .tree()
+            .unwrap()
+            .get_path(Path::new(PATH))
+            .unwrap()
+            .id();
+        String::from_utf8(repository.find_blob(blob).unwrap().content().to_vec()).unwrap()
+    }
+
+    /// The context stage: two different provisional closures, one in the
+    /// local branch and one in the fetched context, conflict in the ticket
+    /// alone. The stage settles it, as a clean merge commit with the remote's
+    /// closure, installing no conflict (G1).
+    #[test]
+    fn a_context_stage_settles_a_closure_only_conflict() {
+        let ours = canonical_ticket(Some(ORIGINAL));
+        let theirs = canonical_ticket(Some(OTHER));
+        let pass = ContextPass::with_files(
+            ("remote-primary.txt", b"primary\n"),
+            (PATH, theirs.as_bytes()),
+            Some((PATH, ours.as_bytes())),
+        );
+        let merged = pass.integrate().unwrap();
+        let stage = pass.stage(0).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Context);
+        assert_eq!(stage.phase, state::IntegrationStepPhase::Applied);
+        let context_merge = stage.result_oid.unwrap();
+        assert_eq!(
+            pass.parents(context_merge),
+            [pass.local, pass.context_incoming]
+        );
+        assert_eq!(ticket_at(&pass.repository, context_merge), theirs);
+        assert_eq!(ticket_at(&pass.repository, merged), theirs);
+        assert_eq!(pass.repository.state(), git2::RepositoryState::Clean);
+        assert!(!pass.repository.index().unwrap().has_conflicts());
+        assert_eq!(
+            pass.stage(1).unwrap().phase,
+            state::IntegrationStepPhase::Applied
+        );
+        assert_eq!(pass.head(), merged);
+    }
+
+    /// The primary stage: the context branch withdrew a closure its base and
+    /// the fetched primary hold, and the merge of the primary into it is
+    /// clean, so it would keep the withdraw. The commit holds the primary's
+    /// closure (G7).
+    #[test]
+    fn a_primary_stage_keeps_the_primary_closure() {
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let withdrawn = canonical_ticket(None);
+        let pass = ContextPass::with_base(
+            (PATH, closed.as_bytes()),
+            ("remote-primary.txt", b"primary\n"),
+            None,
+            (PATH, withdrawn.as_bytes()),
+        );
+        assert_eq!(ticket_at(&pass.repository, pass.local), withdrawn);
+        assert_eq!(ticket_at(&pass.repository, pass.primary_incoming), closed);
+        let merged = pass.integrate().unwrap();
+        assert!(pass.stage(0).is_some());
+        let stage = pass.stage(1).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Primary);
+        assert_eq!(stage.result_oid, Some(merged));
+        assert_eq!(
+            pass.parents(merged),
+            [pass.local, pass.primary_incoming],
+            "a merge commit, not a fast-forward"
+        );
+        assert_eq!(ticket_at(&pass.repository, merged), closed);
+        assert_eq!(pass.repository.state(), git2::RepositoryState::Clean);
+    }
+
+    /// G8, through R-30's push decision (`push_unless_unclosed`), the tail the
+    /// plan path and the merging path both end in, from the refusal to the push:
+    /// `promotion_test_drive_local_bound` runs only `integrate_divergence`
+    /// and cannot. The local branch withdrew a closure and the fetched
+    /// primary holds it, so nothing was merged to give it back: the head is
+    /// not pushed, an `item sync` is ended and a lifecycle child kept.
+    #[test]
+    fn a_fast_forward_that_drops_the_primary_closure_is_not_published() {
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let withdrawn = canonical_ticket(None);
+        let other_closure = canonical_ticket(Some(OTHER));
+        let document = SynchronizationTarget::Context {
+            kind: AuthoringKind::Document,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        };
+        let pass = ContextPass::new();
+        let repository = &pass.repository;
+        let closed_commit = child_path(repository, pass.main, PATH, closed.as_bytes());
+        let withdraw = child_path(repository, closed_commit, PATH, withdrawn.as_bytes());
+        let reclosed = child_path(repository, closed_commit, PATH, other_closure.as_bytes());
+        let primary_open = child_path(repository, pass.main, PATH, withdrawn.as_bytes());
+        let primary_without = child_path(repository, pass.main, "other.txt", b"other\n");
+        // candidate, fetched primary, target, refused.
+        for (case, candidate, primary, target, refused) in [
+            (
+                "a withdraw on the primary's closure",
+                withdraw,
+                closed_commit,
+                &pass.target,
+                true,
+            ),
+            (
+                "another closure",
+                reclosed,
+                closed_commit,
+                &pass.target,
+                true,
+            ),
+            (
+                "the head holds the closure",
+                closed_commit,
+                closed_commit,
+                &pass.target,
+                false,
+            ),
+            (
+                "the primary holds none",
+                withdraw,
+                primary_open,
+                &pass.target,
+                false,
+            ),
+            (
+                "the primary holds no ticket",
+                withdraw,
+                primary_without,
+                &pass.target,
+                false,
+            ),
+            (
+                "a primary target",
+                withdraw,
+                closed_commit,
+                &SynchronizationTarget::Primary,
+                false,
+            ),
+            (
+                "a document context",
+                withdraw,
+                closed_commit,
+                &document,
+                false,
+            ),
+        ] {
+            let decided = primary_closure_push_refusal(repository, target, candidate, primary);
+            assert_eq!(
+                matches!(decided, Err(SynchronizationError::TicketClosed)),
+                refused,
+                "{case}: {decided:?}"
+            );
+        }
+        // The tail of the synchronization, from the refusal to the push
+        // (`push_unless_unclosed`), with a push that records its calls: a
+        // refused head never reaches it. An item sync ends, as unresolved
+        // history ends it; a lifecycle child is kept for its parent. A head
+        // that holds the primary's closure is pushed once.
+        for (keep, refused) in [(false, true), (true, true), (false, false)] {
+            let pass = ContextPass::new();
+            let repository = &pass.repository;
+            let closed_commit = child_path(repository, pass.main, PATH, closed.as_bytes());
+            let withdraw = child_path(repository, closed_commit, PATH, withdrawn.as_bytes());
+            let head = if refused { withdraw } else { closed_commit };
+            let pushes = std::cell::Cell::new(0);
+            let answer = pass.service.push_unless_unclosed(
+                pass.root.path(),
+                &pass.owner,
+                keep,
+                repository,
+                &pass.target,
+                head,
+                closed_commit,
+                || {
+                    pushes.set(pushes.get() + 1);
+                    Ok(true)
+                },
+            );
+            if refused {
+                assert!(
+                    matches!(answer, Err(SynchronizationError::TicketClosed)),
+                    "keep={keep}: {answer:?}"
+                );
+                assert_eq!(pushes.get(), 0, "keep={keep}: the push is never called");
+            } else {
+                assert!(matches!(answer, Ok(true)), "{answer:?}");
+                assert_eq!(pushes.get(), 1, "a head that holds the closure is pushed");
+            }
+            let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+            let other = SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap(),
+            }
+            .operation_target(&plan);
+            let second = pass
+                .service
+                .reserve_remote_operation(pass.root.path(), OperationId::new(), &other)
+                .unwrap();
+            // Only a refusal that is not kept ends the operation.
+            assert_eq!(
+                matches!(second, RemoteReservationOutcome::Reserved(_)),
+                refused && !keep,
+                "keep={keep} refused={refused}"
+            );
+        }
+    }
+
+    /// Part D's merged branch whose remote branch survives: when the primary
+    /// holds the branch's work path by path, the merge of the fetched primary
+    /// is clean and its tree is the primary's, closure and all, which R-30
+    /// leaves as it is. Pins unchanged behaviour (exempt from fail-first).
+    #[test]
+    fn a_proven_merge_merges_the_primary_in_cleanly() {
+        let (root, _data, _service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let main = repository.head().unwrap().target().unwrap();
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let target = SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        };
+        // The branch's two commits, and the forge's squash of them.
+        let work = child_path(&repository, main, "work.txt", b"work\n");
+        let branch = child_path(&repository, work, PATH, closed.as_bytes());
+        let squashed = child_path(&repository, main, PATH, closed.as_bytes());
+        let primary = child_path(&repository, squashed, "work.txt", b"work\n");
+        // Another change of a path the primary holds differently is no proof.
+        let unproven = child_path(&repository, branch, "work.txt", b"more work\n");
+        let merge = |local| {
+            let prepared = prepare_clean_merge(root.path(), local, primary).unwrap();
+            keep_primary_closure(
+                root.path(),
+                &target,
+                merge::IntegrationStage::Primary,
+                local,
+                primary,
+                primary,
+                prepared,
+            )
+            .unwrap()
+        };
+        assert!(matches!(merge(unproven), MergePreparation::Conflict));
+        let MergePreparation::Clean(prepared) = merge(branch) else {
+            panic!("the proven merge is clean")
+        };
+        let tree = prepare::import_prepared_tree(&repository, &prepared).unwrap();
+        assert_eq!(tree, repository.find_commit(primary).unwrap().tree_id());
+        let result = repository.find_tree(tree).unwrap();
+        let blob = result.get_path(Path::new(PATH)).unwrap().id();
+        assert_eq!(
+            repository.find_blob(blob).unwrap().content(),
+            closed.as_bytes()
+        );
+    }
 }

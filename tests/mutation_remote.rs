@@ -806,6 +806,8 @@ fn call_before_the_stores_hold_anything(
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
             Some("primary_local_commits") => PRIMARY_LOCAL_COMMITS_SCHEMA,
+            Some("pull_request_closure") => PULL_REQUEST_CLOSURE_SCHEMA,
+            Some("pull_request_link") => PULL_REQUEST_LINK_SCHEMA,
             _ => SYNCHRONIZATION_SCHEMA,
         };
         schema::check_published(data_schema, &value["data"])
@@ -834,6 +836,8 @@ const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
 const LOCAL_CONTEXT_SYNC_SCHEMA: &str = "local_context_sync_mutation.schema.json";
 const PRIMARY_LOCAL_COMMITS_SCHEMA: &str = "primary_local_commits.schema.json";
 const HOST_SCHEMA: &str = "host_mutation.schema.json";
+const PULL_REQUEST_CLOSURE_SCHEMA: &str = "pull_request_closure_mutation.schema.json";
+const PULL_REQUEST_LINK_SCHEMA: &str = "pull_request_link.schema.json";
 
 /// Checks an envelope against its golden fixture under
 /// `tests/fixtures/mutation_v1`, as every target of the boundary does.

@@ -173,8 +173,10 @@ pub(crate) fn guidance(
             return super::prepare::guidance(way_out, item, primary);
         }
         LifecycleWayOut::SendAgain
+        | LifecycleWayOut::PrepareAgain
         | LifecycleWayOut::RetryRequest { .. }
         | LifecycleWayOut::ResumeOperation { .. }
+        | LifecycleWayOut::SyncItem { .. }
         | LifecycleWayOut::SharePrimary => return None,
     })
 }

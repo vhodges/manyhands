@@ -180,10 +180,11 @@ pub(crate) fn attempt_for(
 }
 
 /// The synchronization `operation_id` names (R-5, decision 34): a comment's
-/// synchronization, a promotion's or a closure's context child, or else the
-/// ID itself. `None` for a lifecycle that has no context child yet.
+/// synchronization, a promotion's or a closure's current child (a branch
+/// record's publication child once it has one), or else the ID itself. `None`
+/// for a lifecycle that has no child yet.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-fn synchronization_named(
+pub(super) fn synchronization_named(
     db: &rusqlite::Connection,
     root: &Path,
     repository_id: i64,

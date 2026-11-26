@@ -217,6 +217,9 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
             commits: _,
             complete: _,
         } => ResultCode::PrimaryHasLocalCommits,
+        // A ticket context's head lacks the closure the primary holds
+        // (R-30): the ticket is closed, and the head is not published.
+        SynchronizationError::TicketClosed => ResultCode::TicketClosed,
         SynchronizationError::PushRejected => ResultCode::PushRejected,
         SynchronizationError::ExternalChange => ResultCode::ExternalChange,
         // A merge left to resolve or to repair outside, or a
@@ -930,6 +933,7 @@ fn recovery(
         // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
+        | ResultCode::AlreadyClosing
         // A command line the CLI could not run: no action corrects it.
         | ResultCode::UsageError
         | ResultCode::CommandUnavailable

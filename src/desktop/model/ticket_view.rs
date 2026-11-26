@@ -102,7 +102,8 @@ fn matches(row: &TicketRow, text: &str) -> bool {
 fn listed_under(row: &TicketRow, query: &TicketQuery) -> bool {
     let lifecycle = match query.closure {
         ClosureFilter::All => true,
-        ClosureFilter::Open => open(row),
+        // The desktop shows a closing ticket as open and never selects it.
+        ClosureFilter::Open | ClosureFilter::Closing => open(row),
         ClosureFilter::Closed => !open(row),
     };
     let readiness = query.readiness.is_none_or(|wanted| {
@@ -230,6 +231,7 @@ pub(crate) fn footnote(view: &TicketView, query: &TicketQuery, repo: &str) -> St
         (Some(ReadinessFilter::Blocked), _) => "blocked ",
         (None, ClosureFilter::Open) => "open ",
         (None, ClosureFilter::Closed) => "closed ",
+        (None, ClosureFilter::Closing) => "closing ",
         (None, ClosureFilter::All) => "",
     };
     let n = view.shown;

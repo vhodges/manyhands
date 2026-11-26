@@ -37,31 +37,45 @@
 //! each retry reads again and a finished request's stored envelope keeps the
 //! last. A promotion reports none, by null, and reads nothing.
 //!
+//! **A branch record** (a pull-request close, a withdraw, a new branch) never
+//! reaches primary, so it answers in a shape of its own (design Part H): its
+//! preview is `PullRequestClosurePreviewDto`, its finished answers carry
+//! `PullRequestClosureMutationDto`, and a child of it that stops answers as
+//! `item sync` answers that stop. Its effects have no integration or cleanup,
+//! and it reports no tickets made ready, since a closing ticket makes none.
+//!
 //! **Identity.** A promotion's preview has no blocker for it, so a ready
 //! preview that plans a merge commit is answered as blocked here, last, with
 //! nothing else in the way. A closure's preview names it itself.
 
-use std::{marker::PhantomData, path::Path, path::PathBuf};
+use std::{
+    marker::PhantomData,
+    path::Path,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     canonical::ItemId,
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect,
         PublicationEffect, RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
+        absolute_path_string,
     },
 };
 
 use super::{
     super::{
         super::{
-            AuthoringKind, ClosureRecording, OperationFamily, OperationId, PlannedClosure,
-            PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionCleanupPending,
-            PromotionIntegration, PromotionPublication, PromotionPublicationPending,
-            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService,
+            AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchRecording, ClosureAction,
+            ClosureRecording, OperationFamily, OperationId, PlannedClosure, PlannedIntegration,
+            PlannedPublication, PromotionCleanup, PromotionCleanupPending, PromotionIntegration,
+            PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
+            PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryErrorKind,
+            RepositoryOperation, RepositoryService, SynchronizationError,
             promotion::{
                 ParentView,
-                lifecycle::ParentStep,
+                lifecycle::{ParentStep, RecordPath},
                 lifecycle_record::{ChildRole, Refusal},
                 record::{IntegrationKind, PublicationCategory},
                 run::{RunEvent, RunObserver},
@@ -77,7 +91,11 @@ use super::{
             LifecycleMutationType, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
             LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
             LifecyclePublicationState, LifecycleRecording, MutationDataDto, PreviewDetailsDto,
-            PreviewEffect,
+            PreviewEffect, PullRequestClosureAction, PullRequestClosureDto,
+            PullRequestClosureMutationDto, PullRequestClosureMutationType,
+            PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
+            PullRequestClosurePublication, PullRequestClosureRecording,
+            SynchronizationConflictMutationDto, SynchronizationConflictType,
         },
         evidence::{self, Position},
         identity::{IntentDigestBuilder, RequestId, ScopeKey},
@@ -92,9 +110,12 @@ use super::{
 
 #[path = "lifecycle_verb.rs"]
 mod verb;
-pub(in super::super) use verb::{Close, LifecycleVerb, Promote};
-pub use verb::{DocumentPromoteInput, TicketCloseInput};
-use verb::{Observed, Reached, Stop, cleanup_pending, path_change, publication_pending};
+use verb::{BranchReady, Ready};
+use verb::{
+    Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change, publication_pending,
+};
+pub(in super::super) use verb::{Close, LifecycleVerb, Promote, Withdraw};
+pub use verb::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput};
 
 pub(in super::super) struct LifecycleBinding<V> {
     root: PathBuf,
@@ -107,6 +128,12 @@ pub(in super::super) struct LifecycleBinding<V> {
     /// ticket already holds: its run records nothing, and reports no
     /// `recording` (R-15). `false` when this call observed nothing.
     closure_exists: bool,
+    /// Whether the request's record is a branch record, as far as this binding
+    /// has learned: from what a prepare observed, from the parent it read, or
+    /// from the answer a branch record gave. Decision 17: its answers name the
+    /// ticket's branch and worktree in `scope`. Set through `&self`, since a
+    /// run learns it from the parent it reads while it answers.
+    branch_record: AtomicBool,
     verb: PhantomData<V>,
 }
 
@@ -118,6 +145,7 @@ impl From<DocumentPromoteInput> for LifecycleBinding<Promote> {
             id,
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
@@ -131,9 +159,70 @@ impl From<TicketCloseInput> for LifecycleBinding<Close> {
             id,
             expected: None,
             closure_exists: false,
+            branch_record: AtomicBool::new(false),
             verb: PhantomData,
         }
     }
+}
+
+impl From<TicketWithdrawClosureInput> for LifecycleBinding<Withdraw> {
+    fn from(input: TicketWithdrawClosureInput) -> Self {
+        let TicketWithdrawClosureInput { root, id } = input;
+        Self {
+            root,
+            id,
+            expected: None,
+            closure_exists: false,
+            branch_record: AtomicBool::new(false),
+            verb: PhantomData,
+        }
+    }
+}
+
+/// The scope of a branch record's answers (decision 17): the ticket's branch
+/// and its worktree, as `item sync`, `comment add` and `ticket save` name them
+/// for the same commit. The worktree is named once the repository is known;
+/// `root` stands in for a repository that is not.
+pub(super) fn branch_scope(
+    kind: &AuthoringKind,
+    id: &ItemId,
+    repository: Option<String>,
+    root: &Path,
+) -> Scope {
+    let names = context_names(
+        repository.as_deref().map_or(root, Path::new),
+        kind,
+        &id.to_string(),
+    );
+    Scope {
+        item_id: Some(id.to_string()),
+        branch: Some(
+            names
+                .branch_ref
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&names.branch_ref)
+                .to_owned(),
+        ),
+        worktree: repository
+            .as_ref()
+            .and_then(|_| absolute_path_string(&names.worktree)),
+        repository,
+        remote: None,
+    }
+}
+
+/// The ticket whose branch record the operation `operation` is, when its
+/// parent record is one.
+pub(super) fn branch_record_of(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Option<ItemId> {
+    Close::parent(service, root, operation)
+        .ok()
+        .flatten()
+        .filter(|parent| parent.path == RecordPath::Branch)
+        .map(|parent| parent.item_id)
 }
 
 /// Whether `observed` is ready with a closure the ticket already holds (R-15).
@@ -159,7 +248,9 @@ impl RunObserver for Stages<'_> {
     fn event(&mut self, event: RunEvent) {
         let stage = match event {
             RunEvent::ChildStarting(ChildRole::Context) => ProgressStage::Connecting,
-            RunEvent::ChildStarting(ChildRole::Primary) => ProgressStage::Publishing,
+            RunEvent::ChildStarting(ChildRole::Primary | ChildRole::Publication) => {
+                ProgressStage::Publishing
+            }
             RunEvent::ChildSafePoint(ChildRole::Context, point) => match point {
                 RemoteOperationSafePoint::BeforeFetch => ProgressStage::Fetching,
                 RemoteOperationSafePoint::BeforeLocalUpdate => ProgressStage::UpdatingLocal,
@@ -176,7 +267,7 @@ impl RunObserver for Stages<'_> {
                 | RemoteOperationSafePoint::AfterPushVerification
                 | RemoteOperationSafePoint::BeforeDiscovery => return,
             },
-            RunEvent::ChildSafePoint(ChildRole::Primary, _) => return,
+            RunEvent::ChildSafePoint(ChildRole::Primary | ChildRole::Publication, _) => return,
             RunEvent::Recording if self.closure_exists => return,
             RunEvent::Recording => ProgressStage::Recording,
             RunEvent::Integrating => ProgressStage::Integrating,
@@ -184,6 +275,145 @@ impl RunObserver for Stages<'_> {
         };
         self.session
             .report(&self.subject.event(stage, Effects::not_requested()));
+    }
+}
+
+/// The pull request link of the ticket's branch as the configuration reads
+/// now: where to open the request of its context branch into the primary,
+/// from the forge the setting or the remote's address names. None without a
+/// valid configuration and a publication remote, or a repository Git cannot
+/// open: a link is never worth failing a step for.
+fn configured_link(root: &Path, id: &ItemId) -> Option<crate::forge::PullRequestLink> {
+    let crate::repository::ConfigurationInspection::Valid(config) =
+        crate::repository::read_configuration_for(
+            root,
+            crate::repository::RepositoryOperation::RepositorySnapshot,
+        )
+        .ok()?
+    else {
+        return None;
+    };
+    let remote = config.publication_remote.as_deref()?;
+    let repository = git2::Repository::open(root).ok()?;
+    Some(crate::repository::closure::checkpoint::branch_link(
+        &repository,
+        &config.primary_branch,
+        config.forge().as_ref(),
+        remote,
+        id,
+    ))
+}
+
+/// A branch record's preview effects, in the order the record makes them
+/// (design Part H): a close synchronizes the context, records its closure and
+/// publishes it, and gives the link; one that keeps a closure has nothing to
+/// record or push of its own; a withdraw removes the closure and publishes
+/// that; a new branch retires an old context, makes the new one and publishes
+/// it.
+fn branch_effects(
+    ready: &Ready,
+    action: ClosureAction,
+    closure: &PlannedClosure,
+) -> Vec<PreviewEffect> {
+    let records = matches!(closure, PlannedClosure::Record { .. });
+    let mut effects = Vec::new();
+    match action {
+        ClosureAction::Close => {
+            if ready.context_child {
+                effects.push(PreviewEffect::ContextSynchronized);
+            }
+            if records {
+                effects.extend([
+                    PreviewEffect::ClosureRecorded,
+                    PreviewEffect::ContextPublished,
+                ]);
+            }
+            effects.push(PreviewEffect::PullRequestLink);
+        }
+        ClosureAction::Withdraw => {
+            if ready.context_child {
+                effects.push(PreviewEffect::ContextSynchronized);
+            }
+            effects.extend([
+                PreviewEffect::ClosureWithdrawn,
+                PreviewEffect::ContextPublished,
+            ]);
+        }
+        ClosureAction::NewBranch => {
+            if ready.cleanup.worktree {
+                effects.push(PreviewEffect::WorktreeRemoved);
+            }
+            if ready.cleanup.local_branch {
+                effects.push(PreviewEffect::BranchDeleted);
+            }
+            effects.push(PreviewEffect::ContextCreated);
+            if records {
+                effects.push(PreviewEffect::ClosureRecorded);
+            }
+            effects.extend([
+                PreviewEffect::ContextPublished,
+                PreviewEffect::PullRequestLink,
+            ]);
+        }
+    }
+    effects
+}
+
+fn closure_action(action: ClosureAction) -> PullRequestClosureAction {
+    match action {
+        ClosureAction::Close => PullRequestClosureAction::Close,
+        ClosureAction::Withdraw => PullRequestClosureAction::Withdraw,
+        ClosureAction::NewBranch => PullRequestClosureAction::NewBranch,
+    }
+}
+
+/// What a branch record's preview shows: the names, commits and paths of
+/// `ready`, with the closure it plans (and its `closed_by`, as the direct
+/// preview shows it) and the link its pull request opens by. A withdraw gives
+/// no link.
+fn branch_preview(
+    root: &str,
+    item: &ItemId,
+    slug: Option<String>,
+    ready: &Ready,
+    record: &BranchReady,
+    closure: &PlannedClosure,
+    link: Option<crate::forge::PullRequestLink>,
+) -> PullRequestClosurePreviewDto {
+    PullRequestClosurePreviewDto {
+        r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
+        root: root.to_owned(),
+        action: closure_action(record.action),
+        item_id: item.to_string(),
+        slug,
+        branch: ready
+            .branch
+            .strip_prefix("refs/heads/")
+            .unwrap_or(&ready.branch)
+            .to_owned(),
+        primary_branch: ready.primary_branch.clone(),
+        remote: ready.remote.clone(),
+        context_oid: record.context_oid.map(|oid| oid.to_string()),
+        tracking_primary_oid: record.tracking_primary.map(|oid| oid.to_string()),
+        closure: match closure {
+            PlannedClosure::Record { closed_by } => LifecyclePlannedClosureDto {
+                recording: LifecycleRecording::Record,
+                closed_by: closed_by.clone(),
+            },
+            PlannedClosure::Existing {
+                closed_at: _,
+                closed_by,
+            } => LifecyclePlannedClosureDto {
+                recording: LifecycleRecording::Existing,
+                closed_by: closed_by.clone(),
+            },
+        },
+        retired_context: record.retired_oid.map(|oid| oid.to_string()),
+        unheld: record.unheld.clone(),
+        pull_request: link
+            .filter(|_| record.action != ClosureAction::Withdraw)
+            .as_ref()
+            .map(crate::repository::PullRequestDto::from),
     }
 }
 
@@ -203,6 +433,14 @@ fn digest_of(command: Command, observed: &Observed) -> ObservationDigest {
         Observed::Blocked(blockers) => {
             let names: Vec<&str> = blockers.iter().map(|blocker| blocker.as_str()).collect();
             Observation::of(name).text("blockers", &names.join(","))
+        }
+        // What a withdraw offers nothing for: a state of its own, which no
+        // preview's consent was given for (Part E, Obligation 10).
+        Observed::NothingToWithdraw => {
+            Observation::of(name).text("unoffered", "nothing_to_withdraw")
+        }
+        Observed::PublicationRemoteRequired => {
+            Observation::of(name).text("unoffered", "publication_remote_required")
         }
     };
     ObservationDigest::of_state(name, state.finish())
@@ -374,12 +612,40 @@ fn reached_effects(reached: &Reached) -> Effects {
 }
 
 impl<V: LifecycleVerb> LifecycleBinding<V> {
+    /// Learns from the record's path whether its answers name the ticket's
+    /// branch (decision 17). A binding that has learned a branch record keeps
+    /// it: it serves one request.
+    fn note_path(&self, path: RecordPath) {
+        if path == RecordPath::Branch {
+            self.branch_record.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Learns from what a prepare observed: only a ready branch record names
+    /// its path. A blocked state, or one that answers before any record
+    /// exists, names none, and keeps the scope a direct request has.
+    fn note_observed(&self, observed: &Observed) {
+        if matches!(observed, Observed::Ready(ready) if ready.record.is_some()) {
+            self.branch_record.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn names_branch(&self) -> bool {
+        self.branch_record.load(Ordering::Relaxed)
+    }
+
     /// Reads the repository and what the domain's preview says of the item:
     /// the repository's root, its registration's ID, and the preview.
     fn observe(&self, service: &RepositoryService) -> Result<(PathBuf, i64, Observed), Answer> {
         let repository = resolve_root(service, &self.root)?;
         let root = repository.root().to_owned();
-        let observed = V::observe(service, &root, &self.id).map_err(refused)?;
+        let observed = V::observe(service, &root, &self.id).map_err(|error| {
+            // A synchronization of the item's context that is not an
+            // unfinished record's own is busy, naming it.
+            let blocker = error.blocker().cloned();
+            refused(error).naming(service, &root, blocker.as_ref())
+        })?;
+        self.note_observed(&observed);
         Ok((root, repository.registration_id(), observed))
     }
 
@@ -423,6 +689,18 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             recovery: vec![action],
             ..Answer::stopped(ResultCode::RecoveryRequired)
         })
+    }
+
+    /// A label from the index: one it does not hold is shown as none, and is
+    /// no part of what is consented to.
+    fn slug_of(&self, service: &RepositoryService, root: &Path) -> Option<String> {
+        if !V::REPORTS_MADE_READY {
+            return None;
+        }
+        resolve_root(service, root)
+            .ok()
+            .and_then(|repository| service.show_item(&repository, &self.id).ok())
+            .and_then(|item| item.slug)
     }
 
     fn data(&self) -> LifecycleMutationDto {
@@ -601,6 +879,164 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// The answer of a pull-request close that finished, whatever way: its
+    /// code is the answer's, and it names what the record wrote and what its
+    /// publication did. Nothing reached primary. A close whose index step is
+    /// yet to run is owed, and the request that gave the answer continues it.
+    fn branch_reached(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        outcome: &BranchClosureOutcome,
+        index_pending: bool,
+    ) -> Ran {
+        self.branch_record.store(true, Ordering::Relaxed);
+        let code = branch_code(outcome.answer());
+        // The index step is yet to run: only a close that answered `ok` says so.
+        let pending = index_pending && code == ResultCode::Ok;
+        let wrote = outcome.checkpoint_oid().is_some();
+        // What the record's publication child pushed is its own result. A
+        // record that ran none (an abandon) still shows what its context
+        // child pushed (R-32).
+        let published = match outcome.publication() {
+            Some(PromotionPublication::Published { oid }) => Some(oid),
+            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
+            Some(PromotionPublication::Pending { reason: _ }) | None => {
+                self.context_child_push(service, accepted)
+            }
+        };
+        let effects = Effects {
+            write: if wrote {
+                WriteEffect::Written
+            } else {
+                WriteEffect::NotRequested
+            },
+            checkpoint: if wrote {
+                CheckpointEffect::Committed
+            } else {
+                CheckpointEffect::NotRequested
+            },
+            discovery: if index_pending {
+                DiscoveryEffect::Pending
+            } else {
+                DiscoveryEffect::Current
+            },
+            publication: match (outcome.publication(), published) {
+                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
+                    PublicationEffect::Current
+                }
+                (_, Some(_)) => PublicationEffect::Published,
+                (_, None) => PublicationEffect::NotRequested,
+            },
+            commit_oid: published.map(|oid| oid.to_string()),
+            ..Effects::not_requested()
+        };
+        // The five answers that report what the record did; the others are
+        // the consent's or the remote's, and carry nothing of it.
+        // The sixth is R-35's: a record whose publication remote changed or
+        // went left its commit on the local branch, and the data says what it
+        // wrote, so that `item sync` is named as the way out.
+        let data = (matches!(
+            code,
+            ResultCode::Ok
+                | ResultCode::AlreadyClosing
+                | ResultCode::AlreadyApplied
+                | ResultCode::RemoteBranchDeleted
+                | ResultCode::TicketClosed
+        ) || outcome.answer() == BranchAnswer::RemoteChanged)
+            .then(|| self.branch_data(service, &accepted.root(), outcome));
+        Ran {
+            answer: Answer {
+                effects,
+                data,
+                recovery: if pending {
+                    vec![outcome::same_request(accepted.request_id)]
+                } else {
+                    Vec::new()
+                },
+                ..Answer::stopped(if pending {
+                    ResultCode::DiscoveryPending
+                } else {
+                    code
+                })
+            },
+            standing: if pending {
+                Standing::Owed
+            } else {
+                Standing::Final
+            },
+        }
+    }
+
+    /// The commit the record's context child pushed, which its row says the
+    /// remote accepted.
+    fn context_child_push(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+    ) -> Option<git2::Oid> {
+        let parent = V::parent(service, &accepted.root(), accepted.operation_id)
+            .ok()
+            .flatten()?;
+        landed_push(service, &accepted.scope, parent.children[0]?)
+    }
+
+    /// What a finished branch record did, as its answer's data: the record's
+    /// own facts, and the link record's link as it stands (a withdraw keeps
+    /// the one an earlier close gave).
+    fn branch_data(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        outcome: &BranchClosureOutcome,
+    ) -> MutationDataDto {
+        let link = resolve_root(service, root).ok().and_then(|repository| {
+            service
+                .read_session(RepositoryOperation::Read, |connection| {
+                    Ok(crate::repository::pull_request_links::link_of(
+                        connection,
+                        repository.registration_id(),
+                        crate::repository::authoring_kind_segment(&AuthoringKind::Ticket),
+                        &self.id.to_string(),
+                    )?)
+                })
+                .ok()
+                .flatten()
+        });
+        MutationDataDto::PullRequestClosure(Box::new(PullRequestClosureMutationDto {
+            r#type: PullRequestClosureMutationType::PullRequestClosure,
+            action: closure_action(outcome.action()),
+            closure: PullRequestClosureDto {
+                recording: match outcome.recording() {
+                    BranchRecording::Recorded => PullRequestClosureRecording::Recorded,
+                    BranchRecording::Existing => PullRequestClosureRecording::Existing,
+                    BranchRecording::Withdrawn => PullRequestClosureRecording::Withdrawn,
+                    BranchRecording::Nothing => PullRequestClosureRecording::Nothing,
+                },
+                closed_at: outcome.closed_at().map(str::to_owned),
+            },
+            checkpoint_oid: outcome.checkpoint_oid().map(|oid| oid.to_string()),
+            publication: match outcome.publication() {
+                Some(PromotionPublication::Published { oid: _ }) => {
+                    Some(PullRequestClosurePublication::Published)
+                }
+                Some(PromotionPublication::AlreadyCurrent { oid: _ }) => {
+                    Some(PullRequestClosurePublication::Current)
+                }
+                Some(PromotionPublication::Pending { reason: _ }) | None => None,
+            },
+            retired_context: outcome.retired_oid().map(|oid| oid.to_string()),
+            pull_request: link.as_ref().map(crate::repository::PullRequestDto::from),
+            // A closure that was closed already is what a closed ticket's
+            // prepare names, and a step-3 refusal for it is named the same.
+            blockers: if outcome.answer() == BranchAnswer::AlreadyClosed {
+                vec![LifecycleBlocker::AlreadyClosed]
+            } else {
+                Vec::new()
+            },
+        }))
+    }
+
     /// The data of an answer that names what stands in the way.
     fn blocked_data(&self, blockers: Vec<LifecycleBlocker>) -> MutationDataDto {
         MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
@@ -663,6 +1099,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             };
         }
         let effects = parent_effects(&V::KIND, service, &root, primary, &view);
+        if view.path == RecordPath::Branch {
+            return self.branch_stopped(service, accepted, stop, &view, effects, blockers);
+        }
         let report = self.made_ready(
             service,
             &root,
@@ -678,7 +1117,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         );
         // This call's stop is not the request's last word: the next call gets
         // the outcome the parent stored.
-        if view.step == ParentStep::Complete {
+        if view.step == ParentStep::Complete || view.answered {
             return Ran {
                 answer: Answer {
                     effects,
@@ -711,6 +1150,82 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// The answer to a branch record that stopped. It closed nothing, so it
+    /// reports no tickets made ready. A child that stopped answers as `item
+    /// sync` answers that stop (design R-5), with its data: the host that is
+    /// not trusted, or the conflict's next step; what stands in the way of the
+    /// record's own step is named as a blocked prepare names it. Whichever
+    /// call stopped it, the next call of the same request continues it.
+    fn branch_stopped(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        stop: Stop,
+        view: &ParentView<LifecycleBlocker>,
+        effects: Effects,
+        blockers: Option<Vec<LifecycleBlocker>>,
+    ) -> Ran {
+        let (code, _, offers_nothing) = stop_answer(&stop);
+        // This call's stop is not the request's last word: the next call gets
+        // the answer the record stored.
+        if view.step == ParentStep::Complete || view.answered {
+            return Ran {
+                answer: Answer {
+                    effects,
+                    recovery: vec![outcome::same_request(accepted.request_id)],
+                    ..Answer::stopped(code)
+                },
+                standing: Standing::Owed,
+            };
+        }
+        let data = match (&stop, blockers) {
+            (_, Some(blockers)) => Some(self.blocked_data(blockers)),
+            (Stop::ContextSynchronization(error), None) => match error.as_ref() {
+                SynchronizationError::ConflictPending {
+                    target: _,
+                    operation_id,
+                    stage: _,
+                } => Some(MutationDataDto::SynchronizationConflict(
+                    SynchronizationConflictMutationDto {
+                        r#type: SynchronizationConflictType::SynchronizationConflict,
+                        conflict: super::sync::conflict_next(
+                            service,
+                            &accepted.root(),
+                            *operation_id,
+                        ),
+                    },
+                )),
+                error => super::sync::host_data(error),
+            },
+            _ => None,
+        };
+        // The operation it was refused for, named as `item sync` names it: the
+        // one a busy error of the repository names, and the one that holds the
+        // reservation a child was refused (ruling 61).
+        let blocker = match &stop {
+            Stop::Repository(error) if error.kind == RepositoryErrorKind::RepositoryBusy => {
+                error.blocker().cloned()
+            }
+            Stop::ContextSynchronization(error) => error.blocker().cloned().or_else(|| {
+                matches!(error.as_ref(), SynchronizationError::Busy)
+                    .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                    .flatten()
+            }),
+            _ => None,
+        };
+        Ran {
+            answer: Answer {
+                data,
+                effects,
+                recovery: standing_recovery(code, accepted),
+                offers_nothing,
+                ..Answer::stopped(code)
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
+            standing: Standing::Owed,
+        }
+    }
+
     /// What a stop names as standing in the way. A refused merge or a child's
     /// conflict is the repository's to name, and a preview reads it with
     /// nothing changed.
@@ -732,7 +1247,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             (Some(blockers), _) => Some(blockers),
             (None, true) => match V::observe(service, root, &self.id) {
                 Ok(Observed::Blocked(blockers)) => Some(blockers),
-                Ok(Observed::Ready(_)) | Err(_) => None,
+                Ok(
+                    Observed::Ready(_)
+                    | Observed::NothingToWithdraw
+                    | Observed::PublicationRemoteRequired,
+                )
+                | Err(_) => None,
             },
             (None, false) => None,
         }
@@ -792,7 +1312,11 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             )
         });
         let ran = match called {
-            Some(Ok(reached)) => self.reached(call.service, accepted, &reached),
+            Some(Ok(Called::Reached(reached))) => self.reached(call.service, accepted, &reached),
+            Some(Ok(Called::Branch {
+                outcome,
+                index_pending,
+            })) => self.branch_reached(call.service, accepted, &outcome, index_pending),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)
@@ -857,6 +1381,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         primary: Option<&str>,
         parent: &ParentView<LifecycleBlocker>,
     ) -> Option<Answer> {
+        self.note_path(parent.path);
+        // A finished branch record answers from its stored answer, which the
+        // domain gives: whatever ended it, it is the run's to report.
+        if parent.answered {
+            return None;
+        }
         let effects = parent_effects(&V::KIND, service, root, primary, parent);
         let answer = match &parent.refusal {
             Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers))
@@ -911,20 +1441,35 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             // What a call observed, and no part of the request.
             expected: _,
             closure_exists: _,
+            branch_record: _,
             verb: _,
         } = self;
         builder
     }
 
-    /// The request's position is on primary, so its result names primary:
-    /// the context's worktree does not outlive a complete run.
+    /// A direct request's position is on primary, so its result names
+    /// primary: the context's worktree does not outlive a complete run. A
+    /// branch record is placed on primary too, but it never reaches it: its
+    /// answers name the ticket's branch and its worktree, as `item sync`,
+    /// `comment add` and `ticket save` do for the same commit (decision 17).
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
+        if self.names_branch() {
+            return branch_scope(&V::KIND, &self.id, repository, &self.root);
+        }
         Scope {
             repository,
             item_id: Some(self.id.to_string()),
             branch: position.and_then(|position| position.branch().map(str::to_owned)),
             worktree: None,
             remote: None,
+        }
+    }
+
+    /// A stored answer is given again from the request's record, with no
+    /// prepare to have observed it: the parent says which path it was.
+    fn settled(&self, service: &RepositoryService, accepted: &Accepted) {
+        if let Ok(Some(parent)) = V::parent(service, &accepted.root(), accepted.operation_id) {
+            self.note_path(parent.path);
         }
     }
 
@@ -941,10 +1486,17 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             return Err(Answer::stopped(ResultCode::IdentityRequired)
                 .with_data(self.blocked_data(blockers.clone())));
         }
+        // No publication remote is no change of state to consent to, as a
+        // synchronization's is not: it is refused as it is at a preview.
+        if matches!(observed, Observed::PublicationRemoteRequired) {
+            return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+        }
         let position = primary_position(&root)?;
         self.expected = match &observed {
             Observed::Ready(ready) => Some(ready.expected),
-            Observed::Blocked(_) => None,
+            Observed::Blocked(_)
+            | Observed::NothingToWithdraw
+            | Observed::PublicationRemoteRequired => None,
         };
         self.closure_exists = closure_exists(&observed);
         Ok(Prepared {
@@ -980,10 +1532,22 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (root, repository_id, observed) = self.observe(call.service)?;
+        // The configuration's answer comes ahead of the hold (R-33), and the
+        // hold ahead of a withdraw's "nothing to withdraw" (decision 33,
+        // ruling 35): an unfinished record of the ticket is what to go on with.
+        if matches!(observed, Observed::PublicationRemoteRequired) {
+            return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+        }
         self.held(call.service, repository_id)?;
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
+            Observed::NothingToWithdraw => {
+                return Err(Answer::stopped(ResultCode::AlreadyApplied));
+            }
+            Observed::PublicationRemoteRequired => {
+                return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+            }
             Observed::Blocked(blockers) => {
                 if names_no_item(call.service, &root, &self.id, &blockers) {
                     return Err(Answer::stopped(ResultCode::ItemNotFound));
@@ -998,6 +1562,23 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         };
         let key = ScopeKey::for_repository(&self.root)
             .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
+        if let (Some(record), Some(closure)) = (&ready.record, &ready.closure) {
+            // A label from the index, as the direct preview's is.
+            let slug = self.slug_of(call.service, &root);
+            return Ok(Previewed {
+                observation: digest.to_stored(),
+                effects: branch_effects(&ready, record.action, closure),
+                details: PreviewDetailsDto::PullRequestClosure(Box::new(branch_preview(
+                    key.as_str(),
+                    &self.id,
+                    slug,
+                    &ready,
+                    record,
+                    closure,
+                    configured_link(&root, &self.id),
+                ))),
+            });
+        }
         let mut effects = Vec::new();
         if ready.context_child {
             effects.push(PreviewEffect::ContextSynchronized);
@@ -1033,16 +1614,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         if ready.cleanup.local_branch {
             effects.push(PreviewEffect::BranchDeleted);
         }
-        // A label from the index: one it does not hold is shown as none, and
-        // is no part of what is consented to.
-        let slug = if V::REPORTS_MADE_READY {
-            resolve_root(call.service, &root)
-                .ok()
-                .and_then(|repository| call.service.show_item(&repository, &self.id).ok())
-                .and_then(|item| item.slug)
-        } else {
-            None
-        };
+        let slug = self.slug_of(call.service, &root);
         Ok(Previewed {
             observation: digest.to_stored(),
             effects,
@@ -1129,6 +1701,18 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 self.expected = Some(ready.expected);
                 Ok(Seen::State { found, own: None })
             }
+            // A withdraw that has nothing left to withdraw is a state the
+            // consent was not given for.
+            Observed::NothingToWithdraw => {
+                self.expected = None;
+                Ok(Seen::State { found, own: None })
+            }
+            Observed::PublicationRemoteRequired => Err(Ran {
+                answer: Answer::stopped(ResultCode::PublicationRemoteRequired),
+                standing: Standing::Stopped {
+                    journal: Some(JournalRow::Absent),
+                },
+            }),
             Observed::Blocked(blockers) => Err(Ran {
                 answer: self.blocked_again(call.service, &root, blockers),
                 standing: Standing::Stopped {
@@ -1167,6 +1751,11 @@ fn parent_integrated(
     primary: Option<&str>,
     parent: &ParentView<LifecycleBlocker>,
 ) -> bool {
+    // A branch record never integrates: whatever its step, nothing reached
+    // primary.
+    if parent.path == RecordPath::Branch {
+        return false;
+    }
     match parent.step {
         ParentStep::Integrated
         | ParentStep::Published
@@ -1202,6 +1791,9 @@ fn landed_push(
 /// that stays whatever stopped it. Before integration that is the
 /// context child's merge on the context's branch and its landed push. After it,
 /// the primary child's landed push, which the parent may not have recorded yet.
+/// A branch record is never integrated: its second child is its publication
+/// child, whose merge and push are on the context's branch too, and the commit
+/// it wrote there is a write as well as a checkpoint.
 /// Nothing is claimed of a row that can't be read.
 fn parent_effects(
     kind: &AuthoringKind,
@@ -1241,17 +1833,45 @@ fn parent_effects(
     };
     let [context_child, primary_child] = parent.children;
     if !integrated {
-        let on_context = context_child.zip(scope.as_ref());
-        let pushed = on_context.and_then(|(child, scope)| landed_push(service, scope, child));
-        let merged = on_context
-            .and_then(|(child, scope)| super::sync::merge_made_on(service, scope, child, &branch));
+        // A branch record's two children both work on the context's branch:
+        // the second is its publication child, which pushes what the record
+        // wrote. A direct close has only its context child before it
+        // integrates.
+        let branch_record = parent.path == RecordPath::Branch;
+        let on_context = |child: Option<OperationId>| child.zip(scope.as_ref());
+        let pushed = [primary_child.filter(|_| branch_record), context_child]
+            .into_iter()
+            .find_map(|child| {
+                on_context(child).and_then(|(child, scope)| landed_push(service, scope, child))
+            });
+        let merged = [primary_child.filter(|_| branch_record), context_child]
+            .into_iter()
+            .find_map(|child| {
+                on_context(child).and_then(|(child, scope)| {
+                    super::sync::merge_made_on(service, scope, child, &branch)
+                })
+            });
+        // The commit it wrote is a write as well as a checkpoint: the branch
+        // record's whole work is on that branch.
+        let write = if branch_record && checkpoint == CheckpointEffect::Committed {
+            WriteEffect::Written
+        } else {
+            WriteEffect::NotRequested
+        };
         if pushed.is_none() && merged.is_none() {
             return Effects {
+                write,
                 checkpoint,
+                discovery: if write == WriteEffect::Written {
+                    discovery()
+                } else {
+                    DiscoveryEffect::NotRequested
+                },
                 ..Effects::not_requested()
             };
         }
         return Effects {
+            write,
             checkpoint,
             discovery: discovery(),
             publication: if pushed.is_some() {
@@ -1366,6 +1986,7 @@ pub(in super::super) fn held_by_its_child(
     let parent = match command {
         Some(Command::DocumentPromote) => Promote::parent(service, root, operation),
         Some(Command::TicketClose) => Close::parent(service, root, operation),
+        Some(Command::TicketWithdrawClosure) => Withdraw::parent(service, root, operation),
         _ => return false,
     };
     matches!(parent, Ok(Some(parent)) if parent.children.contains(&Some(active)))

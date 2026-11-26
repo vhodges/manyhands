@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull-request link data",
+  "description": "The data of a result of item sync of a ticket in a pull-request repository, when the sync published, or found current, a branch whose ticket holds a provisional closure: where to open the pull request. Every other item sync answer carries the synchronization's own data. The link is also recorded for the item, and ticket show reads it from there.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "pull_request"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "pull_request_link"
+      ]
+    },
+    "pull_request": {
+      "$ref": "pull_request.schema.json"
+    }
+  }
+}

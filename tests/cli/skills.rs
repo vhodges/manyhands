@@ -443,6 +443,7 @@ const AUTONOMY: &[(&str, usize, &str)] = &[
     ("document repair", 1, "`document repair`"),
     ("ticket repair", 1, "`ticket repair`"),
     ("ticket close", 1, "`ticket close`"),
+    ("ticket withdraw-closure", 1, "`ticket withdraw-closure`"),
     ("item republish", 1, "`item republish`"),
     ("operation resume", 1, "`operation resume`"),
     ("context retire", 1, "`context retire`"),

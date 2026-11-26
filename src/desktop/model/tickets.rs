@@ -157,10 +157,12 @@ pub(crate) fn blocked_reasons(item: &ItemDto, by_id: &HashMap<String, ItemDto>) 
         .iter()
         .map(|reason| {
             let text = match reason.code {
-                ReadinessReasonCode::OpenDependency => format!(
-                    "{OPEN_DEPENDENCY}: {}",
-                    reason.ids.iter().map(named).collect::<Vec<_>>().join(", ")
-                ),
+                ReadinessReasonCode::OpenDependency | ReadinessReasonCode::ClosingDependency => {
+                    format!(
+                        "{OPEN_DEPENDENCY}: {}",
+                        reason.ids.iter().map(named).collect::<Vec<_>>().join(", ")
+                    )
+                }
                 ReadinessReasonCode::UnresolvedDependency => {
                     format!("{UNRESOLVED_DEPENDENCY}: {}", reason.ids.join(", "))
                 }
@@ -238,7 +240,7 @@ impl TicketRow {
             project: item.project.clone(),
             team: item.team.clone(),
             lifecycle: item.closure.as_ref().map(|closure| match closure.state {
-                ClosureState::Open => Lifecycle::Open,
+                ClosureState::Open | ClosureState::Closing => Lifecycle::Open,
                 ClosureState::Closed => Lifecycle::Closed,
             }),
             changed_at: item.changed_at.clone(),
