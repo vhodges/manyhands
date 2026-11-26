@@ -3862,8 +3862,8 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
         })
     };
     let preview = pull_request_prepared(&w, &withdrawal());
-    let confirmation = confirmation_of(&preview);
-    let withdrawn = pull_request_called(&w, WITHDRAW, &confirmation, withdrawal());
+    let withdraw_confirmation = confirmation_of(&preview);
+    let withdrawn = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, withdrawal());
     assert_eq!(withdrawn.code, ResultCode::Ok, "{:?}", withdrawn.data);
     assert_eq!(withdrawn.outcome, Outcome::Success);
     let data = pull_request_closure_of(&withdrawn).ok_or(FixtureError)?;
@@ -3892,10 +3892,12 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
         &withdrawn,
     );
 
-    // 6. The close again records a new closure, and the same request sent
-    // again answers the identical envelope, with no connection and no push:
-    // the rule the withdraw's conformance row exempts (E-12), since a
-    // finished withdraw needs a server.
+    // 6. The close again records a new closure. Then the same requests sent
+    // again answer the identical envelopes, with no connection and no push,
+    // and the withdraw's request ID sent with another ticket is a mismatch:
+    // rules 1 and 2 of the withdraw's conformance row, which E-12 exempts
+    // since a finished withdraw needs a server. The close's replay is of the
+    // branch's tip; the withdraw's, sent after it, is of a commit behind it.
     let preview = pull_request_prepared(&w, &mutation());
     let confirmation = confirmation_of(&preview);
     let last = pull_request_called(&w, CLOSE_LAST, &confirmation, mutation());
@@ -3914,6 +3916,18 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     let opened = connections(&w);
     let replayed = pull_request_called(&w, CLOSE_LAST, &confirmation, mutation());
     assert_eq!(replayed, last);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    let resent = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, withdrawal());
+    assert_eq!(resent, withdrawn);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    let other = Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput {
+        root: w.root.clone(),
+        id: OTHER_ITEM.parse().unwrap(),
+    });
+    let mismatched = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, other);
+    assert_eq!(mismatched.code, ResultCode::RequestMismatch);
     assert_eq!(connections(&w), opened);
     assert_eq!(only_the_ticket_branch(before), pushed_last);
     Ok(())

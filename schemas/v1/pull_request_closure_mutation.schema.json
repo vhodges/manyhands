@@ -31,7 +31,7 @@
       ]
     },
     "closure": {
-      "description": "The closure the answer leaves on the branch. recording is recorded when this record wrote it, existing when the branch already held it (every already_closing answer reads existing), withdrawn when this record removed it, and none when the record wrote or kept none. closed_at is the closure's own timestamp, set exactly when recording is recorded, and null otherwise. closed_by is never here: it is personal data.",
+      "description": "The closure the answer leaves on the branch. recording is recorded when this record wrote it, existing when the branch already held it (every already_closing answer reads existing), withdrawn when this record removed it or, for a close, when another clone's withdraw of it has merged in since, and none when the record wrote or kept none. closed_at is the closure's own timestamp, set exactly when recording is recorded, and null otherwise. closed_by is never here: it is personal data.",
       "type": "object",
       "additionalProperties": false,
       "required": [
