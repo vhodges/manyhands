@@ -4343,6 +4343,41 @@ fn a_pull_request_enable_without_a_key_leaves_a_recorded_setup() {
         &[],
         &created,
     );
+    // `repo sync` and `context sync-local` wait for a first-time setup too:
+    // the gate answers before either reads anything.
+    let synced = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX4",
+        Mutation::RepoSync(manyhands::repository::RepoSyncInput {
+            root: plain.root.clone(),
+        }),
+    );
+    assert_eq!(synced.code, ResultCode::SetupPending, "{}", synced.message);
+    support::mutation_golden::assert_contract_at(
+        "repo_sync_setup_pending",
+        &root,
+        None,
+        &[],
+        &synced,
+    );
+    let local = execute_with(
+        &desk.service,
+        "01ARZ3NDEKTSV4RRFFQ69G5FX5",
+        Mutation::LocalContextSync(manyhands::repository::LocalContextSyncInput {
+            root: plain.root.clone(),
+            kind: manyhands::repository::AuthoringKind::Ticket,
+            id: support::items::item_id("01ARZ3NDEKTSV4RRFFQ69G5FE1"),
+            observation: String::new(),
+        }),
+    );
+    assert_eq!(local.code, ResultCode::SetupPending, "{}", local.message);
+    support::mutation_golden::assert_contract_at(
+        "local_sync_setup_pending",
+        &root,
+        None,
+        &[],
+        &local,
+    );
     // `poll once` takes the setup poll for a first-time setup, and a recorded
     // setup is not on the remote yet: it answers `not_published` without a
     // connection, and the request is finished.
@@ -4766,12 +4801,34 @@ fn turning_pull_request_mode_on_without_a_key_records_a_change() {
         "{}",
         prepared.message
     );
+    support::mutation_golden::assert_contract_at(
+        "ticket_close_setup_pending",
+        world.root.to_str().unwrap(),
+        None,
+        &[],
+        &prepared,
+    );
     let saved = execute_with(
         &world.service,
         REQUEST_2,
         world.save(items::TICKET_A, &world.token(items::TICKET_A)),
     );
     assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+    // A second selection waits for the first, whatever its request.
+    let again_selected = execute_with(&world.service, support::mutation::REQUEST_3, select());
+    assert_eq!(
+        again_selected.code,
+        ResultCode::SetupPending,
+        "{}",
+        again_selected.message
+    );
+    support::mutation_golden::assert_contract_at(
+        "remote_select_setup_pending",
+        world.root.to_str().unwrap(),
+        None,
+        &[],
+        &again_selected,
+    );
 
     // The same request again: the same answer, and nothing is recorded twice.
     let again = execute_with(&world.service, REQUEST_1, select());

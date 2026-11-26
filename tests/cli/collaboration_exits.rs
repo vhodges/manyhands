@@ -94,6 +94,12 @@ const ROWS: &[Row] = &[
         2,
         "a_malformed_operation_id_is_invalid_id_for_both_verbs",
     ),
+    // `repo sync` meets a pending first-time setup (Wave 06 Cycle 02).
+    binary(
+        "setup_pending",
+        3,
+        "a_pull_request_enable_without_a_key_stops_with_no_selected_key",
+    ),
     binary(
         "invalid_input",
         2,
@@ -327,9 +333,9 @@ fn union() -> BTreeSet<&'static str> {
 #[test]
 fn the_c4_table_and_reasons_account_for_every_code_of_the_audit() {
     let library = union();
-    assert_eq!(library.len(), 49);
+    assert_eq!(library.len(), 50);
     let expected = set(library.iter().copied().chain(CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 51);
+    assert_eq!(expected.len(), 52);
     let covered = set(ROWS.iter().map(|row| row.code));
     let reasons = set(REASONS.iter().map(|row| row.code));
     assert_eq!(covered.len(), ROWS.len(), "a code appears twice");
@@ -1078,6 +1084,12 @@ fn c5_union() -> BTreeSet<&'static str> {
 /// target, or a `c5_` SSH case of `cli_remote`.
 const C5_ROWS: &[Row] = &[
     remote("ok", 0, "c5_lifecycle_walk_primary_ahead_close"),
+    // `ticket close --prepare` meets a pending setup (Wave 06 Cycle 02).
+    binary(
+        "setup_pending",
+        3,
+        "a_pull_request_enable_without_a_key_stops_with_no_selected_key",
+    ),
     binary(
         "already_applied",
         0,
@@ -1286,9 +1298,9 @@ const C5_REASONS: &[Row] = &[
 #[test]
 fn the_c5_table_and_reasons_account_for_every_code_of_the_audit() {
     let library = c5_union();
-    assert_eq!(library.len(), 46);
+    assert_eq!(library.len(), 47);
     let expected = set(library.iter().copied().chain(C5_CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 49);
+    assert_eq!(expected.len(), 50);
     let covered = set(C5_ROWS.iter().map(|row| row.code));
     let reasons = set(C5_REASONS.iter().map(|row| row.code));
     assert_eq!(covered.len(), C5_ROWS.len(), "a code appears twice");

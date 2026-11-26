@@ -906,4 +906,68 @@ fn a_pull_request_enable_without_a_key_stops_with_no_selected_key() {
     );
     assert_eq!(again["data"], stopped["data"]);
     assert_eq!(f.listed()["data"]["items"].as_array().unwrap().len(), 1);
+
+    // While the setup is pending the gated verbs wait for it, whatever their
+    // family: `setup_pending`, blocked, exit 3, with nothing written. This is
+    // the binary's evidence for that code in C2's, C3's, C4's and C5's exit
+    // tables (`ticket close`'s prepare, `ticket create`, `repo sync` and
+    // `remote select`).
+    let root = f.root.to_str().unwrap();
+    let select = f.env.home.path().join("select.json");
+    fs::write(&select, br#"{"name":"origin"}"#).unwrap();
+    let create = f.env.home.path().join("create.json");
+    fs::write(
+        &create,
+        br#"{"item_id":"01ARZ3NDEKTSV4RRFFQ69G5FT0","title":"A ticket","type":"task","status":"open"}"#,
+    )
+    .unwrap();
+    let (select, create) = (select.to_str().unwrap(), create.to_str().unwrap());
+    for args in [
+        vec![
+            "ticket",
+            "close",
+            "--repo",
+            root,
+            "--id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FT1",
+            "--prepare",
+            "--json",
+        ],
+        vec![
+            "ticket",
+            "create",
+            "--repo",
+            root,
+            "--input",
+            create,
+            "--json",
+            "--request-id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FT2",
+        ],
+        vec![
+            "repo",
+            "sync",
+            "--repo",
+            root,
+            "--json",
+            "--request-id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FT3",
+        ],
+        vec![
+            "remote",
+            "select",
+            "--repo",
+            root,
+            "--input",
+            select,
+            "--json",
+            "--request-id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FT4",
+        ],
+    ] {
+        let refused = checked(&args, &f.env, &[], 3, "setup_pending", None);
+        assert_eq!(refused["outcome"], "blocked", "{args:?}");
+        assert!(refused["data"].is_null(), "{args:?}");
+    }
+    assert_eq!(f.listed()["data"]["items"][0]["setup"]["state"], "recorded");
 }
