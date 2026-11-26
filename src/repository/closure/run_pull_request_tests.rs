@@ -2279,6 +2279,41 @@ fn d16_the_hold_refuses_every_writer_but_its_own_publication_child() {
         TicketWriteOptions,
     };
     use crate::results::{RecoveryAction, RecoveryActionKind, ResultCode};
+    // A direct record is no hold: the guard's own answer stands.
+    let f = Fixture::remote();
+    let req = f.request();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterClosureCheckpoint),
+        req.clone(),
+        &mut FakeIo::default(),
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
+    let path = f.root().join(".manyhands/worktrees").join(ID);
+    let source =
+        fs::read_to_string(path.join(".manyhands/tickets").join(ID).join("ticket.md")).unwrap();
+    let error = f
+        .service
+        .save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: f.root().into(),
+                kind: AuthoringKind::Ticket,
+                item_id: id(),
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            draft: TicketDraft {
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: "Edited body.\n".into(),
+            },
+            expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
+        })
+        .err()
+        .expect("a closed ticket was saved");
+    assert_eq!(error.kind, RepositoryErrorKind::TicketClosed);
     for case in ["closing", "publication_pending"] {
         let p = PullRequest::new();
         let req = p.request();
@@ -2389,18 +2424,19 @@ fn d16_the_hold_refuses_every_writer_but_its_own_publication_child() {
                 "{case}: {writer}: {value}"
             );
         };
-        // `context retire` answers its own report, which has no room for a
-        // blocker: the refusal is `recovery_required` with nothing retired.
-        let retired = execute(
-            &p.f,
-            Mutation::ContextRetire(crate::repository::ContextRetireInput {
-                root: p.f.root().into(),
-                kind: AuthoringKind::Ticket,
-                id: id(),
-            }),
+        // `context retire` names the record too: the blocker takes the place
+        // of the retirement report in the envelope, as for every named answer.
+        named(
+            "context retire",
+            execute(
+                &p.f,
+                Mutation::ContextRetire(crate::repository::ContextRetireInput {
+                    root: p.f.root().into(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(),
+                }),
+            ),
         );
-        assert_eq!(retired["code"], "recovery_required", "{case}: {retired}");
-        assert_eq!(retired["data"]["state"], "refused", "{case}: {retired}");
         named(
             "item republish",
             serde_json::to_value(
@@ -2461,41 +2497,6 @@ fn d16_the_hold_refuses_every_writer_but_its_own_publication_child() {
         assert!(!p.held(), "{case}");
         p.assert_primary_untouched(&io);
     }
-    // A direct record is no hold: the guard's own answer stands.
-    let f = Fixture::remote();
-    let req = f.request();
-    let _ = f.run_io(
-        &f.failing(FailurePoint::AfterClosureCheckpoint),
-        req.clone(),
-        &mut FakeIo::default(),
-    );
-    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
-    let path = f.root().join(".manyhands/worktrees").join(ID);
-    let source =
-        fs::read_to_string(path.join(".manyhands/tickets").join(ID).join("ticket.md")).unwrap();
-    let error = f
-        .service
-        .save_ticket(SaveTicketRequest {
-            target: AuthoringTarget {
-                root: f.root().into(),
-                kind: AuthoringKind::Ticket,
-                item_id: id(),
-                intent: ContextIntent::Edit,
-                operation_id: OperationId::new(),
-            },
-            draft: TicketDraft {
-                title: "Ticket".into(),
-                ticket_type: "task".into(),
-                status: "open".into(),
-                project: None,
-                team: None,
-                body: "Edited body.\n".into(),
-            },
-            expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
-        })
-        .err()
-        .expect("a closed ticket was saved");
-    assert_eq!(error.kind, RepositoryErrorKind::TicketClosed);
 }
 
 /// Ruling 19: `item resolve-history` passes a branch record's hold. It
@@ -2614,6 +2615,116 @@ fn a_poll_does_not_retire_a_context_a_branch_record_holds() {
     );
     assert!(worktree.exists(), "{value}");
     assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Merged);
+    p.assert_primary_untouched(&io.inner);
+}
+
+/// A repair that began before a branch record reached `closing` is refused
+/// under the lease: the check before the lease found no hold (the record is
+/// out of the item's reach, as it was before it wrote), and the record holds
+/// the item once the repair has the lease and its row. The repair writes
+/// nothing.
+#[test]
+fn a_repair_checks_the_hold_again_under_the_lease() {
+    use crate::repository::{
+        ExpectedPathObservation, LifecycleLeasePhase, REGISTRY_FILE, RepairItemRequest,
+    };
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo::default();
+    let failing = p.f.failing(FailurePoint::AfterClosureCheckpoint);
+    assert!(p.run_in(&failing, req.clone(), &mut io).is_err());
+    assert_eq!(p.stored(&req).step, ClosureStep::Closing);
+    let context = p.f.context_oid();
+    let worktree = p.f.root().join(".manyhands/worktrees").join(ID);
+    let ticket_file = worktree
+        .join(".manyhands/tickets")
+        .join(ID)
+        .join("ticket.md");
+    let source = fs::read_to_string(&ticket_file).unwrap();
+    // The record is not the item's yet: the check before the lease finds
+    // nothing. The hook gives it back once the repair holds the lease.
+    const ELSEWHERE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let registry = p.f.data.path().join(REGISTRY_FILE);
+    let set_item = move |item: &'static str| {
+        rusqlite::Connection::open(&registry)
+            .unwrap()
+            .execute("UPDATE ticket_closures SET item_id=?1", [item])
+            .unwrap();
+    };
+    let restore = set_item.clone();
+    set_item(ELSEWHERE);
+    assert!(!p.held());
+    p.f.service
+        .set_lifecycle_lease_hook_for_testing(LifecycleLeasePhase::RepairBegun, move || {
+            restore(ID)
+        });
+    let result = p.f.service.repair_item(RepairItemRequest {
+        root: p.f.root().into(),
+        kind: AuthoringKind::Ticket,
+        path: std::path::PathBuf::from(ticket()),
+        source: source.clone(),
+        expected: ExpectedPathObservation::from_bytes(source.as_bytes()),
+        operation_id: OperationId::new(),
+    });
+    assert_held(
+        "closing, under the lease",
+        "ticket repair",
+        req.operation_id,
+        result,
+    );
+    assert_eq!(p.f.context_oid(), context);
+    assert_eq!(fs::read_to_string(&ticket_file).unwrap(), source);
+    assert!(p.held());
+}
+
+/// The poll's retirement claims a candidate under the fence too: a record
+/// that reached the item after the candidate was captured (the candidate
+/// holds a selected context, so the capture saw no hold) is met by the
+/// claim, and the context is left alone.
+#[test]
+fn a_candidate_captured_before_the_record_held_is_refused_at_its_claim() {
+    use crate::repository::REGISTRY_FILE;
+    let mut p = PullRequest::new();
+    let req = p.request();
+    let mut io = CancelAtPublication {
+        inner: PullRequestIo::default(),
+        parent: Some(req.operation_id),
+    };
+    assert!(matches!(
+        p.run(req.clone(), &mut io),
+        Err(TicketClosureError::Interrupted)
+    ));
+    let merged = forge_merge(&p);
+    checkout(&p.f.repo, merged);
+    p.primary_before = merged;
+    let context = p.f.context_oid();
+    let worktree = p.f.root().join(".manyhands/worktrees").join(ID);
+    // Until the pass has frozen its candidates, the record is not the
+    // item's; then it is.
+    const ELSEWHERE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let registry = p.f.data.path().join(REGISTRY_FILE);
+    let set_item = move |item: &'static str| {
+        rusqlite::Connection::open(&registry)
+            .unwrap()
+            .execute("UPDATE ticket_closures SET item_id=?1", [item])
+            .unwrap();
+    };
+    let restore = set_item.clone();
+    set_item(ELSEWHERE);
+    crate::repository::context_retirement::handoff::observe_eligible(move |_| restore(ID));
+    let value = retiring_poll(&p.f, merged);
+    assert!(p.held(), "{value}");
+    let retirement = &value["data"]["retirements"][0];
+    assert_eq!(retirement["state"], "refused", "{value}");
+    assert_eq!(retirement["code"], "recovery_required", "{value}");
+    assert_eq!(
+        p.f.repo.refname_to_id(&context_ref()).ok(),
+        Some(context),
+        "{value}"
+    );
+    assert!(worktree.exists(), "{value}");
     let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
     assert_eq!(outcome.answer(), BranchAnswer::Merged);
     p.assert_primary_untouched(&io.inner);

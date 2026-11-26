@@ -667,6 +667,9 @@ enum IndexAvailability {
 pub enum LifecycleLeasePhase {
     RemoveRemoteUnselected,
     SetPublicationRemoteExisting,
+    /// A ticket repair holds the lease and its row is begun, before it asks
+    /// anything of the item.
+    RepairBegun,
 }
 
 /// The message of the commit enablement makes.
