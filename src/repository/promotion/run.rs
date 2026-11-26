@@ -365,7 +365,9 @@ fn run_observed<L: Lifecycle>(
     let Ok(mut r) = load::<L>(service, &root, request.operation_id) else {
         return Err(error);
     };
-    if r.item_id() != &request.item_id || r.expectation() != request.expected {
+    // A record of another verb is not this request's, whatever its ID and
+    // digest say: it is never answered from.
+    if r.item_id() != &request.item_id || r.expectation() != request.expected || !L::continues(&r) {
         return Err(error);
     }
     // A branch record never integrates: a finished one answers from its

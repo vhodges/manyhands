@@ -90,7 +90,8 @@ impl ClosureAction {
 }
 
 /// How a finished branch record answers, stored as its `answer_code`. The
-/// first nine are what a completed record answers after its publication
+/// first nine, and a withdraw's `Withdrawn`, `WithdrawClosed` and
+/// `ClosedSince`, are what a completed record answers after its publication
 /// child; the rest are what an abandoned one answers with its refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchAnswer {
@@ -110,6 +111,17 @@ pub enum BranchAnswer {
     ContextRemoteBranchDeleted,
     ContextHistoryUnresolved,
     ContextTicketClosed,
+    /// A withdraw's, after its publication child: the closure is removed and
+    /// published.
+    Withdrawn,
+    /// A withdraw's, after its publication child: the tracking primary holds
+    /// a closure, so the ticket is closed.
+    WithdrawClosed,
+    /// A withdraw's, after its publication child: the published head holds a
+    /// closure again.
+    ClosedSince,
+    /// A withdraw's, abandoned: the head holds no closure to withdraw.
+    AlreadyApplied,
 }
 impl BranchAnswer {
     /// The stored value, which `parse` reads back.
@@ -131,6 +143,10 @@ impl BranchAnswer {
             Self::ContextRemoteBranchDeleted => "context_remote_branch_deleted",
             Self::ContextHistoryUnresolved => "context_history_unresolved",
             Self::ContextTicketClosed => "context_ticket_closed",
+            Self::Withdrawn => "withdrawn",
+            Self::WithdrawClosed => "withdraw_closed",
+            Self::ClosedSince => "closed_since",
+            Self::AlreadyApplied => "already_applied",
         }
     }
     /// The stored value; any other text is recovery.
@@ -152,6 +168,10 @@ impl BranchAnswer {
             "context_remote_branch_deleted" => Ok(Self::ContextRemoteBranchDeleted),
             "context_history_unresolved" => Ok(Self::ContextHistoryUnresolved),
             "context_ticket_closed" => Ok(Self::ContextTicketClosed),
+            "withdrawn" => Ok(Self::Withdrawn),
+            "withdraw_closed" => Ok(Self::WithdrawClosed),
+            "closed_since" => Ok(Self::ClosedSince),
+            "already_applied" => Ok(Self::AlreadyApplied),
             _ => Err(state::recovery_required()),
         }
     }
@@ -319,6 +339,13 @@ pub enum TicketClosurePreflight {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // As `TicketClosurePreflight`: the ready preview by value.
 pub enum ClosureWithdrawalPreflight {
+    /// A withdraw to confirm. While an unfinished record that a new request
+    /// cannot supersede holds the ticket, and no closure is found, it is
+    /// ready with a placeholder closure: `PlannedClosure::Existing` with an
+    /// empty `closed_at` and `closed_by`, and nothing to identify (ruling
+    /// 35). The caller applies the hold (decision 33), which answers
+    /// `recovery_required` naming the holder, before it shows or consents to
+    /// a ready withdrawal.
     Ready(TicketClosurePreview),
     Blocked {
         /// Every blocker, in declaration order.
@@ -553,7 +580,10 @@ impl RepositoryService {
     /// The preflight of a withdraw of the ticket's provisional closure
     /// (Part E): what `preview_ticket_closure` reads, observed as a withdraw
     /// in either mode, without a repository lease, network access, or a
-    /// Git/registry mutation.
+    /// Git/registry mutation. A `Ready` answer may hold a placeholder
+    /// closure with no identity (ruling 35: an unfinished record holds the
+    /// ticket): the caller applies the hold (decision 33) before it shows or
+    /// consents to it.
     pub fn preview_closure_withdrawal(
         &self,
         request: PreviewTicketClosureRequest,
@@ -570,6 +600,25 @@ impl RepositoryService {
         session: &mut SessionCredentials<P>,
     ) -> Result<TicketClosureResult, TicketClosureError> {
         lifecycle::close(
+            self,
+            request,
+            session,
+            None,
+            &mut Unobserved,
+            OffsetDateTime::now_utc,
+        )
+    }
+    /// Withdraw a ticket's provisional closure as previewed
+    /// (`preview_closure_withdrawal`): synchronize its context, write the
+    /// commit that removes the closure and publish it. The same operation ID
+    /// finishes an interrupted withdraw; a completed one replays its stored
+    /// outcome.
+    pub fn withdraw_ticket_closure<P: SessionCredentialProvider>(
+        &self,
+        request: CloseTicketRequest,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        lifecycle::withdraw(
             self,
             request,
             session,

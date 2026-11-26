@@ -255,7 +255,8 @@ pub(in super::super) struct ClosureObservation {
     pub(in super::super) cleanup: PlannedCleanup,
     /// The selected identity of a `Record` closure or a withdraw (its
     /// commit's author); `None` for `Existing`, whose merge signer is
-    /// resolved at execution.
+    /// resolved at execution, and for a withdraw's placeholder closure
+    /// (ruling 35), which has no commit to sign.
     #[cfg_attr(not(test), allow(dead_code))]
     // Observed for the tests; execution re-selects under the lease.
     pub(in super::super) identity: Option<CommittingIdentity>,
@@ -548,14 +549,14 @@ pub(in super::super) fn revalidate_observation_under_lease(
 
 /// C12. `operation_records.item_id` is null for most lifecycle rows, and for
 /// every row an older build wrote: a row's ticket comes from its target
-/// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is unfinished while its local row or its
-/// publication's remote row is.
+/// (R-T0-4), parsed by the abandon bridge's own parser. A comment binding is
+/// unfinished while its local row or its publication's remote row is.
 ///
 /// A branch observation (`branch`: a pull-request close, or a withdraw) also
 /// reads a live synchronization of the ticket's context, which the direct
-/// close meets only at its confirm. The
-/// unfinished record's own children are left out: the binding's `held`
-/// answers for those, and a foreign synchronization alone is `busy` (R23).
+/// close meets only at its confirm. The unfinished record's own children are
+/// left out: the binding's `held` answers for those, and a foreign
+/// synchronization alone is `busy` (R23).
 fn pending_work(
     tx: &rusqlite::Transaction<'_>,
     repository_id: i64,

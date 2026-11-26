@@ -523,6 +523,12 @@ pub(in super::super) trait Lifecycle {
         Ok(())
     }
     fn refusal_error(refusal: &Self::Refusal) -> Self::Error;
+    /// Whether a request of this lifecycle continues `r`. A closure verb
+    /// continues only a record of its own action; every other record is its
+    /// lifecycle's own.
+    fn continues(_r: &Self::Record) -> bool {
+        true
+    }
 
     // Integration.
     fn reconcile_integration(

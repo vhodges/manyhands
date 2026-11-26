@@ -6,7 +6,7 @@ use super::{
     ClosureBlocker, ClosureExpectation, ClosureOutcome, ClosureRecording, PlannedClosure,
     PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosureResult,
     checkpoint,
-    observe::{self, ClosureObservation, PreparedClosureObservation},
+    observe::{self, ClosureObservation, ClosureRefusal, PreparedClosureObservation, Verb},
     record::{self, ClosureKind, ClosureRecord},
 };
 use crate::{
@@ -57,6 +57,29 @@ pub(in super::super) fn close<P: SessionCredentialProvider>(
     )
 }
 
+/// `close`, for a withdraw of the ticket's provisional closure (Part E). A
+/// withdraw's request is a close's: the same ticket, operation and consent.
+pub(in super::super) fn withdraw<P: SessionCredentialProvider>(
+    service: &RepositoryService,
+    request: CloseTicketRequest,
+    session: &mut SessionCredentials<P>,
+    probe: Option<CancellationProbe>,
+    progress: &mut dyn run::RunObserver,
+    clock: fn() -> OffsetDateTime,
+) -> Result<TicketClosureResult, TicketClosureError> {
+    run::run_lifecycle(
+        &TicketWithdrawLifecycle,
+        service,
+        LifecycleRequest {
+            probe,
+            clock,
+            ..lifecycle_request(request)
+        },
+        session,
+        progress,
+    )
+}
+
 pub(in super::super) fn lifecycle_request(
     request: CloseTicketRequest,
 ) -> LifecycleRequest<ClosureExpectation> {
@@ -80,12 +103,14 @@ pub(in super::super) fn lifecycle_request(
     }
 }
 
-/// What a closure's observation is asked for: the request, and the mode to
-/// observe in, `None` being the configuration's. A new request observes in
-/// the configuration's mode; a continuation of a record, in the record's.
+/// What a closure's observation is asked for: the request, the mode to
+/// observe in, `None` being the configuration's, and the verb. A new request
+/// observes in the configuration's mode; a continuation of a record, in the
+/// record's.
 pub(in super::super) struct ClosurePreviewRequest {
     pub(in super::super) request: PreviewTicketClosureRequest,
     pub(in super::super) mode: Option<Integration>,
+    pub(in super::super) verb: Verb,
 }
 
 /// The path of a direct record, today's closure.
@@ -175,6 +200,44 @@ impl LifecyclePreview for ClosureObservation {
     }
 }
 
+/// The closure record a request begins or finds, with the closure effect
+/// observed (or the record's own). Which verb may continue it is the
+/// lifecycle's to say.
+fn begin_closure_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: ClosureExpectation,
+    remote: Option<&str>,
+    observed: Option<&ClosureObservation>,
+) -> Result<ClosureRecord, RepositoryError> {
+    let kind = match observed {
+        Some(observation) => kind_of(observation),
+        // `begin_record` returns the existing record before it would use
+        // the kind, so a first-write refusal without one is never
+        // inserted again.
+        None => match record::read_record(tx, id, op)? {
+            Some(existing) => existing.closure_kind.unwrap_or(ClosureKind::Record),
+            None => return Err(state::recovery_required()),
+        },
+    };
+    match observed.map(|observation| observation.path) {
+        Some(path) if path != DIRECT => record::begin_branch_record(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            remote,
+            kind,
+            path,
+            observed.map(|observation| observation.context_oid),
+        ),
+        _ => record::begin_record(tx, id, op, item, expectation, remote, kind),
+    }
+}
+
 pub(in super::super) struct TicketClosureLifecycle;
 
 impl Lifecycle for TicketClosureLifecycle {
@@ -208,7 +271,8 @@ impl Lifecycle for TicketClosureLifecycle {
     }
     /// A new record takes its closure effect from the revalidated
     /// observation (R-T2-1). Without one the record must already exist:
-    /// `begin_record` then returns it, validated, before any insert.
+    /// `begin_record` then returns it, validated, before any insert. A
+    /// record of a withdraw is not this lifecycle's.
     fn begin_record(
         tx: &Transaction<'_>,
         id: i64,
@@ -218,30 +282,15 @@ impl Lifecycle for TicketClosureLifecycle {
         remote: Option<&str>,
         observed: Option<&ClosureObservation>,
     ) -> Result<ClosureRecord, RepositoryError> {
-        let kind = match observed {
-            Some(observation) => kind_of(observation),
-            // `begin_record` returns the existing record before it would use
-            // the kind, so a first-write refusal without one is never
-            // inserted again.
-            None => match record::read_record(tx, id, op)? {
-                Some(existing) => existing.closure_kind.unwrap_or(ClosureKind::Record),
-                None => return Err(state::recovery_required()),
-            },
-        };
-        match observed.map(|observation| observation.path) {
-            Some(path) if path != DIRECT => record::begin_branch_record(
-                tx,
-                id,
-                op,
-                item,
-                expectation,
-                remote,
-                kind,
-                path,
-                observed.map(|observation| observation.context_oid),
-            ),
-            _ => record::begin_record(tx, id, op, item, expectation, remote, kind),
+        let r = begin_closure_record(tx, id, op, item, expectation, remote, observed)?;
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
         }
+        Ok(r)
+    }
+    /// A close's verb continues only a record of its own: not a withdraw's.
+    fn continues(r: &ClosureRecord) -> bool {
+        r.action != ClosureAction::Withdraw
     }
     fn replacement_guard(
         tx: &Transaction<'_>,
@@ -266,12 +315,18 @@ impl Lifecycle for TicketClosureLifecycle {
         let kind = observed.map(kind_of);
         // The refused request's own path: the observed one, else the
         // configuration's, which a new request always observes in (R25).
-        match observed.map_or((config.integration(), ClosureAction::Close), |o| o.path) {
+        let r = match observed.map_or((config.integration(), ClosureAction::Close), |o| o.path) {
             DIRECT => record::refuse_record(tx, id, op, item, expectation, remote, kind, refusal),
             path => {
                 record::refuse_record_on(tx, id, op, item, expectation, remote, kind, refusal, path)
             }
+        }?;
+        // A refused request that finds a record of its ID finds it as it
+        // finds one at `begin_record`: another verb's is not its own.
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
         }
+        Ok(r)
     }
     fn clear_cancellation(
         tx: &Transaction<'_>,
@@ -339,6 +394,7 @@ impl Lifecycle for TicketClosureLifecycle {
                 confirmed_identity: identity.cloned(),
             },
             mode: record.map(|record| record.integration_mode),
+            verb: Verb::Close,
         }
     }
     fn preview(
@@ -346,16 +402,21 @@ impl Lifecycle for TicketClosureLifecycle {
         request: ClosurePreviewRequest,
     ) -> Result<Result<ClosureObservation, Vec<ClosureBlocker>>, RepositoryError> {
         Ok(
-            observe::prepare_observation_in(service, &request.request, request.mode)?
-                .observed
-                .map_err(|refusal| refusal.blockers),
+            observe::prepare_observation_for(
+                service,
+                &request.request,
+                request.mode,
+                request.verb,
+            )?
+            .observed
+            .map_err(|refusal| refusal.blockers),
         )
     }
     fn prepare(
         service: &RepositoryService,
         request: ClosurePreviewRequest,
     ) -> Result<PreparedClosureObservation, RepositoryError> {
-        observe::prepare_observation_in(service, &request.request, request.mode)
+        observe::prepare_observation_for(service, &request.request, request.mode, request.verb)
     }
     fn configuration(observation: &PreparedClosureObservation) -> &RepositoryConfig {
         &observation.configuration
@@ -610,5 +671,326 @@ impl Lifecycle for TicketClosureLifecycle {
                 TicketClosureResult::BranchIndexPending(IndexPending::new(outcome))
             }
         }
+    }
+}
+
+/// A withdraw of a provisional closure (Part E) over the closure lifecycle's
+/// record: a branch record with the action `withdraw`, in either mode. Its
+/// observation, its step 3 and its answers are its own; everything else is
+/// the close's.
+pub(in super::super) struct TicketWithdrawLifecycle;
+
+type Close = TicketClosureLifecycle;
+
+impl Lifecycle for TicketWithdrawLifecycle {
+    type Record = ClosureRecord;
+    type Error = TicketClosureError;
+    type Preview = ClosureObservation;
+    type Expectation = ClosureExpectation;
+    /// The whole refusal: `ready` reads why a withdraw has nothing to confirm.
+    type Preflight = Result<ClosureObservation, ClosureRefusal>;
+    type PreviewRequest = ClosurePreviewRequest;
+    type Observation = PreparedClosureObservation;
+    type Refusal = record::Refusal;
+    type ReplacementGuard = record::ReplacementGuard;
+    type Outcome = ClosureOutcome;
+    type Output = TicketClosureResult;
+    type BranchFinish = BranchFinish;
+    const KIND: LifecycleKind = LifecycleKind::TicketClosure;
+
+    fn read_record(
+        db: &Connection,
+        id: i64,
+        op: OperationId,
+    ) -> Result<Option<ClosureRecord>, RepositoryError> {
+        record::read_record(db, id, op)
+    }
+    fn save_record(
+        tx: &Transaction<'_>,
+        id: i64,
+        r: &ClosureRecord,
+    ) -> Result<(), RepositoryError> {
+        record::save_record(tx, id, r)
+    }
+    fn begin_record(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        item: &ItemId,
+        expectation: ClosureExpectation,
+        remote: Option<&str>,
+        observed: Option<&ClosureObservation>,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        let r = begin_closure_record(tx, id, op, item, expectation, remote, observed)?;
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
+        }
+        Ok(r)
+    }
+    /// A withdraw's verb continues only a record of its own.
+    fn continues(r: &ClosureRecord) -> bool {
+        r.action == ClosureAction::Withdraw
+    }
+    fn replacement_guard(
+        tx: &Transaction<'_>,
+        id: i64,
+        item: &ItemId,
+    ) -> Result<record::ReplacementGuard, RepositoryError> {
+        record::replacement_guard(tx, id, item)
+    }
+    /// A refused withdraw is a branch record in either mode, so it is never
+    /// stored as the direct close's: the observed path, else the
+    /// configuration's mode with the action `withdraw`.
+    fn refuse_record(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        item: &ItemId,
+        expectation: ClosureExpectation,
+        config: &RepositoryConfig,
+        observed: Option<&ClosureObservation>,
+        refusal: &record::Refusal,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        let r = record::refuse_record_on(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            config.publication_remote.as_deref(),
+            observed.map(kind_of),
+            refusal,
+            observed.map_or((config.integration(), ClosureAction::Withdraw), |o| o.path),
+        )?;
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
+        }
+        Ok(r)
+    }
+    fn clear_cancellation(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<(), RepositoryError> {
+        Close::clear_cancellation(tx, id, op)
+    }
+    fn reset_context_after_primary_advance(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        Close::reset_context_after_primary_advance(tx, id, op)
+    }
+    fn child_state(
+        db: &Connection,
+        r: &ClosureRecord,
+        role: ChildRole,
+    ) -> Result<ChildState, RepositoryError> {
+        Close::child_state(db, r, role)
+    }
+    fn child_execution(
+        r: &ClosureRecord,
+        role: ChildRole,
+    ) -> Result<ChildExecution, RepositoryError> {
+        Close::child_execution(r, role)
+    }
+    fn next_attempt(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        role: ChildRole,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        Close::next_attempt(tx, id, op, role)
+    }
+    fn complete_record(
+        tx: &Transaction<'_>,
+        service: &RepositoryService,
+        id: i64,
+        op: OperationId,
+        evidence: &RetirementEvidence<'_>,
+        owner: Option<&RemoteReservation>,
+    ) -> Result<(), RepositoryError> {
+        Close::complete_record(tx, service, id, op, evidence, owner)
+    }
+    fn reconcile_completion(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        Close::reconcile_completion(tx, id, op)
+    }
+
+    fn preview_request(
+        root: PathBuf,
+        item_id: ItemId,
+        identity: Option<&ConfirmedCommitIdentity>,
+        record: Option<&ClosureRecord>,
+    ) -> ClosurePreviewRequest {
+        ClosurePreviewRequest {
+            verb: Verb::Withdraw,
+            ..Close::preview_request(root, item_id, identity, record)
+        }
+    }
+    fn preview(
+        service: &RepositoryService,
+        request: ClosurePreviewRequest,
+    ) -> Result<Self::Preflight, RepositoryError> {
+        Ok(
+            observe::prepare_observation_for(
+                service,
+                &request.request,
+                request.mode,
+                request.verb,
+            )?
+            .observed,
+        )
+    }
+    fn prepare(
+        service: &RepositoryService,
+        request: ClosurePreviewRequest,
+    ) -> Result<PreparedClosureObservation, RepositoryError> {
+        Close::prepare(service, request)
+    }
+    fn configuration(observation: &PreparedClosureObservation) -> &RepositoryConfig {
+        Close::configuration(observation)
+    }
+    fn revalidate(
+        observation: &PreparedClosureObservation,
+        service: &RepositoryService,
+        repository: &git2::Repository,
+    ) -> Result<Self::Preflight, RepositoryError> {
+        observe::revalidate_observation_under_lease(observation, service, repository)
+    }
+    /// A withdraw that offers nothing to confirm at a confirm (no closure,
+    /// or no publication remote) is a situation that changed since the
+    /// preview: `ExternalChange`. Its blockers are a close's.
+    fn ready(preflight: Self::Preflight) -> Result<ClosureObservation, record::Refusal> {
+        match preflight {
+            Ok(observation) => Ok(observation),
+            Err(refusal) if refusal.unoffered.is_some() => Err(record::Refusal::ExternalChange),
+            Err(refusal) => Close::ready(Err(refusal.blockers)),
+        }
+    }
+    fn refusal_error(refusal: &record::Refusal) -> TicketClosureError {
+        Close::refusal_error(refusal)
+    }
+
+    fn integration_request(
+        preview: &ClosureObservation,
+        expected: ClosureExpectation,
+        context: Oid,
+    ) -> integrate::IntegrationRequest<ClosureExpectation> {
+        Close::integration_request(preview, expected, context)
+    }
+    /// A withdraw is a branch record, which never integrates (Part D).
+    fn prepare_integration(
+        &self,
+        _service: &RepositoryService,
+        _root: &Path,
+        _request: &integrate::IntegrationRequest<ClosureExpectation>,
+        _identity: Option<&ConfirmedCommitIdentity>,
+        _parent: Option<&ClosureRecord>,
+    ) -> Result<integrate::PreparedIntegration, TicketClosureError> {
+        Err(TicketClosureError::RecoveryRequired)
+    }
+    fn write_commit(
+        prepared: integrate::PreparedIntegration,
+    ) -> Result<integrate::IntegrationCandidate, TicketClosureError> {
+        Close::write_commit(prepared)
+    }
+    fn resume_candidate(
+        prepared: integrate::PreparedIntegration,
+        oid: Oid,
+    ) -> Result<integrate::IntegrationCandidate, TicketClosureError> {
+        Close::resume_candidate(prepared, oid)
+    }
+    fn apply(
+        candidate: integrate::IntegrationCandidate,
+    ) -> Result<integrate::Integrated, TicketClosureError> {
+        Close::apply(candidate)
+    }
+    fn pre_integration(
+        &self,
+        _stage: &mut LeasedIntegration<'_, ClosureRecord>,
+    ) -> Result<PreIntegration, TicketClosureError> {
+        Err(TicketClosureError::RecoveryRequired)
+    }
+
+    fn branch_step(
+        &self,
+        service: &RepositoryService,
+        request: &LifecycleRequest<ClosureExpectation>,
+        r: &ClosureRecord,
+    ) -> Result<BranchStep, TicketClosureError> {
+        checkpoint::withdraw_step(
+            service,
+            &request.root,
+            request.confirmed_identity.as_ref(),
+            (request.clock)(),
+            r,
+        )
+    }
+    fn end_branch(
+        service: &RepositoryService,
+        root: &Path,
+        r: &ClosureRecord,
+        end: BranchEnd<'_>,
+    ) -> Result<(), RepositoryError> {
+        Close::end_branch(service, root, r, end)
+    }
+    fn begin_publication(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<ClosureRecord, RepositoryError> {
+        Close::begin_publication(tx, id, op)
+    }
+    /// The answer. A withdraw gives no link, and keeps the one the item has:
+    /// the link record is not touched.
+    fn branch_answer(
+        _service: &RepositoryService,
+        request: &LifecycleRequest<ClosureExpectation>,
+        r: &ClosureRecord,
+        primary: &str,
+        child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
+    ) -> Result<Option<BranchFinish>, RepositoryError> {
+        let (repo, _) =
+            canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
+        Ok(
+            checkpoint::withdrawal_answer(&repo, r, primary, child)?.map(|answer| BranchFinish {
+                answer,
+                link: None,
+                given_at: (request.clock)().unix_timestamp(),
+            }),
+        )
+    }
+    fn complete_branch(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        finish: &BranchFinish,
+    ) -> Result<(), RepositoryError> {
+        Close::complete_branch(tx, id, op, finish)
+    }
+    fn branch_outcome(
+        r: &ClosureRecord,
+        publication: Option<PromotionPublication>,
+    ) -> ClosureOutcome {
+        Close::branch_outcome(r, publication)
+    }
+
+    fn outcome(
+        r: &ClosureRecord,
+        integration: PromotionIntegration,
+        publication: PromotionPublication,
+        cleanup: PromotionCleanup,
+    ) -> ClosureOutcome {
+        Close::outcome(r, integration, publication, cleanup)
+    }
+    fn complete(outcome: ClosureOutcome) -> TicketClosureResult {
+        Close::complete(outcome)
+    }
+    fn index_pending(outcome: ClosureOutcome) -> TicketClosureResult {
+        Close::index_pending(outcome)
     }
 }

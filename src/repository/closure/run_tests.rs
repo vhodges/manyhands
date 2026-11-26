@@ -4,7 +4,7 @@
 //! exact delete, the boundary hooks and the effect counters are promotion's
 //! (`promotion::run_tests`), called, not copied.
 use super::{
-    lifecycle::{TicketClosureLifecycle, lifecycle_request},
+    lifecycle::{TicketClosureLifecycle, TicketWithdrawLifecycle, lifecycle_request},
     observe::closed_ticket_bytes,
     record::{self, ClosureKind, ClosureRecord, ClosureStep},
     test_support::{self as support, ID, checkout, commit, id, parse_ticket, read, ticket, write},
@@ -45,6 +45,9 @@ fn tracking_context_ref() -> String {
 }
 fn close_subject() -> String {
     format!("Close ticket {ID}")
+}
+fn withdraw_subject() -> String {
+    format!("Withdraw closure of ticket {ID}")
 }
 fn merge_subject() -> String {
     format!("Integrate closed ticket {ID}")
@@ -1144,17 +1147,31 @@ fn closure_exit_child() {
         approval: None,
         confirmed_identity: None,
     };
-    let _ = run::run_with_io(
-        &TicketClosureLifecycle,
-        &service,
-        lifecycle_request(request),
-        &mut FakeIo::default(),
-    );
+    // The verb the child runs: a close, or a withdraw.
+    let _ = match std::env::var("MANYHANDS_CLOSURE_EXIT_VERB").as_deref() {
+        Ok("withdraw") => run::run_with_io(
+            &TicketWithdrawLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+        _ => run::run_with_io(
+            &TicketClosureLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+    };
     panic!("exit point was not reached")
 }
 
 /// Runs the closure in a child process that exits at `point`.
 fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
+    exit_at_with(f, req, point, "close");
+}
+
+/// `exit_at` for the verb the child runs: `close` or `withdraw`.
+fn exit_at_with(f: &Fixture, req: &CloseTicketRequest, point: usize, verb: &str) {
     // `module_path!` names this module inside whichever test crate holds it.
     let module = module_path!().split_once("::").unwrap().1;
     let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1163,6 +1180,7 @@ fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
         .env("MANYHANDS_CLOSURE_EXIT_DATA", f.data.path())
         .env("MANYHANDS_CLOSURE_EXIT_POINT", point.to_string())
         .env("MANYHANDS_CLOSURE_EXIT_OP", req.operation_id.to_string())
+        .env("MANYHANDS_CLOSURE_EXIT_VERB", verb)
         .env(
             "MANYHANDS_CLOSURE_EXIT_EXPECTATION",
             req.expected

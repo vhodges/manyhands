@@ -780,6 +780,11 @@ pub(in super::super) fn begin_record(
         None,
     )
 }
+/// What a request answers when it names another verb's record: the one its
+/// ID and digest found is not the one it continues.
+pub(in super::super) fn action_mismatch() -> RepositoryError {
+    parent::mismatch(KIND)
+}
 /// A branch record's `begin_record`: the same replay, supersession and
 /// `busy`, with the record's path and the head its consent bound.
 #[allow(clippy::too_many_arguments)] // `begin_record`'s, plus the path and the consented head.
@@ -1005,8 +1010,9 @@ pub(in super::super) fn replace_unmoved_closure(
 }
 
 /// What a branch record's `closing` writes: a `record` closure's commit,
-/// built and not yet referenced, with its `closed_at`; or nothing, for an
-/// `existing` closure, which the context already holds.
+/// built and not yet referenced, with its `closed_at`; nothing, for an
+/// `existing` closure, which the context already holds; or a withdraw's
+/// commit.
 #[derive(Clone, Copy)]
 pub(in super::super) enum BranchWrite {
     Closure {
@@ -1014,13 +1020,18 @@ pub(in super::super) enum BranchWrite {
         commit: Oid,
     },
     Existing,
+    /// A withdraw's commit, built and not yet referenced.
+    Withdraw {
+        commit: Oid,
+    },
 }
 
-/// `context_synchronized → closing` of a branch `close`, in one SQL write
-/// with its base (the tracking primary the hook read) and, for a `record`
-/// closure, its `closed_at` and the commit just built and not yet
-/// referenced. The caller has just re-checked that no synchronization of the
-/// context is unfinished.
+/// `context_synchronized → closing` of a branch `close` or `withdraw`, in
+/// one SQL write with its base (the tracking primary the hook read) and,
+/// for a `record` closure, its `closed_at` and the commit just built and
+/// not yet referenced, or, for a withdraw, its commit. The write must be
+/// the record's action's. The caller has just re-checked that no
+/// synchronization of the context is unfinished.
 pub(in super::super) fn begin_branch_closing(
     tx: &Transaction<'_>,
     repository_id: i64,
@@ -1031,12 +1042,20 @@ pub(in super::super) fn begin_branch_closing(
     let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     let matching = match write {
         BranchWrite::Closure { commit, .. } => {
-            r.closure_kind == Some(ClosureKind::Record) && !commit.is_zero()
+            r.action == ClosureAction::Close
+                && r.closure_kind == Some(ClosureKind::Record)
+                && !commit.is_zero()
         }
-        BranchWrite::Existing => r.closure_kind == Some(ClosureKind::Existing),
+        BranchWrite::Existing => {
+            r.action == ClosureAction::Close && r.closure_kind == Some(ClosureKind::Existing)
+        }
+        BranchWrite::Withdraw { commit } => {
+            r.action == ClosureAction::Withdraw
+                && r.closure_kind == Some(ClosureKind::Existing)
+                && !commit.is_zero()
+        }
     };
     if r.path() != RecordPath::Branch
-        || r.action != ClosureAction::Close
         || r.step != ClosureStep::ContextSynchronized
         || !matching
         || base.is_zero()
@@ -1051,6 +1070,9 @@ pub(in super::super) fn begin_branch_closing(
         }
         BranchWrite::Existing => {
             tx.execute("UPDATE ticket_closures SET step='closing',base_oid=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
+        }
+        BranchWrite::Withdraw { commit } => {
+            tx.execute("UPDATE ticket_closures SET step='closing',base_oid=?2,withdraw_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),commit.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
         }
     }
     read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
@@ -1110,6 +1132,9 @@ fn after_child(answer: BranchAnswer) -> bool {
             | BranchAnswer::Published
             | BranchAnswer::KeptPublished
             | BranchAnswer::WithdrawnSince
+            | BranchAnswer::Withdrawn
+            | BranchAnswer::WithdrawClosed
+            | BranchAnswer::ClosedSince
     )
 }
 

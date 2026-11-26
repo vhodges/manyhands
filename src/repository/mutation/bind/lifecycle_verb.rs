@@ -504,16 +504,20 @@ impl LifecycleVerb for Close {
 /// the consent no longer holds for answers as an external change does.
 pub(super) fn branch_code(answer: BranchAnswer) -> ResultCode {
     match answer {
-        BranchAnswer::Merged | BranchAnswer::Published | BranchAnswer::WithdrawnSince => {
-            ResultCode::Ok
-        }
+        BranchAnswer::Merged
+        | BranchAnswer::Published
+        | BranchAnswer::WithdrawnSince
+        | BranchAnswer::Withdrawn => ResultCode::Ok,
         BranchAnswer::Existing | BranchAnswer::KeptPublished | BranchAnswer::AlreadyClosing => {
             ResultCode::AlreadyClosing
         }
         BranchAnswer::ClosedElsewhere
         | BranchAnswer::TicketClosed
         | BranchAnswer::AlreadyClosed
-        | BranchAnswer::ContextTicketClosed => ResultCode::TicketClosed,
+        | BranchAnswer::ContextTicketClosed
+        | BranchAnswer::WithdrawClosed
+        | BranchAnswer::ClosedSince => ResultCode::TicketClosed,
+        BranchAnswer::AlreadyApplied => ResultCode::AlreadyApplied,
         BranchAnswer::RemoteBranchDeleted | BranchAnswer::ContextRemoteBranchDeleted => {
             ResultCode::RemoteBranchDeleted
         }

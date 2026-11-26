@@ -9,7 +9,10 @@
 //! held, then one short guarded ref update (R-T6-3).
 use super::{
     BranchAnswer, PlannedClosure, PreviewTicketClosureRequest,
-    observe::{self, ClosureObservation, closed_by_text, closed_ticket_bytes, ticket_path},
+    observe::{
+        self, ClosureContentError, ClosureObservation, closed_by_text, closed_ticket_bytes,
+        ticket_path, withdrawn_ticket_bytes,
+    },
     record::{self, BranchWrite, ClosureKind, ClosureRecord, ClosureStep, Refusal},
 };
 use crate::{
@@ -163,9 +166,80 @@ pub(in super::super) fn build_closure_commit(
     closed_at: OffsetDateTime,
     identity: &CommitIdentity,
 ) -> Result<Option<ClosureCommit>, RepositoryError> {
-    let failed = |_| unavailable(repo);
     let closed_at = whole_utc_seconds(closed_at);
     let closed_by = closed_by_text(identity);
+    let Some(built) = commit_edited_ticket(
+        repo,
+        path,
+        context,
+        closed_at,
+        identity,
+        &checkpoint_subject(item),
+        |original| closed_ticket_bytes(original, closed_at, &closed_by),
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ClosureCommit {
+        closed_at,
+        ticket_blob: built.ticket_blob,
+        commit: built.commit,
+        closed_by,
+        mode: built.mode,
+    }))
+}
+
+/// A withdraw's commit subject.
+fn withdraw_subject(item: &ItemId) -> String {
+    format!("Withdraw closure of ticket {item}")
+}
+
+/// The commit `Withdraw closure of ticket <ULID>`: the context's ticket with
+/// both closure fields removed (`withdrawn_ticket_bytes`, mode kept), parent
+/// the context, the identity as author and committer at `at`. Unreferenced.
+/// `None` when the ticket is not a canonical regular file or holds no
+/// closure to remove.
+pub(in super::super) fn build_withdraw_commit(
+    repo: &git2::Repository,
+    item: &ItemId,
+    path: &Path,
+    context: Oid,
+    at: OffsetDateTime,
+    identity: &CommitIdentity,
+) -> Result<Option<Oid>, RepositoryError> {
+    Ok(commit_edited_ticket(
+        repo,
+        path,
+        context,
+        whole_utc_seconds(at),
+        identity,
+        &withdraw_subject(item),
+        withdrawn_ticket_bytes,
+    )?
+    .map(|built| built.commit))
+}
+
+/// What `commit_edited_ticket` wrote.
+struct EditedTicket {
+    ticket_blob: Oid,
+    commit: Oid,
+    mode: i32,
+}
+
+/// The commit `subject` over `context`: its ticket as `edit` gives it from
+/// the ticket's bytes (mode kept), the identity as author and committer at
+/// `at`. `None` when the ticket is not a regular file in the tree or `edit`
+/// refuses it.
+fn commit_edited_ticket(
+    repo: &git2::Repository,
+    path: &Path,
+    context: Oid,
+    at: OffsetDateTime,
+    identity: &CommitIdentity,
+    subject: &str,
+    edit: impl FnOnce(&[u8]) -> Result<Vec<u8>, ClosureContentError>,
+) -> Result<Option<EditedTicket>, RepositoryError> {
+    let failed = |_| unavailable(repo);
     let context = repo.find_commit(context).map_err(failed)?;
     let context_tree = context.tree().map_err(failed)?;
     let Ok(entry) = context_tree.get_path(path) else {
@@ -177,33 +251,24 @@ pub(in super::super) fn build_closure_commit(
         _ => return Ok(None),
     };
     let original = repo.find_blob(entry.id()).map_err(failed)?;
-    let Ok(closed) = closed_ticket_bytes(original.content(), closed_at, &closed_by) else {
+    let Ok(edited) = edit(original.content()) else {
         return Ok(None);
     };
-    let ticket_blob = repo.blob(&closed).map_err(failed)?;
+    let ticket_blob = repo.blob(&edited).map_err(failed)?;
     let mut update = git2::build::TreeUpdateBuilder::new();
     update.upsert(path, ticket_blob, mode);
     let tree = update.create_updated(repo, &context_tree).map_err(failed)?;
     let tree = repo.find_tree(tree).map_err(failed)?;
-    let when = git2::Time::new(closed_at.unix_timestamp(), 0);
+    let when = git2::Time::new(at.unix_timestamp(), 0);
     let Ok(signature) = git2::Signature::new(&identity.name, &identity.email, &when) else {
         return Ok(None);
     };
     let commit = repo
-        .commit(
-            None,
-            &signature,
-            &signature,
-            &checkpoint_subject(item),
-            &tree,
-            &[&context],
-        )
+        .commit(None, &signature, &signature, subject, &tree, &[&context])
         .map_err(failed)?;
-    Ok(Some(ClosureCommit {
-        closed_at,
+    Ok(Some(EditedTicket {
         ticket_blob,
         commit,
-        closed_by,
         mode: entry.filemode(),
     }))
 }
@@ -1138,6 +1203,155 @@ pub(in super::super) fn branch_step<E: LifecycleError>(
     Ok(BranchStep::Closing)
 }
 
+/// Step 3 of a `withdraw` (Part E), under its own lease: with the context
+/// synchronized, the commit that removes the closure it consented to is
+/// written on the context, or the record ends with the answer that says why
+/// not. The commit is built and recorded as `closing` before the context
+/// moves to it, as a closure's is. It shares `branch_step`'s parts, and none
+/// of the direct hook's checks of the base: nothing here merges into the
+/// primary, or moves it, and a withdraw gives no link.
+///
+/// An abandon is one transaction under the lease, and a record at `closing`
+/// is abandoned only while its reconciliation proves nothing was written.
+pub(in super::super) fn withdraw_step<E: LifecycleError>(
+    service: &RepositoryService,
+    root: &Path,
+    confirmation: Option<&ConfirmedCommitIdentity>,
+    now: OffsetDateTime,
+    r: &ClosureRecord,
+) -> Result<BranchStep, E> {
+    let item = &r.item_id;
+    // The consent is observed outside the lease, in the record's own mode,
+    // as a withdraw.
+    let request = PreviewTicketClosureRequest {
+        root: root.to_owned(),
+        item_id: item.clone(),
+        confirmed_identity: confirmation.cloned(),
+    };
+    let prepared = observe::prepare_observation_for(
+        service,
+        &request,
+        Some(r.integration_mode),
+        observe::Verb::Withdraw,
+    )?;
+    if let Some(operation) = state::with_transaction(service, root, |tx, id| {
+        observe::foreign_synchronization(tx, id, item)
+    })? {
+        return Err(observe::foreign_synchronization_busy(root, &operation).into());
+    }
+    let (repo, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let root = root.as_path();
+    let _lease = repository_lease(&repo, root, RepositoryOperation::RepositorySnapshot)?;
+    let primary = prepared.configuration.primary_branch.as_str();
+    let remote = r.remote_name.as_deref().ok_or_else(E::recovery_required)?;
+    let context = r.context_oid.ok_or_else(E::recovery_required)?;
+    let path = ticket_path(item);
+    let context_ref = KIND.context_ref(item);
+    let given_at = now.unix_timestamp();
+    let abandon = |refusal: Refusal, answer: BranchAnswer| {
+        state::with_transaction(service, root, |tx, id| {
+            record::abandon_branch_record(tx, id, r.operation_id, &refusal, answer, None, given_at)
+        })
+        .map(|()| BranchStep::Finished)
+        .map_err(E::from)
+    };
+    // A record at `closing` holds what an earlier call recorded. Its
+    // reconciliation on `withdraw_oid` is not here yet: it stays as it is,
+    // for recovery.
+    if r.step == ClosureStep::Closing {
+        return Err(E::recovery_required());
+    }
+    // The context holds what the child left it.
+    if repo.refname_to_id(&context_ref).ok() != Some(context) {
+        return abandon(Refusal::ExternalChange, BranchAnswer::ExternalChange);
+    }
+    // 3.1: the tracking primary holds a closure: withdrawing it would be a
+    // reopen.
+    if repo
+        .refname_to_id(&format!("refs/remotes/{remote}/{primary}"))
+        .is_ok_and(|tracking| commit_names_closure(&repo, tracking, &path))
+    {
+        return abandon(
+            Refusal::Blocked(vec![ClosureBlocker::AlreadyClosed]),
+            BranchAnswer::AlreadyClosed,
+        );
+    }
+    // 3.2: the head holds no closure to withdraw (another clone's withdraw
+    // arrived), or one that does not read.
+    if !commit_names_closure(&repo, context, &path) {
+        return abandon(Refusal::ExternalChange, BranchAnswer::AlreadyApplied);
+    }
+    if commit_closure_text(&repo, context, &path).is_none() {
+        return abandon(Refusal::ExternalChange, BranchAnswer::ExternalChange);
+    }
+    let observed = match observe::revalidate_under_lease(&prepared, service, &repo) {
+        Ok(observed) => observed,
+        Err(error) if error.kind == RepositoryErrorKind::ExternalChange => {
+            return abandon(
+                Refusal::ReconfirmationRequired,
+                BranchAnswer::ReconfirmationRequired,
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Ok(observation) = observed else {
+        return abandon(
+            Refusal::ReconfirmationRequired,
+            BranchAnswer::ReconfirmationRequired,
+        );
+    };
+    // What the request consented to, with the head the child may have moved
+    // as the confirm bound it. Another closure on the head is another
+    // digest.
+    if observe::branch_expectation_with_head(&observation, r.consented_context_oid) != r.expectation
+    {
+        return abandon(Refusal::ExternalChange, BranchAnswer::ExternalChange);
+    }
+    if !matches!(observation.closure, PlannedClosure::Existing { .. }) {
+        return Err(E::recovery_required());
+    }
+    // A synchronization of this context still running holds the commit off
+    // before anything is written, the identity included.
+    if state::with_transaction(service, root, |tx, id| {
+        record::context_synchronization_unfinished(tx, id, item)
+    })? {
+        return Err(E::busy());
+    }
+    let identity = integrate::promotion_identity::<E>(service, &repo, root, confirmation)?;
+    let Some(built) = build_withdraw_commit(&repo, item, &path, context, now, &identity)? else {
+        return abandon(
+            Refusal::ReconfirmationRequired,
+            BranchAnswer::ReconfirmationRequired,
+        );
+    };
+    let held_off = state::with_transaction(service, root, |tx, id| {
+        if record::context_synchronization_unfinished(tx, id, item)? {
+            return Ok(true);
+        }
+        record::begin_branch_closing(
+            tx,
+            id,
+            r.operation_id,
+            observation.base,
+            BranchWrite::Withdraw { commit: built },
+        )?;
+        Ok(false)
+    })?;
+    if held_off {
+        return Err(E::busy());
+    }
+    boundary(service, root, FailurePoint::ClosureAfterClosingRecorded)?;
+    let context_repo = context_repository(root, item)?;
+    context_moving(service, root, item)?;
+    move_context_to_checkpoint_with(&context_repo, item, context, built, || {
+        boundary(service, root, FailurePoint::ClosureDuringCheckpointCheckout)
+    })?;
+    // The move marks the ticket's context alone: nothing reaches the primary.
+    context_moving(service, root, item)?;
+    boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
+    Ok(BranchStep::Closing)
+}
+
 /// What a branch record answers after its publication child, by the table
 /// of its stop and its result, in its order: the tracking primary as the
 /// child left it (rows 1 and 2: whether the forge merged this closure or
@@ -1211,6 +1425,69 @@ pub(in super::super) fn publication_answer(
         Some(_) => BranchAnswer::KeptPublished,
         None if commit_names_closure(repo, head, &path) => BranchAnswer::KeptPublished,
         None => BranchAnswer::WithdrawnSince,
+    }))
+}
+
+/// What a withdraw answers after its publication child, by the table of its
+/// stop and its result, in its order: the tracking primary as the child left
+/// it (a closure there, the withdrawn one or another, is a closed ticket),
+/// the remote that is not the record's (no child ran), a closed ticket or a
+/// deleted remote branch the child stopped with, a publication remote that
+/// changed or is gone, then, for a child that completed, whether the head it
+/// published holds a closure again. `None` when the child's stop stands.
+/// `child` is `None` when none ran, because the remote is not the one the
+/// record was made for. The tracking primary is the record's own remote's,
+/// at `primary`.
+pub(in super::super) fn withdrawal_answer(
+    repo: &git2::Repository,
+    r: &ClosureRecord,
+    primary: &str,
+    child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
+) -> Result<Option<BranchAnswer>, RepositoryError> {
+    let path = ticket_path(&r.item_id);
+    // Row 1.
+    let tracking = r.remote_name.as_deref().and_then(|remote| {
+        repo.refname_to_id(&format!("refs/remotes/{remote}/{primary}"))
+            .ok()
+    });
+    if tracking.is_some_and(|tracking| commit_names_closure(repo, tracking, &path)) {
+        return Ok(Some(BranchAnswer::WithdrawClosed));
+    }
+    let head = match child {
+        // Row 2: the child could not run.
+        None => return Ok(Some(BranchAnswer::RemoteChanged)),
+        Some(Ok(SynchronizationOutcome::Published { oid, .. }))
+        | Some(Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. })) => *oid,
+        // Row 3.
+        Some(Err(SynchronizationError::TicketClosed)) => {
+            return Ok(Some(BranchAnswer::WithdrawClosed));
+        }
+        // Row 4.
+        Some(Err(SynchronizationError::RemoteContextDeleted)) => {
+            return Ok(Some(BranchAnswer::RemoteBranchDeleted));
+        }
+        // Row 5.
+        Some(Err(SynchronizationError::Transport(error)))
+            if matches!(
+                error.kind,
+                SshTransportErrorKind::PublicationRemoteMissing
+                    | SshTransportErrorKind::EndpointChanged
+                    | SshTransportErrorKind::ConfigurationInvalid
+            ) =>
+        {
+            return Ok(Some(BranchAnswer::RemoteChanged));
+        }
+        // Any other stop stands, and a result with no head to read is the
+        // runner's to store: neither answers the record.
+        Some(Err(_)) | Some(Ok(SynchronizationOutcome::PublishPending { .. })) => {
+            return Ok(None);
+        }
+    };
+    // Rows 6 and 7.
+    Ok(Some(if commit_names_closure(repo, head, &path) {
+        BranchAnswer::ClosedSince
+    } else {
+        BranchAnswer::Withdrawn
     }))
 }
 

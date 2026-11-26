@@ -253,6 +253,14 @@ fn clock() -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(CLOCK).unwrap()
 }
 
+/// A later clock than `CLOCK`: a withdraw, or a second close, run a day on.
+fn later() -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp(CLOCK + 86_400).unwrap()
+}
+
+/// A ticket other than the one the fixture closes, that depends on it.
+const DEPENDENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+
 /// A repository in pull-request mode: the configuration is committed on the
 /// primary, which a pull-request close never moves.
 struct PullRequest {
@@ -266,6 +274,20 @@ impl PullRequest {
         let primary_before = f.primary();
         Self { f, primary_before }
     }
+    /// A direct repository with a publication remote: its context is a
+    /// branch record's too, for a withdraw.
+    fn direct() -> Self {
+        let f = Fixture::remote();
+        switch(&f, Integration::Direct);
+        let primary_before = f.primary();
+        Self { f, primary_before }
+    }
+    /// A direct repository with no publication remote.
+    fn local() -> Self {
+        let f = Fixture::new();
+        let primary_before = f.primary();
+        Self { f, primary_before }
+    }
     fn request(&self) -> CloseTicketRequest {
         self.f.request()
     }
@@ -275,6 +297,82 @@ impl PullRequest {
         io: &mut impl PromotionIo,
     ) -> Result<TicketClosureResult, TicketClosureError> {
         self.run_in(&self.f.service, req, io)
+    }
+    /// A close run on `clock`.
+    fn run_at(
+        &self,
+        req: CloseTicketRequest,
+        io: &mut impl PromotionIo,
+        clock: fn() -> OffsetDateTime,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        run::run_with_io(
+            &TicketClosureLifecycle,
+            &self.f.service,
+            LifecycleRequest {
+                clock,
+                ..lifecycle_request(req)
+            },
+            io,
+        )
+    }
+    /// What a withdraw of the ticket's closure is offered as.
+    fn withdrawal(&self) -> ClosureWithdrawalPreflight {
+        self.f
+            .service
+            .preview_closure_withdrawal(PreviewTicketClosureRequest {
+                root: self.f.root().into(),
+                item_id: id(),
+                confirmed_identity: None,
+            })
+            .unwrap()
+    }
+    /// A withdraw request for the preview it is offered (panics when it is
+    /// not offered).
+    fn withdraw_request(&self) -> CloseTicketRequest {
+        let ClosureWithdrawalPreflight::Ready(preview) = self.withdrawal() else {
+            panic!("a withdraw is not offered: {:?}", self.withdrawal());
+        };
+        CloseTicketRequest {
+            root: self.f.root().into(),
+            operation_id: OperationId::new(),
+            item_id: id(),
+            expected: preview.expectation(),
+            approval: None,
+            confirmed_identity: None,
+        }
+    }
+    fn withdraw(
+        &self,
+        req: CloseTicketRequest,
+        io: &mut impl PromotionIo,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        self.withdraw_with(&self.f.service, req, io, clock)
+    }
+    /// A withdraw run on `clock`.
+    fn withdraw_at(
+        &self,
+        req: CloseTicketRequest,
+        io: &mut impl PromotionIo,
+        clock: fn() -> OffsetDateTime,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        self.withdraw_with(&self.f.service, req, io, clock)
+    }
+    fn withdraw_with(
+        &self,
+        service: &RepositoryService,
+        req: CloseTicketRequest,
+        io: &mut impl PromotionIo,
+        clock: fn() -> OffsetDateTime,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        run::run_with_io(
+            &TicketWithdrawLifecycle,
+            service,
+            LifecycleRequest {
+                clock,
+                ..lifecycle_request(req)
+            },
+            io,
+        )
     }
     fn run_in(
         &self,
@@ -342,13 +440,72 @@ impl PullRequest {
     /// A close request run to `Published` with its own io: the closure
     /// commit `C`, the context's tip, published.
     fn close_first(&self) -> Oid {
+        self.close_first_request().1
+    }
+    /// `close_first`, with the request that closed.
+    fn close_first_request(&self) -> (CloseTicketRequest, Oid) {
         let mut io = PullRequestIo::default();
-        let outcome = PullRequest::branch(self.run(self.request(), &mut io));
+        let req = self.request();
+        let outcome = PullRequest::branch(self.run(req.clone(), &mut io));
         assert_eq!(outcome.answer(), BranchAnswer::Published);
         self.assert_primary_untouched(&io);
         let closure = self.f.context_oid();
         assert_eq!(outcome.checkpoint_oid(), Some(closure));
-        closure
+        (req, closure)
+    }
+    /// A ticket on the primary that depends on the fixture's, indexed, so
+    /// that a listing reads what the closure does to its dependents.
+    fn add_dependent(&mut self) {
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {DEPENDENT}\ntitle: Dependent\n\
+             type: task\nstatus: open\ndeps:\n- {ID}\n---\nDependent body.\n"
+        );
+        write(
+            &self.f.repo,
+            &format!(".manyhands/tickets/{DEPENDENT}/ticket.md"),
+            source,
+        );
+        let oid = commit(&self.f.repo);
+        self.f.tracking("main", oid);
+        self.primary_before = self.f.primary();
+        self.refresh();
+    }
+    /// The index, refreshed from what the contexts hold now.
+    fn refresh(&self) {
+        use crate::repository::{RefreshOutcome, RefreshRepositoryRequest};
+        let refreshed = self.f.service.refresh_repository(RefreshRepositoryRequest {
+            root: self.f.root().into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{refreshed:?}"
+        );
+    }
+    /// Why the dependent ticket is blocked, as the stored index lists it.
+    fn dependent_reasons(&self) -> Vec<crate::repository::ReadinessReasonCode> {
+        let repository = self.f.service.resolve_repository(self.f.root()).unwrap();
+        self.f
+            .service
+            .list_tickets(&repository, &TicketFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item.id.as_deref() == Some(DEPENDENT))
+            .and_then(|item| item.readiness.as_ref())
+            .map(|readiness| readiness.reasons.iter().map(|reason| reason.code).collect())
+            .expect("the dependent is listed with its readiness")
+    }
+    /// When the item was last given its link, as the link record keeps it.
+    fn link_given_at(&self) -> Option<i64> {
+        self.f
+            .db()
+            .query_row(
+                "SELECT given_at FROM pull_request_links WHERE kind='ticket' AND item_ulid=?1",
+                [ID],
+                |row| row.get(0),
+            )
+            .ok()
     }
     /// A commit on `parent` with the ticket's body written as `body`.
     fn body_commit_on(&self, parent: Oid, body: &str) -> Oid {
@@ -464,6 +621,11 @@ struct PullRequestIo {
     /// cancel-and-acknowledge path, not the release alone.
     prepared: bool,
     primary_calls: usize,
+    /// Puts a driven update to R-30's push decision, as production's
+    /// `push_unless_unclosed` puts the head it publishes: a head that lacks
+    /// the closure the fetched primary holds is `TicketClosed`, and the row
+    /// is left as the drive left it.
+    decide_push: bool,
 }
 impl PullRequestIo {
     fn children(&self) -> usize {
@@ -559,6 +721,20 @@ impl PromotionIo for PullRequestIo {
             let (_, incoming) = self.drive.take().unwrap();
             let merged =
                 sync::promotion_test_drive_local_bound(service, &req, incoming, execution)?;
+            if self.decide_push {
+                let repo = git2::Repository::open(&root).unwrap();
+                let primary = repo.refname_to_id("refs/remotes/origin/main").unwrap();
+                if crate::repository::integration::prepare::lacks_primary_closure(
+                    &repo,
+                    merged,
+                    primary,
+                    &observe::ticket_path(&id()),
+                )
+                .unwrap()
+                {
+                    return Err(SynchronizationError::TicketClosed);
+                }
+            }
             complete_child_row(
                 service,
                 &root,
@@ -2795,4 +2971,1096 @@ fn w6_another_clone_s_synchronization_keeps_the_withdraw() {
     assert!(repo.graph_descendant_of(merged, withdrawn).unwrap());
     // It never touches the primary.
     assert_eq!(p.f.primary(), p.primary_before);
+}
+
+// --- Task 8, slice B: the withdraw --------------------------------------
+
+/// A repository whose ticket holds a closure to withdraw, and that closure's
+/// commit: a pull-request close run to `Published`, or, in direct mode, a
+/// closure the context already holds, never published. Either way it is
+/// indexed, so a listing reads what the closure does.
+fn withdrawable(direct: bool) -> (PullRequest, Oid) {
+    if direct {
+        let p = PullRequest::direct();
+        let held = p.closed_commit_on(p.f.context_oid(), 1_700_000_000, CLOSED_BY);
+        p.hold(held);
+        p.refresh();
+        (p, held)
+    } else {
+        let p = PullRequest::new();
+        let closed = p.close_first();
+        (p, closed)
+    }
+}
+
+/// A record whose first publication child stopped with `error`, its row kept
+/// and active: the withdraw is at `publication_pending` for the same request.
+fn withdraw_stopped_at_publication(
+    p: &PullRequest,
+    req: &CloseTicketRequest,
+    io: &mut PullRequestIo,
+    error: SynchronizationError,
+) {
+    io.stops.push_back((ChildRole::Publication, error, true));
+    let result = p.withdraw_at(req.clone(), io, later);
+    assert!(
+        matches!(result, Err(TicketClosureError::ContextSynchronization(_))),
+        "{result:?}"
+    );
+    assert_eq!(p.stored(req).step, ClosureStep::PublicationPending);
+}
+
+/// A commit on the primary whose ticket is `tip`'s, with one parent: the
+/// forge's squash of the pull request.
+fn squash_merge(p: &PullRequest, tip: Oid) -> Oid {
+    let closed = support::tree_bytes(&p.f.repo, tip, &ticket());
+    support::tree_commit(
+        &p.f.repo,
+        p.f.primary(),
+        &[(ticket().as_str(), Some((&closed, 0o100644)))],
+    )
+}
+
+/// A save of the ticket, which the hold of `record` refuses.
+fn assert_save_held(p: &PullRequest, record: OperationId, case: &str) {
+    use crate::repository::{
+        AuthoringTarget, ContextIntent, ExpectedPathObservation, SaveTicketRequest, TicketDraft,
+    };
+    let ticket_file =
+        p.f.root()
+            .join(".manyhands/worktrees")
+            .join(ID)
+            .join(".manyhands/tickets")
+            .join(ID)
+            .join("ticket.md");
+    let source = fs::read_to_string(ticket_file).unwrap();
+    assert_held(
+        case,
+        "save",
+        record,
+        p.f.service.save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: p.f.root().into(),
+                kind: AuthoringKind::Ticket,
+                item_id: id(),
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            draft: TicketDraft {
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: "Edited body.\n".into(),
+            },
+            expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
+        }),
+    );
+}
+
+/// W1: a withdraw of a closing ticket writes one commit that removes the
+/// closure, publishes it, reopens the ticket and keeps its link, in a
+/// pull-request repository, in a direct one with a publication remote, and
+/// when only the tracking context holds the closure (its context child brings
+/// it in).
+#[test]
+fn w1_a_withdraw_publishes_and_reopens_in_either_mode() {
+    use crate::repository::ReadinessReasonCode as Reason;
+    // (case, direct, only the tracking context holds the closure)
+    for (case, direct, tracking_only) in [
+        ("pull request", false, false),
+        ("direct", true, false),
+        ("tracking only", false, true),
+    ] {
+        let mode = if direct {
+            Integration::Direct
+        } else {
+            Integration::PullRequest
+        };
+        let mut io = PullRequestIo::default();
+        let p = if tracking_only {
+            let p = PullRequest::new();
+            let closed = p.closed_commit_on(p.f.context_oid(), 1_700_000_000, CLOSED_BY);
+            p.f.repo
+                .reference(&tracking_context_ref(), closed, true, "fixture")
+                .unwrap();
+            io.drive = Some((ChildRole::Context, closed));
+            p
+        } else {
+            // The index is read after the hold: the ticket is closing and its
+            // dependent waits on it.
+            let (mut p, _) = withdrawable(direct);
+            p.add_dependent();
+            assert_eq!(p.listed_state(), Some(ClosureState::Closing), "{case}");
+            assert_eq!(p.dependent_reasons(), [Reason::ClosingDependency], "{case}");
+            p
+        };
+        let req = p.withdraw_request();
+        let outcome = PullRequest::branch(p.withdraw_at(req.clone(), &mut io, later));
+        let r = p.stored(&req);
+        let w = p.f.context_oid();
+        assert_eq!(outcome.answer(), BranchAnswer::Withdrawn, "{case}");
+        assert_eq!(outcome.action(), ClosureAction::Withdraw, "{case}");
+        assert_eq!(outcome.checkpoint_oid(), Some(w), "{case}");
+        assert_eq!(
+            outcome.publication(),
+            Some(PromotionPublication::Published { oid: w }),
+            "{case}"
+        );
+        // One commit over the synchronized head, as the run's clock and the
+        // identity gave it, with the head's ticket and no closure.
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{case}");
+        let commit = p.f.repo.find_commit(w).unwrap();
+        assert_eq!(
+            commit.summary(),
+            Some(withdraw_subject().as_str()),
+            "{case}"
+        );
+        let parent = commit.parent_id(0).unwrap();
+        assert_eq!(Some(parent), r.context_oid, "{case}");
+        assert_eq!(commit.time().seconds(), later().unix_timestamp(), "{case}");
+        assert_eq!(
+            support::tree_bytes(&p.f.repo, w, &ticket()),
+            observe::withdrawn_ticket_bytes(&support::tree_bytes(&p.f.repo, parent, &ticket()))
+                .unwrap(),
+            "{case}"
+        );
+        // The record, in the mode it began in.
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(BranchAnswer::Withdrawn), "{case}");
+        assert_eq!(r.withdraw_oid, Some(w), "{case}");
+        assert_eq!((r.closure_oid, r.closed_at), (None, None), "{case}");
+        assert_eq!(
+            (r.integration_mode, r.action),
+            (mode, ClosureAction::Withdraw)
+        );
+        assert_eq!(
+            p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+            w,
+            "{case}"
+        );
+        // The ticket reads open, and its dependent waits on an open one.
+        assert_eq!(p.listed_state(), Some(ClosureState::Open), "{case}");
+        if !tracking_only {
+            assert_eq!(p.dependent_reasons(), [Reason::OpenDependency], "{case}");
+        }
+        // The link record is kept as it was: a pull-request close gave it at
+        // `CLOCK`, the withdraw at `later` gave none.
+        let linked = !direct && !tracking_only;
+        assert_eq!(p.link().is_some(), linked, "{case}");
+        assert_eq!(p.link_given_at(), linked.then_some(CLOCK), "{case}");
+        assert!(!p.held(), "{case}");
+        // The same request again gives the same answer, and runs nothing.
+        let children = io.children();
+        assert_eq!(
+            PullRequest::branch(p.withdraw_at(req, &mut io, later)),
+            outcome,
+            "{case}"
+        );
+        assert_eq!(io.children(), children, "{case}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// W2: with no closure to withdraw the answer is `already_applied` and
+/// nothing is written: at prepare; at a confirm whose closure is gone since
+/// the preview (the confirm's refusal); at step 3, after another clone's
+/// withdraw arrived with the context child; and for a withdraw made here and
+/// never published, whose tracking ref still holds the closure (R-32).
+#[test]
+fn w2_nothing_to_withdraw_is_already_applied_with_nothing_written() {
+    // Prepare.
+    let p = PullRequest::new();
+    assert_eq!(
+        p.withdrawal(),
+        ClosureWithdrawalPreflight::NothingToWithdraw
+    );
+    // Confirm: the closure is gone since the preview.
+    let p = PullRequest::new();
+    p.hold(p.closed_commit_on(p.f.context_oid(), 1_700_000_000, CLOSED_BY));
+    let req = p.withdraw_request();
+    p.hold(p.open_commit_on(p.f.context_oid()));
+    let refs_before = refs(&p.f.repo);
+    let mut io = PullRequestIo::default();
+    let result = p.withdraw(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ExternalChange)),
+        "{result:?}"
+    );
+    assert_refused_untouched(
+        &p.f,
+        &req,
+        &io.inner,
+        (Integration::PullRequest, ClosureAction::Withdraw),
+        &refs_before,
+        "confirm",
+    );
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    p.assert_primary_untouched(&io);
+    // Step 3: another clone's withdraw arrived with the context child.
+    let p = PullRequest::new();
+    let closed = p.close_first();
+    let req = p.withdraw_request();
+    let incoming = p.withdraw_commit_on(closed);
+    let mut io = PullRequestIo {
+        drive: Some((ChildRole::Context, incoming)),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::AlreadyApplied);
+    assert_eq!(outcome.checkpoint_oid(), None);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ExternalChange));
+    assert_eq!(r.answer_code, Some(BranchAnswer::AlreadyApplied));
+    assert_eq!(r.withdraw_oid, None);
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    // The context is as the child left it: with the other clone's withdraw.
+    assert_eq!(Some(p.f.context_oid()), r.context_oid);
+    assert!(
+        p.f.repo
+            .graph_descendant_of(p.f.context_oid(), incoming)
+            .unwrap()
+    );
+    assert!(matches!(
+        observe::file_closure(&support::tree_bytes(
+            &p.f.repo,
+            p.f.context_oid(),
+            &ticket()
+        )),
+        observe::FileClosure::Open
+    ));
+    assert!(!p.held());
+    let children = io.children();
+    assert_eq!(PullRequest::branch(p.withdraw(req, &mut io)), outcome);
+    assert_eq!(io.children(), children);
+    p.assert_primary_untouched(&io);
+    // R-32: a withdraw made here and never published. The tracking ref holds
+    // the closure, so a withdraw is offered, and its context child publishes
+    // the withdraw: nothing is left to write.
+    let p = PullRequest::new();
+    let closed = p.close_first();
+    let local = p.withdraw_commit_on(closed);
+    p.hold(local);
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo::default();
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::AlreadyApplied);
+    assert_eq!(outcome.publication(), None);
+    assert_eq!(
+        p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        local
+    );
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    assert_eq!(p.stored(&req).step, ClosureStep::Abandoned);
+    p.assert_primary_untouched(&io);
+}
+
+/// W3: a closure the tracking primary holds at step 3 is `ticket_closed`,
+/// the withdrawn closure or another: withdrawing it would be a reopen.
+#[test]
+fn w3_a_closure_the_tracking_primary_holds_at_step_three_is_ticket_closed() {
+    type Fetched = fn(&PullRequest) -> Oid;
+    for (case, fetched) in [
+        ("own", own_closure_on_primary as Fetched),
+        ("another", another_closure_on_primary as Fetched),
+    ] {
+        let p = PullRequest::new();
+        p.close_first();
+        let req = p.withdraw_request();
+        let mut io = PullRequestIo {
+            fetched: vec![(ChildRole::Context, fetched(&p))],
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::AlreadyClosed, "{case}");
+        assert_eq!(outcome.checkpoint_oid(), None, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Abandoned, "{case}");
+        assert_eq!(
+            r.refusal,
+            Some(record::Refusal::Blocked(vec![
+                ClosureBlocker::AlreadyClosed
+            ])),
+            "{case}"
+        );
+        assert_eq!(r.withdraw_oid, None, "{case}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0, "{case}");
+        assert_eq!(io.children(), 1, "{case}");
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// W4: an unfinished closure record holds the ticket: a withdraw is offered
+/// and a new confirm of it is `busy`, whichever verb the record is of, and
+/// the holder is found for the binding's `held`. A withdraw lost at
+/// `BeforeCompletion`, with its commit pushed and both contexts open, is a
+/// holder, and its ticket is not "nothing to withdraw" (ruling 35).
+#[test]
+fn w4_an_unfinished_closure_record_holds_a_withdraw_and_a_withdraw_holds_a_close() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    use crate::repository::{Mutation, TicketCloseInput};
+    // A close stopped at `publication_pending` holds a new withdraw.
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Publication,
+            transport(K::TransportUnavailable),
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    assert!(matches!(
+        p.run(req.clone(), &mut io),
+        Err(TicketClosureError::ContextSynchronization(_))
+    ));
+    assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    assert_eq!(p.holder(), Some(req.operation_id));
+    // The record's own child is left out of the observation (ruling 28).
+    let other = p.withdraw_request();
+    let mut other_io = PullRequestIo::default();
+    let refused = p.withdraw(other, &mut other_io);
+    assert!(
+        matches!(refused, Err(TicketClosureError::Busy)),
+        "{refused:?}"
+    );
+    assert_eq!(other_io.children(), 0);
+    let records: i64 =
+        p.f.db()
+            .query_row("SELECT count(*) FROM ticket_closures", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(records, 1);
+    p.assert_primary_untouched(&io);
+    p.assert_primary_untouched(&other_io);
+    // A withdraw stopped at `publication_pending` holds a new close.
+    let p = PullRequest::new();
+    p.close_first();
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo::default();
+    withdraw_stopped_at_publication(&p, &req, &mut io, transport(K::TransportUnavailable));
+    assert_eq!(p.holder(), Some(req.operation_id));
+    let prepared =
+        p.f.service
+            .prepare(&Mutation::TicketClose(TicketCloseInput {
+                root: p.f.root().to_owned(),
+                id: id(),
+            }));
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["code"], "recovery_required", "{value}");
+    assert!(
+        value["recovery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["operation_id"] == req.operation_id.to_string()),
+        "{value}"
+    );
+    let close = p.request();
+    let mut other_io = PullRequestIo::default();
+    assert!(matches!(
+        p.run(close, &mut other_io),
+        Err(TicketClosureError::Busy)
+    ));
+    assert_eq!(other_io.children(), 0);
+    let records: i64 =
+        p.f.db()
+            .query_row("SELECT count(*) FROM ticket_closures", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(records, 2);
+    p.assert_primary_untouched(&io);
+    p.assert_primary_untouched(&other_io);
+    // A withdraw lost before its completion, with its commit pushed: both
+    // contexts hold the open ticket, and the record still holds the ticket.
+    let p = PullRequest::new();
+    let closed = p.close_first();
+    let req = p.withdraw_request();
+    exit_at_with(&p.f, &req, 12, "withdraw");
+    let w = p.f.context_oid();
+    assert_ne!(w, closed);
+    p.f.repo
+        .reference(&tracking_context_ref(), w, true, "the withdraw is pushed")
+        .unwrap();
+    assert_ne!(p.stored(&req).step, ClosureStep::Complete);
+    assert_eq!(p.holder(), Some(req.operation_id));
+    assert!(
+        matches!(p.withdrawal(), ClosureWithdrawalPreflight::Ready(_)),
+        "{:?}",
+        p.withdrawal()
+    );
+    p.assert_primary_untouched(&PullRequestIo::default());
+}
+
+/// W5: a child that stops answers as a close's does (D5 to D10), and a
+/// publication child's deleted remote branch answers `ticket_closed` when the
+/// tracking primary holds a closure, `remote_branch_deleted` otherwise, the
+/// withdraw kept on the local branch.
+#[test]
+fn w5_a_stopped_child_answers_as_a_close_s_and_a_deleted_branch_by_the_tracking_primary() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    // D5: a context child that stops, kept, leaves the record `confirmed`
+    // for the same request.
+    let (p, _) = withdrawable(false);
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(ChildRole::Context, transport(K::TransportUnavailable), true)]),
+        ..PullRequestIo::default()
+    };
+    let result = p.withdraw(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ContextSynchronization(_))),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Confirmed);
+    assert!(p.phase(r.context_sync_id.unwrap()).is_some());
+    let outcome = PullRequest::branch(p.withdraw(req, &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Withdrawn);
+    p.assert_primary_untouched(&io);
+    // D6: a context child that meets a deleted remote branch is let go, and
+    // the record is abandoned with its code, nothing written.
+    let (p, closed) = withdrawable(false);
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Context,
+            SynchronizationError::RemoteContextDeleted,
+            true,
+        )]),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ContextRemoteBranchDeleted);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ReconfirmationRequired));
+    assert_eq!(
+        p.phase(r.context_sync_id.unwrap()).as_deref(),
+        Some("cancelled")
+    );
+    p.assert_no_active_child(&r, "D6");
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    assert_eq!(p.f.context_oid(), closed);
+    assert!(!p.held());
+    p.assert_primary_untouched(&io);
+    // D8: a publication child that stops holds the ticket, which reads open
+    // meanwhile, and refuses a save; the same request goes on. In both modes.
+    for (case, direct) in [("pull request", false), ("direct", true)] {
+        let (p, _) = withdrawable(direct);
+        let req = p.withdraw_request();
+        // The child's row is not kept, so the hold alone refuses a save; a
+        // kept row is refused earlier, by the live row, as it always was.
+        let mut io = PullRequestIo {
+            stops: VecDeque::from([(
+                ChildRole::Publication,
+                transport(K::TransportUnavailable),
+                false,
+            )]),
+            ..PullRequestIo::default()
+        };
+        let result = p.withdraw_at(req.clone(), &mut io, later);
+        assert!(
+            matches!(result, Err(TicketClosureError::ContextSynchronization(_))),
+            "{case}: {result:?}"
+        );
+        assert_eq!(
+            p.stored(&req).step,
+            ClosureStep::PublicationPending,
+            "{case}"
+        );
+        assert!(p.held(), "{case}");
+        assert_eq!(p.listed_state(), Some(ClosureState::Open), "{case}");
+        assert_save_held(&p, req.operation_id, case);
+        let outcome = PullRequest::branch(p.withdraw_at(req.clone(), &mut io, later));
+        assert_eq!(outcome.answer(), BranchAnswer::Withdrawn, "{case}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{case}");
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+    // D11: a publication child's deleted remote branch.
+    type Fetched = Option<fn(&PullRequest) -> Oid>;
+    let table: [(&str, Fetched, BranchAnswer); 2] = [
+        (
+            "the tracking primary holds a closure",
+            Some(own_closure_on_primary),
+            BranchAnswer::WithdrawClosed,
+        ),
+        (
+            "the tracking primary is open",
+            None,
+            BranchAnswer::RemoteBranchDeleted,
+        ),
+    ];
+    for (case, fetched, answer) in table {
+        let (p, closed) = withdrawable(false);
+        let req = p.withdraw_request();
+        let mut io = PullRequestIo {
+            fetched: fetched
+                .map(|oid| vec![(ChildRole::Publication, oid(&p))])
+                .unwrap_or_default(),
+            stops: VecDeque::from([(
+                ChildRole::Publication,
+                SynchronizationError::RemoteContextDeleted,
+                true,
+            )]),
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), answer, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(answer), "{case}");
+        let child = r.primary_sync_id.expect("the child was minted");
+        assert_eq!(p.phase(child).as_deref(), Some("cancelled"), "{case}");
+        p.assert_no_active_child(&r, case);
+        // Nothing was published: the withdraw stays on the local branch.
+        let w = r.withdraw_oid.expect("the withdraw was written");
+        assert_eq!(outcome.publication(), None, "{case}");
+        assert_eq!(outcome.checkpoint_oid(), Some(w), "{case}");
+        assert_eq!(p.f.context_oid(), w, "{case}");
+        assert_eq!(
+            p.f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+            closed,
+            "{case}"
+        );
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// W7: a close after a withdraw is Part D's close: it observes the head open,
+/// records a new closure over the withdraw commit and a new `closed_at`.
+#[test]
+fn w7_a_close_after_a_withdraw_records_a_new_closed_at() {
+    let p = PullRequest::new();
+    p.close_first();
+    let mut io = PullRequestIo::default();
+    let req = p.withdraw_request();
+    let withdrawn = PullRequest::branch(p.withdraw(req, &mut io));
+    assert_eq!(withdrawn.answer(), BranchAnswer::Withdrawn);
+    let w = p.f.context_oid();
+    let again = p.request();
+    let outcome = PullRequest::branch(p.run_at(again.clone(), &mut io, later));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 2);
+    let closure = p.f.context_oid();
+    let commit = p.f.repo.find_commit(closure).unwrap();
+    assert_eq!(commit.summary(), Some(close_subject().as_str()));
+    assert_eq!(commit.parent_id(0).unwrap(), w);
+    let ticket = parse_ticket(&support::tree_bytes(&p.f.repo, closure, &ticket()));
+    assert_eq!(ticket.closed_at, Some(later()));
+    let r = p.stored(&again);
+    assert_eq!(r.closed_at, Some(later()));
+    assert_eq!(r.closure_oid, Some(closure));
+    assert_eq!(p.listed_state(), Some(ClosureState::Closing));
+    assert_eq!(p.link_given_at(), Some(later().unix_timestamp()));
+    p.assert_primary_untouched(&io);
+}
+
+/// W8: a process lost after the publication child was minted never runs the
+/// hook again: the same request answers `withdrawn` with the one commit.
+#[test]
+fn w8_a_crash_after_the_publication_child_never_runs_the_hook_again() {
+    use run::RunEvent;
+    // `AfterPublication`, and `BeforeCompletion`.
+    for point in [7, 12] {
+        let p = PullRequest::new();
+        p.close_first();
+        let req = p.withdraw_request();
+        exit_at_with(&p.f, &req, point, "withdraw");
+        let mut io = PullRequestIo::default();
+        let mut told = Told(Vec::new());
+        let outcome = PullRequest::branch(run::run_with_io_observed(
+            &TicketWithdrawLifecycle,
+            &p.f.reopened(),
+            LifecycleRequest {
+                clock,
+                ..lifecycle_request(req.clone())
+            },
+            &mut io,
+            &mut told,
+        ));
+        assert_eq!(outcome.answer(), BranchAnswer::Withdrawn, "{point}");
+        assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 1, "{point}");
+        assert!(
+            !told.0.contains(&RunEvent::Recording),
+            "{point}: {:?}",
+            told.0
+        );
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// W9: the forge merges the closure between the two children. A fast-forward
+/// leaves the withdraw on the local branch only, as the publication child
+/// stops with `ticket_closed` (R-30); a merge commit or a squash is merged
+/// into the withdraw with the primary's closure, and published. Either way
+/// the answer is `ticket_closed`, by the tracking primary.
+#[test]
+fn w9_a_forge_merge_between_the_children_answers_ticket_closed_in_every_style() {
+    type Forge = fn(&PullRequest, Oid) -> Oid;
+    let table: [(&str, Forge, bool); 3] = [
+        ("fast-forward", |_, closed| closed, true),
+        ("merge commit", |p, _| forge_merge(p), false),
+        ("squash", |p, closed| squash_merge(p, closed), false),
+    ];
+    for (case, forge, fast_forward) in table {
+        let (p, closed) = withdrawable(false);
+        let forged = forge(&p, closed);
+        let req = p.withdraw_request();
+        // `decide_push` is R-30's decision as production's
+        // `push_unless_unclosed` makes it, which Task 6 unit-tests: a head
+        // that lacks the closure the fetched primary holds is not pushed.
+        let mut io = PullRequestIo {
+            fetched: vec![(ChildRole::Publication, forged)],
+            drive: Some((ChildRole::Publication, closed)),
+            decide_push: true,
+            ..PullRequestIo::default()
+        };
+        let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::WithdrawClosed, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(BranchAnswer::WithdrawClosed), "{case}");
+        p.assert_no_active_child(&r, case);
+        let w = r.withdraw_oid.expect("the withdraw was written");
+        assert_eq!(outcome.checkpoint_oid(), Some(w), "{case}");
+        let tracking = p.f.repo.refname_to_id(&tracking_context_ref()).unwrap();
+        if fast_forward {
+            // Nothing was pushed: the withdraw is on the local branch only.
+            assert_eq!(p.f.context_oid(), w, "{case}");
+            assert_eq!(tracking, closed, "{case}");
+            assert_eq!(outcome.publication(), None, "{case}");
+        } else {
+            // The merge was given the primary's closure, and published.
+            let Some(PromotionPublication::Published { oid: head }) = outcome.publication() else {
+                panic!("{case}: {:?}", outcome.publication());
+            };
+            assert_eq!(tracking, head, "{case}");
+            assert!(p.f.repo.graph_descendant_of(head, w).unwrap(), "{case}");
+            let ticket = parse_ticket(&support::tree_bytes(&p.f.repo, head, &ticket()));
+            assert_eq!(ticket.closed_at, Some(clock()), "{case}");
+            assert_eq!(ticket.closed_by.as_deref(), Some(CLOSED_BY), "{case}");
+        }
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// W10: a cancelled publication child is let go, and the same request
+/// replaces it, as D15 does for a close.
+#[test]
+fn w10_a_cancelled_withdraw_is_continued_by_the_same_request() {
+    let p = PullRequest::new();
+    p.close_first();
+    let req = p.withdraw_request();
+    let mut io = CancelAtPublication {
+        inner: PullRequestIo::default(),
+        parent: Some(req.operation_id),
+    };
+    let result = p.withdraw(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::Interrupted)),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::PublicationPending);
+    assert_eq!(
+        r.publication,
+        Some(crate::repository::promotion::record::PublicationCategory::Cancelled)
+    );
+    let first = r.primary_sync_id.unwrap();
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Withdrawn);
+    assert_ne!(p.stored(&req).primary_sync_id, Some(first));
+    p.assert_primary_untouched(&io.inner);
+}
+
+/// W11: another closure than the consented one on the head at step 3 is
+/// `external_change`, with nothing written.
+#[test]
+fn w11_another_closure_on_the_head_at_step_three_is_external_change() {
+    let p = PullRequest::new();
+    let closed = p.close_first();
+    let req = p.withdraw_request();
+    let incoming = p.closed_commit_on(closed, 1_750_000_000, "Another <another@example.invalid>");
+    let mut io = PullRequestIo {
+        drive: Some((ChildRole::Context, incoming)),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ExternalChange);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ExternalChange));
+    assert_eq!(r.withdraw_oid, None);
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    // The context is as the child left it, holding the other closure.
+    assert_eq!(Some(p.f.context_oid()), r.context_oid);
+    let held = parse_ticket(&support::tree_bytes(
+        &p.f.repo,
+        p.f.context_oid(),
+        &ticket(),
+    ));
+    assert_eq!(
+        held.closed_by.as_deref(),
+        Some("Another <another@example.invalid>")
+    );
+    assert!(!p.held());
+    p.assert_primary_untouched(&io);
+}
+
+/// 3.1 step 5: a head that names a closure that does not read (its
+/// `closed_by` is gone) is not a closure to withdraw: `external_change`, with
+/// nothing written.
+#[test]
+fn a_head_naming_a_closure_it_does_not_hold_is_external_change_at_step_three() {
+    let p = PullRequest::new();
+    let closed = p.close_first();
+    let req = p.withdraw_request();
+    let text = String::from_utf8(support::tree_bytes(&p.f.repo, closed, &ticket())).unwrap();
+    let malformed = text
+        .lines()
+        .filter(|line| !line.starts_with("closed_by"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(text, malformed);
+    let incoming = support::tree_commit(
+        &p.f.repo,
+        closed,
+        &[(ticket().as_str(), Some((malformed.as_bytes(), 0o100644)))],
+    );
+    let mut io = PullRequestIo {
+        drive: Some((ChildRole::Context, incoming)),
+        ..PullRequestIo::default()
+    };
+    let outcome = PullRequest::branch(p.withdraw(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ExternalChange);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ExternalChange));
+    assert_eq!(r.withdraw_oid, None);
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    // The context is as the child left it.
+    assert_eq!(Some(p.f.context_oid()), r.context_oid);
+    assert!(
+        p.f.repo
+            .graph_descendant_of(p.f.context_oid(), incoming)
+            .unwrap()
+    );
+    assert!(!p.held());
+    p.assert_primary_untouched(&io);
+}
+
+/// W12: with no publication remote a withdraw is refused in direct mode, at
+/// prepare and at a confirm, which is stored as a withdraw's own row.
+#[test]
+fn w12_without_a_publication_remote_a_withdraw_is_refused_in_direct_mode() {
+    let p = PullRequest::local();
+    p.hold(p.closed_commit_on(p.f.context_oid(), 1_700_000_000, CLOSED_BY));
+    assert_eq!(
+        p.withdrawal(),
+        ClosureWithdrawalPreflight::PublicationRemoteRequired
+    );
+    let req = CloseTicketRequest {
+        root: p.f.root().into(),
+        operation_id: OperationId::new(),
+        item_id: id(),
+        expected: ClosureExpectation::from_bytes([7; 32]),
+        approval: None,
+        confirmed_identity: None,
+    };
+    let refs_before = refs(&p.f.repo);
+    let mut io = PullRequestIo::default();
+    let result = p.withdraw(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ExternalChange)),
+        "{result:?}"
+    );
+    assert_refused_untouched(
+        &p.f,
+        &req,
+        &io.inner,
+        (Integration::Direct, ClosureAction::Withdraw),
+        &refs_before,
+        "no remote",
+    );
+    assert_eq!(p.stored(&req).remote_name, None);
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    p.assert_primary_untouched(&io);
+}
+
+/// W14: a ticket with no context is `context_missing`, at prepare and at a
+/// confirm, which is stored as the withdraw's refusal with nothing run.
+#[test]
+fn w14_a_ticket_with_no_context_is_context_missing() {
+    let (p, _) = withdrawable(false);
+    let req = p.withdraw_request();
+    p.f.repo
+        .find_worktree(ID)
+        .unwrap()
+        .prune(Some(
+            git2::WorktreePruneOptions::new()
+                .valid(true)
+                .working_tree(true),
+        ))
+        .unwrap();
+    p.f.repo
+        .find_reference(&context_ref())
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(
+        p.withdrawal(),
+        ClosureWithdrawalPreflight::Blocked {
+            blockers: vec![ClosureBlocker::ContextMissing],
+            identity_configuration: None,
+        }
+    );
+    let mut io = PullRequestIo::default();
+    let result = p.withdraw(req.clone(), &mut io);
+    assert!(
+        matches!(&result, Err(TicketClosureError::Blocked(b)) if *b == [ClosureBlocker::ContextMissing]),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(
+        r.refusal,
+        Some(record::Refusal::Blocked(vec![
+            ClosureBlocker::ContextMissing
+        ]))
+    );
+    assert_eq!(
+        (r.integration_mode, r.action),
+        (Integration::PullRequest, ClosureAction::Withdraw)
+    );
+    assert_eq!(io.children(), 0);
+    assert_eq!(p.f.commits_in_odb(&withdraw_subject()), 0);
+    p.assert_primary_untouched(&io);
+}
+
+/// The withdraw's answer table, row by row, as the close's is: each row is
+/// chosen by what the tracking primary and the publication child say, in the
+/// table's order, and the record completes with it, no child left holding the
+/// context and the link record kept as the close gave it. The withdraws run
+/// at `later`, so a link given again would show.
+#[test]
+fn withdraw_answers_choose_each_row_in_order() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    type Script = fn(&PullRequest, &CloseTicketRequest, &mut PullRequestIo);
+    let rows: [(&str, Script, BranchAnswer); 8] = [
+        (
+            "1 own closure fetched",
+            |p, _, io| {
+                io.fetched
+                    .push((ChildRole::Publication, own_closure_on_primary(p)))
+            },
+            BranchAnswer::WithdrawClosed,
+        ),
+        (
+            "1 another closure fetched",
+            |p, _, io| {
+                io.fetched
+                    .push((ChildRole::Publication, another_closure_on_primary(p)))
+            },
+            BranchAnswer::WithdrawClosed,
+        ),
+        (
+            "3 ticket closed",
+            |_, _, io| {
+                io.stops.push_back((
+                    ChildRole::Publication,
+                    SynchronizationError::TicketClosed,
+                    true,
+                ))
+            },
+            BranchAnswer::WithdrawClosed,
+        ),
+        (
+            "4 remote branch deleted",
+            |_, _, io| {
+                io.stops.push_back((
+                    ChildRole::Publication,
+                    SynchronizationError::RemoteContextDeleted,
+                    true,
+                ))
+            },
+            BranchAnswer::RemoteBranchDeleted,
+        ),
+        (
+            "2 remote removed",
+            |p, req, io| {
+                withdraw_stopped_at_publication(p, req, io, SynchronizationError::Busy);
+                configure(p, None, "main");
+            },
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "5 publication remote missing",
+            |_, _, io| {
+                io.stops.push_back((
+                    ChildRole::Publication,
+                    transport(K::PublicationRemoteMissing),
+                    true,
+                ))
+            },
+            BranchAnswer::RemoteChanged,
+        ),
+        (
+            "6 closed since",
+            |p, req, io| {
+                // The remote's publication was rejected; the retry merges what
+                // another clone published since: a closure on the head.
+                withdraw_stopped_at_publication(p, req, io, SynchronizationError::PushRejected);
+                let w = p.f.context_oid();
+                io.drive = Some((
+                    ChildRole::Publication,
+                    p.closed_commit_on(w, 1_750_000_000, "Another <another@example.invalid>"),
+                ));
+            },
+            BranchAnswer::ClosedSince,
+        ),
+        ("7 withdrawn", |_, _, _| {}, BranchAnswer::Withdrawn),
+    ];
+    for (case, script, answer) in rows {
+        let (p, _) = withdrawable(false);
+        let req = p.withdraw_request();
+        let mut io = PullRequestIo::default();
+        script(&p, &req, &mut io);
+        let outcome = PullRequest::branch(p.withdraw_at(req.clone(), &mut io, later));
+        assert_eq!(outcome.answer(), answer, "{case}");
+        let r = p.stored(&req);
+        assert_eq!(r.step, ClosureStep::Complete, "{case}");
+        assert_eq!(r.answer_code, Some(answer), "{case}");
+        p.assert_no_active_child(&r, case);
+        assert_eq!(p.link_given_at(), Some(CLOCK), "{case}");
+        assert!(!p.held(), "{case}");
+        if answer == BranchAnswer::RemoteChanged {
+            // Its commit is kept on the local branch, and nothing published.
+            assert_eq!(outcome.publication(), None, "{case}");
+            assert_eq!(outcome.checkpoint_oid(), r.withdraw_oid, "{case}");
+            assert_eq!(p.f.context_oid(), r.withdraw_oid.unwrap(), "{case}");
+            assert_ne!(
+                p.f.repo.refname_to_id(&tracking_context_ref()).ok(),
+                r.withdraw_oid,
+                "{case}"
+            );
+        }
+        // The same request again gives the same answer, and runs nothing.
+        let children = io.children();
+        assert_eq!(
+            PullRequest::branch(p.withdraw_at(req, &mut io, later)),
+            outcome,
+            "{case}"
+        );
+        assert_eq!(io.children(), children, "{case}");
+        p.assert_primary_untouched(&io);
+    }
+}
+
+/// A request continues only a record of its own verb: another verb's record
+/// of its ID and digest is not answered from, not run on and not refused
+/// into, whatever its step. A direct close's completed record is the row
+/// that only the runner's guard refuses.
+#[test]
+fn a_request_continues_only_its_own_verb_s_record() {
+    use crate::repository::{ConfigurationInspection, read_configuration};
+    // A completed close, sent as a withdraw.
+    let p = PullRequest::new();
+    let (close_req, _) = p.close_first_request();
+    let before = format!("{:?}", p.stored(&close_req));
+    let mut io = PullRequestIo::default();
+    let result = p.withdraw(close_req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::OperationMismatch)),
+        "{result:?}"
+    );
+    assert_eq!(io.children(), 0);
+    assert_eq!(format!("{:?}", p.stored(&close_req)), before);
+    // A refused request that meets the record at its insertion: either
+    // verb's refusal finds the other's record.
+    let ConfigurationInspection::Valid(config) = read_configuration(p.f.root()).unwrap() else {
+        panic!("a valid configuration")
+    };
+    let refusal = record::Refusal::ExternalChange;
+    let refused = state::with_transaction(&p.f.service, p.f.root(), |tx, rid| {
+        Ok(<TicketWithdrawLifecycle as Lifecycle>::refuse_record(
+            tx,
+            rid,
+            close_req.operation_id,
+            &id(),
+            close_req.expected,
+            &config,
+            None,
+            &refusal,
+        ))
+    })
+    .unwrap();
+    assert!(
+        matches!(&refused, Err(e) if e.kind == RepositoryErrorKind::OperationMismatch),
+        "{refused:?}"
+    );
+    // A completed direct close, sent as a withdraw: the runner's guard.
+    let f = Fixture::new();
+    let direct = f.request();
+    f.close(&f.service, direct.clone()).unwrap();
+    let before = format!("{:?}", f.stored(direct.operation_id));
+    let result = run::run_with_io(
+        &TicketWithdrawLifecycle,
+        &f.service,
+        lifecycle_request(direct.clone()),
+        &mut FakeIo::default(),
+    );
+    assert!(
+        matches!(result, Err(TicketClosureError::OperationMismatch)),
+        "{result:?}"
+    );
+    assert_eq!(format!("{:?}", f.stored(direct.operation_id)), before);
+    // A withdraw stopped at `publication_pending`, sent as a close.
+    let p = PullRequest::new();
+    p.close_first();
+    let req = p.withdraw_request();
+    let mut io = PullRequestIo::default();
+    withdraw_stopped_at_publication(
+        &p,
+        &req,
+        &mut io,
+        transport(crate::repository::transport::SshTransportErrorKind::TransportUnavailable),
+    );
+    let before = format!("{:?}", p.stored(&req));
+    let mut other = PullRequestIo::default();
+    let result = p.run(req.clone(), &mut other);
+    assert!(
+        matches!(result, Err(TicketClosureError::OperationMismatch)),
+        "{result:?}"
+    );
+    assert_eq!(other.children(), 0);
+    assert_eq!(format!("{:?}", p.stored(&req)), before);
+    let refused = state::with_transaction(&p.f.service, p.f.root(), |tx, rid| {
+        Ok(<TicketClosureLifecycle as Lifecycle>::refuse_record(
+            tx,
+            rid,
+            req.operation_id,
+            &id(),
+            req.expected,
+            &config,
+            None,
+            &refusal,
+        ))
+    })
+    .unwrap();
+    assert!(
+        matches!(&refused, Err(e) if e.kind == RepositoryErrorKind::OperationMismatch),
+        "{refused:?}"
+    );
+    // The withdraw's own request goes on.
+    let outcome = PullRequest::branch(p.withdraw(req, &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Withdrawn);
+    p.assert_primary_untouched(&io);
+    p.assert_primary_untouched(&other);
 }

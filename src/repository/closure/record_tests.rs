@@ -2328,3 +2328,100 @@ fn a_branch_record_begins_replays_and_is_refused_on_its_own_path() {
     .unwrap();
     assert_eq!(direct.path(), RecordPath::Direct);
 }
+
+/// A branch record's `closing` writes what its action writes: a withdraw its
+/// commit, a close its closure or nothing. Another action's write, an
+/// effect the record's kind does not have and a zero commit are refused, and
+/// leave the record where it was.
+#[test]
+fn begin_branch_closing_writes_what_the_action_writes() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let mut n = 0;
+    let mut row = |action: &str, kind: &str| {
+        n += 1;
+        branch_row(
+            &tx,
+            &item_n(n),
+            action,
+            "context_synchronized",
+            &[("closure_kind", kind), ("context_oid", &q('1'))],
+        )
+    };
+    // A withdraw writes its commit, and no closure.
+    let withdraw = row("withdraw", "'existing'");
+    begin_branch_closing(
+        &tx,
+        1,
+        withdraw,
+        oid('2'),
+        BranchWrite::Withdraw { commit: oid('5') },
+    )
+    .unwrap();
+    let r = read(&tx, withdraw);
+    assert_eq!(r.step, ClosureStep::Closing);
+    assert_eq!(r.withdraw_oid, Some(oid('5')));
+    assert_eq!(r.base_oid, Some(oid('2')));
+    assert_eq!((r.closure_oid, r.closed_at), (None, None));
+    assert_eq!(r.written_commit(), Some(oid('5')));
+    // A close's own writes are unchanged.
+    let existing = row("close", "'existing'");
+    begin_branch_closing(&tx, 1, existing, oid('2'), BranchWrite::Existing).unwrap();
+    assert_eq!(read(&tx, existing).step, ClosureStep::Closing);
+    let recorded = row("close", "'record'");
+    begin_branch_closing(
+        &tx,
+        1,
+        recorded,
+        oid('2'),
+        BranchWrite::Closure {
+            closed_at: at(),
+            commit: oid('3'),
+        },
+    )
+    .unwrap();
+    assert_eq!(read(&tx, recorded).closure_oid, Some(oid('3')));
+    // Another action's write, and a zero commit, are refused.
+    let refused = [
+        (
+            "withdraw, a close's nothing",
+            row("withdraw", "'existing'"),
+            BranchWrite::Existing,
+        ),
+        (
+            "withdraw, a closure",
+            row("withdraw", "'existing'"),
+            BranchWrite::Closure {
+                closed_at: at(),
+                commit: oid('3'),
+            },
+        ),
+        (
+            "close, a withdraw",
+            row("close", "'existing'"),
+            BranchWrite::Withdraw { commit: oid('5') },
+        ),
+        (
+            "record close, a withdraw",
+            row("close", "'record'"),
+            BranchWrite::Withdraw { commit: oid('5') },
+        ),
+        (
+            "withdraw, a zero commit",
+            row("withdraw", "'existing'"),
+            BranchWrite::Withdraw {
+                commit: Oid::zero(),
+            },
+        ),
+    ];
+    for (case, op, write) in refused {
+        assert_eq!(
+            kind_of(begin_branch_closing(&tx, 1, op, oid('2'), write)),
+            RepositoryErrorKind::RecoveryRequired,
+            "{case}"
+        );
+        let r = read(&tx, op);
+        assert_eq!(r.step, ClosureStep::ContextSynchronized, "{case}");
+        assert_eq!(r.withdraw_oid, None, "{case}");
+    }
+}

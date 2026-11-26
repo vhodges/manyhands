@@ -406,6 +406,18 @@ fn a_branch_answer_gives_its_code() {
             ResultCode::ExternalChange,
             "reconfirmation_required",
         ),
+        (A::Withdrawn, ResultCode::Ok, "withdrawn"),
+        (
+            A::WithdrawClosed,
+            ResultCode::TicketClosed,
+            "withdraw_closed",
+        ),
+        (A::ClosedSince, ResultCode::TicketClosed, "closed_since"),
+        (
+            A::AlreadyApplied,
+            ResultCode::AlreadyApplied,
+            "already_applied",
+        ),
     ] {
         assert_eq!(branch_code(answer), code, "{name}");
         assert_eq!(answer.name(), name);
