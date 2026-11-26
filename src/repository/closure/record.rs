@@ -10,14 +10,19 @@ use crate::{
     repository::{
         OperationId, RemoteOperationPhase, RemoteOperationPriority, RemoteOperationTarget,
         RepositoryError, RepositoryService,
-        cleanup::RetirementEvidence,
+        cleanup::{self, RetirementEvidence},
+        discovery::ContextKey,
+        mark_registered_lifecycle_contexts_dirty,
         promotion::{
             lifecycle::{LifecycleKind, LifecycleRecord, ParentStep, RecordPath},
             lifecycle_record::{self as parent, Blocker, ParentRecord, categories},
             record::{CleanupCategory, IntegrationKind, PublicationCategory},
         },
         pull_request_links,
-        remote::{reservation::RemoteReservation, state},
+        remote::{
+            reservation::{self, RemoteReservation},
+            state,
+        },
     },
 };
 use git2::Oid;
@@ -804,6 +809,62 @@ pub(in super::super) fn begin_branch_record(
     path: (Integration, ClosureAction),
     consented: Option<Oid>,
 ) -> Result<ClosureRecord, RepositoryError> {
+    begin_retiring(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        kind,
+        path,
+        consented,
+        None,
+    )
+}
+
+/// `begin_branch_record` for a new branch: the head its consent bound (the
+/// old context's tip, if there is a context) and what step 2 retires, which
+/// is the record's `retired_oid` from its first write.
+#[allow(clippy::too_many_arguments)] // `begin_branch_record`'s, minus the path, plus what is retired.
+pub(in super::super) fn begin_new_branch_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: ClosureExpectation,
+    remote: Option<&str>,
+    kind: ClosureKind,
+    consented: Option<Oid>,
+    retired: Option<Oid>,
+) -> Result<ClosureRecord, RepositoryError> {
+    begin_retiring(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        kind,
+        (Integration::PullRequest, ClosureAction::NewBranch),
+        consented,
+        retired,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // The two begin shapes above, in one place.
+fn begin_retiring(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: ClosureExpectation,
+    remote: Option<&str>,
+    kind: ClosureKind,
+    path: (Integration, ClosureAction),
+    consented: Option<Oid>,
+    retired: Option<Oid>,
+) -> Result<ClosureRecord, RepositoryError> {
     if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
     }
@@ -824,6 +885,7 @@ pub(in super::super) fn begin_branch_record(
         None,
         path,
         consented,
+        retired,
     )
 }
 /// A refused new request is terminal from insertion. It can coexist with the
@@ -884,9 +946,10 @@ pub(in super::super) fn refuse_record_on(
         Some(refusal),
         path,
         None,
+        None,
     )
 }
-#[allow(clippy::too_many_arguments)] // The two insert shapes above, in one place.
+#[allow(clippy::too_many_arguments)] // The insert shapes above, in one place.
 fn insert_record(
     tx: &Transaction<'_>,
     id: i64,
@@ -898,6 +961,7 @@ fn insert_record(
     refusal: Option<&Refusal>,
     path: (Integration, ClosureAction),
     consented: Option<Oid>,
+    retired: Option<Oid>,
 ) -> Result<ClosureRecord, RepositoryError> {
     if let Some(remote) = remote {
         crate::repository::RemoteRefPlan::from_configuration(remote, "main")
@@ -909,7 +973,7 @@ fn insert_record(
     } else {
         "confirmed"
     };
-    tx.execute("INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers,closure_kind,integration_mode,action,consented_context_oid) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,parent::now(),category,blockers,kind.map(ClosureKind::name),path.0.as_str(),path.1.name(),consented.map(|o|o.to_string())]).map_err(|_|state::recovery_required())?;
+    tx.execute("INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers,closure_kind,integration_mode,action,consented_context_oid,retired_oid) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,parent::now(),category,blockers,kind.map(ClosureKind::name),path.0.as_str(),path.1.name(),consented.map(|o|o.to_string()),retired.map(|o|o.to_string())]).map_err(|_|state::recovery_required())?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)
 }
 /// Saves every runner-owned field. The closure effect (`closure_kind`,
@@ -1086,10 +1150,12 @@ pub(in super::super) fn begin_branch_closing(
 
 /// A new branch's step 1 write, in one SQL write: the commit just built on
 /// the tracking primary `base`, not yet referenced, its `closed_at` (whole UTC
-/// seconds), the tracking context tip the consent bound (`remote_context_oid`)
-/// and the record's own pending ref, which is made next. The step stays
-/// `confirmed`: from this write the record holds the ticket. The caller has
-/// just re-checked that no synchronization of the context is unfinished.
+/// seconds: the clock's for a `record` closure, the kept closure's own for an
+/// `existing` one), the tracking context tip the consent bound
+/// (`remote_context_oid`) and the record's own pending ref, which is made
+/// next. The step stays `confirmed`: from this write the record holds the
+/// ticket. The caller has just re-checked that no synchronization of the
+/// context is unfinished.
 pub(in super::super) fn begin_new_branch(
     tx: &Transaction<'_>,
     repository_id: i64,
@@ -1102,7 +1168,6 @@ pub(in super::super) fn begin_new_branch(
     let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     if r.action != ClosureAction::NewBranch
         || r.step != ClosureStep::Confirmed
-        || r.closure_kind != Some(ClosureKind::Record)
         || r.closure_oid.is_some()
         || base.is_zero()
         || commit.is_zero()
@@ -1116,10 +1181,12 @@ pub(in super::super) fn begin_new_branch(
     Ok(())
 }
 
-/// A new branch's step 3 begins: `confirmed` (nothing to retire) to
-/// `closing`, with the context to be made at the commit (`context_oid`), in
-/// one SQL write. The pending ref stays until the context exists. The caller
-/// has just re-checked that no synchronization of the context is unfinished.
+/// A new branch's step 3 begins, with the context to be made at the commit
+/// (`context_oid`), in one SQL write: from `confirmed` when there is nothing
+/// to retire, from `retired` when there was. A record that has something to
+/// retire does not skip it. The pending ref stays until the context exists.
+/// The caller has just re-checked that no synchronization of the context is
+/// unfinished.
 pub(in super::super) fn begin_new_branch_closing(
     tx: &Transaction<'_>,
     repository_id: i64,
@@ -1130,12 +1197,12 @@ pub(in super::super) fn begin_new_branch_closing(
         return Err(state::recovery_required());
     };
     if r.action != ClosureAction::NewBranch
-        || r.step != ClosureStep::Confirmed
-        || r.retired_oid.is_some()
+        || !(r.step == ClosureStep::Retired
+            || r.step == ClosureStep::Confirmed && r.retired_oid.is_none())
     {
         return Err(state::recovery_required());
     }
-    tx.execute("UPDATE ticket_closures SET step='closing',context_oid=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),commit.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET step='closing',context_oid=?2,cleanup_category=NULL,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),commit.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
     read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     Ok(())
 }
@@ -1252,7 +1319,9 @@ pub(in super::super) fn complete_branch_record(
 /// A branch record's end before its closure is written (or with nothing of
 /// it written), with the refusal and the answer it stores, and the link it
 /// gives its item when it knows one. The caller has proved that nothing is
-/// written when the record is at `closing`.
+/// written when the record is at `closing`. A new branch ends from either side
+/// of its retirement and lets go of its pending ref (its Git ref is deleted
+/// first, by the caller).
 pub(in super::super) fn abandon_branch_record(
     tx: &Transaction<'_>,
     id: i64,
@@ -1264,20 +1333,126 @@ pub(in super::super) fn abandon_branch_record(
 ) -> Result<(), RepositoryError> {
     let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     if r.path() != RecordPath::Branch
-        || !matches!(
-            r.step,
-            ClosureStep::Confirmed | ClosureStep::ContextSynchronized | ClosureStep::Closing
-        )
+        || !r.step.branch_permits(ClosureStep::Abandoned, r.action)
         || after_child(answer)
         || active_without_authority(tx, id, r.context_sync_id)?
     {
         return Err(state::recovery_required());
     }
     let (category, blockers) = Refusal::encoded_columns(Some(refusal))?;
-    tx.execute("UPDATE ticket_closures SET step='abandoned',refusal_category=?2,refusal_blockers=?3,answer_code=?4,cleanup_category=NULL,updated_at=max(updated_at,?5) WHERE operation_id=?1",params![op.to_string(),category,blockers,answer.name(),parent::now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET step='abandoned',refusal_category=?2,refusal_blockers=?3,answer_code=?4,cleanup_category=NULL,pending_ref=NULL,updated_at=max(updated_at,?5) WHERE operation_id=?1",params![op.to_string(),category,blockers,answer.name(),parent::now()]).map_err(|_|state::recovery_required())?;
     give_link(tx, id, &r.item_id, link, given_at)?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     Ok(())
+}
+
+/// A new branch's end under its own `close` reservation: the abandon, and the
+/// reservation ends with it (`cancelled`), in the one transaction. The
+/// retirement was not made, so no context is retired.
+pub(in super::super) fn abandon_reserved_new_branch(
+    tx: &Transaction<'_>,
+    service: &RepositoryService,
+    id: i64,
+    op: OperationId,
+    refusal: &Refusal,
+    answer: BranchAnswer,
+    owner: &RemoteReservation,
+) -> Result<(), RepositoryError> {
+    // No link is given: the record ends before it has a context.
+    abandon_branch_record(tx, id, op, refusal, answer, None, 0)?;
+    reservation::finish_parent(KIND, service, tx, id, owner)
+}
+
+/// A new branch's retirement, in the caller's transaction: the old context
+/// retired at `retired_oid` under the evidence the tracking deletion gave, the
+/// index owed what changed, the record at `retired` and the record's own
+/// `close` reservation ended with it. `branch_deleted` to `retired`; the
+/// record's `cancel_requested` is kept, so a cancellation asked under the
+/// reservation stops step 3.
+pub(in super::super) fn retire_new_branch(
+    tx: &Transaction<'_>,
+    service: &RepositoryService,
+    id: i64,
+    op: OperationId,
+    evidence: &RetirementEvidence<'_>,
+    owner: &RemoteReservation,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    let Some(retired) = r.retired_oid else {
+        return Err(state::recovery_required());
+    };
+    if r.action != ClosureAction::NewBranch
+        || r.step != ClosureStep::BranchDeleted
+        || !evidence.matches(KIND.authoring(), op, &r.item_id, retired)
+        || owner.operation_id() != op
+    {
+        return Err(state::recovery_required());
+    }
+    let configured: Option<String> = tx
+        .query_row(
+            "SELECT remote_name FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if configured.as_deref() != r.remote_name.as_deref() {
+        return Err(state::recovery_required());
+    }
+    let remote = reservation::owned(service, tx, id, owner)?;
+    parent::validate_remote_identity(tx, id, op, &remote.target, remote.priority)?;
+    cleanup::retire_context(tx, id, evidence)?;
+    crate::repository::recovery::invalidate_index_observations(tx, id)?;
+    // The index owes what the retirement changed, in the same transaction, so
+    // that a process lost after the commit leaves it owed. A new branch moves
+    // the item's context alone, never the primary.
+    let root: String = tx
+        .query_row(
+            "SELECT root_path FROM repositories WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    mark_registered_lifecycle_contexts_dirty(
+        tx,
+        id,
+        std::path::Path::new(&root),
+        &[ContextKey::Item(r.item_id.clone())],
+    )?;
+    tx.execute("UPDATE ticket_closures SET step='retired',cleanup_category=NULL,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
+    reservation::finish_parent(KIND, service, tx, id, owner)?;
+    read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
+/// What a new branch's record and reservation say after an uncertain commit
+/// of its retirement: `true` when it is at `retired` or later with its
+/// reservation completed, `false` when it is still at `branch_deleted`.
+/// Git's absence is never evidence.
+pub(in super::super) fn reconcile_retirement(
+    db: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+) -> Result<bool, RepositoryError> {
+    let r = read_record(db, id, op)?.ok_or_else(state::recovery_required)?;
+    if r.action != ClosureAction::NewBranch || r.retired_oid.is_none() {
+        return Err(state::recovery_required());
+    }
+    match r.step {
+        ClosureStep::BranchDeleted => Ok(false),
+        ClosureStep::Retired
+        | ClosureStep::Closing
+        | ClosureStep::PublicationPending
+        | ClosureStep::Published
+        | ClosureStep::Complete => {
+            let remote = state::read_operation(db, id, op)?.ok_or_else(state::recovery_required)?;
+            parent::validate_remote_identity(db, id, op, &remote.target, remote.priority)?;
+            if remote.phase != RemoteOperationPhase::Completed {
+                return Err(state::recovery_required());
+            }
+            Ok(true)
+        }
+        _ => Err(state::recovery_required()),
+    }
 }
 
 /// Gives the ticket its pull request link, when the record knows one.

@@ -115,6 +115,9 @@ pub(in super::super) struct ClosurePreviewRequest {
 
 /// The path of a direct record, today's closure.
 const DIRECT: (Integration, ClosureAction) = (Integration::Direct, ClosureAction::Close);
+/// The path of a new branch, whose record is begun with what it retires.
+const NEW_BRANCH: (Integration, ClosureAction) =
+    (Integration::PullRequest, ClosureAction::NewBranch);
 
 /// The closure effect a new record is inserted with: the observed one.
 fn kind_of(observation: &ClosureObservation) -> ClosureKind {
@@ -223,6 +226,19 @@ fn begin_closure_record(
         },
     };
     match observed.map(|observation| observation.path) {
+        Some(NEW_BRANCH) => record::begin_new_branch_record(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            remote,
+            kind,
+            observed.and_then(ClosureObservation::consented_head),
+            observed
+                .and_then(|observation| observation.new_branch.as_ref())
+                .and_then(|facts| facts.retired_oid),
+        ),
         Some(path) if path != DIRECT => record::begin_branch_record(
             tx,
             id,
@@ -446,24 +462,6 @@ impl Lifecycle for TicketClosureLifecycle {
             }
             Err(blockers) => Err(record::Refusal::Blocked(blockers)),
         }
-    }
-    /// Interim, until a new branch retires its old context: a confirm of an
-    /// unchanged new-branch preview that has an old branch to retire writes no
-    /// record. A refusal at insertion is unaffected, since this runs only for
-    /// an unchanged digest.
-    fn require_identity(
-        preview: &ClosureObservation,
-        _repository: &git2::Repository,
-        _confirmation: Option<&ConfirmedCommitIdentity>,
-    ) -> Result<(), TicketClosureError> {
-        if preview
-            .new_branch
-            .as_ref()
-            .is_some_and(|facts| facts.old_tip.is_some() || facts.retired_oid.is_some())
-        {
-            return Err(TicketClosureError::RecoveryRequired);
-        }
-        Ok(())
     }
     fn refusal_error(refusal: &record::Refusal) -> TicketClosureError {
         match refusal {

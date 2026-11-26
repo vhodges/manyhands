@@ -2467,7 +2467,7 @@ fn a_new_branch_records_its_commit_begins_closing_and_lets_its_ref_go() {
         kind_of(clear_pending_ref(&tx, 1, op)),
         RepositoryErrorKind::RecoveryRequired
     );
-    // A direct record, a kept closure and a zero commit are not a new branch's.
+    // A direct record and a zero commit are not a new branch's.
     let direct = begin_record(
         &tx,
         1,
@@ -2479,12 +2479,7 @@ fn a_new_branch_records_its_commit_begins_closing_and_lets_its_ref_go() {
     )
     .unwrap()
     .operation_id;
-    let kept = begin_new(&item_n(5), ClosureKind::Existing);
-    for (case, operation, commit) in [
-        ("direct", direct, oid('3')),
-        ("kept", kept, oid('3')),
-        ("zero", op, Oid::zero()),
-    ] {
+    for (case, operation, commit) in [("direct", direct, oid('3')), ("zero", op, Oid::zero())] {
         assert_eq!(
             kind_of(begin_new_branch(
                 &tx,
@@ -2540,4 +2535,128 @@ fn a_new_branch_records_its_commit_begins_closing_and_lets_its_ref_go() {
     let r = begin_publication(&tx, 1, op).unwrap();
     assert_eq!(r.step, ClosureStep::PublicationPending);
     assert_eq!(r.primary_attempt, 1);
+    // A kept closure is a new branch's too: its `closed_at` is the kept
+    // closure's, and no step differs.
+    let kept = begin_new(&item_n(5), ClosureKind::Existing);
+    begin_new_branch(&tx, 1, kept, oid('2'), at(), oid('3'), None).unwrap();
+    let r = read(&tx, kept);
+    assert_eq!(
+        (r.closure_kind, r.closed_at, r.closure_oid),
+        (Some(ClosureKind::Existing), Some(at()), Some(oid('3')))
+    );
+    begin_new_branch_closing(&tx, 1, kept).unwrap();
+    assert_eq!(read(&tx, kept).step, ClosureStep::Closing);
+}
+
+/// A new branch that has an old context to retire is begun with what it
+/// retires, and does not skip the retirement: it begins `closing` only from
+/// `retired`. It may be abandoned from either side of the retirement, never
+/// from its removals, and the abandon lets go of its pending ref.
+#[test]
+fn a_new_branch_retires_before_it_closes_and_is_abandoned_without_its_ref() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let begin_retiring = |n: u8| {
+        begin_new_branch_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(&item_n(n)),
+            digest(7),
+            Some("origin"),
+            ClosureKind::Record,
+            Some(oid('1')),
+            Some(oid('1')),
+        )
+        .unwrap()
+        .operation_id
+    };
+    // (the step it is at, whether an abandon from there is permitted)
+    let steps = [
+        (ClosureStep::Confirmed, true),
+        (ClosureStep::WorktreeRemoving, false),
+        (ClosureStep::WorktreeRemoved, false),
+        (ClosureStep::BranchDeleted, true),
+        (ClosureStep::Retired, true),
+    ];
+    for (n, (step, abandons)) in steps.into_iter().enumerate() {
+        let case = format!("{step:?}");
+        let op = begin_retiring(10 + n as u8);
+        let r = read(&tx, op);
+        assert_eq!(
+            (r.retired_oid, r.consented_context_oid),
+            (Some(oid('1')), Some(oid('1'))),
+            "{case}"
+        );
+        begin_new_branch(&tx, 1, op, oid('2'), at(), oid('3'), Some(oid('1'))).unwrap();
+        // The retirement is not skipped.
+        assert_eq!(
+            kind_of(begin_new_branch_closing(&tx, 1, op)),
+            RepositoryErrorKind::RecoveryRequired,
+            "{case}"
+        );
+        let mut r = read(&tx, op);
+        for next in [
+            ClosureStep::WorktreeRemoving,
+            ClosureStep::WorktreeRemoved,
+            ClosureStep::BranchDeleted,
+            ClosureStep::Retired,
+        ] {
+            if r.step == step {
+                break;
+            }
+            r.step = next;
+            save_record(&tx, 1, &r).unwrap();
+        }
+        assert_eq!(read(&tx, op).step, step, "{case}");
+        let refusal = Refusal::ExternalChange;
+        let abandoned =
+            abandon_branch_record(&tx, 1, op, &refusal, BranchAnswer::ExternalChange, None, 0);
+        if abandons {
+            abandoned.unwrap();
+            let r = read(&tx, op);
+            assert_eq!(r.step, ClosureStep::Abandoned, "{case}");
+            assert_eq!((r.pending_ref, r.cleanup), (None, None), "{case}");
+            assert_eq!(r.retired_oid, Some(oid('1')), "{case}");
+            assert!(!written_closure_unfinished(&tx, 1, &item(&item_n(10 + n as u8))).unwrap());
+        } else {
+            assert_eq!(
+                kind_of(abandoned),
+                RepositoryErrorKind::RecoveryRequired,
+                "{case}"
+            );
+            assert_eq!(read(&tx, op).step, step, "{case}");
+        }
+    }
+    // Only `retired` begins `closing`, and it is not an abandon's step again.
+    let op = begin_retiring(20);
+    begin_new_branch(&tx, 1, op, oid('2'), at(), oid('3'), None).unwrap();
+    let mut r = read(&tx, op);
+    for next in [
+        ClosureStep::WorktreeRemoving,
+        ClosureStep::WorktreeRemoved,
+        ClosureStep::BranchDeleted,
+        ClosureStep::Retired,
+    ] {
+        r.step = next;
+        save_record(&tx, 1, &r).unwrap();
+    }
+    begin_new_branch_closing(&tx, 1, op).unwrap();
+    let r = read(&tx, op);
+    assert_eq!(
+        (r.step, r.context_oid),
+        (ClosureStep::Closing, Some(oid('3')))
+    );
+    assert_eq!(
+        kind_of(abandon_branch_record(
+            &tx,
+            1,
+            op,
+            &Refusal::ExternalChange,
+            BranchAnswer::ExternalChange,
+            None,
+            0,
+        )),
+        RepositoryErrorKind::RecoveryRequired
+    );
 }

@@ -212,7 +212,7 @@ fn mapped<E: LifecycleError>(error: RepositoryError) -> E {
         _ => E::from(error),
     }
 }
-fn load<L: Lifecycle>(
+pub(in super::super) fn load<L: Lifecycle>(
     service: &RepositoryService,
     root: &Path,
     op: OperationId,
@@ -221,7 +221,7 @@ fn load<L: Lifecycle>(
         L::read_record(tx, id, op)?.ok_or_else(state::recovery_required)
     })
 }
-fn save<L: Lifecycle>(
+pub(in super::super) fn save<L: Lifecycle>(
     service: &RepositoryService,
     root: &Path,
     r: &L::Record,
@@ -2136,7 +2136,7 @@ fn safe(
         _ => Err(Clean::Cancelled),
     }
 }
-fn validate_cleanup_owner(
+pub(in super::super) fn validate_cleanup_owner(
     service: &RepositoryService,
     root: &Path,
     owner: Option<&RemoteReservation>,
@@ -2161,7 +2161,11 @@ fn validate_cleanup_owner(
     }
     Ok(())
 }
-fn require_configuration(root: &Path, primary: &str, remote: Option<&str>) -> Result<(), Clean> {
+pub(in super::super) fn require_configuration(
+    root: &Path,
+    primary: &str,
+    remote: Option<&str>,
+) -> Result<(), Clean> {
     match read_configuration(root) {
         Ok(ConfigurationInspection::Valid(config))
             if config.primary_branch == primary

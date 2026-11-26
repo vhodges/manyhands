@@ -11,7 +11,7 @@ use super::{
     BranchAnswer, ClosureAction, PlannedClosure, PreviewTicketClosureRequest,
     observe::{
         self, ClosureContentError, ClosureObservation, closed_by_text, closed_ticket_bytes,
-        ticket_path, withdrawn_ticket_bytes,
+        closure_replaced_bytes, ticket_path, withdrawn_ticket_bytes,
     },
     record::{self, BranchWrite, ClosureKind, ClosureRecord, ClosureStep, Refusal},
 };
@@ -187,6 +187,47 @@ pub(in super::super) fn build_closure_commit(
         closed_by,
         mode: built.mode,
     }))
+}
+
+/// The closure a commit's ticket holds, which a new branch keeps (R-21):
+/// `closed_at` and `closed_by` as the ticket has them. `None` unless the
+/// ticket is a conforming closed one.
+pub(in super::super) fn commit_closure(
+    repo: &git2::Repository,
+    commit: Oid,
+    path: &Path,
+) -> Option<(OffsetDateTime, String)> {
+    let tree = repo.find_commit(commit).ok()?.tree().ok()?.id();
+    tree_closure(repo, tree, path).map(|(closed_at, closed_by, _)| (closed_at, closed_by))
+}
+
+/// The commit `Close ticket <ULID>` that keeps a closure the old context
+/// already holds: `context`'s ticket given `kept_at` and `kept_by` as they are
+/// (`closure_replaced_bytes`), parent `context`, the identity as author and
+/// committer at `at`. Unreferenced. `None` when the ticket is not a canonical
+/// regular file or the closure cannot be given to it. `at` is the clock's:
+/// the closure's own time is the ticket's, not the commit's.
+#[allow(clippy::too_many_arguments)] // `build_closure_commit`'s, plus the closure kept.
+pub(in super::super) fn build_kept_closure_commit(
+    repo: &git2::Repository,
+    item: &ItemId,
+    path: &Path,
+    context: Oid,
+    at: OffsetDateTime,
+    identity: &CommitIdentity,
+    kept_at: OffsetDateTime,
+    kept_by: &str,
+) -> Result<Option<Oid>, RepositoryError> {
+    Ok(commit_edited_ticket(
+        repo,
+        path,
+        context,
+        whole_utc_seconds(at),
+        identity,
+        &checkpoint_subject(item),
+        |original| closure_replaced_bytes(original, kept_at, kept_by),
+    )?
+    .map(|built| built.commit))
 }
 
 /// A withdraw's commit subject.

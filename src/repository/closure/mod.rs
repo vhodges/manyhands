@@ -118,6 +118,9 @@ pub enum BranchAnswer {
     ContextRemoteBranchDeleted,
     ContextHistoryUnresolved,
     ContextTicketClosed,
+    /// A new branch's, abandoned: the old context's full check refused its
+    /// removal (dirty, moved, locked, or holding a repository of its own).
+    ContextChanged,
     /// A withdraw's, after its publication child: the closure is removed and
     /// published.
     Withdrawn,
@@ -150,6 +153,7 @@ impl BranchAnswer {
             Self::ContextRemoteBranchDeleted => "context_remote_branch_deleted",
             Self::ContextHistoryUnresolved => "context_history_unresolved",
             Self::ContextTicketClosed => "context_ticket_closed",
+            Self::ContextChanged => "context_changed",
             Self::Withdrawn => "withdrawn",
             Self::WithdrawClosed => "withdraw_closed",
             Self::ClosedSince => "closed_since",
@@ -175,6 +179,7 @@ impl BranchAnswer {
             "context_remote_branch_deleted" => Ok(Self::ContextRemoteBranchDeleted),
             "context_history_unresolved" => Ok(Self::ContextHistoryUnresolved),
             "context_ticket_closed" => Ok(Self::ContextTicketClosed),
+            "context_changed" => Ok(Self::ContextChanged),
             "withdrawn" => Ok(Self::Withdrawn),
             "withdraw_closed" => Ok(Self::WithdrawClosed),
             "closed_since" => Ok(Self::ClosedSince),

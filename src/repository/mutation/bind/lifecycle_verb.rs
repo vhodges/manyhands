@@ -524,9 +524,10 @@ pub(super) fn branch_code(answer: BranchAnswer) -> ResultCode {
         BranchAnswer::RemoteBranchDeleted | BranchAnswer::ContextRemoteBranchDeleted => {
             ResultCode::RemoteBranchDeleted
         }
-        BranchAnswer::RemoteChanged | BranchAnswer::ContextHistoryUnresolved => {
-            ResultCode::RecoveryRequired
-        }
+        // The code a direct close's `context_changed` cleanup stop answers.
+        BranchAnswer::RemoteChanged
+        | BranchAnswer::ContextHistoryUnresolved
+        | BranchAnswer::ContextChanged => ResultCode::RecoveryRequired,
         BranchAnswer::ExternalChange | BranchAnswer::ReconfirmationRequired => {
             ResultCode::ExternalChange
         }

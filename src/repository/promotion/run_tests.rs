@@ -31,7 +31,7 @@ pub(super) fn observation_prepared(service: &RepositoryService, root: &std::path
 }
 thread_local! { pub(in super::super) static TRACKING_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
 thread_local! { pub(in super::super) static COMMIT_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
-pub(super) fn completion_returned(
+pub(in super::super) fn completion_returned(
     service: &RepositoryService,
     root: &std::path::Path,
     result: Result<(), RepositoryError>,
@@ -43,7 +43,7 @@ pub(super) fn completion_returned(
     }
     result
 }
-pub(super) fn tracking_deleted(service: &RepositoryService, root: &std::path::Path) {
+pub(in super::super) fn tracking_deleted(service: &RepositoryService, root: &std::path::Path) {
     let hook = TRACKING_HOOKS.with(|h| h.borrow_mut().remove(root));
     if let Some(hook) = hook {
         hook(service);
@@ -480,7 +480,11 @@ pub(in super::super) fn complete_child_row(
         Ok(())
     }).unwrap();
 }
-pub(super) fn local_effect(service: &RepositoryService, root: &std::path::Path, effect: &str) {
+pub(in super::super) fn local_effect(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    effect: &str,
+) {
     state::with_transaction(service, root, |tx, _| {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS promotion_test_effects(effect TEXT NOT NULL)")
             .unwrap();

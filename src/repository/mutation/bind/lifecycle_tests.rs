@@ -397,6 +397,11 @@ fn a_branch_answer_gives_its_code() {
             "context_history_unresolved",
         ),
         (
+            A::ContextChanged,
+            ResultCode::RecoveryRequired,
+            "context_changed",
+        ),
+        (
             A::ExternalChange,
             ResultCode::ExternalChange,
             "external_change",

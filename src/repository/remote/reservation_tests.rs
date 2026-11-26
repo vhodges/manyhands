@@ -3759,6 +3759,51 @@ fn close_parent_at_branch_deleted(
     })
     .unwrap()
 }
+/// A new branch's parent at `branch_deleted`: its old context `1…` is the one
+/// it retires, the tracking primary `2…`, its commit `3…`.
+fn new_branch_parent_at_branch_deleted(
+    service: &RepositoryService,
+    root: &Path,
+) -> crate::repository::closure::record::ClosureRecord {
+    use crate::repository::closure::{
+        ClosureExpectation,
+        record::{self as closure, ClosureStep},
+    };
+    state::with_transaction(service, root, |tx, id| {
+        let op = OperationId::new();
+        closure::begin_new_branch_record(
+            tx,
+            id,
+            op,
+            &close_item(),
+            ClosureExpectation::from_bytes([7; 32]),
+            Some("origin"),
+            closure::ClosureKind::Record,
+            Some(close_oid('1')),
+            Some(close_oid('1')),
+        )?;
+        closure::begin_new_branch(
+            tx,
+            id,
+            op,
+            close_oid('2'),
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            close_oid('3'),
+            Some(close_oid('1')),
+        )?;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        for step in [
+            ClosureStep::WorktreeRemoving,
+            ClosureStep::WorktreeRemoved,
+            ClosureStep::BranchDeleted,
+        ] {
+            r.step = step;
+            closure::save_record(tx, id, &r)?;
+        }
+        closure::read_record(tx, id, op).map(Option::unwrap)
+    })
+    .unwrap()
+}
 fn reserve_close(service: &RepositoryService, root: &Path, op: OperationId) -> RemoteReservation {
     match service
         .reserve_remote_operation(root, op, &close_target())
@@ -4014,9 +4059,16 @@ fn close_cancel_flags_parent_and_reservation() {
 /// `branch_deleted` after `setup` adjusts its rows. Returns the result and
 /// the close reservation's phase afterwards.
 fn finish_close_case(setup: impl FnOnce(&Connection, OperationId)) -> (bool, String) {
+    finish_case(close_parent_at_branch_deleted, setup)
+}
+/// `finish_close_case` for the parent `parent` makes.
+fn finish_case(
+    parent: fn(&RepositoryService, &Path) -> crate::repository::closure::record::ClosureRecord,
+    setup: impl FnOnce(&Connection, OperationId),
+) -> (bool, String) {
     use crate::repository::promotion::lifecycle::LifecycleKind;
     let (data, root, service) = fixture();
-    let parent = close_parent_at_branch_deleted(&service, root.path());
+    let parent = parent(&service, root.path());
     let op = parent.operation_id;
     let owner = reserve_close(&service, root.path(), op);
     for point in [
@@ -4123,6 +4175,81 @@ fn finish_close_refuses_document_retirement_row() {
     });
     assert!(!finished);
     assert_ne!(phase, "completed");
+}
+
+/// A new branch's parent row ends with its record's end: its retirement (the
+/// record at `retired`, the old context retired at its `retired_oid`) is
+/// `completed`, and an abandon under the reservation (no pending ref left,
+/// something retired for) is `cancelled`. Neither without its record's end, at
+/// another tip, or from the direct close's own rows.
+#[test]
+fn finish_close_ends_a_new_branch_s_reservation_by_its_end() {
+    fn new_branch(setup: impl FnOnce(&Connection, OperationId)) -> (bool, String) {
+        finish_case(new_branch_parent_at_branch_deleted, setup)
+    }
+    let retired = |db: &Connection| {
+        db.execute_batch("UPDATE ticket_closures SET step='retired'")
+            .unwrap();
+    };
+    let abandoned = |db: &Connection| {
+        db.execute_batch("UPDATE ticket_closures SET step='abandoned',refusal_category='external_change',answer_code='external_change',pending_ref=NULL")
+            .unwrap();
+    };
+    assert_eq!(
+        new_branch(|db, op| {
+            retired(db);
+            retire(db, op, "ticket", '1');
+        }),
+        (true, "completed".to_owned())
+    );
+    assert_eq!(
+        new_branch(|db, _| abandoned(db)),
+        (true, "cancelled".to_owned())
+    );
+    for (name, setup) in [
+        (
+            "retired at another tip",
+            Box::new(|db: &Connection, op| {
+                retired(db);
+                retire(db, op, "ticket", '3');
+            }) as Box<dyn FnOnce(&Connection, OperationId)>,
+        ),
+        (
+            "retired, nothing retired",
+            Box::new(|db: &Connection, _| retired(db)),
+        ),
+        (
+            "branch_deleted, retired",
+            Box::new(|db: &Connection, op| retire(db, op, "ticket", '1')),
+        ),
+        (
+            "retired by another operation",
+            Box::new(|db: &Connection, _| {
+                retired(db);
+                retire(db, OperationId::new(), "ticket", '1');
+            }),
+        ),
+        (
+            "a document retired",
+            Box::new(|db: &Connection, op| {
+                retired(db);
+                retire(db, op, "document", '1');
+            }),
+        ),
+        (
+            "abandoned with nothing to retire",
+            Box::new(|db: &Connection, _| {
+                abandoned(db);
+                db.execute_batch("UPDATE ticket_closures SET retired_oid=NULL")
+                    .unwrap();
+            }),
+        ),
+    ] {
+        let (finished, phase) = new_branch(setup);
+        assert!(!finished, "{name}");
+        assert_ne!(phase, "completed", "{name}");
+        assert_ne!(phase, "cancelled", "{name}");
+    }
 }
 
 /// A closure parent with a minted context attempt, and its child execution.
