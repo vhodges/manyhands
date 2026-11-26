@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-rphcs (`01M87684C9GM9BJP5QQ429KMAK`), branch `manyhands/ticket/01M87684C9GM9BJP5QQ429KMAK`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 04 design](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md). Plan: [Cycle 04 implementation plan](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-implementation.md).
 
-Status: **draft**, revision 5, 2026-11-26. Not yet approved.
+Status: **draft**, revision 6, 2026-11-26. Not yet approved.
 
 Revision history:
 
@@ -17,7 +17,8 @@ Revision history:
 - Revision 3 (Cycle document `51b490eb`, design `43b2aa14`, plan `5091ecda`): a scoped re-review (0 Blocking, 6 Important, 10 Minor) and an adversarial round (2 Blocking, 7 Important, 9 Minor) of revision 2, and the owner's decisions 13 and 14.
 - Revision 4: a third round on revision 3 (scoped re-review: 2 Blocking, 3 Important, 7 Minor; adversarial: 3 Blocking, 4 Important, 6 Minor), whose blockers were again in the mechanisms of decisions 13 and 14. As the planning skill directs after a third such round, revision 4 states them as required-outcome tables (design Part C, RR and F) and makes Task 4 test-first against them with a design checkpoint that chooses the mechanism.
 - Revision 4 (Cycle document `c2b5d5db`, design `6ca7aa60`, plan `0f8f8c03`) had a fourth, scoped round (1 Blocking, 6 Important, 8 Minor), the owner's choice after revision 4 was presented.
-- Revision 5: that round's corrections to the outcome tables and the owner's decision 15. Revision 5 has not been independently reviewed.
+- Revision 5 (Cycle document `05ee09aa`, design `3e419631`, plan `3a009742`): that round's corrections to the outcome tables and the owner's decision 15.
+- Revision 6: re-grounded on main `8e5d9832` after Cycle 03 merged (integrated at `6bc4b69c`), by two read-only research agents: the design's Baseline Facts and line numbers, and its alignment with Cycle 03 as landed (design Review Record). Revisions 5 and 6 have not been independently reviewed.
 
 ## Purpose And Authority
 
@@ -36,8 +37,8 @@ Authorities, in order:
 | Gate | State |
 | --- | --- |
 | RFC approved and on main | `0db9124d`, 2026-11-24 |
-| Ticket branch holds current main | `origin/main` `6c7937c8` merged at `00c043da` (merged, not rebased; pushed); the dependency save at `83297a99` |
-| Dependencies | vh-c2dtj (Cycle 01), closed and merged; vh-gy8gz (Cycle 03), in implementation (decision 5): Tasks 0 to 8 done and Task 9's code at `bef571fd`, Tasks 10 to 16 to come. Task 0 starts after it merges |
+| Ticket branch holds current main | `origin/main` `8e5d9832` merged at `0c5027e0` (merged, not rebased; pushed); earlier `6c7937c8` at `00c043da`, and the dependency save at `83297a99` |
+| Dependencies | vh-c2dtj (Cycle 01) and vh-gy8gz (Cycle 03, decision 5), closed and merged; Cycle 03 was integrated at `6bc4b69c` |
 | Landed Cycle | vh-c97se (Cycle 02), merged at `c56b6ef1`: `PullRequestDto`, `pull_request.schema.json`, and the `setup_pending` gate, which already covers `document promote` |
 | Dependents | vh-ssepw (Cycle 05) and vh-p7st2 (Cycle 06) |
 | Deployments in pull-request mode | none: this repository is direct mode and Manyhands is not yet used at work |
@@ -61,7 +62,7 @@ Authorities, in order:
 
 - vh-ssepw: `primary_holds_document` (design R-3) is the content-proof rule for its detection of a promoted document; its confirmed manual cleanup and its surviving-branch deletion end a document's context and so must delete its link row, as both retirement paths do, and must respect the retirement fence of an unfinished pull-request promotion (decision 13); promote already answers `already_applied` once a clone has seen the merge; K-9 and K-12 are edges its cleanup settles.
 - vh-p7st2: the new preview `pull_request_promotion_preview` and data `pull_request_promotion`; `document show`'s `pull_request` for a document; "Approve and merge" in a pull-request repository; and `repo inspect`'s listing of outstanding links, for tickets and documents (decision 12).
-- vh-gy8gz: this Cycle extends its link helper to documents (design Part G item 9), its `item sync` link to documents (Part F), its library fake publisher to promotion (Part G item 13), its SSH case with promote steps (decision 6), and its retirement fence with a promotion twin (decision 13); it adds a defaulted lifecycle hook that the closure does not take (Part G item 6); it changes its Contract 12's "`pull_request` null for documents" and its Part C rule that every `item sync` answer carrying a link writes the row.
+- vh-gy8gz (closed, so it takes no comment; recorded here instead): this Cycle extends its link helper to documents (design Part G item 9), its `item sync` link to documents (Part F), its library fake publisher to promotion (Part G item 13), its SSH case with promote steps (decision 6), and its retirement fence with a promotion twin (decision 13); it adds a defaulted lifecycle hook that the closure does not take (Part G item 6); it changes its Contract 12's "`pull_request` null for documents" and its Part C rule that every `item sync` answer carrying a link writes the row.
 - The Wave 06 document: Cycle 04's checklist (design D-6).
 
 ## Departures From The RFC
@@ -145,6 +146,7 @@ Nothing has been run. Every status above is planned.
 - K-15: Until a poll prunes it, prepare and `document show` read a stale tracking ref of a branch the forge deleted, so a document whose remote copy was ahead reads not held there; confirm reads it as absent (design R-3).
 - K-16: A change of the publication remote, or a save, while a conflict or an identity window holds a stopped promote's child is not caught: the child continues to its own end by its way out, and resolving the conflict publishes the resolution as any conflict's is published (decision 15).
 - K-17: The link of a first promote is built when its record finishes, from the remote URL and forge setting as they are then, so a change of either after the confirm can give a link other than the previewed one (design R-30).
+- K-18: Once a pull-request promote's branch is gone, a same-request replay of its finished answer answers `recovery_required` unless the primary holds the commit the answer names: a merge commit or a fast-forward replays, a squash does not, as Cycle 03's K-13 says for a close.
 
 ## Open Questions
 
@@ -184,5 +186,6 @@ None at this revision.
 | Review round 4, scoped re-review | 1 Blocking, 6 Important, 8 Minor | — | Resolved in revision 5; see the design's Review Record | This revision |
 | Review round 4 | A held child cannot be let go, and resolving its conflict publishes outside the promote's checks | decision | It continues to its own end (decision 15, K-16) | `remote/reservation.rs` about 1836-1857; `bind/conflict.rs` about 45-52 |
 | Review round 4 | The link "built from the record's inputs" had none to build from | ruling | Built when the record finishes, from the live remote URL and forge setting (design R-30, K-17) | `closure/checkpoint.rs` `branch_link`; `forge.rs` `recognise` |
+| Re-grounding after Cycle 03 merged | Cycle 03 landed its withdraw prepare, `item sync` link, way outs, replay fix and SSH case in shapes that change this design | correction | Revision 6: a held document at confirm is `external_change` (design R-29); a document arm in `item sync` (Part F); `from_stored`, way outs, replay and resume for the promote (Part D, Part G item 4, K-18); no contract-table row or second SSH golden (R-23); E-13, E-14 | Research at `8e5d9832`; not independently reviewed |
 | Review round 2 | Refused records carry no answer; the answer CHECK must be one-sided | correction | As Cycle 03's (design Part A) | `promotion/record.rs` `refuse_record`; `closure/record.rs` about 421-422 |
 | Review round 2 | The preview omitted a publication the synchronization makes | correction | All three effects, as the RFC (design R-24) | RFC "Document promote in pull-request mode" |
