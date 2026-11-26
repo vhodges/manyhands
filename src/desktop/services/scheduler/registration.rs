@@ -4,6 +4,9 @@
 //! These are the scheduler's own calls, never part of an automatic poll's
 //! (B4). A repository is polled only when its remotes show an SSH
 //! publication remote (U-2): a poll without a remote writes state (Fact 31).
+//! A repository whose first-time setup is published on its remote is polled
+//! through that remote too, by the same policy, and `poll` takes the setup
+//! path for it (Wave 06 Cycle 02, Part J).
 
 use std::time::Duration;
 
@@ -12,7 +15,12 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::desktop::{
     model::polling::{Authority, Policy, Root},
-    services::{Backend, inflight::ActiveRow, poll},
+    services::{
+        Backend,
+        inflight::ActiveRow,
+        poll,
+        setup_poll::{PendingSetup, SetupPollPath},
+    },
 };
 
 /// The publication remote a repository is checked against: its name and its
@@ -123,14 +131,43 @@ pub(super) fn status_of(backend: &dyn Backend, root: &Root) -> Option<PollingSta
     backend.polling_status(&repo).ok()
 }
 
-/// Reads `root`: its remotes, then its policy.
+/// The remotes as the scheduler reads them for a repository whose setup is
+/// the first-time one `setup` names: the setup's remote stands where the
+/// selected publication remote would, since the repository has none yet
+/// (Part J). Any other repository's remotes are as listed.
+fn polled_through(remotes: RemoteListDto, setup: Option<&PendingSetup>) -> RemoteListDto {
+    let Some(setup) = setup.filter(|setup| setup.path == SetupPollPath::Replace) else {
+        return remotes;
+    };
+    RemoteListDto {
+        items: remotes
+            .items
+            .into_iter()
+            .map(|mut remote| {
+                remote.selected_for_publication = remote.name == setup.remote;
+                remote
+            })
+            .collect(),
+        ..remotes
+    }
+}
+
+/// Reads `root`: its setup, then its remotes, then its policy.
+///
+/// A repository with a first-time setup published on its remote is polled
+/// through that remote by policy, as one with an SSH publication remote is
+/// (Part J); a change on another remote is polled by the current remote's
+/// policy, and `poll` adds the setup's poll after it. A repository with no
+/// setup reads as it always has.
 pub(super) fn read(backend: &dyn Backend, root: &Root) -> Read {
     let Ok(repo) = backend.resolve(std::path::Path::new(root)) else {
         return Read::Failed;
     };
+    let setup = backend.pending_setup(std::path::Path::new(root));
     let Ok(remotes) = backend.publication_remotes(&repo) else {
         return Read::Failed;
     };
+    let remotes = polled_through(remotes, setup.as_ref());
     if !ssh_publication(&remotes) {
         return Read::NotPolled;
     }

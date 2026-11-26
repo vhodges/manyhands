@@ -241,6 +241,83 @@ fn poll_call_list() {
     assert_eq!(harness.backend.calls(), [PollCall::Resolve]);
 }
 
+/// Wave 06 Cycle 02, Part J: a first-time setup published on another remote
+/// is polled in place of the repository's own remote, with the automatic
+/// policy: the policy is not asked and today's poll is not made. A change on
+/// another remote is polled after today's poll of the current remote, and
+/// only when that check answered.
+#[test]
+fn a_published_setup_takes_the_setup_poll_path() {
+    use crate::desktop::{
+        services::setup_poll::{PendingSetup, SetupPollPath},
+        test_support::polling::setup_report,
+    };
+    use manyhands::repository::SetupPollOutcome;
+
+    let mut harness = Harness::new();
+    let on = |path| PendingSetup {
+        path,
+        remote: "origin".to_owned(),
+    };
+    // First-time: Resolve, PollingStatus, then the setup poll and the
+    // deadline it stored read back; nothing of today's poll.
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::Replace));
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert_eq!(
+        harness.backend.calls(),
+        [
+            PollCall::Resolve,
+            PollCall::PollingStatus,
+            PollCall::RemoteSnapshot
+        ]
+    );
+    assert_eq!(
+        harness.backend.setup_polled(),
+        [(harness.root.clone(), true)]
+    );
+
+    // A change: today's five calls, then the setup poll after them.
+    harness.backend.clear_calls();
+    harness
+        .backend
+        .publish_setup(&harness.root, on(SetupPollPath::After));
+    harness
+        .backend
+        .answer_poll(crate::desktop::services::poll_convert::Library::Polled {
+            parts: crate::desktop::services::poll_convert::ReportParts {
+                completion: manyhands::repository::PollCompletion::Completed,
+                completed_at: time::OffsetDateTime::now_utc(),
+                next_eligible_at: None,
+                targets: Vec::new(),
+                outcome: None,
+            },
+            index_pending: false,
+        });
+    harness
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Completed);
+    assert_eq!(harness.backend.setup_polled().len(), 2);
+
+    // The check of the current remote did not answer: the setup waits.
+    harness
+        .backend
+        .answer_poll(crate::desktop::services::poll_convert::Library::Busy);
+    harness.poll(OperationId::new());
+    let (_, attempt) = harness.until_polled();
+    assert_eq!(attempt.answer, Answer::Busy);
+    assert_eq!(harness.backend.setup_polled().len(), 2, "no third poll");
+}
+
 /// A background poll asks nobody for a passphrase: no prompt, the key is
 /// not declined, it is recorded against the running request, and the poll
 /// answers a locked key (B5, R-26). Through the real provider and a fresh
