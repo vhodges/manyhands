@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull-request closure mutation",
+  "description": "The data of a result of ticket close in a pull-request repository, or of ticket withdraw-closure, or of an operation resume that continued one: a branch record that finished, whatever way. Nothing of it reaches primary, so it has no integration, cleanup or made-ready report. It carries the data in an ok, already_closing, already_applied, remote_branch_deleted or ticket_closed answer, and in the recovery_required answer of a record whose publication remote changed or is gone, whose way out is item sync. A prepare that is blocked answers with the lifecycle's blocked data instead, and a child of the record that stops carries the synchronization's own. It holds IDs, commits and fixed categories: no closed_by, title or body.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "action",
+    "closure",
+    "checkpoint_oid",
+    "publication",
+    "retired_context",
+    "pull_request",
+    "blockers"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "pull_request_closure"
+      ]
+    },
+    "action": {
+      "description": "What the record did to the ticket: close records or keeps a closure on the ticket's branch; new_branch makes the branch again from primary after its old one was deleted on the remote, keeping a provisional closure; withdraw removes a closure from the branch.",
+      "type": "string",
+      "enum": [
+        "close",
+        "withdraw",
+        "new_branch"
+      ]
+    },
+    "closure": {
+      "description": "The closure the answer leaves on the branch. recording is recorded when this record wrote it, existing when the branch already held it (every already_closing answer reads existing), withdrawn when this record removed it, and none when the record wrote or kept none. closed_at is the closure's own timestamp, set exactly when recording is recorded, and null otherwise. closed_by is never here: it is personal data.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recording",
+        "closed_at"
+      ],
+      "properties": {
+        "recording": {
+          "type": "string",
+          "enum": [
+            "recorded",
+            "existing",
+            "withdrawn",
+            "none"
+          ]
+        },
+        "closed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "checkpoint_oid": {
+      "description": "The commit this record made on the ticket's branch, when it made one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "publication": {
+      "description": "How the ticket's branch reached the remote: published when this record pushed it, current when the remote held it already. Null when the record's publication did not complete.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "published",
+        "current",
+        null
+      ]
+    },
+    "retired_context": {
+      "description": "The commit a new branch retired of the old context: its old tip, or the remote history's last published commit. Null for any other record.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pull_request": {
+      "description": "Where to open the pull request, from the link record. Null when the item has none.",
+      "$ref": "pull_request.schema.json"
+    },
+    "blockers": {
+      "description": "What stands in the way, as a blocked prepare names it. Empty otherwise.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "not_a_document",
+          "not_a_ticket",
+          "context_missing",
+          "context_nonconforming",
+          "context_dirty",
+          "context_conflicted",
+          "conflict_pending",
+          "local_operation_pending",
+          "comment_publication_pending",
+          "primary_missing",
+          "primary_not_checked_out",
+          "primary_dirty",
+          "primary_conflicted",
+          "primary_ahead_of_remote",
+          "context_behind_remote",
+          "integration_conflict",
+          "remote_context_deleted",
+          "history_unknown",
+          "history_unresolved",
+          "already_closed",
+          "primary_reopened",
+          "document_invalid_after_integration",
+          "ticket_invalid_after_closure",
+          "identity_required",
+          "remote_context_unmaterialized"
+        ]
+      }
+    }
+  }
+}

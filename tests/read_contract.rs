@@ -732,8 +732,9 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
         LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
-        PullRequestClosurePreviewType, RemoteBranch, SetupCancelType, SetupPollOutcome,
-        SetupPollType,
+        PullRequestClosureMutationType, PullRequestClosurePreviewType,
+        PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
+        RemoteBranch, SetupCancelType, SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -937,6 +938,46 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "details.unheld.items.change",
             LifecyclePathChangeKind::ALL
                 .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "type",
+            PullRequestClosureMutationType::ALL
+                .map(PullRequestClosureMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "closure.recording",
+            PullRequestClosureRecording::ALL
+                .map(PullRequestClosureRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "publication",
+            PullRequestClosurePublication::ALL
+                .map(PullRequestClosurePublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "pull_request_link.schema.json",
+            "type",
+            PullRequestLinkDataType::ALL
+                .map(PullRequestLinkDataType::as_str)
                 .to_vec(),
         ),
         (

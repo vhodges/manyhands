@@ -1,0 +1,44 @@
+{
+  "code": "already_closing",
+  "command": "ticket close",
+  "data": {
+    "action": "close",
+    "blockers": [],
+    "checkpoint_oid": null,
+    "closure": {
+      "closed_at": null,
+      "recording": "existing"
+    },
+    "publication": "current",
+    "pull_request": {
+      "forge": null,
+      "source": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      "target": "main",
+      "url": "https://forge.example/new?from=manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW&to=main"
+    },
+    "retired_context": null,
+    "type": "pull_request_closure"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "current",
+    "write": "not_requested"
+  },
+  "message": "The ticket's branch already holds a closure.",
+  "operation_id": "<operation>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FV3",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

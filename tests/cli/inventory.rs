@@ -216,6 +216,7 @@ const DATA: &[(&str, &[&str])] = &[
             "blocked",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
+            "pull_request_link",
         ],
     ),
     (
@@ -255,6 +256,7 @@ const DATA: &[(&str, &[&str])] = &[
             "primary_local_commits",
             "local_context_sync_mutation",
             "lifecycle_mutation",
+            "pull_request_closure_mutation",
             "context_retirement_mutation",
         ],
     ),
@@ -273,8 +275,7 @@ const DATA: &[(&str, &[&str])] = &[
     // A pull-request close's preview, its blocked prepares and its answers
     // are the lifecycle's or their own; a child of the record that stops
     // answers as `item sync` does, and a busy stop is named by the blocker.
-    // The record's own answers (`pull_request_closure_mutation`) and the
-    // link (`pull_request_link`) join with their schemas.
+    // The record's own answers are `pull_request_closure_mutation`.
     (
         "ticket close",
         &[
@@ -282,6 +283,7 @@ const DATA: &[(&str, &[&str])] = &[
             "pull_request_closure_preview",
             "lifecycle_blocked",
             "lifecycle_mutation",
+            "pull_request_closure_mutation",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
             "blocked",
@@ -293,6 +295,7 @@ const DATA: &[(&str, &[&str])] = &[
             "pull_request_closure_preview",
             "lifecycle_blocked",
             "lifecycle_mutation",
+            "pull_request_closure_mutation",
             "synchronization_mutation",
             "synchronization_conflict_mutation",
             "blocked",
