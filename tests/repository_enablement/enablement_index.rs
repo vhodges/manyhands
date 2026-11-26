@@ -443,6 +443,8 @@ fn the_synchronization_after_a_selection_is_not_refused_as_not_clean() {
         Mutation::RemoteSelect(RemoteSelectInput {
             root: fixture.root.clone(),
             name: Some("origin".to_owned()),
+            integration: None,
+            forge: None,
         })
     };
     let sync = || {

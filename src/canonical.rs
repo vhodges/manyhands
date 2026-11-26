@@ -111,6 +111,13 @@ pub enum ForgeKind {
 }
 
 impl ForgeKind {
+    pub const ALL: [Self; 4] = [
+        Self::BitbucketCloud,
+        Self::BitbucketDataCenter,
+        Self::Github,
+        Self::Gitlab,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BitbucketCloud => "bitbucket-cloud",

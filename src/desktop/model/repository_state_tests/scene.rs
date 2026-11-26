@@ -135,6 +135,7 @@ impl Scene {
         Self {
             entry: RepositoryEntry {
                 summary: RepositorySummaryDto {
+                    setup: None,
                     root: ROOT.to_owned(),
                     enabled_at: None,
                     accessibility: Accessibility::Accessible,

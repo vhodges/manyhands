@@ -104,6 +104,13 @@ const ROWS: &[Row] = &[
         2,
         "a_path_with_no_nonconforming_entry_is_refused"
     ),
+    // A gated verb meets a pending first-time setup (Wave 06 Cycle 02): the
+    // binary's `ticket create` is refused while the setup is recorded.
+    row!(
+        "setup_pending",
+        3,
+        "a_pull_request_enable_without_a_key_stops_with_no_selected_key"
+    ),
     row!("ok", 0, "document_create_commits_one_checkpoint_offline"),
     row!(
         "already_applied",
@@ -306,9 +313,9 @@ fn the_c3_table_and_reasons_account_for_every_code_of_the_audit() {
         .next()
         .unwrap();
     let library = set(published.split_whitespace());
-    assert_eq!(library.len(), 40);
+    assert_eq!(library.len(), 41);
     let expected = set(library.into_iter().chain(CLI_ONLY.iter().copied()));
-    assert_eq!(expected.len(), 42);
+    assert_eq!(expected.len(), 43);
     let covered = set(ROWS.iter().map(|r| r.code));
     let reasons = set(REASONS.iter().map(|r| r.code));
     assert_eq!(covered.len(), ROWS.len());

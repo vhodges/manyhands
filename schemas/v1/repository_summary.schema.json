@@ -8,6 +8,7 @@
     "enabled_at",
     "accessibility",
     "configuration",
+    "setup",
     "index",
     "problem_count"
   ],
@@ -24,6 +25,9 @@
     },
     "configuration": {
       "$ref": "repository_configuration.schema.json"
+    },
+    "setup": {
+      "$ref": "repository_setup.schema.json"
     },
     "index": {
       "$ref": "repository_index.schema.json"

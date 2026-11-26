@@ -11,6 +11,7 @@ use super::{
     IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
+    pending_setup::{index_shows_complete, read_setup_or_problem},
     resolve::{at_root, open_exactly, selected_repository},
     status::index_problems,
 };
@@ -20,7 +21,7 @@ use crate::{
         ConfigurationInspection, DirtyContexts, IdentityConfigProvider, IdentityInspection,
         RemoteInfo, RepositoryError, RepositoryIdentityConfig, RepositoryOperation,
         RepositoryService, SuppliedIdentityConfig, bridges::identity::local_initials,
-        read_configuration_guarded, remote_info_for, resolve_identity,
+        read_configuration_guarded, remote_info_for, resolve_identity, setup::complete,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -362,6 +363,7 @@ impl RepositoryService {
                                     forge_pull_request_url: row.get(14)?,
                                 },
                             ),
+                            setup: None,
                             index: index_state(
                                 refresh_required,
                                 row.get(4)?,
@@ -376,6 +378,21 @@ impl RepositoryService {
                 .collect::<Result<Vec<_>, _>>()?;
             let mut items = Vec::new();
             for (mut item, repo) in rows {
+                // The index and the record only: no remote is read, so a
+                // link that needs the remote's URL has none. A setup this
+                // build cannot read reads as none, with a problem, and the
+                // list goes on.
+                // One the registration's blob already shows complete reads as
+                // none: the index only, so it lags until the next refresh.
+                let registration = repo.registration_id();
+                let (setup, problem) = read_setup_or_problem(
+                    connection,
+                    registration,
+                    |record| index_shows_complete(connection, registration, record),
+                    |_| None,
+                )?;
+                item.setup = setup;
+                item.configuration.problems.extend(problem);
                 item.problem_count =
                     u64::try_from(index_problems(connection, &repo)?.len()).unwrap_or_default();
                 items.push(item);
@@ -445,6 +462,30 @@ impl RepositoryService {
             }
             Err(error) => return Err(error),
         };
+        // A repository that is not registered has no setup. The link is
+        // built with the setup remote's fetch URL as Git has it.
+        // One this build cannot read reads as none, with a problem, as
+        // unreadable operations do.
+        let setup = match registration {
+            Some(registration) => self.read_session(RepositoryOperation::Read, |connection| {
+                read_setup_or_problem(
+                    connection,
+                    registration,
+                    // A setup the local primary already holds reads as none.
+                    |record| complete::is_complete(&repository, record).unwrap_or(false),
+                    |name| {
+                        inspection
+                            .remotes
+                            .iter()
+                            .find(|remote| remote.name == name)
+                            .map(|remote| remote.fetch_url.clone())
+                    },
+                )
+            })?,
+            None => (None, None),
+        };
+        let (setup, setup_problem) = setup;
+        configuration.problems.extend(setup_problem);
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -461,6 +502,7 @@ impl RepositoryService {
                 configuration.publication_remote.as_deref(),
             ),
             configuration,
+            setup,
             operations,
         })
     }

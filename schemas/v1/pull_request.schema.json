@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull request link",
+  "type": ["object", "null"],
+  "additionalProperties": false,
+  "required": ["source", "target", "forge", "url"],
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "forge": {
+      "type": ["string", "null"],
+      "enum": [
+        "bitbucket-cloud",
+        "bitbucket-data-center",
+        "github",
+        "gitlab",
+        null
+      ]
+    },
+    "url": {
+      "type": ["string", "null"]
+    }
+  }
+}

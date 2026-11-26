@@ -1,0 +1,70 @@
+{
+  "code": "ok",
+  "command": "repo enable",
+  "data": {
+    "command": "repo enable",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "forge": null,
+      "identity": {
+        "email": "manyhands-test@example.invalid",
+        "name": "Manyhands Test",
+        "source": "repository",
+        "written_locally": false
+      },
+      "integration": "pull_request",
+      "primary_branch": "main",
+      "remote_location": "ssh://git@example.invalid/team/repo.git",
+      "remote_name": "origin",
+      "root": "<root>",
+      "slug_prefix": null
+    },
+    "effects": [
+      {
+        "effect": "worktree_exclusion_written"
+      },
+      {
+        "effect": "repository_registered"
+      },
+      {
+        "effect": "setup_recorded"
+      },
+      {
+        "effect": "setup_branch_committed"
+      },
+      {
+        "effect": "setup_branch_published"
+      }
+    ],
+    "expires_at": "2023-11-14T22:23:20Z",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

@@ -1532,7 +1532,28 @@ impl RepositoryService {
         Ok((result, live))
     }
 
+    /// Every poll, then the completion of a pending setup the local primary
+    /// already holds (design Part B, R-17): a CLI poll and the desktop's
+    /// direct poll both finish it. It runs only after the poll's own remote
+    /// row is final: `finish` takes the lifecycle check of remote selection,
+    /// which an active remote reservation refuses, so the plan store never
+    /// fences the poll that calls it. A `finish` that fails, or finds the
+    /// lock held or an operation in the way, changes no answer.
     fn poll_probed<P: crate::repository::keys::SessionCredentialProvider>(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: Option<&CancellationProbe>,
+        original: Option<&crate::repository::mutation::Accepted>,
+        live: &mut Option<crate::repository::context_retirement::handoff::Live>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        let root = request.root.clone();
+        let result = self.poll_probed_inner(request, session, probe, original, live);
+        let _ = crate::repository::setup::complete::finish(self, &root);
+        result
+    }
+
+    fn poll_probed_inner<P: crate::repository::keys::SessionCredentialProvider>(
         &self,
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
