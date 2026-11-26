@@ -4767,11 +4767,14 @@ fn closure_hold_lets_through_only_its_own_publication_child() {
     assert!(holds(None), "nothing else of the context passes");
     assert!(!holds(Some(&own)), "its own publication child does");
     // `conflict resolve`'s continuation of that child carries no attempt, and
-    // is let through by its ID alone; another synchronization is not, nor the
-    // record's own ID, nor a stale attempt's.
+    // is let through by its ID alone. The record's own ID is no
+    // synchronization of it, and another ID with no attempt is held.
     assert!(!holds_as(None, child), "its continuation does");
     assert!(holds_as(None, op), "the record's ID is no synchronization");
-    assert!(holds_as(None, OperationId::new()));
+    assert!(
+        holds_as(None, OperationId::new()),
+        "another ID with no attempt is held"
+    );
     // The reserve caller: the child reserves, and a synchronization that is
     // no child is refused by the hold, as an attempt the record replaced is
     // refused by the fence before it.

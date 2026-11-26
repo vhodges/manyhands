@@ -1351,10 +1351,15 @@ fn a_branch_record_s_publication_conflict_is_found_by_its_id() {
 /// R-5, R-17 (ruling 67): `conflict resolve` by a branch record's ID
 /// checkpoints the resolution and continues the publication child, which the
 /// record's hold on the context exempts as it exempts the child's own
-/// attempt: the continuation is not `busy`. The fixture's remote is
-/// unreachable, so what follows the resolution is a transport stop of the
-/// child; the child's publication itself is the SSH tier's. Any other
-/// synchronization of the same context is still refused by the hold.
+/// attempt: the continuation is not `busy`, and reaches the transport. A
+/// library test has no publication double for that continuation (the real
+/// transport needs the runtime the binaries start), so it stops at the
+/// transport's own `RuntimeUninitialized`, answered `internal_error`, with
+/// the resolution checkpointed and the publication pending; the push itself
+/// is the SSH tier's. The record's same request then goes on: the child is
+/// replaced and published by the runner's double, and the record completes
+/// with D10's answer. Any other synchronization of the same context is still
+/// refused by the hold.
 #[test]
 fn a_branch_record_s_resolve_continues_its_own_publication_child() {
     use crate::repository::{
@@ -1362,6 +1367,9 @@ fn a_branch_record_s_resolve_continues_its_own_publication_child() {
         remote::{RemoteOperationAction, RemoteOperationTarget},
     };
     let p = PullRequest::new();
+    // The endpoints a real remote's first attempt records, so that the
+    // continuation of the child's row finds them unchanged.
+    p.f.configure_endpoints();
     let req = p.request();
     let mut io = PullRequestIo::default();
     let (child, _) = conflicted_publication(&p, &req, &mut io);
@@ -1387,8 +1395,11 @@ fn a_branch_record_s_resolve_continues_its_own_publication_child() {
     // The resolution is checkpointed under the child, and the continuation
     // is not fenced.
     assert_eq!(value["data"]["operation_id"], child.to_string(), "{value}");
-    assert_ne!(value["code"], "busy", "{value}");
+    assert_eq!(value["code"], "internal_error", "{value}");
+    assert_eq!(value["outcome"], "partial", "{value}");
     assert_eq!(value["effects"]["checkpoint"], "committed", "{value}");
+    assert_eq!(value["effects"]["publication"], "pending", "{value}");
+    assert_eq!(value["data"]["publication"], "pending", "{value}");
     // Another synchronization of the context is still `busy`.
     let plan = p.f.service.configure_origin_plan_for_testing(p.f.root());
     let target = RemoteOperationTarget::for_context(
@@ -1404,6 +1415,17 @@ fn a_branch_record_s_resolve_continues_its_own_publication_child() {
             .unwrap(),
         crate::repository::remote::RemoteReservationOutcome::Busy
     ));
+    // The record is still unfinished, and its same request finishes it.
+    assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    assert!(p.held());
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Complete);
+    assert_eq!(r.answer_code, Some(BranchAnswer::Published));
+    assert_eq!(r.primary_sync_id, Some(child));
+    assert!(!p.held());
+    p.assert_primary_untouched(&io);
 }
 
 /// D12: a process lost before the context ref moved to the closure rebuilds
