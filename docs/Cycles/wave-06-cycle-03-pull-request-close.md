@@ -95,24 +95,24 @@ Authorities, in order:
 
 | # | Contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | 1, 2, 12 | The owner's case: record, publish, a forge merge commit; then a poll answers the ticket closed, retirement succeeds and the link record is gone | planned (Task 13) |
-| A2 | 1, 2 | The same with a squash, and with a fast-forward | planned (Task 13) |
-| A3 | 4, 5 | The owner's case: the clone that recorded the closure reads `closing` before it fetches, `closed` after the poll | planned (Task 13) |
-| A4 | 7 | The owner's case: a declined pull request, a withdraw, then the closure recorded again | planned (Task 13) |
-| A5 | 6 | The owner's case: a comment and a save while the closure is provisional; a save that changes the closure is refused | planned (Tasks 2, 13) |
-| A6 | 9 | The owner's case: two clones recording a closure; the later one's retry keeps the published closure and publishes | planned (Tasks 6, 13) |
-| A7 | 5 | The owner's case: a dependent stays blocked (`closing_dependency`) until the primary holds the closure, and the queries leave the closing ticket out | planned (Tasks 1, 13) |
-| A8 | 10 | The merged-first recovery without the remote branch: proven and unproven, with the unheld entries | planned (Tasks 9, 13) |
-| A9 | 11 | The merged-first branch with the remote branch kept: the close is in place and its only change against the primary is the closure | planned (Tasks 6, 7, 13) |
-| A10 | 10 | A ticket with no context closes through the new branch: never published, with deleted remote history, and with a surviving branch the primary holds | planned (Task 9) |
-| A11 | 1 | No primary write: every runner test asserts the local primary unchanged and that no synchronization targeted the primary; the SSH case shows the server's primary unchanged across close, close again, withdraw and close again, and writes the goldens (decision 11) | planned (Tasks 7 to 9, 14) |
-| A12 | 2 to 4, 13 | The required outcomes D1 to D21 and the answer table, W1 to W14, F1 to F17, and the record's rebuild | planned (Tasks 7 to 9, 11, 12) |
-| A13 | 8 | The immutability rule for each validator: changed for a ticket context's pinned stages, today's for primary targets, local synchronizations and window 0; a clean merge keeps the primary's closure, and a fast-forward that lacks it is refused | planned (Tasks 3, 6) |
-| A14 | 3, 7, 12, 13 | Every registration: the code, the data, the link data, the preview, the blocker, the verb, the schemas, the enums, the goldens, the inventories, conformance and autonomy | planned (Tasks 4, 5, 10, 11, 14) |
-| A15 | 14 | The amended contracts and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | planned (Task 15) |
-| A16 | 14 | The fast tier and every SSH-harness target, once at review-ready | planned (Task 16) |
+| A1 | 1, 2, 12 | The owner's case: record, publish, a forge merge commit; then a poll answers the ticket closed, retirement succeeds and the link record is gone | met: Task 13 `lifecycle_ends_closed_and_retired_for_each_merge_style` (merge-commit row) |
+| A2 | 1, 2 | The same with a squash, and with a fast-forward | met: the same table's squash and fast-forward rows (Task 13) |
+| A3 | 4, 5 | The owner's case: the clone that recorded the closure reads `closing` before it fetches, `closed` after the poll | met: Task 13 `the_recording_clone_reads_closing_until_it_fetches` (with K-7) and `another_clone_reads_closing_after_its_poll` |
+| A4 | 7 | The owner's case: a declined pull request, a withdraw, then the closure recorded again | met: Task 13 `declined_withdrawn_then_recorded_again` |
+| A5 | 6 | The owner's case: a comment and a save while the closure is provisional; a save that changes the closure is refused | met: Task 2's save check and Task 13 `comments_and_saves_while_provisional` |
+| A6 | 9 | The owner's case: two clones recording a closure; the later one's retry keeps the published closure and publishes | met: Task 6 and Task 13 `two_clones_record_and_the_later_keeps_the_published_closure` |
+| A7 | 5 | The owner's case: a dependent stays blocked (`closing_dependency`) until the primary holds the closure, and the queries leave the closing ticket out | met: Task 1 and Task 13 `a_dependent_waits_for_the_primary` (its `ticket blocked` check is weak, deferred to a follow-on) |
+| A8 | 10 | The merged-first recovery without the remote branch: proven and unproven, with the unheld entries | met: Task 9 and Task 13 `merged_first_with_the_remote_branch_gone_closes_through_a_new_branch`; situation 2's `history_unresolved` row added in the final fix wave |
+| A9 | 11 | The merged-first branch with the remote branch kept: the close is in place and its only change against the primary is the closure | met: Task 13 `merged_first_with_the_remote_branch_kept_closes_in_place` (a table over the three merge styles) |
+| A10 | 10 | A ticket with no context closes through the new branch: never published, with deleted remote history, and with a surviving branch the primary holds | met: Task 9's F-rows (`f3_…`, `f6_…`, F1 to F17) |
+| A11 | 1 | No primary write: every runner test asserts the local primary unchanged and that no synchronization targeted the primary; the SSH case shows the server's primary unchanged across close, close again, withdraw and close again, and writes the goldens (decision 11) | met: every runner test's `assert_primary_untouched`, and the SSH case `a_pull_request_close_publishes_only_the_ticket_branch` (Task 14) |
+| A12 | 2 to 4, 13 | The required outcomes D1 to D21 and the answer table, W1 to W14, F1 to F17, and the record's rebuild | met: the closure run tests for D1 to D21, the answer table, W1 to W14 and F1 to F17, and the record's rebuild tests (Tasks 7 to 9, 11, 12) |
+| A13 | 8 | The immutability rule for each validator: changed for a ticket context's pinned stages, today's for primary targets, local synchronizations and window 0; a clean merge keeps the primary's closure, and a fast-forward that lacks it is refused | met: Tasks 3 and 6 |
+| A14 | 3, 7, 12, 13 | Every registration: the code, the data, the link data, the preview, the blocker, the verb, the schemas, the enums, the goldens, the inventories, conformance and autonomy | met: the registration, inventory, conformance and contract tests (Tasks 4, 5, 10, 11, 14) |
+| A15 | 14 | The amended contracts and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | met: Task 15; the document readers in `tests/cli` pass |
+| A16 | 14 | The fast tier and every SSH-harness target, once at review-ready | met: at `c9205359`, the fast tier (6545 passed; three desktop scheduler tests failed under load and pass alone, as Cycle 02 found) and every SSH-harness target (1533 SSH cases) and `--lib repository::local_sync::` (167) |
 
-Nothing has been run. Every status above is planned.
+Review-ready on 2026-11-26 at `c9205359`: the static gates clean; the fast tier once (5393 s; AGENTS.md's command with `--no-fail-fast` added so the known scheduler flakes in `--bins` cannot stop the later targets); every SSH-harness target once and `--lib repository::local_sync::` (1 h 46 min in all). The execution ledger's Task 16 section has the times per target.
 
 ## Product-Owner Decisions (2026-11-25)
 
