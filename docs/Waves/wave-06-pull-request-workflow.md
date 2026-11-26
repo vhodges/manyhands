@@ -47,11 +47,11 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (a
 
 - [x] Decided: nothing works on this machine while the setup branch is unmerged (RFC decision 8)
 - [x] Decided: the publication remote selection goes in the setup commit
-- [ ] `repo enable` can put the setup on its own branch and publish it, leaving the remote's primary unchanged (Add repository moved to Cycle 06)
-- [ ] After the merge, the next poll brings the repository to the same state as a direct enable
-- [ ] Setting changes in an enabled repository go through a setup branch, with cancel and abandon
-- [ ] Tests: library and non-SSH integration tests, and one SSH case
-- [ ] Reviewed and closed
+- [x] `repo enable` can put the setup on its own branch and publish it, leaving the remote's primary unchanged (Add repository moved to Cycle 06)
+- [x] After the merge, the next poll brings the repository to the same state as a direct enable
+- [x] Setting changes in an enabled repository go through a setup branch, with cancel and abandon (`repo setup-cancel`)
+- [x] Tests: library and non-SSH integration tests, and one SSH case
+- [x] Reviewed and closed (merged 2026-11-26 at `c56b6ef1`)
 
 ### Cycle 03, vh-gy8gz: Ticket close in pull-request mode, the closing state and withdraw
 
