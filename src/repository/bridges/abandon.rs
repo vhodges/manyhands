@@ -235,6 +235,7 @@ fn writes(operation: RepositoryOperation) -> Writes {
         RepositoryOperation::AddRemote
         | RepositoryOperation::RemoveRemote
         | RepositoryOperation::RemoveRegistration
+        | RepositoryOperation::CancelSetup
         | RepositoryOperation::RefreshRepository
         | RepositoryOperation::RebuildRepository
         | RepositoryOperation::OpenRegistry

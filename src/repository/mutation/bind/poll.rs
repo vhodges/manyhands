@@ -33,6 +33,11 @@ use rusqlite::Transaction;
 
 use crate::results::{DiscoveryEffect, Effects, ResultCode, Scope, timestamp_string};
 
+use crate::repository::setup::{
+    self,
+    poll::{SetupPollError, SetupPollOutcome, SetupPollPath},
+};
+
 use super::{
     super::{
         super::{
@@ -47,7 +52,7 @@ use super::{
         command::Command,
         dto::{
             MutationDataDto, PollMutationCompletion, PollMutationDto, PollPolicyMutationDto,
-            PollTargetDisposition, PollTargetDto,
+            PollTargetDisposition, PollTargetDto, SetupPollDto,
         },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder, ScopeKey},
@@ -373,6 +378,106 @@ impl PollOnceBinding {
     /// interrupted or killed, and changes nothing for a row that has ended,
     /// whose stored result the domain returns, or for no row.
     fn call(&self, call: &CallContext<'_>, accepted: &Accepted, restart: bool) -> Ran {
+        // The record decides, at every call of the request, so that a request
+        // entered again takes the path the setup says now (L12). A registry
+        // that cannot be read is no setup: the ordinary poll runs.
+        match setup::poll::path_of(call.service, &accepted.root()) {
+            Ok(Some(SetupPollPath::Replace)) => Self::setup_poll(call, accepted)
+                .unwrap_or_else(|| self.ordinary_call(call, accepted, restart)),
+            Ok(Some(SetupPollPath::After)) => {
+                let ran = self.ordinary_call(call, accepted, restart);
+                Self::then_setup_poll(call, accepted, &ran);
+                ran
+            }
+            Ok(None) | Err(_) => self.ordinary_call(call, accepted, restart),
+        }
+    }
+
+    /// The setup poll of a first-time setup, which takes the place of
+    /// today's poll. It reserves no remote row, so the request's operation
+    /// has no journal row to say what is in flight, and every answer is
+    /// final: a stop is final and a new request polls again, as a poll's are
+    /// (R-18). A `Stopped` standing would read the absent row as nothing in
+    /// flight and delete the record, which could not then be replayed.
+    /// `None` when the setup ended between the choice of the poll and the
+    /// lock: there is nothing to poll or recover, and the caller runs today's
+    /// poll.
+    pub(super) fn setup_poll(call: &CallContext<'_>, accepted: &Accepted) -> Option<Ran> {
+        let answer =
+            match call
+                .session
+                .poll_setup(call.service, &accepted.root(), accepted.request_id)
+            {
+                None => Answer::stopped(ResultCode::InternalError),
+                Some(Ok(report)) => {
+                    let activated = report.outcome == SetupPollOutcome::Activated;
+                    Answer {
+                        effects: Effects {
+                            discovery: if activated {
+                                DiscoveryEffect::Current
+                            } else {
+                                DiscoveryEffect::NotRequested
+                            },
+                            ..Effects::not_requested()
+                        },
+                        local_change: activated,
+                        ..Answer::stopped(ResultCode::Ok).with_data(MutationDataDto::SetupPoll(
+                            Box::new(SetupPollDto::of(&report)),
+                        ))
+                    }
+                }
+                Some(Err(error)) => {
+                    let code = error.code();
+                    match error {
+                        SetupPollError::Cancelled => {
+                            // A failure to clear it leaves a flag on a record that
+                            // is finished below, where nothing reads it.
+                            let _ = call.service.take_cancellation(accepted.request_id);
+                            Answer::stopped(code)
+                        }
+                        SetupPollError::Transport(error) => {
+                            let error = SynchronizationError::Transport(error);
+                            Answer {
+                                data: sync::host_data(&error),
+                                ..Answer::stopped(code)
+                            }
+                        }
+                        SetupPollError::Repository(error) => refused(error),
+                        SetupPollError::Gone => return None,
+                        SetupPollError::Busy
+                        | SetupPollError::RecoveryRequired
+                        | SetupPollError::Registry(_) => Answer::stopped(code),
+                    }
+                }
+            };
+        Some(Ran {
+            answer,
+            standing: Standing::Final,
+        })
+    }
+
+    /// A change on another remote: the setup poll follows today's poll of
+    /// the current remote, unless that was cancelled or interrupted. Its
+    /// report and its stops are dropped, since the request's answer is
+    /// today's poll's (R-16), and the setup's state is `repo inspect`'s.
+    pub(super) fn then_setup_poll(call: &CallContext<'_>, accepted: &Accepted, ran: &Ran) {
+        if call.session.cancelled()
+            || ran.answer.code == ResultCode::Cancelled
+            || matches!(ran.standing, Standing::Owed)
+        {
+            return;
+        }
+        let _ = call
+            .session
+            .poll_setup(call.service, &accepted.root(), accepted.request_id);
+    }
+
+    pub(super) fn ordinary_call(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        restart: bool,
+    ) -> Ran {
         let request = PollPublicationRemoteRequest {
             root: accepted.root(),
             operation_id: accepted.operation_id,
@@ -586,6 +691,20 @@ impl Binding for PollOnceBinding {
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         let repository = resolve_root(call.service, &self.root)?;
         let root = repository.root();
+        // A first-time setup has no configuration file to name a remote or a
+        // primary: the setup poll takes its place, and the request is placed
+        // on the setup's primary.
+        if let Ok(Some((SetupPollPath::Replace, primary))) =
+            setup::poll::path_and_primary(call.service, root)
+        {
+            return Ok(Prepared {
+                family: Some(OperationFamily::Remote),
+                position: Position::of(root, &format!("refs/heads/{primary}"))
+                    .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?,
+                expected: None,
+                observation: None,
+            });
+        }
         let configuration =
             match read_configuration_for(root, RepositoryOperation::RepositorySnapshot)
                 .map_err(refused)?
@@ -624,6 +743,13 @@ impl Binding for PollOnceBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
+        // A setup poll has no row to fence: it takes its path again.
+        if matches!(
+            setup::poll::path_of(call.service, &accepted.root()),
+            Ok(Some(SetupPollPath::Replace))
+        ) {
+            return Ok(Entered::Unfinished);
+        }
         if !ended_failed(&journal)
             && let Some(answer) = sync::fenced_answer(call.service, accepted, Some(&journal))
         {
@@ -643,3 +769,7 @@ impl Binding for PollOnceBinding {
         self.call(call, accepted, true)
     }
 }
+
+#[cfg(test)]
+#[path = "poll_tests.rs"]
+mod tests;

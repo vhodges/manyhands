@@ -258,10 +258,11 @@ pub(crate) fn retire_note_title(name: &str) -> String {
 
 /// S9's words for each action the library lists (R-32). `{primary}` is the
 /// repository's main branch.
-const ACTION_WORDS: [(OperationAction, &str); 23] = [
+const ACTION_WORDS: [(OperationAction, &str); 24] = [
     (OperationAction::CreateAndEnable, "Adding a repository"),
     (OperationAction::Enable, "Adding a repository"),
     (OperationAction::RemoveRegistration, "Removing a repository"),
+    (OperationAction::CancelSetup, "Cancelling a setup"),
     (OperationAction::AddRemote, "Adding a shared copy"),
     (OperationAction::RemoveRemote, "Removing a shared copy"),
     (

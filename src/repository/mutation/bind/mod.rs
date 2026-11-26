@@ -58,6 +58,7 @@ pub(crate) mod resolve_history;
 pub(crate) mod resume;
 pub(crate) mod retire;
 pub(crate) mod save;
+pub(crate) mod setup_cancel;
 pub(crate) mod sync;
 pub(crate) mod ticket;
 
@@ -1134,6 +1135,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // A registration is removed in one transaction: nothing of it is
         // ever done with work remaining.
         Some(Command::RepoRemove) => Recorded::nothing(),
+        // The cancel's one local row is a record of the setup it ended: no
+        // effect is shown for it.
+        Some(Command::RepoSetupCancel) => Recorded::nothing(),
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),

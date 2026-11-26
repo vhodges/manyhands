@@ -26,6 +26,7 @@ use super::{
     records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Kept, Reply, RequestIdentity},
     settle::stored_result,
+    setup_gate,
 };
 
 impl RepositoryService {
@@ -269,6 +270,13 @@ impl RepositoryService {
         confirmation: Option<ConfirmationId>,
         session: &dyn Session,
     ) -> Option<Envelope<MutationDataDto>> {
+        // A pending setup refuses the commands that must wait for it,
+        // before anything of the request is looked at or accepted.
+        if let Some(root) = setup_gate::root_of(binding.place())
+            && let Err(answer) = setup_gate::check(self, binding.command(), root)
+        {
+            return Some(Reply { binding, identity }.envelope(answer, None, Kept::No));
+        }
         let consent = match self.consent(&Reply { binding, identity }, confirmation) {
             Ok(consent) => consent,
             Err(envelope) => return Some(envelope),
@@ -345,8 +353,12 @@ impl RepositoryService {
                 Err(_) => return Some(reply.stopped(ResultCode::RecoveryRequired)),
             },
         };
-        let inserted =
-            self.insert_request_admitted(&request, |tx| binding.admit(self, tx, &accepted));
+        // The gate again, in the acceptance transaction: a setup recorded
+        // since the first check still refuses, and nothing is accepted.
+        let inserted = self.insert_request_admitted(&request, |tx| {
+            setup_gate::admit(tx, binding.command(), binding.place())?;
+            binding.admit(self, tx, &accepted)
+        });
         // DROP before the ordinary executor takes its own common Git lease.
         drop(admission_guard);
         match inserted {
@@ -400,6 +412,7 @@ impl RepositoryService {
                 .event(reply.binding.command().stage(), Effects::not_requested()),
         );
         let written = self.finish_in_one_transaction(request, |transaction| {
+            setup_gate::admit(transaction, reply.binding.command(), reply.binding.place())?;
             let answer = write.write(transaction, &accepted.scope)?;
             if self.dies_at(FailurePoint::BeforeRequestSettlement, accepted) {
                 return Err(ReadError::new(ResultCode::InternalError));

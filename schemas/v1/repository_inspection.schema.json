@@ -10,6 +10,7 @@
     "head_branch",
     "local_branches",
     "configuration",
+    "setup",
     "identity_state",
     "remotes",
     "operations"
@@ -35,6 +36,9 @@
     },
     "configuration": {
       "$ref": "repository_configuration.schema.json"
+    },
+    "setup": {
+      "$ref": "repository_setup.schema.json"
     },
     "identity_state": {
       "type": "string",

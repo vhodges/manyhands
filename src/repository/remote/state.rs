@@ -3150,6 +3150,42 @@ pub(super) fn record_poll_attempt(
     Ok(())
 }
 
+/// Records the attempt of a first-time setup's poll where the desktop reads
+/// it (design Part G): the outcome (`Completed` for any answered
+/// advertisement, `stopped_by` the transport's stop otherwise), the attempt's
+/// time and the next eligible time, as an ordinary poll's finish writes them.
+/// No remote row is reserved, so the rows of the poll are not touched.
+pub(in super::super) fn record_setup_poll_attempt(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    stopped_by: Option<&crate::repository::transport::SshTransportErrorKind>,
+    invocation: super::RemotePollInvocation,
+    now: OffsetDateTime,
+) -> Result<(), RepositoryError> {
+    let category = stopped_by.map_or(
+        RemoteOutcomeCategory::Completed,
+        super::observation::transport_category,
+    );
+    let policy = read_snapshot(transaction, repository_id)?.polling().clone();
+    let next = super::poll::next_eligible(category, invocation, now, &policy);
+    // The backoff grows for an automatic stop the network may cure, is
+    // cleared by an answered advertisement and is kept otherwise.
+    let backoff = match category {
+        RemoteOutcomeCategory::Completed => None,
+        RemoteOutcomeCategory::TransportUnavailable | RemoteOutcomeCategory::ProtocolRejected
+            if invocation == super::RemotePollInvocation::Automatic =>
+        {
+            next.and_then(|at| u64::try_from((at - now).whole_seconds()).ok())
+                .and_then(|seconds| AutomaticBackoff::from_seconds(seconds).ok())
+        }
+        _ => policy
+            .automatic_backoff()
+            .and_then(|current| AutomaticBackoff::from_seconds(current.as_secs()).ok()),
+    };
+    record_outcome(transaction, repository_id, category, backoff)?;
+    record_poll_attempt(transaction, repository_id, now, next)
+}
+
 /// Invoke only with the complete result of a successful advertisement. Failed,
 /// partial, or cancelled calls use record_outcome and leave the current batch.
 /// The caller wraps this in with_transaction; a stale configuration is rejected
