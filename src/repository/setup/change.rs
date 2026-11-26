@@ -298,8 +298,9 @@ impl RepositoryService {
             .config()
             .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
         if resolve_identity(&local, &local, root, operation)?.is_none() {
-            self.complete_lifecycle(root, operation, record)?;
-            return Ok(Stage::Stop(Box::new(SetupOutcome::IdentityRequired)));
+            return Ok(Stage::Stop(Box::new(
+                self.identity_required(root, operation, record)?,
+            )));
         }
         let blob = repository
             .head()
@@ -397,7 +398,11 @@ impl RepositoryService {
         // ended since (a refusal at publishing, a cancel, a completion): the
         // request is over. It records nothing; publishing answers what became
         // of it.
-        if recovery::recorded_a_setup(&tx, record.id)? {
+        // The request itself is finished (an ending that took its own row
+        // too): the same, though its row cannot say so.
+        if recovery::recorded_a_setup(&tx, record.id)?
+            || record::request_is_finished(&tx, request.request_id)?
+        {
             return Ok(Found::Gone);
         }
         // Part B, "Closing the races": no unfinished close or promotion, and

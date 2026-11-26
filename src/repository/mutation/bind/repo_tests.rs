@@ -841,6 +841,26 @@ fn l5_a_removal_finishes_the_request_in_its_own_transaction() {
     assert_eq!(replayed.effects, setup_before.effects);
     assert_eq!(data_of(&replayed), data_of(&setup_before));
 
+    // (c) The ending also deleted the request's own operation row, as a
+    // first-time cancel and `repo remove` do in their transactions: the call
+    // in flight finds no `setup_recorded` row, and still answers the stored
+    // envelope, never the bare code of its own stop.
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    let session = Scripted::new(vec![Step::Then(Box::new(|service, root, request| {
+        end(service, root, request);
+        open_registry(&service.registry_path, &mut |_| {})
+            .unwrap()
+            .execute("DELETE FROM operation_records", [])
+            .unwrap();
+        Err(SetupError::RemoteAlreadySetUp)
+    }))]);
+    let answer = w.run(R1, Some(confirmation), None, &session);
+    assert_eq!(answer.code, ResultCode::RemoteAlreadySetUp);
+    assert_eq!(data_of(&answer)["type"], "setup");
+    assert_eq!(data_of(&answer)["state"], "recorded");
+    assert_eq!(w.record(R1).state, RequestState::Finished);
+
     // (b) The process dies after the removal and before the settle (L5).
     let w = World::new();
     let confirmation = w.confirmation(None);
@@ -1099,6 +1119,17 @@ fn l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed()
 
     assert_eq!(ran.answer.code, ResultCode::WorktreeNotClean);
     assert!(matches!(ran.standing, Standing::Owed));
+    // Recorded, so durable though no effect shows it: partial, never a
+    // plain refusal (ruling Q2).
+    assert_eq!(
+        Outcome::of_mutation(
+            false,
+            ran.answer.code,
+            &ran.answer.effects,
+            ran.answer.local_change
+        ),
+        Outcome::Partial
+    );
     assert_eq!(
         serde_json::to_value(&ran.answer.data).unwrap(),
         setup_data(&setup, "recorded")
@@ -1113,6 +1144,100 @@ fn l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed()
     assert_eq!(data_of(&answer), setup_data(&setup, "published"));
     w.assert_one_setup(&setup, "L11 refused");
     w.assert_local_primary_untouched("L11 refused");
+}
+
+// R-20, for the identity stop: a call that found no identity to commit as
+// answers after another call of the same request recorded the setup (the
+// identity went missing between them). Its row is recorded, so it is owed with
+// the setup, in the domain call's outcome and in the binding's answer to a
+// bare `IdentityRequired`; settled as a refusal before the recording it would
+// be deleted, and a record would name a request that has none.
+fn l15_an_identity_missing_after_another_call_recorded_leaves_the_request_owed() {
+    use crate::repository::setup::enable::SetupOutcome;
+    let w = World::new();
+    let confirmation = w.confirmation(None);
+    let stopped = Scripted::new(vec![Step::Fail(|| SetupError::Busy)]);
+    assert_eq!(
+        w.run(R1, Some(confirmation), None, &stopped).code,
+        ResultCode::Busy
+    );
+    let setup = w.setup().unwrap();
+    {
+        let repository = Repository::open(&w.root).unwrap();
+        let mut local = repository
+            .config()
+            .unwrap()
+            .open_level(git2::ConfigLevel::Local)
+            .unwrap();
+        local.remove("user.name").unwrap();
+        local.remove("user.email").unwrap();
+    }
+    let record = w.record(R1);
+    let accepted = Accepted::of_record(&record, record.attempt).unwrap();
+    let intended = crate::repository::setup::intent::for_enable(
+        "main",
+        Some("origin"),
+        Some(Integration::PullRequest),
+        None,
+        Some(REMOTE_URL),
+    )
+    .unwrap();
+
+    // The domain call, made as a first one: it finds its row recorded.
+    let outcome = w
+        .service
+        .enable_with_setup(
+            crate::repository::EnableRepositoryRequest {
+                root: w.root.clone(),
+                primary_branch: "main".into(),
+                identity: None,
+                operation_id: accepted.operation_id,
+            },
+            crate::repository::setup::enable::SetupRequest {
+                request_id: RequestId::parse(R1).unwrap(),
+                prefix: None,
+                remote_name: "origin".into(),
+                intended: Some(intended),
+                recorded: false,
+            },
+            &|_, _| panic!("a call that stops on the identity publishes nothing"),
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            SetupOutcome::Recorded {
+                stop: ResultCode::IdentityRequired,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+
+    // The binding, told only that no identity was found, reads the row.
+    let ran = super::setup_ran(
+        &w.service,
+        &accepted,
+        &w.root,
+        SetupOutcome::IdentityRequired,
+    );
+    assert_eq!(ran.answer.code, ResultCode::IdentityRequired);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(
+        serde_json::to_value(&ran.answer.data).unwrap(),
+        setup_data(&setup, "recorded")
+    );
+    assert_eq!(
+        Outcome::of_mutation(
+            false,
+            ran.answer.code,
+            &ran.answer.effects,
+            ran.answer.local_change
+        ),
+        Outcome::Partial
+    );
+    assert_eq!(w.record(R1).state, RequestState::Accepted);
+    w.assert_one_setup(&setup, "L15");
 }
 
 // R-Y: a binding that no observation gave a route is not run as a direct
@@ -1248,6 +1373,7 @@ fn the_enable_request_lifecycle_of_design_part_k() {
     ry_a_binding_with_no_route_is_never_run_as_a_direct_enable();
     l13_resume_names_the_original_request();
     l14_an_unreadable_record_is_owed_not_the_direct_path();
+    l15_an_identity_missing_after_another_call_recorded_leaves_the_request_owed();
 }
 
 /// Never a second setup (L11), for `repo enable`: a call that is stale,
@@ -1257,6 +1383,13 @@ fn the_enable_request_lifecycle_of_design_part_k() {
 /// stored envelope.
 #[test]
 fn a_stale_first_enable_never_records_a_second_setup() {
+    stale_first_enable(false);
+    // The ending, a first-time cancel or `repo remove`, also took the
+    // request's own row: the finished request alone says it is over.
+    stale_first_enable(true);
+}
+
+fn stale_first_enable(own_row_gone: bool) {
     use crate::repository::setup::{
         change::tests::{Never, end_the_setup},
         enable::{SetupOutcome, SetupRequest},
@@ -1280,6 +1413,12 @@ fn a_stale_first_enable_never_records_a_second_setup() {
         .execute("DELETE FROM repositories", [])
         .unwrap();
     assert_eq!(w.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    if own_row_gone {
+        open_registry(&w.service.registry_path, &mut |_| {})
+            .unwrap()
+            .execute("DELETE FROM operation_records", [])
+            .unwrap();
+    }
     let intended = crate::repository::setup::intent::for_enable(
         "main",
         Some("origin"),

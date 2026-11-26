@@ -1331,6 +1331,9 @@ impl RepoBinding {
                 }
                 let answer = Answer {
                     data: setup_data::of(service, &root, None),
+                    // The setup is recorded: a durable change no effect
+                    // shows, so the request is partial, never a refusal.
+                    local_change: true,
                     ..Answer::stopped(outcome::repository_error_code(error.kind))
                 }
                 .naming(service, &root, blocker.as_ref());
@@ -1989,12 +1992,30 @@ pub(super) fn setup_ran(
             ),
             standing: Standing::Final,
         },
-        SetupOutcome::IdentityRequired => Ran {
-            answer: Answer::stopped(ResultCode::IdentityRequired),
-            standing: Standing::Stopped {
-                journal: accepted.journal_row(service),
-            },
-        },
+        SetupOutcome::IdentityRequired => {
+            // Nothing was recorded by this call, but another call of the
+            // request may have recorded the setup since (R-20): a request
+            // recorded, or whose row cannot be read, is owed with its setup,
+            // as the `Err` arm of the call has it. Settled as a refusal it
+            // would be deleted, leaving a record that names a request that
+            // has none.
+            if recorded_now(service, accepted) {
+                return Ran {
+                    answer: Answer {
+                        data: setup_data::of(service, root, None),
+                        local_change: true,
+                        ..Answer::stopped(ResultCode::IdentityRequired)
+                    },
+                    standing: Standing::Owed,
+                };
+            }
+            Ran {
+                answer: Answer::stopped(ResultCode::IdentityRequired),
+                standing: Standing::Stopped {
+                    journal: accepted.journal_row(service),
+                },
+            }
+        }
     }
 }
 

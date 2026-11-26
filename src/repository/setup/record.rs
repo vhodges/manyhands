@@ -13,6 +13,25 @@ use crate::canonical::ItemId;
 use git2::Oid;
 use rusqlite::{Connection, Row, Transaction, params};
 
+/// Whether the request `request_id` is finished: its record is there and
+/// holds a result. A request that ended its setup (a refusal, a cancel, a
+/// removal, a completion) is over, and a stale call of it records nothing,
+/// whether or not its own operation row survived the ending. A request with
+/// no record at all is not asked about: a call that reached a recording has
+/// accepted one.
+pub(super) fn request_is_finished(
+    connection: &Connection,
+    request_id: RequestId,
+) -> Result<bool, RepositoryError> {
+    let state: Option<String> = rusqlite::OptionalExtension::optional(connection.query_row(
+        "SELECT state FROM request_records WHERE request_ulid = ?1",
+        [request_id.to_string()],
+        |row| row.get(0),
+    ))
+    .map_err(RepositoryError::sqlite)?;
+    Ok(state.as_deref() == Some(crate::repository::mutation::RequestState::Finished.as_str()))
+}
+
 /// What a setup does to the repository's configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SetupKind {

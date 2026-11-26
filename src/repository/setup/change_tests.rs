@@ -1006,6 +1006,16 @@ fn a_direct_selection_refuses_a_pull_request_primary_under_the_lease() {
                 forge: Some(Some(&forge)),
             },
         ),
+        (
+            // The file this call intends is the one found, but the request
+            // meant a direct selection: not `already_applied`.
+            "the same remote, direct by its intent",
+            Change {
+                name: Some("origin"),
+                integration: Some(Integration::Direct),
+                forge: None,
+            },
+        ),
     ];
     for (what, change) in rows {
         let w = World::new(PR_ORIGIN);
@@ -1120,6 +1130,30 @@ fn a_stale_first_call_never_records_a_second_change() {
         0
     );
     w.assert_primary_untouched("the stale call", &w.configuration());
+
+    // The ending also took the request's own row (a cancel, `repo remove`):
+    // the finished request alone says it is over, and the same stale call
+    // records nothing.
+    w.db().execute("DELETE FROM operation_records", []).unwrap();
+    let again = w
+        .service
+        .change_setup(
+            ChangeSetupRequest {
+                operation_id: operation,
+                ..w.first(
+                    request(R1),
+                    w.planned("origin", Some(Integration::PullRequest)),
+                )
+            },
+            &publish,
+        )
+        .unwrap();
+    assert!(ended_with_the_stored_envelope(&again), "{again:?}");
+    assert_eq!(
+        w.count("SELECT COUNT(*) FROM repository_setups"),
+        0,
+        "no second record, the own row gone"
+    );
 
     // A call told the setup is recorded, with the record gone: the stored
     // envelope, and not an operation mismatch.

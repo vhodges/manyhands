@@ -225,11 +225,39 @@ impl RepositoryService {
         self.check_before_recording(request, setup, repository, root)?;
         // An identity that the request does not supply must be there.
         if request.identity.is_none() && !self.has_identity(repository, root)? {
-            self.complete_lifecycle(root, operation, record)?;
-            return Ok(Stage::Stop(Box::new(SetupOutcome::IdentityRequired)));
+            return Ok(Stage::Stop(Box::new(
+                self.identity_required(root, operation, record)?,
+            )));
         }
         self.record_setup(request, setup, repository, root, record)
             .map(Stage::Found)
+    }
+
+    /// What a call that found no identity to commit as answers, and ends its
+    /// row. Another call of the same request may have recorded the setup
+    /// meanwhile (R-20): this call's row is then at `setup_recorded`, the
+    /// request is owed with its setup, and nothing is completed or settled
+    /// here. Shared with a selection's setup.
+    pub(super) fn identity_required(
+        &self,
+        root: &std::path::Path,
+        operation: RepositoryOperation,
+        record: RecoveryRecord,
+    ) -> Result<SetupOutcome, RepositoryError> {
+        if record.id != 0 {
+            let _guard = cache_write_guard(&self.registry_path, root, operation)?;
+            let connection = self
+                .open_migrated_registry(operation)
+                .map_err(|error| error.for_operation(operation, root))?;
+            if recovery::recorded_a_setup(&connection, record.id)? {
+                return Ok(SetupOutcome::Recorded {
+                    stop: ResultCode::IdentityRequired,
+                    authority: None,
+                });
+            }
+        }
+        self.complete_lifecycle(root, operation, record)?;
+        Ok(SetupOutcome::IdentityRequired)
     }
 
     /// Today's checks of an enable, for a repository with no configuration.
@@ -413,7 +441,11 @@ impl RepositoryService {
         // This call's own row recorded a setup already, and the setup has
         // ended since: the request is over. It records nothing (design L11);
         // publishing answers what became of it.
-        if recovery::recorded_a_setup(&tx, record.id)? {
+        // The request itself is finished (an ending that took its own row
+        // too): the same, though its row cannot say so.
+        if recovery::recorded_a_setup(&tx, record.id)?
+            || record::request_is_finished(&tx, setup.request_id)?
+        {
             return Ok(Found::Gone);
         }
         let repository_id = register_setup_pending(&tx, root)?;

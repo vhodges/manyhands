@@ -381,6 +381,24 @@ impl World {
         format!("refs/heads/manyhands/setup/{SETUP}")
     }
 
+    /// A linked worktree, outside the root, that has the setup branch checked
+    /// out; the root's own HEAD is untouched. Its administrative directory is
+    /// `<root>/.git/worktrees/linked`.
+    pub(crate) fn check_the_setup_branch_out_in_a_linked_worktree(&self) {
+        let git = self.git();
+        let reference = git.find_reference(&self.branch_ref()).unwrap();
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        git.worktree("linked", &self.data.path().join("linked"), Some(&options))
+            .unwrap();
+    }
+
+    /// The linked worktree is gone: its registration is removed, as a
+    /// prune does for one whose directory was deleted.
+    pub(crate) fn drop_the_linked_worktree(&self) {
+        std::fs::remove_dir_all(self.root.join(".git/worktrees/linked")).unwrap();
+    }
+
     pub(crate) fn base_ref(&self) -> String {
         format!("refs/manyhands/setups/{SETUP}/base")
     }

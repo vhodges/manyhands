@@ -635,6 +635,17 @@ fn l11_a_call_refused_after_another_recorded_the_setup_leaves_the_request_owed()
 
     assert_eq!(ran.answer.code, ResultCode::WorktreeNotClean);
     assert!(matches!(ran.standing, Standing::Owed));
+    // Recorded, so durable though no effect shows it: partial, never a
+    // plain refusal (ruling Q2).
+    assert_eq!(
+        Outcome::of_mutation(
+            false,
+            ran.answer.code,
+            &ran.answer.effects,
+            ran.answer.local_change
+        ),
+        Outcome::Partial
+    );
     assert_eq!(
         serde_json::to_value(&ran.answer.data).unwrap(),
         setup_data(&setup, "recorded")

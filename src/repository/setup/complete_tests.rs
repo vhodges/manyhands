@@ -196,6 +196,31 @@ fn a_setup_branch_moved_since_publishing_is_kept() {
     assert_eq!(world.local_ref(&world.base_ref()), None);
 }
 
+/// A setup branch checked out in another worktree is not deleted from under
+/// it: the finish stops as it does when HEAD is off the primary, and the next
+/// look finishes it once the checkout is gone.
+#[test]
+fn a_setup_branch_checked_out_in_a_linked_worktree_stops_the_finish() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let at = world.local_ref(&world.branch_ref());
+    assert!(at.is_some());
+    world.check_the_setup_branch_out_in_a_linked_worktree();
+
+    assert!(!finish_without_waiting(&world), "checked out elsewhere");
+    assert!(world.record().is_some());
+    assert_eq!(world.local_ref(&world.branch_ref()), at);
+    assert_eq!(world.request().state, RequestState::Accepted);
+
+    world.drop_the_linked_worktree();
+
+    assert!(finish_without_waiting(&world), "the checkout is gone");
+    assert!(world.record().is_none());
+    assert_eq!(world.local_ref(&world.branch_ref()), None);
+}
+
 /// Reconciliation stopped by an operation in the way: the record stays and
 /// the next look finishes it. Nothing is half done: the request is not
 /// finished.

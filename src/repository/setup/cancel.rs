@@ -519,26 +519,25 @@ impl Cancelling<'_> {
     }
 
     /// Step 3: the local setup branch, only at the recorded commit and while
-    /// HEAD does not name it (kept otherwise), and the private base ref. Both
+    /// no worktree's HEAD names it (kept otherwise), and the private base ref. Both
     /// are idempotent.
     fn local_step(
         &self,
         record: &SetupRecord,
         scope: &crate::repository::transport::SetupScope,
     ) -> Result<LocalBranch, SetupCancelError> {
-        // A branch that HEAD names is kept as well: deleting it would leave
-        // HEAD on a branch that is not there (K-15).
-        let checked_out = self
-            .repository
-            .find_reference("HEAD")
-            .ok()
-            .and_then(|head| head.symbolic_target().map(str::to_owned))
-            .is_some_and(|target| target == scope.branch_ref());
         let branch = match self.repository.find_reference(&scope.branch_ref()) {
             Ok(mut reference) => {
-                if !checked_out
-                    && reference.target().is_some()
+                // A branch that any worktree's HEAD names is kept as well:
+                // deleting it would leave that HEAD on a branch that is not
+                // there (K-15), and `Reference::delete` does not look. A
+                // checkout that cannot be told is a checkout.
+                if reference.target().is_some()
                     && reference.target() == record.commit_oid
+                    && crate::repository::cleanup::branch_is_checked_out(
+                        &self.repository,
+                        &scope.branch_ref(),
+                    ) == Ok(false)
                 {
                     reference.delete().map_err(|error| self.git(error))?;
                     LocalBranch::Deleted

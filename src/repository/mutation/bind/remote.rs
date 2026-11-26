@@ -563,6 +563,9 @@ impl RemoteSelectBinding {
                 Ran {
                     answer: Answer {
                         data: setup_data::of(service, &root, None),
+                        // The setup is recorded: a durable change no effect
+                        // shows, so the request is partial, never a refusal.
+                        local_change: true,
                         ..Answer::stopped(code)
                     }
                     .naming(service, &root, blocker.as_ref()),

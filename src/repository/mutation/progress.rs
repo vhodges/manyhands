@@ -336,8 +336,6 @@ pub(crate) trait Session {
     /// request `request_id` that recorded it, with the session's
     /// credentials; see `setup::publish::continue_setup`. `None` when the
     /// session has no credentials, or they are in use: nothing was called.
-    // The bindings of Tasks 7 and 9 are the callers.
-    #[allow(dead_code)]
     fn publish_setup(
         &self,
         service: &RepositoryService,

@@ -5816,9 +5816,14 @@ impl RepositoryService {
         // A request that is a direct one by its intent, planned from a
         // configuration read before the lease, plans again from the one found
         // here: a primary that turned pull request meanwhile (a sync took a
-        // collaborator's merged setup) is not committed over.
-        if !equal
-            && let Some(change) = guard
+        // collaborator's merged setup) is not committed over. A request that
+        // names a mode or a forge is asked even when the file this call
+        // intends is equal to the one found: it meant a direct selection,
+        // which a primary now in pull-request mode is not, and the shortcut
+        // below would answer it `already_applied`. A selection of a remote
+        // alone has no guard and is as it was.
+        if let Some(change) = guard
+            && (!equal || change.integration.is_some() || change.forge.is_some())
             && !matches!(
                 setup::change::path_of(&config, change),
                 Ok(setup::change::ChangePath::Direct | setup::change::ChangePath::AlreadyApplied)

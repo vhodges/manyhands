@@ -24,9 +24,7 @@ enum TransferAction {
     /// its push of the setup's branch, and the guarded delete of that branch.
     /// The fourth, its observation, is `Observe`.
     FetchSetupBase,
-    #[allow(dead_code)]
     PushSetup(git2::Oid),
-    #[allow(dead_code)]
     DeleteSetup(git2::Oid),
 }
 

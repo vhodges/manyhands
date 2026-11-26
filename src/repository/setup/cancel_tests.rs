@@ -493,6 +493,15 @@ fn cases() -> Vec<Case> {
             )
         },
         Case {
+            // Another worktree has the setup branch checked out, the root's
+            // HEAD does not name it: `Reference::delete` would not notice.
+            arrange: |world| world.check_the_setup_branch_out_in_a_linked_worktree(),
+            ..case(
+                "the setup branch is checked out in a linked worktree: kept, and the rest goes on",
+                deleted(RemoteBranch::Deleted, LocalBranch::Kept, false),
+            )
+        },
+        Case {
             arrange: |world| {
                 let other = world.c0;
                 world

@@ -81,7 +81,7 @@ fn a_local_action_is_one_the_recovery_store_writes() {
     for action in local {
         assert_eq!(local_action(action.as_str()), Some(*action));
     }
-    for action in &OperationAction::ALL[16..] {
+    for action in &OperationAction::ALL[17..] {
         assert_eq!(local_action(action.as_str()), None, "{action:?}");
     }
     // What the recovery store writes for an operation it has no name for.

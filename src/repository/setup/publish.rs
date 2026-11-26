@@ -39,9 +39,9 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct Published {
     pub(crate) setup_id: ItemId,
-    // Reported by the poll and the cancel of later tasks; an enable's answer
-    // names the branch, never the commit (design K7).
-    #[allow(dead_code)]
+    // Only the tests of publishing read it: an enable's answer names the
+    // branch, never the commit (design K7), and no caller needs it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) commit_oid: Oid,
     pub(crate) link: PullRequestLink,
 }

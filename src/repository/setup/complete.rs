@@ -152,6 +152,13 @@ fn finish_record(
     let branch = format!("refs/heads/manyhands/setup/{}", record.setup_id);
     match repository.find_reference(&branch) {
         Ok(mut reference) if reference.target() == record.commit_oid => {
+            // `Reference::delete` does not look at other worktrees: a branch
+            // checked out in any of them (or one whose checkouts cannot all
+            // be told) is not deleted from under it. The finish stops, as
+            // when HEAD is off the primary, and the next look finishes it.
+            if crate::repository::cleanup::branch_is_checked_out(repository, &branch) != Ok(false) {
+                return Ok(false);
+            }
             reference.delete().map_err(git)?;
         }
         Ok(_) => {}
