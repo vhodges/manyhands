@@ -20,7 +20,8 @@
           "state": "current"
         },
         "problem_count": 0,
-        "root": "<repository>"
+        "root": "<repository>",
+        "setup": null
       }
     ]
   },

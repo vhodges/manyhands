@@ -2007,6 +2007,8 @@ fn a_comment_that_waits_for_its_registration_is_shown_refused_a_resume_and_aband
         Mutation::RemoteSelect(RemoteSelectInput {
             root: world.root.clone(),
             name: Some("origin".to_owned()),
+            integration: None,
+            forge: None,
         }),
     );
     assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);

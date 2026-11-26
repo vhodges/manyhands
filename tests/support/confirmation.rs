@@ -49,6 +49,8 @@ pub const ITEM_REPUBLISH_PREVIEW_SCHEMA: &str = "item_republish_preview.schema.j
 
 pub const LIFECYCLE_PREVIEW_SCHEMA: &str = "lifecycle_preview.schema.json";
 
+pub const SETUP_CANCEL_PREVIEW_SCHEMA: &str = "setup_cancel_preview.schema.json";
+
 /// The published schema of the preview `command` gives.
 pub fn preview_schema(command: &str) -> &'static str {
     match command {
@@ -61,6 +63,9 @@ pub fn preview_schema(command: &str) -> &'static str {
         "document repair" | "ticket repair" => REPAIR_PREVIEW_SCHEMA,
         "item republish" => ITEM_REPUBLISH_PREVIEW_SCHEMA,
         "document promote" | "ticket close" => LIFECYCLE_PREVIEW_SCHEMA,
+        "repo setup-cancel" => SETUP_CANCEL_PREVIEW_SCHEMA,
+        // A pull-request enable's preview is `setup_preview.schema.json`: a
+        // test of one checks it itself.
         "repo create" | "repo enable" => PREVIEW_SCHEMA,
         // `prepare` gives no preview of any other command.
         other => panic!("{other}: no preview schema"),
@@ -294,6 +299,9 @@ impl Plain {
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: None,
+            publication_remote: None,
+            integration: None,
+            forge: None,
         }
     }
 
@@ -606,6 +614,8 @@ pub fn select_through(
         Mutation::RemoteSelect(RemoteSelectInput {
             root: root.to_owned(),
             name: name.map(str::to_owned),
+            integration: None,
+            forge: None,
         }),
     );
     assert_eq!(selected.outcome, Outcome::Success, "{}", selected.message);
@@ -799,6 +809,9 @@ impl Unregistered {
             primary_branch: "main".to_owned(),
             identity: None,
             slug_prefix: Some("mh".to_owned()),
+            publication_remote: None,
+            integration: None,
+            forge: None,
         })
     }
 }

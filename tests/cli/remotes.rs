@@ -434,3 +434,61 @@ fn remote_shapes_and_grammar_are_checked_before_mutation() {
         "not_confirmable",
     );
 }
+
+/// A selection that turns pull-request mode on, with no key selected, records
+/// its change and stops with `no_selected_key`, owed: this is the stop the
+/// in-process tests cannot reach, since a test harness cannot initialize the
+/// transport. The primary's configuration is untouched, and the same request
+/// again gives the same answer.
+#[test]
+fn a_pull_request_selection_without_a_key_stops_with_no_selected_key() {
+    let f = Fixture::new();
+    add(&f);
+    let config = || fs::read(f.repo.root.join(".manyhands/config.toml")).unwrap();
+    let before = config();
+    fs::write(
+        &f.input,
+        br#"{"name":"origin","integration":"pull_request"}"#,
+    )
+    .unwrap();
+    let args = f.args("remote", "select", &["--json", "--request-id", NEXT]);
+
+    let stopped = checked(
+        &args,
+        &f.env,
+        &[],
+        4,
+        "no_selected_key",
+        Some("setup_mutation.schema.json"),
+    );
+
+    assert_eq!(stopped["outcome"], "partial");
+    assert_eq!(stopped["data"]["state"], "recorded");
+    assert_eq!(stopped["data"]["kind"], "change");
+    assert_eq!(stopped["data"]["integration"], "pull_request");
+    assert_eq!(config(), before);
+    let setup = stopped["data"]["id"].as_str().unwrap().to_owned();
+    let branch = stopped["data"]["branch"].as_str().unwrap().to_owned();
+    crate::support::mutation_golden::assert_contract_at(
+        "remote_select_setup_recorded",
+        fs::canonicalize(&f.repo.root).unwrap().to_str().unwrap(),
+        Some("setup_mutation.schema.json"),
+        &[
+            (setup.as_str(), "<setup>"),
+            (branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &stopped,
+    );
+
+    // The same request again: the same answer, and the change is not
+    // recorded twice.
+    let again = checked(
+        &args,
+        &f.env,
+        &[],
+        4,
+        "no_selected_key",
+        Some("setup_mutation.schema.json"),
+    );
+    assert_eq!(again["data"], stopped["data"]);
+}

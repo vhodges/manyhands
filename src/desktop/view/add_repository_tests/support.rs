@@ -66,6 +66,7 @@ impl Table {
 /// identity and no remote. Each canned row changes what it is about.
 pub(super) fn canned(root: &Path) -> RepositoryInspectionDto {
     RepositoryInspectionDto {
+        setup: None,
         selected_path: key(root),
         root: key(root),
         registered: false,

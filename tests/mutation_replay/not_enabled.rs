@@ -121,6 +121,8 @@ fn requests(world: &World) -> Vec<(&'static str, Mutation)> {
             Mutation::RemoteSelect(RemoteSelectInput {
                 root: world.root.clone(),
                 name: None,
+                integration: None,
+                forge: None,
             }),
         ),
         ("index refresh", refresh(world)),

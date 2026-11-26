@@ -10,6 +10,7 @@ use super::{
         recovery::{FinalKind, JournalRow},
     },
     bind::{Accepted, Answer, Ran, Standing},
+    command::Command,
     dto::{MutationDataDto, RequestState},
     identity::RequestId,
     records::RequestResult,
@@ -104,10 +105,31 @@ impl RepositoryService {
         accepted: &Accepted,
         ran: Ran,
     ) -> Envelope<MutationDataDto> {
-        if super::local_control::effects(self, accepted.request_id)
-            .ok()
-            .flatten()
-            .is_some()
+        // A request the domain finished itself, in the transaction that
+        // removed what it was for, is answered with what it stored: a local
+        // synchronization's, and a setup's (design K4), whose own local row
+        // completed at `setup_recorded`. A setup request is also told by its
+        // record alone: the transaction that ends a setup (a first-time
+        // cancel, `repo remove`) may delete that own row, and a call still in
+        // flight then finds none. The record is read for the three setup
+        // commands only.
+        let setup_command = matches!(
+            reply.binding.command(),
+            Command::RepoEnable | Command::RemoteSelect | Command::RepoSetupCancel
+        );
+        if (setup_command
+            || super::local_control::effects(self, accepted.request_id)
+                .ok()
+                .flatten()
+                .is_some()
+            || accepted
+                .recorded_local_step(self)
+                .ok()
+                .flatten()
+                .is_some_and(|step| {
+                    step.is(crate::repository::recovery::LocalStep::SetupRecorded)
+                        || step.is(crate::repository::recovery::LocalStep::SetupCancelRecorded)
+                }))
             && let Ok(Some(record)) = self.request_record(accepted.request_id)
             && record.state == RequestState::Finished
         {

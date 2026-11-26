@@ -237,6 +237,30 @@ fn optional_objects_allow_missing_but_refuse_null_and_check_nested_fields() {
 }
 
 #[test]
+fn nullable_objects_tell_absent_from_null_and_refuse_other_types() {
+    // Absent is `None`; null is `Some(None)`: the one removes nothing, the
+    // other removes the table.
+    assert!(ok(object("{}").nullable_object("forge")).is_none());
+    assert!(matches!(
+        ok(object(r#"{"forge":null}"#).nullable_object("forge")),
+        Some(None)
+    ));
+    let present = ok(object(r#"{"forge":{"kind":"github"}}"#).nullable_object("forge"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(ok(present.string("kind")), "github");
+    for value in ["true", "1", "[]", r#""VALUE-SENTINEL-41""#] {
+        assert!(matches!(
+            object(&format!("{{\"forge\":{value}}}")).nullable_object("forge"),
+            Err(InputError::WrongType {
+                field: "forge",
+                expected: "an object or null"
+            })
+        ));
+    }
+}
+
+#[test]
 fn enums_require_an_exact_allowed_string() {
     for value in ALLOWED {
         let input = object(&format!(r#"{{"protection":"{value}"}}"#));

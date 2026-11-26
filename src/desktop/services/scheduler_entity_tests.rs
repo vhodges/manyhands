@@ -160,6 +160,179 @@ async fn launch_polls_due_ssh_repos(cx: &mut TestAppContext) {
     assert!(world.scheduled(&plain, cx));
 }
 
+/// Wave 06 Cycle 02, Part J: a repository whose setup is published on another
+/// remote is polled through the library's `poll_setup` with the automatic
+/// policy, by its polling policy and the deadline the setup poll recorded; a
+/// first-time setup in place of today's poll (it has no publication remote
+/// yet), a change after today's poll of the current remote. An `activated`
+/// answer reads the repository again, as a poll that brought something in
+/// does; waiting for the merge changes nothing. A repository without a setup
+/// is read and polled as before (`launch_polls_due_ssh_repos` pins its
+/// counts).
+#[gpui_kit::test]
+async fn a_published_setup_on_another_remote_is_polled_on_the_setup_path(cx: &mut TestAppContext) {
+    use manyhands::repository::{SetupPollOutcome, transport::SshTransportErrorKind};
+
+    use crate::desktop::{
+        services::setup_poll::{PendingSetup, SetupPollPath},
+        test_support::polling::{PollCall, setup_report, setup_transport_failure},
+    };
+
+    let world = World::new(true, cx);
+    let changed = |cx: &mut TestAppContext| {
+        world
+            .services
+            .operations()
+            .update(cx, |operations, _| operations.take_changed().roots)
+    };
+
+    // A first-time setup: the repository has an SSH remote that is not its
+    // publication remote yet, and nothing of its own to check.
+    let first = world.fixture.create_repository("first-time");
+    world
+        .fixture
+        .add_remote(&first, "origin", "ssh://git@example.invalid/team/repo.git");
+    let first = first.to_str().unwrap().to_owned();
+    world.backend.publish_setup(
+        &first,
+        PendingSetup {
+            path: SetupPollPath::Replace,
+            remote: "origin".to_owned(),
+            current_ssh: false,
+        },
+    );
+    // The library records the setup poll's attempt and its next check.
+    let at = |seconds| world.clock.utc() + time::Duration::seconds(seconds);
+    world
+        .backend
+        .record_setup_deadlines(&first, vec![at(300), at(100_000)]);
+    world
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    world
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::Activated));
+    world.list(std::slice::from_ref(&first), cx);
+    World::settle(cx, "the first setup poll", |_| {
+        !world.backend.setup_polled().is_empty()
+    })
+    .await;
+    World::quiet(cx).await;
+    assert_eq!(world.backend.setup_polled(), [(first.clone(), true)]);
+    assert!(world.scheduled(&first, cx));
+    // Today's poll is not made, nor its eligibility asked; the merge being
+    // waited for changes nothing the views read.
+    assert!(world.backend.polled_roots().is_empty());
+    assert!(
+        !world.backend.calls().contains(&PollCall::PollAutomatic),
+        "{:?}",
+        world.backend.calls()
+    );
+    assert!(changed(cx).is_empty());
+
+    // By policy: not before the recorded deadline, then once.
+    world.advance(secs(299));
+    world.tick(cx);
+    World::quiet(cx).await;
+    assert_eq!(world.backend.setup_polled().len(), 1);
+    world.advance(secs(2));
+    world.tick(cx);
+    World::settle(cx, "the second setup poll", |_| {
+        world.backend.setup_polled().len() == 2
+    })
+    .await;
+    World::quiet(cx).await;
+    // It activated: the repository is read again (R-10).
+    assert_eq!(changed(cx), std::iter::once(first.clone()).collect());
+
+    // A change on another remote: today's poll of the current remote, then
+    // the setup's.
+    let change = world.ssh_repo("change");
+    world.backend.publish_setup(
+        &change,
+        PendingSetup {
+            path: SetupPollPath::After,
+            remote: "fork".to_owned(),
+            current_ssh: true,
+        },
+    );
+    world.backend.answer_poll(world.completed());
+    world
+        .backend
+        .answer_setup_poll(setup_report(SetupPollOutcome::WaitingForMerge));
+    world.list(std::slice::from_ref(&change), cx);
+    World::settle(cx, "the change's setup poll", |_| {
+        world.backend.setup_polled().len() == 3
+    })
+    .await;
+    World::quiet(cx).await;
+    assert_eq!(world.backend.polled_roots(), std::slice::from_ref(&change));
+    assert_eq!(world.backend.setup_polled()[2], (change.clone(), true));
+
+    // A change that adds a publication remote to a repository with none, and
+    // one on a repository whose publication remote is not SSH: nothing of
+    // today's to poll, so the setup alone is polled, by policy (once, then
+    // held for the interval, since a change records no deadline).
+    let bare = world.fixture.create_repository("bare");
+    world
+        .fixture
+        .add_remote(&bare, "fork", "ssh://git@example.invalid/team/repo.git");
+    let bare = bare.to_str().unwrap().to_owned();
+    let local = world.fixture.create_repository("local");
+    world.fixture.publish_over_ssh(&local);
+    world
+        .fixture
+        .set_remote_url(&local, "origin", "file:///srv/elsewhere.git");
+    world
+        .fixture
+        .add_remote(&local, "fork", "ssh://git@example.invalid/team/repo.git");
+    let local = local.to_str().unwrap().to_owned();
+    // The same when the setup poll fails: offline, or the remote's endpoint
+    // changed. Nothing is recorded for a change, so the repository must not
+    // be due again at once.
+    let failing = |name: &str| {
+        let root = world.fixture.create_repository(name);
+        world
+            .fixture
+            .add_remote(&root, "fork", "ssh://git@example.invalid/team/repo.git");
+        root.to_str().unwrap().to_owned()
+    };
+    let offline = failing("offline");
+    let moved = failing("moved");
+    for (polled, root) in [(4, &bare), (5, &local), (6, &offline), (7, &moved)] {
+        world.backend.publish_setup(
+            root,
+            PendingSetup {
+                path: SetupPollPath::After,
+                remote: "fork".to_owned(),
+                current_ssh: false,
+            },
+        );
+        world.backend.answer_setup_poll(match polled {
+            6 => setup_transport_failure(root, SshTransportErrorKind::TransportUnavailable),
+            7 => setup_transport_failure(root, SshTransportErrorKind::EndpointChanged),
+            _ => setup_report(SetupPollOutcome::WaitingForMerge),
+        });
+        world.list(std::slice::from_ref(root), cx);
+        World::settle(cx, "the setup-only poll", |_| {
+            world.backend.setup_polled().len() == polled
+        })
+        .await;
+        World::quiet(cx).await;
+        assert_eq!(
+            world.backend.setup_polled()[polled - 1],
+            (root.clone(), true)
+        );
+        assert_eq!(
+            world.backend.setup_polled().len(),
+            polled,
+            "held, not looped"
+        );
+        assert!(world.scheduled(root, cx));
+    }
+    assert_eq!(world.backend.polled_roots(), std::slice::from_ref(&change));
+}
+
 /// The timer wakes at the model's next wake, and submits one poll at a
 /// time however many repositories are due (R-7).
 #[gpui_kit::test]

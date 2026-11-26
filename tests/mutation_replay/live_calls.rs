@@ -158,6 +158,8 @@ fn a_remote_selection_s_row_another_call_is_indexing_under_is_left_as_it_is() {
             Mutation::RemoteSelect(RemoteSelectInput {
                 root: world.root.clone(),
                 name: Some("origin".to_owned()),
+                integration: None,
+                forge: None,
             })
         },
     );
