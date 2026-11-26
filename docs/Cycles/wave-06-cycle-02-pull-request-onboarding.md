@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-c97se (`01M84H84WQYE8J2WJWEDGJ45W4`), branch `manyhands/ticket/01M84H84WQYE8J2WJWEDGJ45W4`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 02 design](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md). Plan: [Cycle 02 implementation plan](../plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-implementation.md).
 
-Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, decisions 17 and 18). Author: Claude. These three documents are Manyhands managed documents on their own branches (decision 9).
+Status: **approved**, 2026-11-25, revision 4 (owner approval 2026-11-25, decisions 17 and 18). Implemented, reviewed and closed 2026-11-26: the owner approved the review, and `ticket close` merged vh-c97se into main at `c56b6ef1`. Author: Claude. These three documents are Manyhands managed documents (decision 9), promoted to main at closure.
 
 Revision history:
 
@@ -18,6 +18,7 @@ Revision history:
 - Revision 4: a third round, a scoped re-review of revision 3 (0 Blocking, 5 Important, 11 Minor) and an adversarial round (2 Blocking, 8 Important, 7 Minor), all in the request lifecycle; decision 16. As the planning skill says after a third round in one mechanism, the lifecycle is not redesigned again: its rules K1 to K7 and outcomes L1 to L14 are the contract, built test-first with design checkpoints. Revision 4 has not been independently reviewed.
 - Approval, 2026-11-25: the owner approved revision 4 as written, with no further review round (decisions 17 and 18). Revision 4 stays without an independent review; its lifecycle is built test-first with the design checkpoints of Tasks 6 to 10.
 - Implementation, 2026-11-25: Tasks 0 to 13 subagent-driven, each reviewed, then a whole-branch review, two fix waves and a short third round; review-ready with the code at `0e2a5e77`. The design is amended where the build departed from it (published OID check, the digest's refactor, L10 and L11, Baseline Fact 9, activation's attempt clearing, the scheduler's read, what stops the finish and G5). Rulings, named test edits E-16 to E-32 and every test run are in the execution ledger, `docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-execution.md`.
+- Closure, 2026-11-26: the owner approved the review; `ticket close` merged the ticket's branch into main at `c56b6ef1` and published it, and the Cycle document, the design and the plan were promoted with the Wave 06 document. Follow-on: the recovery skill's kept-branch wording (ruling R-AF), K-24, and the final review's deferred Minors.
 
 ## Purpose And Authority
 
