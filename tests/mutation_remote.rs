@@ -5110,16 +5110,22 @@ fn setup_privacy(w: &World) {
 fn setup_confirmation(w: &World, mutation: &Mutation) -> String {
     let prepared = w.service.prepare(mutation);
     let value = serde_json::to_value(&prepared).expect("an envelope serializes");
-    // A preview shows the remote it is to publish to: the one thing of the
-    // world's private material a person is asked to consent to.
-    let location = w.server.url().into_bytes();
-    let shown: Vec<Vec<u8>> = w
-        .probes
-        .iter()
-        .filter(|probe| **probe != location)
-        .cloned()
-        .collect();
-    ssh_privacy::clean(&serde_json::to_vec(&value).unwrap(), &shown).expect("redacted preview");
+    // A preview of an enable shows the remote it is to publish to, as the
+    // library redacts it: the one field of it that holds the world's private
+    // material, and the one a person is asked to consent to. It is taken out
+    // after it is checked, and everything else is scanned for every probe.
+    let mut value = value;
+    if let Some(details) = value
+        .pointer_mut("/data/details")
+        .and_then(|details| details.as_object_mut())
+        && let Some(location) = details.remove("remote_location")
+    {
+        assert_eq!(
+            location.as_str(),
+            Some(results::redact_url(&w.server.url()).as_str())
+        );
+    }
+    ssh_privacy::clean(&serde_json::to_vec(&value).unwrap(), &w.probes).expect("redacted preview");
     assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
     prepared
         .data
@@ -5295,6 +5301,10 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
     let missing = setup_call(&w, FIRST, Some(&confirmation), enable());
     assert_eq!(missing.code, ResultCode::RemotePrimaryMissing);
     assert_eq!(missing.outcome, Outcome::Blocked);
+    // Nothing reached the server: it still has no primary and no push was
+    // made, which the restore below would hide.
+    assert_eq!(served(MAIN), None);
+    assert_eq!(w.server.receive_updates().len(), 0);
     // The answer names the setup that ended, as it stood.
     let ended = setup_data(&missing);
     assert_eq!(ended["type"], "setup");
@@ -5479,7 +5489,7 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
 
     // Somebody pushes to the setup branch: its cancel keeps the remote
     // branch, and deletes the local one.
-    {
+    let theirs = {
         let mut fetch = git2::FetchOptions::new();
         fetch.remote_callbacks(callbacks(&w.server));
         let spec = format!("+{0}:{0}", setup_ref(&first));
@@ -5491,7 +5501,9 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
         )?;
         push_peer(&w.peer, &w.server, &setup_ref(&first))?;
         assert_eq!(served(&setup_ref(&first)), Some(theirs));
-    }
+        theirs
+    };
+    let pushed = w.server.receive_updates().len();
     let kept = cancel(CANCEL_ONE);
     assert_eq!(kept.code, ResultCode::Ok, "{}", kept.message);
     let data = setup_data(&kept);
@@ -5501,7 +5513,10 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
     assert_eq!(data["remote_branch"], "kept");
     assert_eq!(data["local_branch"], "deleted");
     assert_eq!(data["unregistered"], false);
-    assert!(served(&setup_ref(&first)).is_some());
+    // The branch is at another commit than the one the setup published, so
+    // no delete was sent: the server's ref and its log are as they were.
+    assert_eq!(served(&setup_ref(&first)), Some(theirs));
+    assert_eq!(w.server.receive_updates().len(), pushed);
     assert!(repo.find_reference(&setup_ref(&first)).is_err());
     assert_eq!(inspected()?.setup, None);
     assert_eq!(fixed(w.service.list_repositories())?.items.len(), 1);
@@ -5514,7 +5529,8 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
     assert_eq!(data["state"], "published");
     let second = data["id"].as_str().ok_or(FixtureError)?.to_owned();
     assert_ne!(second, first);
-    assert!(served(&setup_ref(&second)).is_some());
+    let second_tip = served(&setup_ref(&second)).ok_or(FixtureError)?;
+    let before_cancel = w.server.receive_updates().len();
     let deleted = cancel(CANCEL_TWO);
     assert_eq!(deleted.code, ResultCode::Ok, "{}", deleted.message);
     let data = setup_data(&deleted);
@@ -5523,6 +5539,18 @@ fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), F
     assert_eq!(data["remote_branch"], "deleted");
     assert_eq!(data["local_branch"], "deleted");
     assert_eq!(served(&setup_ref(&second)), None);
+    // One delete went over the wire, guarded by the tip the setup published.
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), before_cancel + 1);
+    assert_eq!(
+        updates[before_cancel],
+        ReceiveUpdate {
+            reference: setup_ref(&second),
+            old_oid: second_tip,
+            new_oid: git2::Oid::zero(),
+            accepted: true,
+        }
+    );
     assert_eq!(inspected()?.setup, None);
     assert_eq!(served(MAIN), Some(squash));
     let (second_id, second_branch) = setup_placeholders(&second);

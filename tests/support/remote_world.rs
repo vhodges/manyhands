@@ -1,6 +1,7 @@
 //! The two-clone synchronization world: an owned SSH server, a clone
 //! that Manyhands is enabled in with the server as its publication
-//! remote, and a peer clone that moves the server's branches.
+//! remote (or, for `plain_key_unenabled`, one it is not yet enabled in),
+//! and a peer clone that moves the server's branches.
 //!
 //! This is shared by the test targets that synchronize against a real
 //! server. Each declares `ssh_remote` and `ssh_privacy` beside it.
