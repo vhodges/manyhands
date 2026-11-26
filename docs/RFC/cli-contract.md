@@ -214,10 +214,10 @@ Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): while a repository has a pend
 | Gate | Verbs |
 | --- | --- |
 | Refused for any pending setup, first-time or a change | `ticket close`, `document promote`, `remote select`, `remote remove`, `repo enable` |
-| Refused for a first-time setup only | `folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair`, `comment add`, `item sync`, `repo sync`, `item republish`, `item resolve-history`, `remote resolve-history`, `conflict resolve`, `context sync-local`, `context resolve-local` |
+| Refused for a first-time setup only | `folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair`, `comment add`, `item sync`, `repo sync`, `item republish`, `item resolve-history`, `remote resolve-history`, `conflict resolve`, `context sync-local`, `context resolve-local`, `context retire` (the desktop's `context prepare` and `context release` are gated the same way) |
 | Not gated | `repo create`, `repo remove`, `repo identity-set`, `repo setup-cancel`, `remote add`, every key and host verb, `operation resume`, `operation abandon`, `poll once`, `poll configure`, `poll pause`, `poll resume`, `index refresh`, `index rebuild`, and every read |
 
-A change leaves the repository enabled, so its other writes carry on in the current mode on the current remote; a first-time setup's repository has no configuration yet, so those writes wait. A setup that the local primary already holds (a merge, a squash or a fast-forward, brought in by `poll once` or a pull) is complete: the gate finishes it first, and refuses nothing. A record that cannot be read refuses the gated verbs and no other. A setup request that the gate lets through is the one that made the record. The way out of a pending setup is its merge and a `poll once`, `repo setup-cancel`, or `repo remove`, which works with the root present or gone, finishes the setup's request as `cancelled` and leaves both setup branches for the person to delete.
+A change leaves the repository enabled, so its other writes carry on in the current mode on the current remote; a first-time setup's repository has no configuration yet, so those writes wait. A setup that the local primary already holds (a merge, a squash or a fast-forward, brought in by `poll once` or a pull) is complete: the gate finishes it first, and refuses nothing. A record that cannot be read refuses the gated verbs with `recovery_required` (recovery `repo.inspect`, no `data.blocker`), never `setup_pending`, and refuses no other verb; `repo inspect` shows `setup` null with the problem `setup_unreadable`, and `repo remove` clears it. A setup request that the gate lets through is the one that made the record. The way out of a pending setup is its merge and a `poll once`, `repo setup-cancel`, or `repo remove`, which works with the root present or gone, finishes the setup's request as `cancelled` and leaves both setup branches for the person to delete.
 
 ### Authoring reads
 
@@ -378,9 +378,10 @@ Request and confirmation IDs must be canonical ULIDs, as must `--key-id`.
 | Every mutation | — | `--prepare` with either `--request-id` or `--confirm` |
 
 Confirmed C2 mutations are repo create/enable/remove/identity-set, remote
-remove, key delete and host approve/replace. Amended 2026-11-25 by Wave 06
-Cycle 02 (vh-c97se): `repo setup-cancel` is confirmed too. All other C2 mutations are
+remove, key delete and host approve/replace. All other C2 mutations are
 unconfirmed. `--prepare` takes no request ID and allocates none.
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo setup-cancel` is a confirmed C2 mutation too.
 
 Each input-taking verb publishes a closed schema under `schemas/input/v1/`,
 named `<resource>_<verb>.schema.json` with hyphens replaced by underscores.
@@ -970,18 +971,7 @@ It describes the operation including effects observed from an earlier attempt.
 
 Amended 2026-11-21 by ticket vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; decision 8 of the [fast-writes design](../plans/2026-11-19-fast-writes-design.md)): on a write, `discovery: current` means that the contexts the write changed are indexed, not that the whole repository is. Another item changed outside Manyhands may still read stale, and is picked up by the next refresh, poll or desktop start, as the [index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21) says. On a write's own call, `discovery: pending` means one of the write's own contexts is not indexed yet; the write's other effects stand. A write that still indexes through a refresh of the whole repository (the index RFC lists them) reports `current` only when that refresh completed. A replay is more cautious: a replay of a completed create, save or move of a ticket or document, slug assignment or repair reports `current` only while the contexts its row recorded are indexed and the repository is not marked behind as a whole (`refresh_required`), and otherwise `discovery_pending` with its commit, offering `index.refresh`, so a replay may answer `discovery_pending` where the first call answered `current`. No JSON shape, result code, recovery action or schema version changes.
 
-Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): three result codes join the
-registry: `setup_pending` (blocked, exit 3, recovery `repo.inspect`, no data),
-`remote_primary_missing` and `remote_already_set_up` (blocked, exit 3, no
-recovery action). `setup_unreadable` is a problem code of `repo inspect` and
-`repo list`, not a result code. The mutation data gains the tagged shapes
-`setup` (`setup_mutation`), `setup_poll` and `setup_cancel`, the previews
-`setup_preview` and `setup_cancel_preview`, and the read shapes
-`repository_setup` and `pull_request`, each a published schema under
-`schemas/v1/`; a stored answer of a pull-request `repo enable` or
-`remote select` replays through `setup`. The operation action `cancel_setup`
-joins the action enums of `operation list`, `operation show` and the
-operation blockers. No recovery action is added.
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): three result codes join the registry: `setup_pending` (blocked, exit 3, recovery `repo.inspect`, no data), `remote_primary_missing` and `remote_already_set_up` (blocked, exit 3, no recovery action). `setup_unreadable` is a problem code of `repo inspect` and `repo list`, not a result code. The mutation data gains the tagged shapes `setup` (`setup_mutation`), `setup_poll` and `setup_cancel`, the previews `setup_preview` and `setup_cancel_preview`, and the read shapes `repository_setup` and `pull_request`, each a published schema under `schemas/v1/`; a stored answer of a pull-request `repo enable` or `remote select` replays through `setup`. The operation action `cancel_setup` joins the action enums of `operation list`, `operation show` and the operation blockers. No recovery action is added.
 
 A recovery `action` is a dotted name from a closed, published registry. An
 action carries exactly its registered argument keys, or none when the result
@@ -1712,18 +1702,7 @@ whose way out is `resolve_history`. The registry of recovery actions gains
 | C4 | `wrong_branch` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
 | `poll once` | `remote_unavailable` | The stored `protocol_rejected` category's answer, pinned without a golden by `c5_poll_once_stored_protocol_rejected`: libgit2's NotFound, its only live source, has no deterministic fixture, and `tests/mutation_contract.rs` records the code under `CODES_NO_MUTATION_GOLDEN_HAS` and `CODES_NO_FIXTURE_CAN_PRODUCE`, which a golden would contradict without a named edit. A new request polls again. |
 
-Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo enable`, `remote select` and
-`repo setup-cancel` answer the transport stops of the rows above (`key_unavailable`,
-`key_rejected`, `unlock_required`, `unlock_failed`, `host_replacement_required`,
-`transport_unavailable`, `remote_unavailable`), `busy` and `recovery_required`
-with the same recovery actions as their other verbs: a setup request that is
-stopped keeps its request accepted, so `request.retry` is the same request, and a
-host stop offers `host.approve` or `host.replace`. The library's setup tests pin
-them (`src/repository/setup/publish_tests.rs`, `poll_tests.rs`, `cancel_tests.rs`
-and `change_tests.rs`), and the SSH case pins the host stop, the empty remote and
-the guarded delete over a real transport. `setup_pending` has a row in each
-family whose verbs the gate refuses, each with a golden. A setup's stop answers
-`partial`, exit 4, whatever the code's own class (`no_selected_key` above).
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo enable`, `remote select` and `repo setup-cancel` answer the transport stops of the rows above (`key_unavailable`, `key_rejected`, `unlock_required`, `unlock_failed`, `host_replacement_required`, `transport_unavailable`, `remote_unavailable`), `busy` and `recovery_required` with the recovery actions the rows above show for them where a golden exists: a setup request that is stopped keeps its request accepted, so `request.retry` sends the same request, a host stop offers `host.approve` or `host.replace`, and a `recovery_required` offers `repo.inspect` (the merged setup's, above). The `recovery_required` of `repo setup-cancel` for a setup that the remote's primary already holds (nothing changes; run `poll once`, which finishes a merged setup; `data.type` `setup`, recovery `repo.inspect`) has no row and no table reason, because C2 already has rows for the code with other verbs, which the table cannot also hold as a reason: it needs a fetch of the remote's primary, which C2's exit table has no SSH server for, no golden holds it, and the library's outcome table pins it (`src/repository/setup/cancel_tests.rs`, `cancel_outcomes`, the cases "already merged ...: recovery_required"). The library's setup tests pin them (`src/repository/setup/publish_tests.rs`, `poll_tests.rs`, `cancel_tests.rs` and `change_tests.rs`), and the SSH case pins the host stop, the empty remote and the guarded delete over a real transport. `setup_pending` has a row in each family whose verbs the gate refuses, each with a golden. A setup's stop answers `partial`, exit 4, whatever the code's own class (`no_selected_key` above).
 
 ## Alternatives, risks and required evidence
 
