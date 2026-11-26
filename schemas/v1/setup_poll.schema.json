@@ -24,7 +24,7 @@
       "type": "string"
     },
     "outcome": {
-      "description": "What the poll saw, in the order it checks: not_published (the setup is recorded and not on the remote yet, and nothing was connected to), configuration_invalid or primary_differs (the remote's primary holds a configuration that cannot be read or names another primary branch), branch_deleted (the setup branch is gone and the primary does not hold the setup), waiting_for_merge, waiting_for_checkout (the root is not on the primary, or not clean), diverged (the local primary has commits the remote's lacks) and activated (the primary was fast-forwarded and the repository is set up).",
+      "description": "What the poll saw, in the order it checks: not_published (the setup is recorded and not on the remote yet, and nothing was connected to), configuration_invalid or primary_differs (the remote's primary holds a configuration that cannot be read or names another primary branch), branch_deleted (the setup branch is gone and the primary does not hold the setup), waiting_for_merge, waiting_for_checkout (the root is not on the primary, or not clean, or the setup branch is checked out in a worktree), diverged (the local primary has commits the remote's lacks) and activated (the primary was fast-forwarded and the repository is set up).",
       "type": "string",
       "enum": [
         "not_published",

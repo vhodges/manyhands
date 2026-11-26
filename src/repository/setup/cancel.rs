@@ -57,7 +57,8 @@ pub enum RemoteBranch {
     Absent,
     /// Left: it is at another commit than the recorded one.
     Kept,
-    /// The setup was never published: no commit, no connection.
+    /// The setup's publishing stopped before the setup commit was made, so
+    /// there is nothing on the remote to connect for.
     NotPublished,
 }
 

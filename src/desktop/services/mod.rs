@@ -340,11 +340,15 @@ pub(crate) trait Backend: Send + Sync + 'static {
         self.service().poll_publication_remote(request, session)
     }
 
-    // A setup published on another remote (Wave 06 Cycle 02, Part J). Neither
-    // call is part of an automatic poll's recorded list or the scheduler's
-    // read counts: the doubles that record those inherit these defaults, and a
-    // repository without a setup answers `None` here and is read and polled
-    // exactly as before.
+    // A setup published on another remote (Wave 06 Cycle 02, Part J).
+    // `pending_setup` is a local read that contacts nothing: an automatic
+    // poll calls it right after `polling_status`, and the scheduler's
+    // registration reads it, so the consent test's recorder forwards and
+    // logs it (it is in B4's sequence and the reads allowed off the worker).
+    // `poll_setup` is the setup's own poll, made only for a repository with
+    // a setup. The doubles inherit these defaults unless they forward them,
+    // as the recorder does; a repository without a setup answers `None`
+    // here and is read and polled exactly as before.
 
     /// The setup of the repository at `root` that the desktop polls, and
     /// the remote it is on. `None` for a repository with no setup, a

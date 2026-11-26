@@ -147,7 +147,7 @@ fn setup_poll_lines(data: &SetupPollDto) -> String {
         ),
         "waiting_for_merge" => format!("waiting for {branch} to merge into {primary}"),
         "waiting_for_checkout" => format!(
-            "merged, waiting for {primary} to be checked out and clean; check it out with no changes or untracked files, then poll again"
+            "merged, waiting for {primary} to be checked out and clean; check it out with no changes or untracked files, and make sure no worktree has {branch} checked out, then poll again"
         ),
         "diverged" => format!(
             "merged, but the local {primary} has commits the remote's {primary} lacks; push them or move them aside, then poll again"
