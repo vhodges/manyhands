@@ -96,6 +96,7 @@ pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
 }
 pub fn preview(preview: &PreviewDto) -> String {
     let details = match &preview.details {
+        PreviewDetailsDto::SetupCancel(d) => fields(d),
         PreviewDetailsDto::Setup(d) => fields(d),
         PreviewDetailsDto::Repository(d) => fields(d),
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
@@ -205,6 +206,10 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SetupRecorded => "record the setup",
         PreviewEffect::SetupBranchCommitted => "commit the setup on a branch",
         PreviewEffect::SetupBranchPublished => "publish the setup branch",
+        PreviewEffect::SetupBranchDeletedRemotely => "delete the setup branch from the remote",
+        PreviewEffect::SetupBranchDeleted => "delete the local setup branch",
+        PreviewEffect::SetupRecordRemoved => "remove the setup record",
+        PreviewEffect::RepositoryUnregistered => "take the repository out of the list",
     }
 }
 fn effects(effects: &Effects) -> String {
@@ -260,6 +265,13 @@ pub fn mutation_success(envelope: &Envelope<MutationDataDto>) -> Human {
 /// A setup's answer, in words: how far the setup has come and the link that
 /// opens its pull request. Nothing for any other data.
 fn setup_lines(data: &MutationDataDto) -> String {
+    if let MutationDataDto::SetupCancel(cancel) = data {
+        return match (cancel.remote_branch.as_str(), cancel.local_branch.as_str()) {
+            ("kept", _) => "The setup branch on the remote is at another commit than the one set up, and was left.\n".to_owned(),
+            (_, "kept") => "The local setup branch is at another commit than the one set up, and was left.\n".to_owned(),
+            _ => String::new(),
+        };
+    }
     let MutationDataDto::Setup(setup) = data else {
         return String::new();
     };
@@ -287,6 +299,11 @@ pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> St
     if let Some(data) = &envelope.data {
         out.push_str(&fields(data));
         out.push_str(&setup_lines(data));
+    }
+    if envelope.command == "repo setup-cancel" && envelope.code == ResultCode::RecoveryRequired {
+        out.push_str(
+            "hint: a setup that the remote's primary already holds cannot be cancelled; run manyhands-cli poll once so that the repository finishes it\n",
+        );
     }
     if supplied && envelope.code == ResultCode::TransportUnavailable {
         out.push_str("hint: if the passphrase was wrong, run the command again\n");

@@ -147,6 +147,9 @@ pub use remote::{
     SynchronizationOutcome, SynchronizationResult, SynchronizationSettings, SynchronizationStage,
     SynchronizationTarget, SynchronizeRemoteRequest,
 };
+pub use setup::cancel::{
+    CancelSetupRequest, LocalBranch, RemoteBranch, SetupCancelError, SetupCancelReport,
+};
 pub use setup::poll::{SetupPollError, SetupPollOutcome, SetupPollReport};
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -1287,6 +1290,9 @@ pub enum RepositoryOperation {
     CreateAndEnable,
     Enable,
     RemoveRegistration,
+    /// `repo setup-cancel`: the cancel's own row, recorded at
+    /// `setup_cancel_recorded`.
+    CancelSetup,
     ListRemotes,
     AddRemote,
     RemoveRemote,

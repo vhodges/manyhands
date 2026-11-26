@@ -14,7 +14,9 @@ use super::{
     FailurePoint, OperationId, RemoveRegistrationOutcome, RemoveRegistrationRequest,
     RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
     begin_or_reconcile_operation, bootstrap_lease, cache_read_guard, cache_write_guard,
-    canonical_repository_root, open_registry_read_only, registry_root_key, repository_lease,
+    canonical_repository_root,
+    mutation::{finish_requests_of_removal, finished_by_removal},
+    open_registry_read_only, registry_root_key, repository_lease,
 };
 
 const OPERATION: RepositoryOperation = RepositoryOperation::RemoveRegistration;
@@ -209,8 +211,11 @@ fn require_registry_only_removal(
             ));
         }
     }
+    // The requests the removal itself finishes (design K5, decision 16) are not
+    // unfinished work that stops it: a setup's request, which the setup record
+    // names or whose row completed at `setup_recorded`, and a cancellation's.
     let pending: bool = db.query_row(
-        "SELECT
+        &format!("SELECT
          EXISTS(SELECT 1 FROM operation_records WHERE root_path=?1
            AND (state!='completed' OR completed_step='comment_registration_pending')
            AND NOT (operation_ulid IS ?2 AND action='remove_registration' AND target IS ''))
@@ -223,9 +228,11 @@ fn require_registry_only_removal(
          OR EXISTS(SELECT 1 FROM request_records r WHERE r.scope_key=?1 AND r.state='accepted'
            AND NOT (r.command='repo remove' AND r.target='' AND EXISTS(
              SELECT 1 FROM request_operations o WHERE o.request_ulid=r.request_ulid
-             AND o.family='local' AND o.operation_ulid=?2)))
+             AND o.family='local' AND o.operation_ulid=?2))
+           AND NOT {finished})
          OR (SELECT COUNT(*) FROM request_records r JOIN request_operations o ON o.request_ulid=r.request_ulid
            WHERE r.scope_key=?1 AND r.state='accepted' AND o.family='local' AND o.operation_ulid=?2)>1",
+            finished = finished_by_removal()),
         params![key, id], |r| r.get(0),
     ).map_err(RepositoryError::sqlite)?;
     if pending {
@@ -289,6 +296,10 @@ impl RepositoryService {
         } = target;
         self.require_index_available(OPERATION, Some(&root))?;
         let key = registry_root_key(&root, OPERATION)?;
+        // What the setup's request is finished with, read before the guards
+        // are taken: the setup as it stands, with no link URL when the root
+        // cannot be opened.
+        let setup = super::setup::data::of(self, &root, None);
         let at_root = |e: RepositoryError| e.for_operation(OPERATION, &root);
         let sqlite = |e| at_root(RepositoryError::sqlite(e));
         let data = self
@@ -360,6 +371,11 @@ impl RepositoryService {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite)?;
         check_registration(&tx).map_err(at_root)?;
+        // Every accepted request of the scope that the removal ends is
+        // finished here, before the rows its guards read are deleted, on both
+        // paths (design K5).
+        finish_requests_of_removal(&tx, key, setup, self.clock.now().unix_timestamp())
+            .map_err(|_| at_root(super::remote::state::recovery_required()))?;
         tx.execute("DELETE FROM operation_records WHERE root_path=?1", [key])
             .map_err(sqlite)?;
         let deleted = tx

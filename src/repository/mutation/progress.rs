@@ -38,6 +38,7 @@ use super::{
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
         setup::{
+            cancel::{CancelSetupRequest, SetupCancelError, SetupCancelReport},
             channel::ServiceChannel,
             poll::{SetupPollError, SetupPollReport},
             publish::{Published, SetupError, continue_setup},
@@ -355,6 +356,15 @@ pub(crate) trait Session {
         root: &std::path::Path,
         asked_of: RequestId,
     ) -> Option<Result<SetupPollReport, SetupPollError>>;
+
+    /// Cancels the pending setup of `request.root` with the session's
+    /// credentials; see `RepositoryService::cancel_setup`. `None` when the
+    /// session has no credentials, or they are in use: nothing was called.
+    fn cancel_setup(
+        &self,
+        service: &RepositoryService,
+        request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -543,6 +553,16 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
         Some(service.poll_setup_observed(root, false, &mut credentials, Some(&probe)))
     }
+
+    fn cancel_setup(
+        &self,
+        service: &RepositoryService,
+        request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.cancel_setup(request, &mut credentials))
+    }
+
     fn poll_once_retiring(
         &self,
         service: &RepositoryService,
@@ -671,6 +691,14 @@ impl Session for NoSession {
         _root: &std::path::Path,
         _asked_of: RequestId,
     ) -> Option<Result<SetupPollReport, SetupPollError>> {
+        None
+    }
+
+    fn cancel_setup(
+        &self,
+        _service: &RepositoryService,
+        _request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>> {
         None
     }
 

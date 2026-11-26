@@ -2955,6 +2955,34 @@ fn in_the_way(
     Ok(matching.map_or(Pending::Nothing, Pending::Own))
 }
 
+/// Refuses, in the caller's transaction, a call of `operation` under
+/// `operation_id` and `target` while another row of the repository is in its
+/// way: `recovery_required` naming the blocker. The call's own row, taken up or
+/// completed, is not. A setup's cancellation asks it before it deletes the
+/// record, as a removal's reconciliation would be refused.
+pub(super) fn require_not_in_the_way(
+    connection: &Connection,
+    root: &Path,
+    operation: RepositoryOperation,
+    operation_id: OperationId,
+    target: &str,
+) -> Result<(), RepositoryError> {
+    let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
+    match in_the_way(
+        connection,
+        root_path,
+        action_name(operation),
+        &operation_id.to_string(),
+        target,
+        false,
+        CallReach::OwnItem,
+        false,
+    )? {
+        Pending::Another(blocker) => Err(recovery_required(operation, root).with_blocker(blocker)),
+        Pending::Own(_) | Pending::Nothing => Ok(()),
+    }
+}
+
 /// Refuses a root on which a refresh under `operation_id` would be
 /// refused before it began: with `OperationMismatch` for an ID that is a
 /// promotion's parent or child whose exact authoritative hand-off is not due,
@@ -3750,6 +3778,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::CreateAndEnable => "create_and_enable",
         RepositoryOperation::Enable => "enable",
         RepositoryOperation::RemoveRegistration => "remove_registration",
+        RepositoryOperation::CancelSetup => "cancel_setup",
         RepositoryOperation::AddRemote => "add_remote",
         RepositoryOperation::RemoveRemote => "remove_remote",
         RepositoryOperation::SetPublicationRemote => "set_publication_remote",
@@ -3790,6 +3819,7 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "create_and_enable" => Some(RepositoryOperation::CreateAndEnable),
         "enable" => Some(RepositoryOperation::Enable),
         "remove_registration" => Some(RepositoryOperation::RemoveRegistration),
+        "cancel_setup" => Some(RepositoryOperation::CancelSetup),
         "add_remote" => Some(RepositoryOperation::AddRemote),
         "remove_remote" => Some(RepositoryOperation::RemoveRemote),
         "set_publication_remote" => Some(RepositoryOperation::SetPublicationRemote),

@@ -463,6 +463,18 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         resource: "repo",
+        verb: "setup-cancel",
+        summary: "Cancel the repository's pending setup.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
         verb: "identity-set",
         summary: "Set repository identity.",
         availability: Availability::Available("C2"),

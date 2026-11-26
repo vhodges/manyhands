@@ -162,6 +162,12 @@ contract_enum!(
     /// enable's: the setup recorded in the registry, its commit made on the
     /// remote's primary and kept on the local branch `manyhands/setup/<id>`,
     /// and that branch pushed.
+    ///
+    /// `setup_branch_deleted_remotely` to `repository_unregistered` are a
+    /// setup's cancellation's: the remote branch deleted at its recorded
+    /// commit, the local branch and the private base ref deleted, the setup's
+    /// record removed, and, for a first-time setup, the repository taken out
+    /// of the repository list.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -203,6 +209,10 @@ contract_enum!(
         SetupRecorded => "setup_recorded",
         SetupBranchCommitted => "setup_branch_committed",
         SetupBranchPublished => "setup_branch_published",
+        SetupBranchDeletedRemotely => "setup_branch_deleted_remotely",
+        SetupBranchDeleted => "setup_branch_deleted",
+        SetupRecordRemoved => "setup_record_removed",
+        RepositoryUnregistered => "repository_unregistered",
     }
 );
 
@@ -274,10 +284,24 @@ pub struct SetupPreviewDto {
     pub forge: Option<SetupForgeDto>,
 }
 
+/// What a preview of `repo setup-cancel` shows: the setup that will be ended,
+/// as the record has it. The branch is the setup's, on the remote and in the
+/// repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelPreviewDto {
+    pub root: String,
+    pub setup_id: String,
+    pub kind: String,
+    pub state: String,
+    pub branch: String,
+    pub remote: String,
+}
+
 /// A preview's `details`: the command's own fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum PreviewDetailsDto {
+    SetupCancel(SetupCancelPreviewDto),
     Setup(SetupPreviewDto),
     Repository(RepositoryPreviewDto),
     RemoteRemoval(RemoteRemovalPreviewDto),
@@ -1059,6 +1083,9 @@ pub enum MutationDataDto {
     /// Of a `poll once` of a repository whose first-time setup is pending:
     /// what the setup poll saw, and what it did (design Part G).
     SetupPoll(Box<SetupPollDto>),
+    /// Of a `repo setup-cancel`: what became of the setup's branches and
+    /// registration (design Part H).
+    SetupCancel(Box<SetupCancelDto>),
     /// Of a `busy` or `recovery_required` answer that names the operation
     /// in its way. It is never stored: a record keeps the command's own.
     Blocked(BlockedDto),
@@ -1232,6 +1259,72 @@ impl SetupPollDto {
             integration,
             differs: stored.get("differs")?.as_bool()?,
             pull_request,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupCancelDto`: one value, so that the data of a setup's
+    /// cancellation is told apart by it alone.
+    SetupCancelType {
+        SetupCancel => "setup_cancel",
+    }
+);
+
+/// What `repo setup-cancel` answers: the setup it ended, what became of its
+/// remote and local branches, and whether a first-time setup's registration
+/// was removed. It holds no remote location, credential or identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelDto {
+    pub r#type: SetupCancelType,
+    pub setup_id: String,
+    pub kind: String,
+    pub remote_branch: String,
+    pub local_branch: String,
+    pub unregistered: bool,
+}
+
+impl SetupCancelDto {
+    /// The data of a cancel's report.
+    pub(crate) fn of(report: &crate::repository::SetupCancelReport) -> Self {
+        Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: report.setup_id.to_string(),
+            kind: report.kind.as_str().to_owned(),
+            remote_branch: report.remote_branch.as_str().to_owned(),
+            local_branch: report.local_branch.as_str().to_owned(),
+            unregistered: report.unregistered,
+        }
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_cancel" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let kind = text("kind")?;
+        let remote_branch = text("remote_branch")?;
+        let local_branch = text("local_branch")?;
+        if !matches!(kind.as_str(), "enable" | "change")
+            || !crate::repository::RemoteBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == remote_branch)
+            || !crate::repository::LocalBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == local_branch)
+        {
+            return None;
+        }
+        Some(Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: text("setup_id")?,
+            kind,
+            remote_branch,
+            local_branch,
+            unregistered: stored.get("unregistered")?.as_bool()?,
         })
     }
 }
@@ -2686,6 +2779,8 @@ impl MutationDataDto {
             | Self::Setup(_)
             // Nor does a setup poll's.
             | Self::SetupPoll(_)
+            // Nor does a cancellation's.
+            | Self::SetupCancel(_)
             // Nor is a request refused for another operation's row
             // refused for its host.
             | Self::Blocked(_) => None,
@@ -2819,6 +2914,10 @@ impl MutationDataDto {
             | Command::OperationResume
             | Command::ItemRepublish => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
+            }
+            // A cancellation of a setup stores what became of it.
+            Command::RepoSetupCancel => {
+                SetupCancelDto::from_stored(stored).map(|data| Self::SetupCancel(Box::new(data)))
             }
             // A pull-request enable stores the setup it recorded, or the
             // local commits that refused it, told apart by the tag. A direct

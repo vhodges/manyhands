@@ -4788,3 +4788,360 @@ fn turning_pull_request_mode_on_without_a_key_records_a_change() {
     );
     assert_eq!(configuration(), before_configuration);
 }
+
+// ---------------------------------------------------------------------
+// Cancelling and removing a pending setup (Wave 06 Cycle 02, design Parts H and K)
+// ---------------------------------------------------------------------
+
+/// A recorded first-time setup is cancelled: the preview binds its state, a
+/// publish between the preview and the confirm is `external_change`, the
+/// cancel unregisters the repository and finishes the enable's own request as
+/// `cancelled`, and that request, sent again, answers so and records no
+/// second setup (L4).
+#[test]
+fn cancelling_a_recorded_setup_unregisters_it() {
+    use manyhands::{
+        repository::{Mutation, RepoSetupCancelInput, RequestState},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::{REQUEST_1, REQUEST_2, REQUEST_3},
+    };
+
+    let desk = Desk::new();
+    let plain = Plain::new();
+    plain
+        .fixture
+        .repository
+        .remote("origin", NEVER_CONTACTED)
+        .unwrap();
+    let enable = || Mutation::RepoEnable(pull_request_input(&plain));
+    let cancel = |root: &std::path::Path| {
+        Mutation::RepoSetupCancel(RepoSetupCancelInput {
+            root: root.to_owned(),
+        })
+    };
+    let root = plain.root.to_str().unwrap().to_owned();
+    let head = plain.head();
+
+    // The setup is recorded, and its enable is owed.
+    let prepared = desk.service.prepare(&enable());
+    let confirmation = serde_json::to_value(&prepared).unwrap()["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stopped = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(
+        stopped.code,
+        ResultCode::InternalError,
+        "{}",
+        stopped.message
+    );
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    let setup = serde_json::to_value(&stopped.data).unwrap();
+    let setup_id = setup["id"].as_str().unwrap().to_owned();
+    let branch = format!("manyhands/setup/{setup_id}");
+
+    // The preview reads local state only: no connection, nothing written.
+    let preview = desk.prepare(&cancel(&plain.root));
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    let value = serde_json::to_value(&preview).unwrap();
+    let effects: Vec<&str> = value["data"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| effect["effect"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        effects,
+        [
+            "setup_branch_deleted",
+            "setup_record_removed",
+            "repository_unregistered"
+        ]
+    );
+    let details = &value["data"]["details"];
+    assert_eq!(details["setup_id"], setup_id.as_str());
+    assert_eq!(details["kind"], "enable");
+    assert_eq!(details["state"], "recorded");
+    assert_eq!(details["branch"], branch.as_str());
+    assert!(!manyhands::runtime::git_transport_initialized());
+    let confirmation_id = value["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_preview",
+        &root,
+        Some("setup_cancel_preview.schema.json"),
+        &[
+            (confirmation_id.as_str(), "<confirmation>"),
+            (setup_id.as_str(), "<setup>"),
+            (branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &preview,
+    );
+
+    // The setup is published between the preview and the confirm: what was
+    // shown is not what is there.
+    let index = || support::items::index(desk.data.path());
+    index()
+        .execute(
+            "UPDATE repository_setups SET base_oid = ?1, commit_oid = ?1, published_oid = ?1",
+            [head.to_string()],
+        )
+        .unwrap();
+    let changed = desk.execute(REQUEST_2, &confirmation_id, cancel(&plain.root));
+    assert_eq!(
+        changed.code,
+        ResultCode::ExternalChange,
+        "{}",
+        changed.message
+    );
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 1);
+    assert_eq!(
+        desk.record(REQUEST_1).unwrap().state,
+        RequestState::Accepted
+    );
+    index()
+        .execute(
+            "UPDATE repository_setups SET published_oid = NULL, base_oid = NULL, commit_oid = NULL",
+            [],
+        )
+        .unwrap();
+
+    // The confirm of a fresh preview unregisters the repository.
+    let (confirmation_id, _) = desk.preview(&cancel(&plain.root));
+    let cancelled = desk.execute(REQUEST_3, &confirmation_id, cancel(&plain.root));
+    assert_eq!(cancelled.code, ResultCode::Ok, "{}", cancelled.message);
+    assert_eq!(cancelled.outcome, Outcome::Success);
+    let data = serde_json::to_value(&cancelled.data).unwrap();
+    assert_eq!(data["type"], "setup_cancel");
+    assert_eq!(data["setup_id"], setup_id.as_str());
+    assert_eq!(data["kind"], "enable");
+    assert_eq!(data["remote_branch"], "not_published");
+    assert_eq!(data["local_branch"], "absent");
+    assert_eq!(data["unregistered"], true);
+    support::schema::check_published("setup_cancel.schema.json", &data).unwrap();
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_recorded",
+        &root,
+        Some("setup_cancel.schema.json"),
+        &[(setup_id.as_str(), "<setup>")],
+        &cancelled,
+    );
+    assert!(!desk.registered(&plain.root));
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0);
+    // No connection was made, and no file or ref of the repository changed.
+    assert!(!manyhands::runtime::git_transport_initialized());
+    assert_eq!(plain.head(), head);
+    assert_eq!(plain.configuration(), None);
+    // The cancel's own row is kept, completed; the enable's own row went with
+    // the registration's other rows.
+    assert_eq!(
+        desk.count(
+            "SELECT COUNT(*) FROM operation_records
+              WHERE action = 'cancel_setup' AND state = 'completed'
+                AND completed_step = 'setup_cancel_recorded'"
+        ),
+        1
+    );
+    assert_eq!(desk.count("SELECT COUNT(*) FROM operation_records"), 1);
+
+    // The enable's request was finished in the same transaction, as
+    // cancelled: sent again, it answers so, and records no second setup.
+    let finished = desk.record(REQUEST_1).unwrap();
+    assert_eq!(finished.state, RequestState::Finished);
+    assert_eq!(
+        finished.result.as_ref().unwrap().code,
+        ResultCode::Cancelled
+    );
+    let again = desk.execute(REQUEST_1, &confirmation, enable());
+    assert_eq!(again.code, ResultCode::Cancelled, "{}", again.message);
+    assert_eq!(again.outcome, Outcome::Cancelled);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repository_setups"), 0);
+    assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0);
+    // The cancel's own request replays what it answered.
+    let replayed = desk.execute(REQUEST_3, &confirmation_id, cancel(&plain.root));
+    assert_eq!(replayed, cancelled);
+
+    // A repository with no setup has nothing to cancel.
+    let direct = Plain::new();
+    let (direct_confirmation, _) = desk.preview(&direct.enable());
+    let enabled = desk.execute(
+        "01ARZ3NDEKTSV4RRFFQ69G5FX4",
+        &direct_confirmation,
+        direct.enable(),
+    );
+    assert_eq!(enabled.code, ResultCode::Ok, "{}", enabled.message);
+    let nothing = desk.prepare(&cancel(&direct.root));
+    assert_eq!(
+        nothing.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        nothing.message
+    );
+    assert_eq!(nothing.outcome, Outcome::Noop);
+    assert!(nothing.data.is_none());
+    support::mutation_golden::assert_contract_at(
+        "repo_setup_cancel_already_applied",
+        direct.root.to_str().unwrap(),
+        None,
+        &[],
+        &nothing,
+    );
+}
+
+/// `repo remove` always works on a repository whose setup is pending, with its
+/// root present or gone (decision 16): the setup's request is finished as
+/// `cancelled` in the removal's transaction, whatever its command, both setup
+/// branches are left, and that request, sent again, answers so and records no
+/// second setup.
+#[test]
+fn repo_remove_always_removes_a_pending_setup() {
+    use manyhands::{
+        canonical::Integration,
+        repository::{Mutation, RemoteSelectInput, RepoRemoveInput, RequestState},
+        results::{Outcome, ResultCode},
+    };
+    use support::{
+        confirmation::{Desk, Plain},
+        mutation::{REQUEST_1, REQUEST_2, REQUEST_3, execute_with},
+    };
+
+    // (a first-time enable, or a change), and whether the root is gone.
+    for (change, gone) in [(false, false), (false, true), (true, false)] {
+        let what = format!("change: {change}, root gone: {gone}");
+        let desk = Desk::new();
+        let plain = Plain::new();
+        plain
+            .fixture
+            .repository
+            .remote("origin", NEVER_CONTACTED)
+            .unwrap();
+        let remove = || {
+            Mutation::RepoRemove(RepoRemoveInput {
+                root: plain.root.clone(),
+            })
+        };
+        let enable = || Mutation::RepoEnable(pull_request_input(&plain));
+        let select = || {
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root: plain.root.clone(),
+                name: Some("origin".to_owned()),
+                integration: Some(Integration::PullRequest),
+                forge: None,
+            })
+        };
+
+        // A recorded setup, whose request is owed.
+        let (confirmation, stopped) = if change {
+            let (direct, _) = desk.preview(&plain.enable());
+            let enabled = desk.execute(REQUEST_1, &direct, plain.enable());
+            assert_eq!(enabled.code, ResultCode::Ok, "{what}: {}", enabled.message);
+            (
+                String::new(),
+                execute_with(&desk.service, REQUEST_2, select()),
+            )
+        } else {
+            let prepared = desk.service.prepare(&enable());
+            let confirmation = serde_json::to_value(&prepared).unwrap()["data"]["confirmation_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let stopped = desk.execute(REQUEST_2, &confirmation, enable());
+            (confirmation, stopped)
+        };
+        assert_eq!(
+            stopped.code,
+            ResultCode::InternalError,
+            "{what}: {}",
+            stopped.message
+        );
+        assert_eq!(
+            desk.record(REQUEST_2).unwrap().state,
+            RequestState::Accepted,
+            "{what}"
+        );
+        let setup_id = serde_json::to_value(&stopped.data).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Both setup branches exist, as a publication left them: the remote's
+        // is out of reach here, so only the local branch and the private ref
+        // can be seen to stay.
+        let local_branch = format!("refs/heads/manyhands/setup/{setup_id}");
+        let private_base = format!("refs/manyhands/setups/{setup_id}/base");
+        let head = plain.head();
+        plain
+            .fixture
+            .repository
+            .reference(&local_branch, head, false, "a setup branch")
+            .unwrap();
+        plain
+            .fixture
+            .repository
+            .reference(&private_base, head, false, "a private base")
+            .unwrap();
+        if gone {
+            std::fs::remove_dir_all(&plain.root).unwrap();
+        }
+
+        let (removal, _) = desk.preview(&remove());
+        let removed = desk.execute(REQUEST_3, &removal, remove());
+
+        assert_eq!(removed.code, ResultCode::Ok, "{what}: {}", removed.message);
+        assert!(!desk.registered(&plain.root), "{what}");
+        assert_eq!(
+            desk.count("SELECT COUNT(*) FROM repository_setups"),
+            0,
+            "{what}"
+        );
+        // The setup's request is finished `cancelled`, in that transaction.
+        let finished = desk.record(REQUEST_2).unwrap();
+        assert_eq!(finished.state, RequestState::Finished, "{what}");
+        assert_eq!(
+            finished.result.as_ref().unwrap().code,
+            ResultCode::Cancelled,
+            "{what}"
+        );
+        // Both branches are left.
+        if !gone {
+            let repository = git2::Repository::open(&plain.root).unwrap();
+            assert!(repository.find_reference(&local_branch).is_ok(), "{what}");
+            assert!(repository.find_reference(&private_base).is_ok(), "{what}");
+        }
+        // No connection was made.
+        assert!(!manyhands::runtime::git_transport_initialized(), "{what}");
+
+        // The same request, sent again, answers `cancelled` and records no
+        // second setup. With the root gone the request cannot be matched to
+        // its record again (a root's identity needs the root), and its stored
+        // result, read above, is what it keeps.
+        if !gone {
+            let again = if change {
+                execute_with(&desk.service, REQUEST_2, select())
+            } else {
+                desk.execute(REQUEST_2, &confirmation, enable())
+            };
+            assert_eq!(
+                again.code,
+                ResultCode::Cancelled,
+                "{what}: {}",
+                again.message
+            );
+            assert_eq!(again.outcome, Outcome::Cancelled, "{what}");
+        }
+        assert_eq!(
+            desk.count("SELECT COUNT(*) FROM repository_setups"),
+            0,
+            "{what}"
+        );
+        assert_eq!(desk.count("SELECT COUNT(*) FROM repositories"), 0, "{what}");
+    }
+}

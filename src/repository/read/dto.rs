@@ -858,6 +858,7 @@ contract_enum!(
         CreateAndEnable => "create_and_enable",
         Enable => "enable",
         RemoveRegistration => "remove_registration",
+        CancelSetup => "cancel_setup",
         AddRemote => "add_remote",
         RemoveRemote => "remove_remote",
         SetPublicationRemote => "set_publication_remote",

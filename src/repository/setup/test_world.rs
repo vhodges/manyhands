@@ -25,8 +25,8 @@ use crate::{
             DigestSalt, IntentDigest, NewRequest, RequestOperation, RequestRecord, ScopeKey,
         },
         transport::{
-            SetupAdvertisement, SetupPush, SetupScope, SshDirection, SshTransportError,
-            SshTransportErrorKind,
+            DeleteAttempt, SetupAdvertisement, SetupPush, SetupScope, SshDirection,
+            SshTransportError, SshTransportErrorKind,
         },
     },
 };
@@ -141,6 +141,14 @@ impl SetupChannel for Stub {
 
     fn push_branch(&mut self, _: &SetupScope, _: Oid) -> Result<SetupPush, SshTransportError> {
         panic!("a poll never pushes");
+    }
+
+    fn delete_branch(
+        &mut self,
+        _: &SetupScope,
+        _: Oid,
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        panic!("a poll never deletes");
     }
 
     fn observe_branch(&mut self, _: &SetupScope) -> Result<Option<Oid>, SshTransportError> {

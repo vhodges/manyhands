@@ -12,8 +12,8 @@ use manyhands::{
         CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, InitialsChange,
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput, Mutation, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
-        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
-        RequestId, SharedKeyId,
+        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
+        RepoSetupCancelInput, RepositoryService, RequestId, SharedKeyId,
         keys::{KeyProtection, KeyStore},
         transport::SshAuthority,
     },
@@ -386,6 +386,34 @@ pub fn repo_remove(
         flags,
         mutate::RETRYING,
         &mut |_| Mutation::RepoRemove(RepoRemoveInput { root: root.clone() }),
+        &mut std::thread::sleep,
+    )
+}
+
+/// `repo setup-cancel`: the repository's pending setup is ended, its branches
+/// deleted, and a first-time setup unregistered. It reads no input.
+pub fn repo_setup_cancel(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root))
+    })();
+    let (flags, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        mutate::RETRYING,
+        &mut |_| Mutation::RepoSetupCancel(RepoSetupCancelInput { root: root.clone() }),
         &mut std::thread::sleep,
     )
 }

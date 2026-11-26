@@ -562,6 +562,15 @@ impl Session for Recorder {
     ) -> Option<Result<crate::repository::SetupPollReport, crate::repository::SetupPollError>> {
         None
     }
+
+    fn cancel_setup(
+        &self,
+        _: &RepositoryService,
+        _: &crate::repository::CancelSetupRequest,
+    ) -> Option<Result<crate::repository::SetupCancelReport, crate::repository::SetupCancelError>>
+    {
+        None
+    }
 }
 
 /// D5 decision 11, L3, R-15: each step a run tells of is a stage. The

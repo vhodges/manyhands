@@ -116,7 +116,10 @@ impl RepositoryService {
                 .recorded_local_step(self)
                 .ok()
                 .flatten()
-                .is_some_and(|step| step.is(crate::repository::recovery::LocalStep::SetupRecorded)))
+                .is_some_and(|step| {
+                    step.is(crate::repository::recovery::LocalStep::SetupRecorded)
+                        || step.is(crate::repository::recovery::LocalStep::SetupCancelRecorded)
+                }))
             && let Ok(Some(record)) = self.request_record(accepted.request_id)
             && record.state == RequestState::Finished
         {

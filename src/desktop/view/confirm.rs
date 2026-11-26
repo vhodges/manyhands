@@ -646,6 +646,12 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
         }
     };
     match details {
+        PreviewDetailsDto::SetupCancel(cancel) => {
+            put("Root", Some(cancel.root.clone()));
+            put("Setup", Some(cancel.setup_id.clone()));
+            put("Branch", Some(cancel.branch.clone()));
+            put("Remote", Some(cancel.remote.clone()));
+        }
         PreviewDetailsDto::Setup(setup) => {
             put("Root", Some(setup.root.clone()));
             put("Primary branch", Some(setup.primary_branch.clone()));

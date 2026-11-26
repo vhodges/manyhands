@@ -168,6 +168,15 @@ impl Session for Scripted {
         false
     }
 
+    fn cancel_setup(
+        &self,
+        _: &RepositoryService,
+        _: &crate::repository::CancelSetupRequest,
+    ) -> Option<Result<crate::repository::SetupCancelReport, crate::repository::SetupCancelError>>
+    {
+        None
+    }
+
     fn report(&self, _: &crate::repository::ProgressEvent) {}
 
     fn retire_context(

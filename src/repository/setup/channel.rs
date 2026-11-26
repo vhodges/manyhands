@@ -12,7 +12,7 @@ use crate::repository::{
     RepositoryService,
     keys::{SessionCredentialProvider, SessionCredentials},
     transport::{
-        SetupAdvertisement, SetupPush, SetupScope, SshDirection, SshTransportError,
+        DeleteAttempt, SetupAdvertisement, SetupPush, SetupScope, SshDirection, SshTransportError,
         VerifySshTransportRequest,
     },
 };
@@ -36,8 +36,20 @@ pub(crate) trait SetupChannel {
         commit: Oid,
     ) -> Result<SetupPush, SshTransportError>;
 
+    /// A delete connection: deletes the setup's branch, guarded at
+    /// `expected`: the one update from `expected` to no ref, which the
+    /// server may refuse or lose. A `PushRejected`, `TransportUnavailable`
+    /// or `RemoteUnavailable` may follow a delete that landed, so the caller
+    /// observes after it whatever it answered.
+    fn delete_branch(
+        &mut self,
+        scope: &SetupScope,
+        expected: Oid,
+    ) -> Result<DeleteAttempt, SshTransportError>;
+
     /// A fetch connection of its own: the setup's branch as a fresh
-    /// advertisement has it, the only evidence of what a push left.
+    /// advertisement has it, the only evidence of what a push or a delete
+    /// left.
     fn observe_branch(&mut self, scope: &SetupScope) -> Result<Option<Oid>, SshTransportError>;
 }
 
@@ -97,6 +109,18 @@ impl<P: SessionCredentialProvider> SetupChannel for ServiceChannel<'_, P> {
         self.service
             .with_setup_remote(request, scope, self.automatic, self.credentials, |remote| {
                 remote.push_setup_branch(commit)
+            })
+    }
+
+    fn delete_branch(
+        &mut self,
+        scope: &SetupScope,
+        expected: Oid,
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        let request = self.request(SshDirection::Delete);
+        self.service
+            .with_setup_remote(request, scope, self.automatic, self.credentials, |remote| {
+                remote.delete_setup_branch(expected)
             })
     }
 

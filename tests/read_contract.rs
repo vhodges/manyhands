@@ -687,10 +687,11 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 16] = [
+const LOCAL_ACTIONS: [OperationAction; 17] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
+    OperationAction::CancelSetup,
     OperationAction::AddRemote,
     OperationAction::RemoveRemote,
     OperationAction::SetPublicationRemote,
@@ -730,7 +731,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        PollMutationCompletion, PollTargetDisposition, SetupPollOutcome, SetupPollType,
+        LocalBranch, PollMutationCompletion, PollTargetDisposition, RemoteBranch, SetupCancelType,
+        SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -807,6 +809,32 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             [Integration::Direct, Integration::PullRequest]
                 .map(Integration::as_str)
                 .to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "type",
+            SetupCancelType::ALL.map(SetupCancelType::as_str).to_vec(),
+        ),
+        ("setup_cancel.schema.json", "kind", vec!["enable", "change"]),
+        (
+            "setup_cancel.schema.json",
+            "remote_branch",
+            RemoteBranch::ALL.map(RemoteBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "local_branch",
+            LocalBranch::ALL.map(LocalBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.state",
+            vec!["recorded", "published"],
         ),
         (
             "setup_poll.schema.json",

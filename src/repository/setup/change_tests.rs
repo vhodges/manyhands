@@ -21,7 +21,7 @@ use crate::{
         RepositoryErrorKind, RepositoryService, RequestId, SetPublicationRemoteRequest,
         open_registry,
         request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
-        transport::{SetupAdvertisement, SetupPush, SetupScope, SshTransportError},
+        transport::{DeleteAttempt, SetupAdvertisement, SetupPush, SetupScope, SshTransportError},
     },
     results::ResultCode,
 };
@@ -933,6 +933,14 @@ impl SetupChannel for Never {
 
     fn push_branch(&mut self, _: &SetupScope, _: Oid) -> Result<SetupPush, SshTransportError> {
         panic!("a setup that is gone is not pushed");
+    }
+
+    fn delete_branch(
+        &mut self,
+        _: &SetupScope,
+        _: Oid,
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        panic!("a setup that is gone is not deleted");
     }
 
     fn observe_branch(&mut self, _: &SetupScope) -> Result<Option<Oid>, SshTransportError> {

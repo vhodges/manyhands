@@ -1,0 +1,57 @@
+{
+  "code": "ok",
+  "command": "repo setup-cancel",
+  "data": {
+    "command": "repo setup-cancel",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "branch": "manyhands/setup/<setup>",
+      "kind": "enable",
+      "remote": "origin",
+      "root": "<root>",
+      "setup_id": "<setup>",
+      "state": "recorded"
+    },
+    "effects": [
+      {
+        "effect": "setup_branch_deleted"
+      },
+      {
+        "effect": "setup_record_removed"
+      },
+      {
+        "effect": "repository_unregistered"
+      }
+    ],
+    "expires_at": "2023-11-14T22:23:20Z",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

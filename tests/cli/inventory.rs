@@ -87,6 +87,7 @@ const NO_INPUT: &[&str] = &[
     "operation resume",
     "operation abandon",
     // C5's (R-2: the lifecycle verbs take none).
+    "repo setup-cancel",
     "document promote",
     "ticket close",
     "poll once",
@@ -144,6 +145,10 @@ const DATA: &[(&str, &[&str])] = &[
         ],
     ),
     ("repo remove", &["repository_removal_preview"]),
+    (
+        "repo setup-cancel",
+        &["blocked", "setup_cancel_preview", "setup_cancel"],
+    ),
     (
         "repo identity-set",
         &["identity_preview", "identity_mutation"],
@@ -409,7 +414,7 @@ fn every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt() {
     }
     let expected = set(bound.difference(&set(EXEMPT.iter().copied())).copied());
     assert_eq!(mutating, expected);
-    assert_eq!(mutating.len(), 44);
+    assert_eq!(mutating.len(), 45);
 }
 
 #[test]
@@ -427,7 +432,7 @@ fn the_catalog_and_the_rfc_taxonomies_name_the_same_verbs() {
         extra.is_empty(),
         "in an RFC table, not catalogued: {extra:?}"
     );
-    assert_eq!(catalogued.len(), 81);
+    assert_eq!(catalogued.len(), 82);
 }
 
 #[test]

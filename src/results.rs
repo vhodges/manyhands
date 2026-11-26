@@ -846,7 +846,7 @@ problem_codes! {
     OperationsUnreadable => "operations_unreadable", None,
         "The repository's unfinished operations could not be read; run operation list for the reason.";
     SetupUnreadable => "setup_unreadable", None,
-        "The repository's pending setup could not be read; run operation list for the reason.";
+        "The repository's pending setup could not be read, and repo setup-cancel reads it too, so it cannot clear it; repo remove drops the record with the registration, and leaves the setup branches.";
     UnknownProblem => "unknown_problem", None,
         "Refresh the index; if the problem remains, inspect the file.";
 }

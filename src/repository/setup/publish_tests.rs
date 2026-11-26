@@ -12,7 +12,7 @@ use crate::{
             commit, lock,
             record::{self, SetupKind, SetupRecord},
         },
-        transport::{SetupAdvertisement, SetupPush, SetupScope, SshDirection},
+        transport::{DeleteAttempt, SetupAdvertisement, SetupPush, SetupScope, SshDirection},
     },
     results::{Effects, ResultCode},
 };
@@ -221,6 +221,14 @@ impl SetupChannel for Stub {
             return Err(self.error(scope, SshDirection::Push, kind));
         }
         Ok(SetupPush::Sent)
+    }
+
+    fn delete_branch(
+        &mut self,
+        _: &SetupScope,
+        _: Oid,
+    ) -> Result<DeleteAttempt, SshTransportError> {
+        panic!("publishing never deletes");
     }
 
     fn observe_branch(&mut self, scope: &SetupScope) -> Result<Option<Oid>, SshTransportError> {
@@ -1139,6 +1147,13 @@ impl Fixture {
                     .reference(&scope.branch_ref(), self.other, true, "a peer")
                     .unwrap();
                 Ok(sent)
+            }
+            fn delete_branch(
+                &mut self,
+                scope: &SetupScope,
+                expected: Oid,
+            ) -> Result<DeleteAttempt, SshTransportError> {
+                self.stub.delete_branch(scope, expected)
             }
             fn observe_branch(
                 &mut self,

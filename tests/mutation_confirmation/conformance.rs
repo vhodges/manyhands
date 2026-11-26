@@ -26,7 +26,7 @@ const OTHER_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCM";
 
 const REFUSED: &str = "confirmation_not_found";
 
-const ROWS: [Row; 8] = [
+const ROWS: [Row; 9] = [
     Row::new("repo create", true, REFUSED, |rule| {
         let desk = Desk::new();
         let site = Site::new();
@@ -171,6 +171,57 @@ const ROWS: [Row; 8] = [
                 Ask::Changed => lost.deselect(),
             },
             &|| lost.move_generation(),
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("repo setup-cancel", true, REFUSED, |rule| {
+        let desk = Desk::new();
+        let plain = Plain::new();
+        plain
+            .fixture
+            .repository
+            .remote("origin", "ssh://git@example.invalid/team/repo.git")
+            .unwrap();
+        // A recorded setup: the enable stops before it connects, because
+        // this process has not initialized the Git transport.
+        let enable = || {
+            Mutation::RepoEnable(RepoEnableInput {
+                publication_remote: Some("origin".to_owned()),
+                integration: Some(manyhands::canonical::Integration::PullRequest),
+                ..plain.input()
+            })
+        };
+        let prepared = serde_json::to_value(desk.service.prepare(&enable())).unwrap();
+        let confirmation = prepared["data"]["confirmation_id"].as_str().unwrap();
+        let recorded = desk.execute("01ARZ3NDEKTSV4RRFFQ69G5FW1", confirmation, enable());
+        assert_eq!(recorded.code, manyhands::results::ResultCode::InternalError);
+        let head = plain.head().to_string();
+        drive_confirmed(
+            &desk.service,
+            desk.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Refused | Ask::Unconsented => {
+                    Mutation::RepoSetupCancel(manyhands::repository::RepoSetupCancelInput {
+                        root: plain.root.clone(),
+                    })
+                }
+                // The command has no input but its repository: another
+                // command.
+                Ask::Changed => Mutation::RepoRemove(manyhands::repository::RepoRemoveInput {
+                    root: plain.root.clone(),
+                }),
+            },
+            // The setup is published.
+            &|| {
+                items::index(desk.data.path())
+                    .execute(
+                        "UPDATE repository_setups
+                            SET base_oid = ?1, commit_oid = ?1, published_oid = ?1",
+                        [&head],
+                    )
+                    .unwrap();
+            },
             rule,
         );
         Ok(())

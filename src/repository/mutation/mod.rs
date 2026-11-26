@@ -97,6 +97,7 @@ use bind::{
     resolve_history::ItemResolveHistoryBinding,
     resume::OperationResumeBinding,
     retire::ContextRetireBinding,
+    setup_cancel::RepoSetupCancelBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
@@ -126,6 +127,7 @@ pub use bind::{
     resolve_history::{ItemResolveHistoryInput, ResolveHistoryChoice},
     resume::OperationResumeInput,
     retire::ContextRetireInput,
+    setup_cancel::RepoSetupCancelInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
@@ -155,9 +157,10 @@ pub use dto::{
     RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto,
     RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto,
     RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SetupForgeDto, SetupMutationDto, SetupMutationType,
-    SetupPollDto, SetupPollType, SetupPreviewDto, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    RequestResultDto, RequestState, SetupCancelDto, SetupCancelPreviewDto, SetupCancelType,
+    SetupForgeDto, SetupMutationDto, SetupMutationType, SetupPollDto, SetupPollType,
+    SetupPreviewDto, SynchronizationConflictMutationDto, SynchronizationConflictType,
+    SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -238,6 +241,48 @@ pub(in super::super) fn finish_setup_request(
         now,
     )
 }
+/// Finishes the accepted request of a cancellation, in the caller's registry
+/// transaction, with `ok` and what became of the setup (design Part H).
+pub(in super::super) fn finish_cancel_request(
+    tx: &rusqlite::Transaction<'_>,
+    request_id: RequestId,
+    report: &super::SetupCancelReport,
+    now: i64,
+) -> Result<bool, super::ReadError> {
+    records::finish_own_cancel(
+        tx,
+        request_id,
+        &bind::Answer {
+            data: Some(MutationDataDto::SetupCancel(Box::new(SetupCancelDto::of(
+                report,
+            )))),
+            ..bind::Answer::stopped(ResultCode::Ok)
+        },
+        now,
+    )
+}
+
+/// Finishes, in a removal's transaction, the requests the removal ends (design
+/// K5): setup requests as `cancelled`, carrying `setup`, and a cancellation's
+/// as `already_applied`.
+pub(in super::super) fn finish_requests_of_removal(
+    tx: &rusqlite::Transaction<'_>,
+    scope_key: &str,
+    setup: Option<MutationDataDto>,
+    now: i64,
+) -> Result<usize, super::ReadError> {
+    records::finish_for_removal(
+        tx,
+        scope_key,
+        &bind::Answer {
+            data: setup,
+            ..bind::Answer::stopped(ResultCode::Cancelled)
+        },
+        &bind::Answer::stopped(ResultCode::AlreadyApplied),
+        now,
+    )
+}
+pub(super) use records::finished_by_removal;
 pub(super) use records::{
     operation_holder, operation_owner, release_operation_holder, release_operation_owner,
 };
@@ -625,6 +670,7 @@ pub enum Mutation {
     RepoEnable(RepoEnableInput),
     RemoteRemove(RemoteRemoveInput),
     RepoRemove(RepoRemoveInput),
+    RepoSetupCancel(RepoSetupCancelInput),
     KeyDelete(KeyDeleteInput),
     OperationAbandon(OperationAbandonInput),
     ItemSync(ItemSyncInput),
@@ -683,6 +729,7 @@ impl Mutation {
             Self::RepoEnable(_) => Command::RepoEnable,
             Self::RemoteRemove(_) => Command::RemoteRemove,
             Self::RepoRemove(_) => Command::RepoRemove,
+            Self::RepoSetupCancel(_) => Command::RepoSetupCancel,
             Self::KeyDelete(_) => Command::KeyDelete,
             Self::OperationAbandon(_) => Command::OperationAbandon,
             Self::ItemSync(_) => Command::ItemSync,
@@ -726,6 +773,9 @@ impl Mutation {
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
             Self::RepoRemove(input) => Some(Box::new(RepoRemoveBinding::from(input.clone()))),
+            Self::RepoSetupCancel(input) => {
+                Some(Box::new(RepoSetupCancelBinding::from(input.clone())))
+            }
             Self::KeyDelete(input) => Some(Box::new(KeyDeleteBinding::from(input.clone()))),
             Self::OperationAbandon(input) => {
                 Some(Box::new(OperationAbandonBinding::from(input.clone())))
@@ -797,6 +847,7 @@ impl Mutation {
             Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
             Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
             Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
+            Self::RepoSetupCancel(input) => Box::new(RepoSetupCancelBinding::from(input)),
             Self::KeyDelete(input) => Box::new(KeyDeleteBinding::from(input)),
             Self::OperationAbandon(input) => Box::new(OperationAbandonBinding::from(input)),
             Self::ItemSync(input) => Box::new(SyncBinding::from(input)),

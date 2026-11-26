@@ -3,6 +3,7 @@
 // The transport's typed error is large by design, as in `transport` and `remote`.
 #![allow(clippy::result_large_err)]
 
+pub(crate) mod cancel;
 pub(crate) mod change;
 pub(crate) mod channel;
 pub(crate) mod commit;

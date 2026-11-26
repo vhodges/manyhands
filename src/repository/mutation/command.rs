@@ -81,6 +81,7 @@ commands! {
     PollOnce => "poll once",
     ItemResolveHistory => "item resolve-history",
     RemoteResolveHistory => "remote resolve-history",
+    RepoSetupCancel => "repo setup-cancel",
 }
 
 /// What a pending setup does to a command (Wave 06 Cycle 02, design Part B).
@@ -140,6 +141,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             // The refresh that puts the folder in the index: making the
             // directory records nothing, and the refresh's row is the
@@ -235,6 +237,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -290,6 +293,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -344,6 +348,7 @@ impl Command {
             | Self::ContextRetire => SetupGate::RefusedBeforeEnable,
             Self::RepoCreate
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::RepoIdentitySet
             | Self::RemoteAdd
             | Self::KeyGenerate
@@ -398,6 +403,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -463,6 +469,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -538,6 +545,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -596,6 +604,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -662,6 +671,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -706,6 +716,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -809,6 +820,7 @@ mod tests {
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
+        assert_eq!(Command::RepoSetupCancel.name(), "repo setup-cancel");
         assert_eq!(Command::KeyDelete.name(), "key delete");
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
         assert_eq!(Command::ItemSync.name(), "item sync");
@@ -943,6 +955,7 @@ mod tests {
                         | Command::RepoEnable
                         | Command::RemoteRemove
                         | Command::RepoRemove
+                        | Command::RepoSetupCancel
                         | Command::KeyDelete
                         | Command::OperationAbandon
                         | Command::RepoIdentitySet
@@ -1187,6 +1200,7 @@ mod tests {
                 &[
                     "repo create",
                     "repo remove",
+                    "repo setup-cancel",
                     "repo identity-set",
                     "remote add",
                     "key generate",

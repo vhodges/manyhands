@@ -786,6 +786,124 @@ pub(in super::super) fn finish_accepted(
     finish_request(transaction, request_id, attempt, &result, now)
 }
 
+/// Finishes the accepted request `request_id` of `repo setup-cancel`, in the
+/// caller's transaction, with `answer` (design Part H): the cancel's own
+/// request, whose own local row completed at `setup_cancel_recorded`. It is
+/// finished at its current attempt. Any other request is left as it is:
+/// `false`.
+pub(in super::super) fn finish_own_cancel(
+    transaction: &Transaction<'_>,
+    request_id: RequestId,
+    answer: &Answer,
+    now: i64,
+) -> Result<bool, ReadError> {
+    let Some(result) = super::settle::stored_result(answer) else {
+        return Ok(false);
+    };
+    let attempt: Option<i64> = transaction
+        .query_row(
+            "SELECT r.attempt FROM request_records r
+              WHERE r.request_ulid = ?1 AND r.state = 'accepted' AND r.command = ?2
+                AND EXISTS (
+                    SELECT 1 FROM request_operations o
+                      JOIN operation_records p
+                        ON p.operation_ulid = o.operation_ulid AND p.root_path = r.scope_key
+                     WHERE o.request_ulid = r.request_ulid AND o.family = ?3
+                       AND p.state = 'completed' AND p.completed_step = ?4)",
+            params![
+                request_id.to_string(),
+                Command::RepoSetupCancel.name(),
+                OperationFamily::Local.as_str(),
+                LocalStep::SetupCancelRecorded.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(attempt) = attempt else {
+        return Ok(false);
+    };
+    let attempt = u64::try_from(attempt).map_err(|_| invalid_stored_data())?;
+    finish_request(transaction, request_id, attempt, &result, now)
+}
+
+/// The requests a removal of the registration finishes (design K5, decision
+/// 16), as a condition on `request_records r`: a request of `repo enable` or
+/// `remote select` that the repository's setup record names or whose own local
+/// row completed at `setup_recorded`, and a request of `repo setup-cancel`
+/// whose own local row completed at `setup_cancel_recorded`. It reads the
+/// record's request ID by the scope's root, so it holds whether or not the
+/// record can be decoded.
+pub(in super::super) fn finished_by_removal() -> String {
+    format!(
+        "((r.command IN ('{enable}', '{select}')
+           AND (r.request_ulid IS (SELECT s.request_id FROM repository_setups s
+                                     JOIN repositories p ON p.id = s.repository_id
+                                    WHERE p.root_path = r.scope_key)
+                OR {recorded}))
+          OR (r.command = '{cancel}' AND {cancelled}))",
+        enable = Command::RepoEnable.name(),
+        select = Command::RemoteSelect.name(),
+        cancel = Command::RepoSetupCancel.name(),
+        recorded = own_row_completed_at(LocalStep::SetupRecorded),
+        cancelled = own_row_completed_at(LocalStep::SetupCancelRecorded),
+    )
+}
+
+fn own_row_completed_at(step: LocalStep) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM request_operations o
+                   JOIN operation_records p
+                     ON p.operation_ulid = o.operation_ulid AND p.root_path = r.scope_key
+                  WHERE o.request_ulid = r.request_ulid AND o.family = '{family}'
+                    AND p.state = 'completed' AND p.completed_step = '{step}')",
+        family = OperationFamily::Local.as_str(),
+        step = step.as_str(),
+    )
+}
+
+/// Finishes, in the caller's removal transaction, every accepted request of
+/// the scope `scope_key` that `finished_by_removal` names: a setup request as
+/// `cancelled` with `setup`, and a cancel's as `already_applied`, each at its
+/// current attempt (design K5). It reads the requests' own rows, so it runs
+/// before the removal deletes them.
+pub(in super::super) fn finish_for_removal(
+    transaction: &Transaction<'_>,
+    scope_key: &str,
+    setup: &Answer,
+    cancel: &Answer,
+    now: i64,
+) -> Result<usize, ReadError> {
+    let found: Vec<(String, i64, String)> = {
+        let mut statement = transaction.prepare(&format!(
+            "SELECT r.request_ulid, r.attempt, r.command FROM request_records r
+              WHERE r.scope_key = ?1 AND r.state = 'accepted' AND {}",
+            finished_by_removal()
+        ))?;
+        statement
+            .query_map([scope_key], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?
+    };
+    let mut finished = 0;
+    for (id, attempt, command) in found {
+        let answer = if command == Command::RepoSetupCancel.name() {
+            cancel
+        } else {
+            setup
+        };
+        let Some(result) = super::settle::stored_result(answer) else {
+            continue;
+        };
+        let request_id = RequestId::parse(&id).map_err(|_| invalid_stored_data())?;
+        let attempt = u64::try_from(attempt).map_err(|_| invalid_stored_data())?;
+        if finish_request(transaction, request_id, attempt, &result, now)? {
+            finished += 1;
+        }
+    }
+    Ok(finished)
+}
+
 fn delete_request(
     transaction: &Transaction<'_>,
     request_id: RequestId,

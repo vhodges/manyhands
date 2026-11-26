@@ -282,6 +282,15 @@ impl Session for Scripted {
     ) -> Option<Result<crate::repository::SetupPollReport, crate::repository::SetupPollError>> {
         None
     }
+
+    fn cancel_setup(
+        &self,
+        _: &RepositoryService,
+        _: &crate::repository::CancelSetupRequest,
+    ) -> Option<Result<crate::repository::SetupCancelReport, crate::repository::SetupCancelError>>
+    {
+        None
+    }
 }
 
 /// A repository on `main` with one commit, the remote `origin` at an

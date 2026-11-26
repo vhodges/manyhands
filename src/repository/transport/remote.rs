@@ -566,8 +566,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// advertisement first and sends nothing for a branch that is absent.
     /// The outcome of a sent delete, and of a refused or lost one, is read
     /// by `observe_setup_branch` on a call of its own.
-    // The setup operations of the later tasks of Wave 06 Cycle 02 are the callers.
-    #[allow(dead_code)]
     pub(crate) fn delete_setup_branch(
         &mut self,
         expected: git2::Oid,

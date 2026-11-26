@@ -676,6 +676,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -710,6 +711,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -848,6 +850,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -882,6 +885,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -916,6 +920,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -950,6 +955,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
         MutationDataDto::Setup(_) => panic!("a setup's data"),
         MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
