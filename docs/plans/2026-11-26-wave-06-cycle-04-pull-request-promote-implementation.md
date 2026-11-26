@@ -14,9 +14,9 @@ manyhands_kind: document
 
 **Tech Stack:** Rust, `git2`, `rusqlite`, `src/forge.rs`, the SSH test harness for steps added to one existing case.
 
-**Spec:** [Cycle 04 design](2026-11-26-wave-06-cycle-04-pull-request-promote-design.md) (revision 2), under the [Cycle document](../Cycles/wave-06-cycle-04-pull-request-promote.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
+**Spec:** [Cycle 04 design](2026-11-26-wave-06-cycle-04-pull-request-promote-design.md) (revision 3), under the [Cycle document](../Cycles/wave-06-cycle-04-pull-request-promote.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft**, revision 2, 2026-11-26. Not yet approved.
+Status: **draft**, revision 3, 2026-11-26. Not yet approved.
 
 ## Global Constraints
 
@@ -39,7 +39,7 @@ Status: **draft**, revision 2, 2026-11-26. Not yet approved.
 - The fast tier and the SSH tier run once, in Task 10; after a fix wave, only the targets whose code or tests changed run again.
 - No real waits: the runner takes its clock from the request.
 
-**Every new check fails first.** Each new test or assertion is run red once, before its code or against a deliberate stub, and the red run is recorded in the ledger. A row that pins unchanged behaviour (C24, the direct rows of P1 and P2) is exempt, and is recorded as such.
+**Every new check fails first.** Each new test or assertion is run red once, before its code or against a deliberate stub, and the red run is recorded in the ledger. Only a row that pins unchanged behaviour (C24, the direct rows of P1, P2 and P13) is exempt, and is recorded as such; a new row that passes at once is run red against a deliberate stub.
 
 **Test edits.** The design's named edits E-1 to E-12, and the edits Task 0's sweep finds, under the owner's test-edit approval: each logged in the ledger as E-13 onwards with its reason. An edit that removes, weakens or reverses an assertion's intent stops for the owner.
 
@@ -69,6 +69,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - Every direct promotion behaves as before: every existing row reads `direct`. Task 1's migration test, Task 4's C24 and the `document_promotion` target pin it.
 - A same-request retry after each crash point repeats no publication and answers as before. Task 4 pins it.
 - `document show` stops offering the link once the primary holds the document, and its cheap check agrees with the proof. Task 6 pins it.
+- A stopped pull-request promote never waits for good and never publishes what was not previewed; retirement waits for it. Task 4 pins it (C20, C22, C25, P13).
 
 ---
 
@@ -80,7 +81,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | 1 | `src/repository/promotion/record.rs`, `promotion/lifecycle.rs` (`impl LifecycleRecord for PromotionRecord`), `record_tests.rs`, `tests/recovery_foundation_gate.rs`; E-3, E-4 | 0 |
 | 2 | `src/repository/promotion/observe.rs`, `observe_tests.rs`, `promotion/mod.rs`, `promotion/lifecycle.rs` (`Preview`, `runs_context_child`, `require_identity`), `bind/lifecycle_verb.rs` (`Promote::observe`, `Ready`), `bind/lifecycle.rs` (the preview's effects, the digest); E-12 | 1 |
 | 3 | `src/repository/promotion/lifecycle.rs` (`branch_step`, `end_branch`, `Outcome`), `run.rs` (`RunEvent::Recording`), `mod.rs` (`DocumentPromotionResult::Branch`, `BranchPromotionOutcome`), `lifecycle_record.rs` (the second slot's readers), `closure/record.rs` and `closure/checkpoint.rs` (the shared link helper), `bind/lifecycle_verb.rs` (`Called::Branch`), `bind/lifecycle.rs`, the shared fake publisher (a test-support module), `promotion/run_tests.rs`; E-5 | 2 |
-| 4 | `src/repository/promotion/run_tests.rs`, and whatever C12 to C23 need in Task 3's files | 3 |
+| 4 | `src/repository/promotion/lifecycle.rs` and `run.rs` (Part G item 6's hook), `promotion/record.rs` (the fence's query), `src/repository/context_retirement/source.rs` and `authority.rs` (the fence, Part G item 14), `promotion/run_tests.rs`, `context_retirement/tests.rs` or `mutation_tests.rs` | 3 |
 | 5 | `src/repository/mutation/dto.rs`, `mutation/way_out.rs`, `schemas/v1/pull_request_promotion_mutation.schema.json`, `schemas/v1/pull_request_promotion_preview.schema.json`, `bind/lifecycle.rs` and `bind/lifecycle_verb.rs` (the answers' data), `src/bin/manyhands-cli/human_lifecycle.rs`, `human_admin.rs` and their tests, the desktop's arms, `tests/cli/lifecycle.rs`, `tests/mutation_contract.rs`, `tests/support/cli.rs`, `tests/cli/inventory.rs`, `tests/support/mutation.rs`, `tests/support/repair.rs`, `tests/mutation_remote/c5_lifecycle.rs` (its matches), `tests/read_contract.rs`, the `cli_v1` goldens; E-2, E-6, E-7, E-8, E-11 | 4 |
 | 6 | `src/repository/read/items.rs`, `read/dto.rs`, `schemas/v1/item.schema.json`, `src/repository/promotion/observe.rs` (`document_link_outstanding`), `src/repository/mutation/bind/sync.rs`, `tests/read_items.rs`, `promotion/observe_tests.rs`, `bind/sync_tests.rs`; E-1 | 5 |
 | 7 | `src/repository/promotion/run_tests.rs` (the lifecycle table) | 6 |
@@ -103,11 +104,11 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 **Files:** `src/repository/promotion/record.rs` (`SCHEMA_V2` frozen and used by the `promotion_refusal_blockers_v2` step; the rebuild under `wave_06_promotion_modes_v1` with an explicit column list; `integration_mode` and `answer_code`; the CHECKs per mode; `PromotionStep::permits` and `validate` per mode; `PromotionAnswer`), `promotion/lifecycle.rs` (`impl LifecycleRecord for PromotionRecord`: `path()` and `answered()`; the callers of `begin_record`). Tests: `src/repository/promotion/record_tests.rs`, `tests/recovery_foundation_gate.rs`. Named edits: E-3, E-4.
 
-**Interfaces:** Produces `PromotionAnswer { Promoted, AlreadyPromoted, PrimaryHolds, RemoteBranchDeleted, HistoryUnresolved, ContextGone }` (stored names `promoted`, `already_promoted`, `primary_holds`, `remote_branch_deleted`, `history_unresolved`, `context_gone`), and `PromotionRecord`'s `integration_mode: Integration` (Cycle 01's) and `answer_code: Option<PromotionAnswer>`.
+**Interfaces:** Produces `PromotionAnswer { Promoted, AlreadyPromoted, PrimaryHolds, RemoteBranchDeleted, HistoryUnresolved, ContextGone }` (stored names `promoted`, `already_promoted`, `primary_holds`, `remote_branch_deleted`, `history_unresolved`, `context_gone`), and `PromotionRecord`'s `integration_mode: Integration` (Cycle 01's), `answer_code: Option<PromotionAnswer>` and its consented tip in `context_oid` from `confirmed`.
 
 - [ ] **Step 1: Write the failing tests** in `record_tests.rs`:
   - `promotion_modes_migration_rebuilds_a_v2_table_once`: a registry holding a v2 `document_promotions` table with rows of several steps migrates once, keeps every row as `direct`, records the marker, and a second migration changes nothing; a fresh registry is created with the new DDL and both markers.
-  - `pull_request_promotion_steps_and_checks`: a table over (mode, step, columns) asserting `permits`, `validate` and the SQL CHECKs: a `pull_request` row moves `confirmed` → `context_synchronized` → `complete` (with `context_oid` and a `published` or `already_current` category, and no integration column) and `confirmed` → `abandoned` (with the refusal `reconfirmation_required` and no category); it refuses every integration and cleanup step and every integration column; `answer_code` is set exactly at `complete` and `abandoned`; a `direct` row with `answer_code` is refused.
+  - `pull_request_promotion_steps_and_checks`: a table over (mode, step, columns) asserting `permits`, `validate` and the SQL CHECKs: a `pull_request` row holds `context_oid` from `confirmed`, moves `confirmed` → `context_synchronized` → `complete` (with a `published` or `already_current` category, an answer, and no integration column), `confirmed` → `abandoned` with the refusal `reconfirmation_required` and an answer, and `confirmed` → `abandoned` as a refused record (`blocked`, `external_change` or `reconfirmation_required`, no answer, in the confirm's mode); it refuses every integration and cleanup step and every integration column; `answer_code` is required at a pull-request `complete`, allowed at `abandoned`, and refused elsewhere and on a `direct` row.
 - [ ] **Step 2: Run, expect FAIL**, each by exact name. Record the red runs.
 - [ ] **Step 3: Implement** Part A. Apply E-3 and E-4 (E-4 rewrites `promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once` from `SCHEMA_V2` with an explicit column list).
 - [ ] **Step 4: Run** the new tests and E-4's edited tests by exact name, and `devenv shell -- cargo test --all-features --locked --test recovery_foundation_gate failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly -- --exact`. Expected: PASS.
@@ -117,13 +118,13 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 **Files:** `src/repository/promotion/observe.rs` (`primary_holds_document`; the pull-request observation, its situations, effects, blockers and digest under `manyhands pull request promotion v1`), `promotion/mod.rs` (`preview_document_promotion` reads the mode), `promotion/lifecycle.rs` (promotion's `type Preview` carries the mode and the pull-request facts; `runs_context_child` true and `require_identity` passing in pull-request mode), `bind/lifecycle_verb.rs` (`Promote::observe`'s dispatch, `Ready`, no `identity_required` in pull-request mode, the prepare's `already_applied` through Cycle 03's withdraw-prepare shape), `bind/lifecycle.rs` (the preview's effects, the digest). Tests: `src/repository/promotion/observe_tests.rs`. Named edits: E-12.
 
-**Interfaces:** Produces `primary_holds_document(repository: &git2::Repository, primary: &str, remote: &str, item: &ItemId) -> bool` (the exact signature is written at Step 1), and a pull-request observation carrying the mode, the situation (`first` or `again`), `L`, `R` and the link.
+**Interfaces:** Produces `primary_holds_document` (the repository, the tip to judge, the tracking primary's OID or none, the primary branch's name, the publication remote's name, the item; it answers a boolean; the exact signature is written at Step 1), and a pull-request observation carrying the mode, the situation (`first` or `again`), `L`, `R` and the link.
 
 - [ ] **Step 1: Design checkpoint.** Write in the ledger, against the source: `primary_holds_document`'s signature and how it reads `L`, `R`, the local and the tracking primary with no fetch; Part G items 1, 5, 10 and 12: the observation type's shape (the primary OID optional or absent in pull-request mode) and each `DocumentPromotionPreflight` match it changes (E-12), how the mode reaches `begin_record`, and how a prepare's `already_applied` is answered through Cycle 03's withdraw-prepare shape before any record. The orchestrator approves it before code.
 - [ ] **Step 2: Write the failing tests** in `observe_tests.rs`:
-  - `primary_holds_document_by_the_content_proof` (P3, A6): a table over a new document and an edit of a merged document × before the merge, a merge commit, a squash, a fast-forward × the merge on the local primary only, the tracking primary only, both × `R` absent, equal to `L`, behind `L`, ahead of `L`, beside `L`; plus a shallow repository and two merge bases. Before the merge it is never held; after it, held exactly when `R` is absent, equal or behind; a document present on the primary with older content is never held; every refusal reads not held.
-  - `pull_request_promotion_observation` (P2, A7): a table over the situations in Part B's order, the effects (`context_published` exactly when `L` differs from `R` or `R` is absent), each blocker kept, each dropped (a dirty root, a root on another branch, a primary ahead of its remote, no identity), `history_unknown` not blocking, `primary_missing` with no tracking primary, and `remote_context_deleted`; the dispatch per mode (a direct repository's observation is today's).
-  - `pull_request_promotion_digest_binds_each_field`, beside `digest_binds_each_field_change_blob_and_cleanup_member`: each of the domain, item, path, branch, primary, remote, `L`, `R` and the situation changes the digest; the tracking and local primary do not.
+  - `primary_holds_document_by_the_content_proof` (P3, A6): a table over a new document and an edit of a merged document × before the merge, a merge commit, a squash, a fast-forward × the merge on the tracking primary, and the local primary equal to, behind, ahead of and beside the tracking primary × `R` absent, equal to `L`, behind `L`, ahead of `L`, beside `L`, and `R` after `remote_branch_deleted`; plus a shallow repository and two merge bases. Before the merge it is never held; after it, held exactly when the merge is on the tracking primary, or on a local primary that is the tracking primary or behind it, and `R` is absent, equal or behind; a merge only on a local primary ahead of the tracking primary is not held; a document present on the primary with older content is never held; every refusal reads not held.
+  - `pull_request_promotion_observation` (P2, A7): a table over the situations in Part B's order, the effects (all three, always), each blocker kept, each dropped (a dirty root, a root on another branch, a primary ahead of its remote, no identity), `history_unknown` not blocking, `primary_missing` with no tracking primary, and `remote_context_deleted`; the dispatch per mode (a direct repository's observation is today's).
+  - `pull_request_promotion_digest_binds_each_field`, beside `digest_binds_each_field_change_blob_and_cleanup_member`: each of the domain, item, path, branch, primary, remote, `L`, `R` when behind, ahead of or beside `L`, the situation and the previewed link changes the digest; `R` absent and `R` equal to `L` give the same digest; the tracking and local primary do not change it.
 - [ ] **Step 3: Run, expect FAIL**, each by exact name. Record the red runs.
 - [ ] **Step 4: Implement** Part B and Part G items 1, 5, 10 and 12. Apply E-12.
 - [ ] **Step 5: Run** the new tests, E-12's edited tests, and `digest_binds_each_field_change_blob_and_cleanup_member` (unchanged), each by exact name. Expected: PASS.
@@ -133,47 +134,50 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 **Files:** `src/repository/promotion/lifecycle.rs` (`branch_step`, `end_branch`, `type Outcome` as an enum), `promotion/run.rs` (no `RunEvent::Recording` for a promotion), `promotion/mod.rs` (`DocumentPromotionResult::Branch` and its index-pending twin, `BranchPromotionOutcome`), `promotion/lifecycle_record.rs` (the second slot's readers), `closure/record.rs` and `closure/checkpoint.rs` (`give_link` and `branch_link` take the kind), `bind/lifecycle_verb.rs` (`Called::Branch` over either lifecycle; the promotion answer's code), `bind/lifecycle.rs` (`reached_*`, the recorded effects, the link row read for the answer), the shared fake publisher (Part G item 13). Tests: a `pull_request` module of `src/repository/promotion/run_tests.rs`. Named edits: E-5.
 
-**Interfaces:** Consumes Task 1's record and Task 2's observation and `primary_holds_document`. Produces `BranchPromotionOutcome { answer: PromotionAnswer, publication: Option<PromotionPublication>, link: Option<PullRequestLink> }`, and the shared fake publisher.
+**Interfaces:** Consumes Task 1's record and Task 2's observation and `primary_holds_document`. Produces `BranchPromotionOutcome { answer: PromotionAnswer, publication: Option<PromotionPublication> }` (the binding reads the link from the row), and the shared fake publisher. `branch_step` reads the child's category through `child_state` (`Complete(stored)`), and judges the first table on the child's authority OID and recorded tracking primary.
 
 - [ ] **Step 1: Merge `origin/main`** if it moved.
 - [ ] **Step 2: Design checkpoint.** Write in the ledger, against the source, Part G items 2 to 4, 6 to 9, 11 and 13, and settle U-2 (lift Cycle 03's `PullRequestIo`, or write a promotion twin). The orchestrator approves it before code.
 - [ ] **Step 3: Write the failing tests** in the `pull_request` module, each asserting that the local primary did not move and that no synchronization targeted the primary:
   - `first_promote_publishes_and_gives_the_link` (C1 to C3): a table over a new document, an edit of a merged one, and a branch already published by `item sync`.
   - `promoting_again_synchronizes_and_gives_the_same_link` (C4 to C7, A4): nothing new, after a save, after the remote's primary moved, after the forge setting changed; `publication` and `given_at` as Part C says, and the row's link every time.
-  - `a_held_document_gives_no_link` (C8 to C10): at prepare; a squash between prepare and confirm with the branch kept (`complete`); a merge with the branch deleted (`abandoned`, the tracking primary moved by the child).
-  - `a_declined_pull_request_answers_remote_branch_deleted` (C11): the record `abandoned` with the refusal `reconfirmation_required` and its answer.
+  - `a_held_document_gives_no_link` (C8 to C10): at prepare; a squash between prepare and confirm with the branch kept (`complete`, the child's merge published); a merge with the branch deleted (`abandoned`, judged with the tracking primary the child recorded).
+  - `a_declined_pull_request_answers_remote_branch_deleted` (C11): the record `abandoned` with the refusal `reconfirmation_required` and its answer; the link row deleted; after a republish, the next promote answers `ok`.
 - [ ] **Step 4: Run, expect FAIL**, each by exact name. Record the red runs.
 - [ ] **Step 5: Implement** Part C's two tables and Part G items 2 to 4, 6 to 9, 11 and 13. Apply E-5.
 - [ ] **Step 6: Run** the new tests by exact name, and these unchanged: `cache_loss_contained_context_cleans_without_another_merge_or_child`, `already_current_publication_is_stored_and_replayed_without_children_or_deletion`, `contained_cleanup_needs_no_identity_or_new_merge` (promotion), `d1_records_publishes_and_completes_without_touching_the_primary` and `d2_an_existing_closure_publishes_pending_work_and_is_already_closing` (`closure/run_pull_request_tests.rs`, which share the branch path and the link helper), and E-5's edited tests. Expected: PASS.
 - [ ] **Step 7: Commit** "feat(promotion): promote in a pull-request repository publishes and gives the link".
 
-## Task 4: Confirm, Stops, Crashes, Holds And Consent (Design Part C, C12 To C24)
+## Task 4: Confirm, Stops, Crashes, Holds, Consent And The Fence (Design Part C, C12 To C27; Part G Items 6 And 14)
 
-**Files:** `src/repository/promotion/run_tests.rs` (the `pull_request` module), and whatever these outcomes need in Task 3's files.
+**Files:** `src/repository/promotion/lifecycle.rs` and `run.rs` (Part G item 6: the defaulted hook that replaces the pre-child remote check with decision 14's two checks and skips the post-child checks for a promotion branch record), `promotion/record.rs` (the fence's query, a twin of `written_closure_unfinished`), `src/repository/context_retirement/source.rs` `capture_target` and `authority.rs`'s backstop (Part G item 14). Tests: the `pull_request` module of `src/repository/promotion/run_tests.rs`; `src/repository/context_retirement/tests.rs` or `mutation_tests.rs` (P13).
 
-- [ ] **Step 1: Design checkpoint.** Write in the ledger, against the source, how each of C12 to C23 comes out of the shared runner unchanged (the stops, `child()`'s replacement, the binding's hold, the conflict lookups, cancellation, replay from `answer_code`, R-20's remote check, R-21's retirement case, a confirmation no prepare issued), and any of them that needs code. Code beyond Task 3's files, or a change to the closure's path, stops for the owner. The orchestrator approves it before code.
+- [ ] **Step 1: Design checkpoint.** Write in the ledger, against the source, Part G items 6 and 14, and how each of C12 to C27 comes out of the runner (the stops, `child()`'s replacement, the binding's hold, the conflict lookups, cancellation, replay from `answer_code`, decision 14's checks and the post-child skips, the fence, a confirmation no prepare issued). A change to the closure's path beyond the defaulted hook stops for the owner. The orchestrator approves it before code.
 - [ ] **Step 2: Write the failing tests** in the `pull_request` module, each asserting that the local primary did not move:
   - `stops_of_the_context_child` (C12, C13): each stop of C12, including `busy` from another synchronization of the branch; a conflict resolved by the record's ID and continued.
   - `crash_and_replay` (C14, C15): the failure points after the child and after the record finished; the same request; a replay answering from `answer_code`, with the row's link and with the row gone.
   - `holds_cancellation_and_listing` (C16, C17, C21).
-  - `consent_differences` (C18, C19, C23): a mode switch either way; a save, a fetched publication, a link given and a merge fetched between prepare and confirm; a confirmation no prepare issued.
-  - `the_remote_changed_and_the_context_retired_meanwhile` (C20, C22).
-- [ ] **Step 3: Run, expect FAIL** where the outcome needs code; record the rows that pass at once as pinning the shared runner's unchanged rules (exempt from fail-first, as Global Constraints say). Record the runs.
-- [ ] **Step 4: Implement** what Step 1 found missing.
-- [ ] **Step 5: Run** the new tests, by exact name, and the direct tests Task 3 Step 6 ran (C24). Expected: PASS.
-- [ ] **Step 6: Commit** "test(promotion): the pull-request promote's stops, crashes, holds and consent".
+  - `consent_differences` (C18, C19, C23): a mode switch either way (a refused record of the confirm's mode); a save, a fetched publication, a link given and a forge-setting change between prepare and confirm (`external_change`); a merge fetched between them (`already_applied`, no record); a confirmation no prepare issued.
+  - `changes_while_a_stopped_record_waits` (C20, C25, C27): the remote changed before the child completed, a save while the record waits (each a refused record, nothing published by it), and the remote changed after the child completed (the record finishes).
+  - `a_cancellation_after_the_child_completed` (C26).
+  - `retirement_waits_for_a_stopped_promote` (C22): with the fence, the poll's retirement skips the document, the same request answers `already_applied` with `primary_holds`, and the next poll retires it.
+  - `the_retirement_fence` (P13, A14) in `context_retirement/tests.rs` or `mutation_tests.rs`: a table over the poll's `--retire-completed`, `context retire` and the backstop, each skipping a document with an unfinished pull-request promotion record and retiring it once the record finishes; a document without one, and a ticket, retire as today.
+- [ ] **Step 3: Run, expect FAIL**, each by exact name; a row that already passes is run red against a deliberate stub (Global Constraints). Record the runs.
+- [ ] **Step 4: Implement** Part G items 6 and 14 and what Step 1 found missing.
+- [ ] **Step 5: Run** the new tests by exact name, the direct tests Task 3 Step 6 ran (C24), and the retirement tests the fence's call sites already have (Task 0 names them). Expected: PASS.
+- [ ] **Step 6: Commit** "feat(promotion): a stopped pull-request promote ends or waits safely, and fences retirement".
 
 ## Task 5: The Data, The Preview, The Way Out And The CLI Contract (Design Part D)
 
-**Files:** `src/repository/mutation/dto.rs` (`PullRequestPromotionMutationDto`, `PullRequestPromotionPreviewDto`, the `from_stored` arm, the lifecycle arm's guard), `mutation/way_out.rs` (decision 11's way out, keyed on the new data), `schemas/v1/pull_request_promotion_mutation.schema.json`, `schemas/v1/pull_request_promotion_preview.schema.json`, `bind/lifecycle.rs` and `bind/lifecycle_verb.rs` (the answers carry the data, the preview its details), `src/bin/manyhands-cli/human_lifecycle.rs` and `human_admin.rs` (the human output) and their tests, the desktop's compile-level arms (`src/desktop/view/confirm.rs` and the data matches). Tests: `tests/cli/lifecycle.rs`, `tests/mutation_contract.rs`, the `cli_v1` goldens. Named edits: E-2, E-6, E-7, E-8, E-11.
+**Files:** `src/repository/mutation/dto.rs` (`PullRequestPromotionMutationDto`, `PullRequestPromotionPreviewDto`, the `from_stored` arm, the lifecycle arm's guard, `document promote` in the synchronization-conflict and host-data arms), `mutation/way_out.rs` (decision 11's way out, keyed on the new data), `schemas/v1/pull_request_promotion_mutation.schema.json`, `schemas/v1/pull_request_promotion_preview.schema.json`, `bind/lifecycle.rs` and `bind/lifecycle_verb.rs` (the answers carry the data, the preview its details), `src/bin/manyhands-cli/human_lifecycle.rs` and `human_admin.rs` (the human output) and `lifecycle_tests.rs`, the desktop's compile-level arms (`src/desktop/view/confirm.rs` and the data matches). Tests: `tests/cli/lifecycle.rs`, `tests/mutation_contract.rs`, the `cli_v1` goldens. Named edits: E-2, E-6, E-7, E-8, E-11.
 
 - [ ] **Step 1: Write the failing tests:**
-  - in `tests/cli/lifecycle.rs`, in a `format_version = 2` pull-request repository with a selected key and a publication remote on a closed port, beside `a_context_primary_already_holds_is_only_cleaned_up`: `a_pull_request_promote_previews_its_link` (golden `document_promote_pull_request_preview`, JSON and text); `a_pull_request_prepare_says_the_primary_holds_the_document` (golden `document_promote_pull_request_primary_holds`, JSON and text); `a_pull_request_prepare_is_blocked` (golden `document_promote_pull_request_blocked`, JSON and text: a dirty context, and none of the dropped blockers appear); `a_pull_request_confirm_stops_at_its_child` (the transport stop answers as `item sync`'s, and the same request is offered as the way out);
-  - `pull_request_promotion_human_lines` (P9) beside the CLI's existing human-output tests: `publication: <state>`, the link's line, and `<primary> already holds this document`;
+  - in `tests/cli/lifecycle.rs`, in a `format_version = 2` pull-request repository with a selected key, a tracking primary written by the fixture, and a publication remote on a closed port, beside `a_context_primary_already_holds_is_only_cleaned_up`: `a_pull_request_promote_previews_its_link` (golden `document_promote_pull_request_preview`, JSON and text); `a_pull_request_prepare_says_the_primary_holds_the_document` (golden `document_promote_pull_request_primary_holds`, JSON and text); `a_pull_request_prepare_is_blocked` (golden `document_promote_pull_request_blocked`, JSON and text: a dirty context, and none of the dropped blockers appear); `a_pull_request_confirm_stops_at_its_child` (the transport stop answers as `item sync`'s, the same request is offered as the way out, and a replay of the stored envelope keeps its data);
+  - `pull_request_promotion_human_lines` (P9) in `src/bin/manyhands-cli/lifecycle_tests.rs`: `publication: <state>`, the link's line, and `the primary branch already holds this document`;
   - a `way_out.rs` test beside its existing ones: the new data's `remote_branch_deleted` gives `item republish` of its item, then a new promote's prepare; a lifecycle `remote_branch_deleted` keeps today's way out.
 - [ ] **Step 2: Run, expect FAIL**, each by exact name. Record the red runs.
 - [ ] **Step 3: Implement** Part D. Write the goldens with `MANYHANDS_UPDATE_GOLDEN=1` for the tests that own them and read the diff. Apply E-2, E-6, E-7, E-8 and E-11.
-- [ ] **Step 4: Run** the new tests, `every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root`, `every_schema_is_reachable_from_a_published_root` (`--test mutation_contract`), `every_verb_s_data_has_an_output_schema_and_its_goldens_match_it` (`--test cli`) and `published_enumerations_list_exactly_the_registered_values` (`--test read_contract`), each by exact name. Then `devenv shell -- cargo check --locked --features desktop-test-support --tests`. Expected: PASS.
+- [ ] **Step 4: Run** the new tests, `every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root`, `every_schema_is_reachable_from_a_published_root` (`--test mutation_contract`), `every_verb_s_data_has_an_output_schema_and_its_goldens_match_it` and `fixture_directory_is_exactly_the_registered_cases` (`--test cli`) and `published_enumerations_list_exactly_the_registered_values` (`--test read_contract`), each by exact name. Then `devenv shell -- cargo check --locked --features desktop-test-support --tests`. Expected: PASS.
 - [ ] **Step 5: Commit** "feat(promotion): the pull-request promote's data, preview, way out and output".
 
 ## Task 6: The Document's Link In Reads And `item sync` (Design Parts E And F)
@@ -198,20 +202,20 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - [ ] **Step 3: Run** it against the real rule. Expected: PASS.
 - [ ] **Step 4: Commit** "test(promotion): the pull-request promote's lifecycles".
 
-## Task 8: The SSH Steps And The Golden (Design P10)
+## Task 8: The SSH Steps And The Goldens (Design P10)
 
 **Files:** `tests/mutation_remote/c5_lifecycle.rs` (Cycle 03's `a_pull_request_close_publishes_only_the_ticket_branch` gains the document steps), `tests/support/mutation_golden.rs` (`CASES`), the golden under `tests/fixtures/mutation_v1/`. Named edits: E-9.
 
-- [ ] **Step 1: Add the steps** to the case, after its own (decision 6): create and save a document; `document promote --prepare` and `--confirm` answer `ok` with the link; promote again answers `already_applied` with the same link; the server's primary is unchanged after each step; write the golden `document_promote_pull_request_ok`, with commit IDs replaced as existing goldens replace them. Apply E-9.
+- [ ] **Step 1: Add the steps** to the case, after its own (decision 6): create and save a document; `document promote --prepare` and `--confirm` answer `ok` with the link; promote again answers `already_applied` with the same link; the document's branch is deleted on the server (a declined pull request) and promote again answers `remote_branch_deleted` with the way out `item republish`; the server's primary is unchanged after each step; write the goldens `document_promote_pull_request_ok` and `document_promote_pull_request_remote_branch_deleted`, with commit IDs replaced as existing goldens replace them. Apply E-9.
 - [ ] **Step 2: Run it red** against a stub promote that answers `ok` without publishing (the server check fails): `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_request_close_publishes_only_the_ticket_branch -- --exact`. Record the red run.
 - [ ] **Step 3: Run it** against the real code, by the same command. Expected: PASS. Then `the_fixture_directories_are_exactly_the_registered_cases` (`--test mutation_contract`) by exact name. Expected: PASS.
-- [ ] **Step 4: Commit** "test(promotion): the pull-request promote over SSH and its golden".
+- [ ] **Step 4: Commit** "test(promotion): the pull-request promote over SSH and its goldens".
 
 ## Task 9: The Contracts, RFCs, Audit And Skills (Design D-1 To D-5)
 
 **Files:** `docs/RFC/cli-contract.md` (D-1), `docs/RFC/pull-request-mode.md` (D-2), `docs/RFC/repository-index-persistence-and-refresh.md` (D-3), `skills/` and `.agents/skills/` (D-4), `docs/research/wave-03-api-audit.md` (D-5). The RFCs are managed documents; as Cycles 01 to 03 did, they are edited on the ticket branch with Git and merge with the ticket, one line per paragraph. Tests: `tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`. Named edits: E-10.
 
-- [ ] **Step 1:** Write D-1 to D-5, each amendment dated 2026-11-26 and naming vh-rphcs. Apply E-10 for the contract rows D-1 adds.
+- [ ] **Step 1:** Write D-1 to D-5, each amendment dated 2026-11-26 and naming vh-rphcs. Apply E-10: the pull-request `remote_branch_deleted` row with its golden (Task 8), and, for `recovery_required` with `history_unresolved`, either the existing `document promote` row (when its recovery matches) or the `recovery_tables.rs` edit it needs, recorded in the ledger.
 - [ ] **Step 2: Run**, each by exact name in `--test cli`: `skills_are_well_formed`, `skill_links_stay_inside_the_set_and_resolve`, `skill_commands_are_catalogued`, `skill_json_examples_match_their_input_schema` and `every_mutation_sits_in_one_autonomy_column` (module `skills`), the tests of `recovery_tables`, `collaboration_exits` and `inventory` that parse the contract (Task 0 named them). Expected: PASS.
 - [ ] **Step 3: Commit** "docs: document promote in pull-request mode".
 
@@ -220,7 +224,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - [ ] **Step 1:** Merge `origin/main` if it moved. Then `git merge-tree --write-tree HEAD origin/main`. Expected: no conflicts.
 - [ ] **Step 2:** The static gates. Expected: clean.
 - [ ] **Step 3: The fast tier**, AGENTS.md's command as written. Expected: PASS. Record the time.
-- [ ] **Step 4: The SSH tier**: `document_promotion`, `mutation_remote`, `ticket_closure` and `cli_remote` (design Testing), each once as `devenv shell -- cargo test --all-features --locked --test <target>`. Expected: PASS. Record the times.
+- [ ] **Step 4: The SSH tier**: `document_promotion`, `mutation_remote`, `ticket_closure`, `cli_remote` and `remote_polling` (design Testing), each once as `devenv shell -- cargo test --all-features --locked --test <target>`. Expected: PASS. Record the times.
 - [ ] **Step 5: Final review.** A fresh reviewer (the most capable model) reviews the whole branch against the design; a fix wave follows if needed, and after it only the targets whose code or tests changed run again.
 - [ ] **Step 6:** Update the Cycle document's Acceptance statuses (through `manyhands-documents`) and the ledger. The orchestrator adds the review-ready comment (gates, tiers and times, the SSH steps, the named edits applied) and publishes the branch.
 - [ ] **Step 7: After review approval only:** commit any owned edit to the ticket's `ticket.md`, save the status as done with `ticket save`, publish with `item sync`, then run `ticket close --prepare` from the main checkout with the key loaded in ssh-agent, show the owner what will merge, publish and be removed, and `--confirm` after the owner's go-ahead. The close performs the merge. Then, through `manyhands-documents` and with the owner's go-ahead for each save and promotion (D-6): tick Cycle 04's boxes in the Wave 06 document; set this Cycle's three documents' status to done; promote the three. Native CI runs after the merge, on main, only when the owner dispatches it.
@@ -238,12 +242,13 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | A11 | 5, 8 |
 | A12 | 9 |
 | A13 | 10 |
+| A14 | 4 |
 | R-1, R-11, R-12, R-13, R-16, R-17, R-19 | 3 |
-| R-2, R-3, R-4, R-5, R-6, R-7, R-18 | 2 |
-| R-8, R-14, R-22, R-23 | 5 |
+| R-2, R-3, R-4, R-5, R-6, R-7, R-18, R-24 | 2 |
+| R-8, R-14, R-22, R-23, R-25 | 5 |
 | R-9, R-10 | 6 |
 | R-15 | 8 |
-| R-20, R-21 | 4 |
+| R-20, R-21, R-26 | 4 |
 | Review Focus lines | 1, 2, 3, 4, 6, 7, 8 |
 
-Checked: every design Part has a task (A: 1; B: 2; C: 3 and 4; D: 5; E and F: 6; G: 2 and 3); the types named in Interfaces match across tasks (`PromotionAnswer`, `BranchPromotionOutcome`, `PullRequestPromotionMutationDto`, `PullRequestPromotionPreviewDto`, `primary_holds_document`, `document_link_outstanding`); no placeholder steps; the plan adds no test target, so no CI list changes.
+Checked: every design Part has a task (A: 1; B: 2; C: 3 and 4; D: 5; E and F: 6; G: 2 and 3); the types named in Interfaces match across tasks (`PromotionAnswer`, `BranchPromotionOutcome`, `PullRequestPromotionMutationDto`, `PullRequestPromotionPreviewDto`, `primary_holds_document`, `document_link_outstanding`); Part G's items map to Tasks 2 (1, 5, 10, 12), 3 (2 to 4, 7, 9, 11, 13) and 4 (6, 14); no placeholder steps; the plan adds no test target, so no CI list changes.
