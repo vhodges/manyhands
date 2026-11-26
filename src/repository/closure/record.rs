@@ -1371,6 +1371,22 @@ pub(in super::super) fn written_closure_holder(
     })
     .transpose()
 }
+/// The branch record that holds the item's ticket, if one does (R-17): the
+/// writers of the ticket answer `recovery_required` naming it. A direct
+/// record keeps the answers it has today, so it is not a hold here.
+pub(in super::super) fn branch_hold(
+    db: &Connection,
+    id: i64,
+    item: &ItemId,
+) -> Result<Option<OperationId>, RepositoryError> {
+    Ok(written_closure_holder(db, id, item)?
+        .and_then(|(operation, path)| (path == RecordPath::Branch).then_some(operation)))
+}
+/// What a writer answers while a branch record holds its ticket.
+pub(in super::super) fn hold_refusal(operation: OperationId) -> RepositoryError {
+    state::recovery_required()
+        .with_blocker(crate::repository::Blocker::remote(&operation.to_string()))
+}
 /// The other order of the same rule: an unfinished synchronization of the
 /// ticket context, reserved before the checkpoint, holds the checkpoint off.
 pub(in super::super) fn context_synchronization_unfinished(

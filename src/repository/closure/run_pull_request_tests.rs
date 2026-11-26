@@ -2208,3 +2208,413 @@ fn a_failure_after_a_stop_s_completion_answers_from_the_record() {
     assert_eq!(p.stored(&req).step, ClosureStep::Complete);
     p.assert_primary_untouched(&io);
 }
+
+/// The forge's merge of the record's pull request: the primary and the
+/// context's tip as its parents, so the primary holds the closure and the
+/// context's content.
+fn forge_merge(p: &PullRequest) -> Oid {
+    let (primary, tip) = (p.f.primary(), p.f.context_oid());
+    let config = support::tree_bytes(&p.f.repo, primary, ".manyhands/config.toml");
+    let tree =
+        p.f.repo
+            .find_commit(support::tree_commit(
+                &p.f.repo,
+                tip,
+                &[(".manyhands/config.toml", Some((&config, 0o100644)))],
+            ))
+            .unwrap()
+            .tree()
+            .unwrap();
+    let signature = git2::Signature::now("Forge", "forge@example.invalid").unwrap();
+    p.f.repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "Merge pull request",
+            &tree,
+            &[
+                &p.f.repo.find_commit(primary).unwrap(),
+                &p.f.repo.find_commit(tip).unwrap(),
+            ],
+        )
+        .unwrap()
+}
+
+/// What the hold (R-17) answers a writer of the ticket: `recovery_required`
+/// naming the record's request.
+fn assert_held<T>(
+    case: &str,
+    writer: &str,
+    record: OperationId,
+    result: Result<T, RepositoryError>,
+) {
+    let error = result
+        .err()
+        .unwrap_or_else(|| panic!("{case}: {writer} was not refused"));
+    assert_eq!(
+        error.kind,
+        RepositoryErrorKind::RecoveryRequired,
+        "{case}: {writer}"
+    );
+    assert_eq!(
+        error.blocker().map(|blocker| blocker.operation_id),
+        Some(record),
+        "{case}: {writer}"
+    );
+}
+
+/// D16: while a branch record holds its ticket (at `closing` and at
+/// `publication_pending`), every writer of the ticket answers
+/// `recovery_required` naming the record's request, and a manual context
+/// synchronization is `busy`. The record's own publication child is not
+/// refused: the same request then publishes. A direct record keeps today's
+/// answer, the guard's `ticket_closed`.
+#[test]
+fn d16_the_hold_refuses_every_writer_but_its_own_publication_child() {
+    use crate::repository::transport::SshTransportErrorKind as K;
+    use crate::repository::{
+        AuthoringTarget, ContextIntent, ExpectedPathObservation, ItemRepublishInput, Mutation,
+        RepairItemRequest, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
+        TicketWriteOptions,
+    };
+    use crate::results::{RecoveryAction, RecoveryActionKind, ResultCode};
+    for case in ["closing", "publication_pending"] {
+        let p = PullRequest::new();
+        let req = p.request();
+        let record = req.operation_id;
+        let mut io = PullRequestIo::default();
+        if case == "closing" {
+            let failing = p.f.failing(FailurePoint::AfterClosureCheckpoint);
+            assert!(p.run_in(&failing, req.clone(), &mut io).is_err(), "{case}");
+            assert_eq!(p.stored(&req).step, ClosureStep::Closing, "{case}");
+        } else {
+            // The child's row is not kept, so the hold alone refuses; a kept
+            // row is refused earlier, by the live row, as it always was.
+            io.stops.push_back((
+                ChildRole::Publication,
+                transport(K::TransportUnavailable),
+                false,
+            ));
+            assert!(
+                matches!(
+                    p.run(req.clone(), &mut io),
+                    Err(TicketClosureError::ContextSynchronization(_))
+                ),
+                "{case}"
+            );
+            assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+        }
+        assert!(p.held(), "{case}");
+        let context = p.f.context_oid();
+        let path = p.f.root().join(".manyhands/worktrees").join(ID);
+        let ticket_file = path.join(".manyhands/tickets").join(ID).join("ticket.md");
+        let source = fs::read_to_string(&ticket_file).unwrap();
+        let target = |operation_id| AuthoringTarget {
+            root: p.f.root().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: id(),
+            intent: ContextIntent::Edit,
+            operation_id,
+        };
+        let save = || SaveTicketRequest {
+            target: target(OperationId::new()),
+            draft: TicketDraft {
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: "Edited body.\n".into(),
+            },
+            expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
+        };
+        let service = &p.f.service;
+        assert_held(case, "save", record, service.save_ticket(save()));
+        assert_held(
+            case,
+            "slug",
+            record,
+            service.save_ticket_with(
+                save(),
+                TicketWriteOptions {
+                    slug: Some("ab-1".into()),
+                    ..TicketWriteOptions::default()
+                },
+            ),
+        );
+        assert_held(
+            case,
+            "context prepare",
+            record,
+            service.prepare_context(target(OperationId::new())),
+        );
+        assert_held(
+            case,
+            "comment",
+            record,
+            service.checkpoint_comment_locally(
+                SubmitCommentRequest {
+                    target: target(OperationId::new()),
+                    comment_id: "01BX5ZZKBKACTAV9WEVGEMMVS0".parse().unwrap(),
+                    parent_id: None,
+                    body: "A comment.\n".into(),
+                    expected_destination: ExpectedPathObservation::Missing,
+                },
+                None,
+            ),
+        );
+        assert_held(
+            case,
+            "ticket repair",
+            record,
+            service.repair_item(RepairItemRequest {
+                root: p.f.root().into(),
+                kind: AuthoringKind::Ticket,
+                path: std::path::PathBuf::from(ticket()),
+                source: source.clone(),
+                expected: ExpectedPathObservation::from_bytes(source.as_bytes()),
+                operation_id: OperationId::new(),
+            }),
+        );
+        // The bindings: a refusal that names the record by its request.
+        let named = |writer: &str, value: serde_json::Value| {
+            assert_eq!(
+                value["code"], "recovery_required",
+                "{case}: {writer}: {value}"
+            );
+            assert_eq!(
+                value["data"]["blocker"]["operation_id"],
+                record.to_string(),
+                "{case}: {writer}: {value}"
+            );
+        };
+        // `context retire` answers its own report, which has no room for a
+        // blocker: the refusal is `recovery_required` with nothing retired.
+        let retired = execute(
+            &p.f,
+            Mutation::ContextRetire(crate::repository::ContextRetireInput {
+                root: p.f.root().into(),
+                kind: AuthoringKind::Ticket,
+                id: id(),
+            }),
+        );
+        assert_eq!(retired["code"], "recovery_required", "{case}: {retired}");
+        assert_eq!(retired["data"]["state"], "refused", "{case}: {retired}");
+        named(
+            "item republish",
+            serde_json::to_value(
+                service.prepare(&Mutation::ItemRepublish(ItemRepublishInput {
+                    root: p.f.root().into(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(),
+                })),
+            )
+            .unwrap(),
+        );
+        // The ticket's own `context sync-local`: a read error whose recovery
+        // action names the record, not a domain error with a blocker.
+        let resolved = service.resolve_repository(p.f.root()).unwrap();
+        let observation = service
+            .observe_local_context_sync(&resolved, AuthoringKind::Ticket, &id())
+            .unwrap();
+        let refused = service
+            .begin_local_context_sync(
+                &resolved,
+                OperationId::new(),
+                AuthoringKind::Ticket,
+                &id(),
+                &observation.observation,
+            )
+            .expect_err(&format!("{case}: sync-local was admitted"));
+        assert_eq!(refused.code(), ResultCode::RecoveryRequired, "{case}");
+        assert_eq!(
+            refused.recovery,
+            [RecoveryAction::for_operation(
+                RecoveryActionKind::OperationShow,
+                record.to_string(),
+                []
+            )],
+            "{case}"
+        );
+        // A manual synchronization of the context is `busy`, as before.
+        let plan = p.f.configure_endpoints();
+        assert!(
+            matches!(
+                service
+                    .reserve_remote_operation(
+                        p.f.root(),
+                        OperationId::new(),
+                        &p.f.manual_context_sync(&plan)
+                    )
+                    .unwrap(),
+                RemoteReservationOutcome::Busy
+            ),
+            "{case}"
+        );
+        // Nothing of the ticket moved, and the record is as it was.
+        assert_eq!(p.f.context_oid(), context, "{case}");
+        assert!(p.held(), "{case}");
+        // The record's own publication child is not refused.
+        let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+        assert_eq!(outcome.answer(), BranchAnswer::Published, "{case}");
+        assert!(!p.held(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+    // A direct record is no hold: the guard's own answer stands.
+    let f = Fixture::remote();
+    let req = f.request();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterClosureCheckpoint),
+        req.clone(),
+        &mut FakeIo::default(),
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
+    let path = f.root().join(".manyhands/worktrees").join(ID);
+    let source =
+        fs::read_to_string(path.join(".manyhands/tickets").join(ID).join("ticket.md")).unwrap();
+    let error = f
+        .service
+        .save_ticket(SaveTicketRequest {
+            target: AuthoringTarget {
+                root: f.root().into(),
+                kind: AuthoringKind::Ticket,
+                item_id: id(),
+                intent: ContextIntent::Edit,
+                operation_id: OperationId::new(),
+            },
+            draft: TicketDraft {
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                body: "Edited body.\n".into(),
+            },
+            expected_path: ExpectedPathObservation::from_bytes(source.as_bytes()),
+        })
+        .err()
+        .expect("a closed ticket was saved");
+    assert_eq!(error.kind, RepositoryErrorKind::TicketClosed);
+}
+
+/// Ruling 19: `item resolve-history` passes a branch record's hold. It
+/// changes the history record, not the context, and the same request then
+/// continues, so a publication child stopped by unresolved history can be
+/// cleared. (A pin of what the writer already does: nothing refuses it.)
+#[test]
+fn item_resolve_history_passes_a_branch_record_s_hold() {
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = PullRequestIo {
+        stops: VecDeque::from([(
+            ChildRole::Publication,
+            SynchronizationError::HistoryUnresolved,
+            false,
+        )]),
+        ..PullRequestIo::default()
+    };
+    assert!(matches!(
+        p.run(req.clone(), &mut io),
+        Err(TicketClosureError::ContextSynchronization(_))
+    ));
+    assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    assert!(p.held());
+    // The repository lost its history: the context's row says so, no fetch
+    // ever tracked the branch, and the current batch does not advertise it.
+    let plan = p.f.configure_endpoints();
+    p.f.repo
+        .find_reference(&tracking_context_ref())
+        .unwrap()
+        .delete()
+        .unwrap();
+    let target = plan.context(AuthoringKind::Ticket, &id());
+    state::with_transaction(&p.f.service, p.f.root(), |tx, rid| {
+        for table in [
+            "remote_context_states",
+            "remote_ref_observations",
+            "remote_observation_batches",
+        ] {
+            tx.execute(&format!("DELETE FROM {table}"), [])
+                .map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,'ticket',?4,'history_unknown','history_unknown',123)",
+            rusqlite::params![rid, target.remote_ref(), target.tracking_ref(), ID],
+        )
+        .map_err(|_| state::recovery_required())?;
+        let generation = state::generation(tx, rid)?;
+        state::complete_batch(tx, rid, &plan, generation, &[], 100)
+    })
+    .unwrap();
+    let observed =
+        p.f.service
+            .history_observation(p.f.root(), AuthoringKind::Ticket, &id())
+            .unwrap();
+    assert!(observed.resolvable());
+    // The binding's prepare passes the hold too: a preview, not a refusal.
+    let prepared =
+        p.f.service
+            .prepare(&crate::repository::Mutation::ItemResolveHistory(
+                crate::repository::ItemResolveHistoryInput {
+                    root: p.f.root().into(),
+                    kind: AuthoringKind::Ticket,
+                    id: id(),
+                    choice: crate::repository::ResolveHistoryChoice::Publish,
+                },
+            ));
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["code"], "ok", "{value}");
+    p.f.service
+        .resolve_history(p.f.root(), AuthoringKind::Ticket, &id(), &observed)
+        .expect("the hold refused the resolution");
+    assert!(p.held());
+    // The same request then continues.
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Published);
+    p.assert_primary_untouched(&io);
+}
+
+/// R-17's poll row for a branch record (rulings 22 and 26): the publication
+/// child was let go, so no row holds the reservation and a poll runs. The
+/// forge merged the closure, which the local and the tracking primary hold
+/// (here moved by hand), and the context's remote branch is gone: the poll
+/// observes the context `Closed`, and its retirement must leave the context
+/// alone while the record holds it. The same request then answers `Merged`.
+#[test]
+fn a_poll_does_not_retire_a_context_a_branch_record_holds() {
+    let mut p = PullRequest::new();
+    let req = p.request();
+    let mut io = CancelAtPublication {
+        inner: PullRequestIo::default(),
+        parent: Some(req.operation_id),
+    };
+    assert!(matches!(
+        p.run(req.clone(), &mut io),
+        Err(TicketClosureError::Interrupted)
+    ));
+    assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    assert!(p.held());
+    let merged = forge_merge(&p);
+    checkout(&p.f.repo, merged);
+    p.primary_before = merged;
+    let context = p.f.context_oid();
+    let worktree = p.f.root().join(".manyhands/worktrees").join(ID);
+    let value = retiring_poll(&p.f, merged);
+    let target = value["data"]["poll"]["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|t| t["item_id"] == ID))
+        .unwrap_or_else(|| panic!("the ticket context is a poll target: {value}"));
+    assert_eq!(target["disposition"], "closed", "{value}");
+    assert_candidate_refused(&p.f);
+    assert_eq!(
+        p.f.repo.refname_to_id(&context_ref()).ok(),
+        Some(context),
+        "{value}"
+    );
+    assert!(worktree.exists(), "{value}");
+    assert_eq!(p.stored(&req).step, ClosureStep::PublicationPending);
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::Merged);
+    p.assert_primary_untouched(&io.inner);
+}

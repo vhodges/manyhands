@@ -298,7 +298,12 @@ fn refuse_repair_intent(
 /// exists (C12). A creation, a repair and a write to another kind are not
 /// asked. A configuration that is not valid is left for the call to
 /// report.
+///
+/// A branch record that holds the ticket (R-17) is asked first, in either
+/// mode, from the registry: `recovery_required` naming the record. A direct
+/// record is no hold, and its closure is the guard's.
 fn refuse_closed_ticket(
+    service: &RepositoryService,
     repository: &Repository,
     root: &Path,
     operation: RepositoryOperation,
@@ -315,6 +320,12 @@ fn refuse_closed_ticket(
     else {
         return Ok(());
     };
+    // A branch record that holds the ticket (R-17) refuses before the guard
+    // below, which reads only the primary and so finds a closing ticket
+    // open. A direct record is no hold here: its closure is the guard's.
+    if let Some(holder) = service.branch_hold_of(root, &target.item_id, operation)? {
+        return Err(closure::record::hold_refusal(holder).for_operation(operation, root));
+    }
     ticket_guard::require_ticket_open(
         repository,
         &configuration.primary_branch,
@@ -2396,7 +2407,9 @@ impl RepositoryService {
             &authoring_context_target(&target),
         )?;
         let effects = CallEffects::default();
-        if let Err(error) = refuse_closed_ticket(&repository, &root, operation, &target, record) {
+        if let Err(error) =
+            refuse_closed_ticket(self, &repository, &root, operation, &target, record)
+        {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
@@ -3100,9 +3113,14 @@ impl RepositoryService {
         }
         let effects = CallEffects::default();
         // Every ticket save, relationship and short-code write comes here.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let result = (|| {
@@ -3496,9 +3514,14 @@ impl RepositoryService {
         let effects = CallEffects::default();
         // Before the publication binding is recorded: a refusal leaves
         // nothing for the row to owe.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let mut known_checkpoint = None;
@@ -4507,6 +4530,34 @@ impl RepositoryService {
             ));
         }
         Ok(())
+    }
+
+    /// The branch record that holds the ticket (R-17), read from the
+    /// registry. A repository the registry does not know has none.
+    fn branch_hold_of(
+        &self,
+        root: &Path,
+        item_id: &canonical::ItemId,
+        operation: RepositoryOperation,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let connection = self
+            .open_migrated_registry(operation)
+            .map_err(|error| error.for_operation(operation, root))?;
+        let root_path = registry_root_key(root, operation)?;
+        let repository_id: Option<i64> = connection
+            .query_row(
+                "SELECT id FROM repositories WHERE root_path=?1",
+                [root_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        let Some(repository_id) = repository_id else {
+            return Ok(None);
+        };
+        closure::record::branch_hold(&connection, repository_id, item_id)
+            .map_err(|error| error.for_operation(operation, root))
     }
 
     /// Marks the context a checkpoint committed to, and only it, as owed an

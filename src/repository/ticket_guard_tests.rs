@@ -377,6 +377,7 @@ fn guard_for(f: &Fixture, intent: ContextIntent) -> Result<(), RepositoryError> 
         completed_step: None,
     };
     super::super::refuse_closed_ticket(
+        &f.service,
         &f.repo,
         f.root.path(),
         RepositoryOperation::SaveTicket,

@@ -468,6 +468,13 @@ impl RepositoryService {
             operation_id,
         };
         self.reject_pending_synchronization_target(&root, &kind, &id, OPERATION)?;
+        // A branch record that holds the ticket (R-17) owns its context until
+        // it finishes: a direct record keeps the answers it has.
+        if let Some(holder) = self.branch_hold_of(&root, &id, OPERATION)? {
+            return Err(
+                super::super::closure::record::hold_refusal(holder).for_operation(OPERATION, &root)
+            );
+        }
         let (lease, record) = self.begin_lifecycle(
             &root_repository,
             &root,
