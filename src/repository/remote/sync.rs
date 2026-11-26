@@ -8099,7 +8099,9 @@ fn backfill_expected_oid(evidence: &mut Evidence, local: git2::Oid) {
 ///
 /// The second value is the commit the newest publication of the context
 /// put there, among those the classification counts as proven: `None` with
-/// no such publication.
+/// no such publication. The third is the commit of every publication the
+/// classification counts, proven or an intent, compatible or not, in row
+/// order: `None` for one whose commit is not recorded.
 fn push_absence(
     connection: &rusqlite::Connection,
     id: i64,
@@ -8108,9 +8110,9 @@ fn push_absence(
     target: &RemoteOperationTarget,
     own: Option<OperationId>,
     unissued: Option<OperationId>,
-) -> Result<(Option<PushAbsenceBoundary>, Option<git2::Oid>), RepositoryError> {
+) -> Result<PushAbsence, RepositoryError> {
     let Some((kind, item_id)) = target.item() else {
-        return Ok((None, None));
+        return Ok((None, None, Vec::new()));
     };
     // R1 retires only the previous context's publication history. New
     // ambiguous/verified attempts must still fence absence, even before
@@ -8149,6 +8151,7 @@ fn push_absence(
     let mut incompatible = false;
     // The row and the commit of the newest proven publication.
     let mut newest: Option<(i64, git2::Oid)> = None;
+    let mut counted = Vec::new();
     for operation in ids {
         let operation = OperationId::parse(&operation).map_err(|_| state::recovery_required())?;
         if Some(operation) == own {
@@ -8213,6 +8216,7 @@ fn push_absence(
             {
                 continue;
             }
+            counted.push(published);
             if record.generation != generation || record.target != *target {
                 incompatible = true;
             } else if proven {
@@ -8244,8 +8248,17 @@ fn push_absence(
             None
         },
         newest.map(|(_, published)| published),
+        counted,
     ))
 }
+
+/// What `push_absence` classifies: the boundary, the commit of the newest
+/// proven publication, and the commit of every publication it counts.
+type PushAbsence = (
+    Option<PushAbsenceBoundary>,
+    Option<git2::Oid>,
+    Vec<Option<git2::Oid>>,
+);
 
 /// How the deletion of an item's published editing branch is recorded, as
 /// the preview of `item republish` reads it (fact 55): from the records the
@@ -8302,6 +8315,99 @@ pub(crate) struct RepublishConsent {
     pub(crate) local: git2::Oid,
 }
 
+/// `republish_evidence` over a registry transaction, for the plan of the
+/// repository at `root`: the evidence, and the commit of every publication
+/// the push-absence classification counts, in row order (`None` for one
+/// whose commit is not recorded). A closure's prepare reads it in its own
+/// read-only transaction.
+pub(crate) fn republish_evidence_in(
+    tx: &rusqlite::Connection,
+    id: i64,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    kind: AuthoringKind,
+    item_id: &crate::canonical::ItemId,
+) -> Result<(RepublishEvidence, Vec<Option<git2::Oid>>), RepositoryError> {
+    use rusqlite::OptionalExtension;
+    let target = SynchronizationTarget::Context {
+        kind,
+        item_id: item_id.clone(),
+    }
+    .operation_target(plan);
+    let generation = state::generation(tx, id)?;
+    let (boundary, proven, counted) = push_absence(tx, id, root, generation, &target, None, None)?;
+    let fetched: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT state, last_advertised_oid FROM remote_context_states
+                  WHERE repository_id = ?1 AND kind = ?2 AND item_id = ?3",
+            rusqlite::params![id, authoring_kind_segment(&kind), item_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|_| state::recovery_required())?;
+    let none = |deletion| RepublishEvidence {
+        deletion,
+        last_published: None,
+    };
+    // History lost (a row, or the cache-loss flag) but a tracking ref
+    // says a fetch once saw the branch, and a current batch does not
+    // advertise it now: a deletion, last published at the tracking ref.
+    let lost_then_gone = if fetched
+        .as_ref()
+        .is_none_or(|(state, _)| state == "history_unknown")
+    {
+        let snapshot = state::read_snapshot(tx, id)?;
+        let target = plan.context(kind, item_id);
+        if snapshot.fetch_publication_evidence_for(kind, item_id)
+            == RemotePublicationEvidence::HistoryUnknown
+            && snapshot.has_current_batch()
+            && !snapshot
+                .observations()
+                .iter()
+                .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
+        {
+            git2::Repository::open(root)
+                .map_err(|_| state::recovery_required())?
+                .refname_to_id(target.tracking_ref())
+                .ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let evidence = match (boundary, fetched) {
+        (Some(PushAbsenceBoundary::Ambiguous { .. }), _) => none(DeletionEvidence::Ambiguous),
+        (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
+        (Some(PushAbsenceBoundary::Deleted) | None, Some((state, advertised)))
+            if state == "remotely_deleted" =>
+        {
+            RepublishEvidence {
+                deletion: DeletionEvidence::Fetched,
+                last_published: advertised
+                    .map(|oid| git2::Oid::from_str(&oid).map_err(|_| state::recovery_required()))
+                    .transpose()?,
+            }
+        }
+        // A fetch last found the branch there.
+        (Some(PushAbsenceBoundary::Deleted) | None, Some((state, _)))
+            if matches!(state.as_str(), "observed" | "unmaterialized" | "malformed") =>
+        {
+            none(DeletionEvidence::None)
+        }
+        (None, _) if lost_then_gone.is_some() => RepublishEvidence {
+            deletion: DeletionEvidence::Fetched,
+            last_published: lost_then_gone,
+        },
+        (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
+            deletion: DeletionEvidence::Pushed,
+            last_published: proven,
+        },
+        (None, _) => none(DeletionEvidence::None),
+    };
+    Ok((evidence, counted))
+}
+
 impl RepositoryService {
     /// How the deletion of the editing branch of the item `item_id`, of
     /// `kind`, in the repository at `root` is recorded. Read only: it
@@ -8319,7 +8425,6 @@ impl RepositoryService {
         kind: AuthoringKind,
         item_id: &crate::canonical::ItemId,
     ) -> Result<RepublishEvidence, RepositoryError> {
-        use rusqlite::OptionalExtension;
         let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
             return Err(state::recovery_required());
         };
@@ -8328,87 +8433,8 @@ impl RepositoryService {
         };
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
             .map_err(|_| state::recovery_required())?;
-        let target = SynchronizationTarget::Context {
-            kind,
-            item_id: item_id.clone(),
-        }
-        .operation_target(&plan);
         state::with_transaction(self, root, |tx, id| {
-            let generation = state::generation(tx, id)?;
-            let (boundary, proven) = push_absence(tx, id, root, generation, &target, None, None)?;
-            let fetched: Option<(String, Option<String>)> = tx
-                .query_row(
-                    "SELECT state, last_advertised_oid FROM remote_context_states
-                      WHERE repository_id = ?1 AND kind = ?2 AND item_id = ?3",
-                    rusqlite::params![id, authoring_kind_segment(&kind), item_id.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(|_| state::recovery_required())?;
-            let none = |deletion| RepublishEvidence {
-                deletion,
-                last_published: None,
-            };
-            // History lost (a row, or the cache-loss flag) but a tracking ref
-            // says a fetch once saw the branch, and a current batch does not
-            // advertise it now: a deletion, last published at the tracking ref.
-            let lost_then_gone = if fetched
-                .as_ref()
-                .is_none_or(|(state, _)| state == "history_unknown")
-            {
-                let snapshot = state::read_snapshot(tx, id)?;
-                let target = plan.context(kind, item_id);
-                if snapshot.fetch_publication_evidence_for(kind, item_id)
-                    == RemotePublicationEvidence::HistoryUnknown
-                    && snapshot.has_current_batch()
-                    && !snapshot
-                        .observations()
-                        .iter()
-                        .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
-                {
-                    git2::Repository::open(root)
-                        .map_err(|_| state::recovery_required())?
-                        .refname_to_id(target.tracking_ref())
-                        .ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            Ok(match (boundary, fetched) {
-                (Some(PushAbsenceBoundary::Ambiguous { .. }), _) => {
-                    none(DeletionEvidence::Ambiguous)
-                }
-                (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
-                (Some(PushAbsenceBoundary::Deleted) | None, Some((state, advertised)))
-                    if state == "remotely_deleted" =>
-                {
-                    RepublishEvidence {
-                        deletion: DeletionEvidence::Fetched,
-                        last_published: advertised
-                            .map(|oid| {
-                                git2::Oid::from_str(&oid).map_err(|_| state::recovery_required())
-                            })
-                            .transpose()?,
-                    }
-                }
-                // A fetch last found the branch there.
-                (Some(PushAbsenceBoundary::Deleted) | None, Some((state, _)))
-                    if matches!(state.as_str(), "observed" | "unmaterialized" | "malformed") =>
-                {
-                    none(DeletionEvidence::None)
-                }
-                (None, _) if lost_then_gone.is_some() => RepublishEvidence {
-                    deletion: DeletionEvidence::Fetched,
-                    last_published: lost_then_gone,
-                },
-                (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
-                    deletion: DeletionEvidence::Pushed,
-                    last_published: proven,
-                },
-                (None, _) => none(DeletionEvidence::None),
-            })
+            republish_evidence_in(tx, id, root, &plan, kind, item_id).map(|(evidence, _)| evidence)
         })
     }
 

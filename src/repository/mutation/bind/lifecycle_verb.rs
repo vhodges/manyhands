@@ -217,6 +217,9 @@ fn closure_blocker(blocker: ClosureBlocker) -> LifecycleBlocker {
         ClosureBlocker::PrimaryReopened => LifecycleBlocker::PrimaryReopened,
         ClosureBlocker::TicketInvalidAfterClosure => LifecycleBlocker::TicketInvalidAfterClosure,
         ClosureBlocker::IdentityRequired => LifecycleBlocker::IdentityRequired,
+        ClosureBlocker::RemoteContextUnmaterialized => {
+            LifecycleBlocker::RemoteContextUnmaterialized
+        }
     }
 }
 

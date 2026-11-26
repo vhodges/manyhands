@@ -3,18 +3,19 @@
 //! the post-closure ticket check (D1, C10) and identity (C2). It never takes
 //! the repository lease, writes Git or SQL, or opens the network.
 use super::{
-    ClosureAction, ClosureBlocker, ClosureExpectation, ClosureWithdrawalPreflight, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosurePreflight, TicketClosurePreview,
+    ClosureAction, ClosureBlocker, ClosureExpectation, ClosureWithdrawalPreflight, NewBranchFacts,
+    PlannedClosure, PreviewTicketClosureRequest, TicketClosurePreflight, TicketClosurePreview,
     checkpoint::{ClosureBuild, ClosureTarget, MergeHandle, build_closure},
 };
 use crate::{
     canonical::{self, CanonicalItem, Integration, ItemId, Ticket},
     repository::{
-        Blocker, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration, PlannedCleanup,
-        PlannedIntegration, PlannedPublication, RemoteSnapshot, RepositoryError,
-        RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationError,
-        SynchronizationTarget,
+        Blocker, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration, PathChange,
+        PlannedCleanup, PlannedIntegration, PlannedPublication, RemoteRefPlan, RemoteSnapshot,
+        RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+        SynchronizationError, SynchronizationTarget,
         bridges::abandon::authoring_item,
+        context_retirement::proof,
         promotion::{
             lifecycle::LifecycleKind,
             observe::{
@@ -22,7 +23,10 @@ use crate::{
                 PlannedResult, PreviewFacts, PrimaryPresence, RemoteContextHistory, digest,
             },
         },
-        remote::sync::{self, CommittingIdentity},
+        remote::{
+            state,
+            sync::{self, CommittingIdentity},
+        },
     },
 };
 use git2::Oid;
@@ -253,10 +257,10 @@ pub(in super::super) struct ClosureObservation {
     /// contained in the base.
     pub(in super::super) needs_context_child: bool,
     pub(in super::super) cleanup: PlannedCleanup,
-    /// The selected identity of a `Record` closure or a withdraw (its
-    /// commit's author); `None` for `Existing`, whose merge signer is
-    /// resolved at execution, and for a withdraw's placeholder closure
-    /// (ruling 35), which has no commit to sign.
+    /// The selected identity of a `Record` closure, a withdraw or a new
+    /// branch (its commit's author); `None` for `Existing`, whose merge
+    /// signer is resolved at execution, and for a withdraw's placeholder
+    /// closure (ruling 35), which has no commit to sign.
     #[cfg_attr(not(test), allow(dead_code))]
     // Observed for the tests; execution re-selects under the lease.
     pub(in super::super) identity: Option<CommittingIdentity>,
@@ -271,8 +275,21 @@ pub(in super::super) struct ClosureObservation {
     /// and its `cleanup` plans nothing, and `integration` is read only as
     /// "the context child runs": nothing integrates.
     pub(in super::super) path: (Integration, ClosureAction),
+    /// A new branch's old tip, retirement and unheld entries (Part F); `None`
+    /// for every other path. For a new branch `context_oid` is the old tip,
+    /// or the tracking primary when the ticket has no context, so this says
+    /// whether there is one.
+    pub(in super::super) new_branch: Option<NewBranchFacts>,
 }
 impl ClosureObservation {
+    /// The head the consent binds: the old context's tip for a new branch
+    /// (none without a context), the context's tip otherwise.
+    pub(in super::super) fn consented_head(&self) -> Option<Oid> {
+        match &self.new_branch {
+            Some(facts) => facts.old_tip,
+            None => Some(self.context_oid),
+        }
+    }
     pub(in super::super) fn preview(&self) -> TicketClosurePreview {
         TicketClosurePreview {
             item_id: self.item_id.clone(),
@@ -295,6 +312,7 @@ impl ClosureObservation {
             cleanup: self.cleanup,
             expectation: self.expectation,
             path: self.path,
+            new_branch: self.new_branch.clone(),
         }
     }
 }
@@ -356,6 +374,19 @@ struct PendingWork {
     /// A branch observation only: an unfinished record of the ticket that a
     /// new request could not supersede holds it (decision 33).
     record_unfinished: bool,
+    /// A pull-request close with a publication remote only: what the remote
+    /// history says of the ticket's branch, for a new branch (Part F).
+    history: Option<NewBranchHistory>,
+}
+
+/// What a pull-request close reads of the remote history of the ticket's
+/// branch, in the registry transaction of its observation: its deletion's
+/// evidence, and the commit of every publication the push-absence
+/// classification counts (`None` where one is not recorded).
+#[derive(Clone)]
+struct NewBranchHistory {
+    evidence: sync::RepublishEvidence,
+    counted: Vec<Option<Oid>>,
 }
 
 /// Prepared outside the lease (discovery), revalidated inside it without
@@ -460,10 +491,17 @@ fn observe_for_at(
     let item = &request.item_id;
     let (repository, root, config) = shared::open_observation(KIND, service, &request.root)?;
     let mode = mode.unwrap_or_else(|| config.integration());
+    let plan = history_plan(&config, mode, verb, &root)?;
     // One read-only registry transaction: history, conflicts and pending work.
     let (repository_id, snapshot, pending_conflict, pending) =
         shared::read_view_with(service, &root, |tx, id| {
-            pending_work(tx, id, item, branch_observed(mode, verb))
+            pending_work(
+                tx,
+                id,
+                item,
+                branch_observed(mode, verb),
+                plan.as_ref().map(|plan| (root.as_path(), plan)),
+            )
         })?;
     let (facts, seal) = ObservationSeal::discover(KIND, &repository, &root, &config, item, || {
         shared::item_preview_facts(KIND, service, &root, item)
@@ -524,9 +562,17 @@ pub(in super::super) fn revalidate_observation_under_lease(
 ) -> Result<Result<ClosureObservation, ClosureRefusal>, RepositoryError> {
     let fresh = prepared.seal.reopen(repository, &prepared.configuration)?;
     let item = prepared.seal.item();
+    let root = prepared.seal.root();
+    let plan = history_plan(&prepared.configuration, prepared.mode, prepared.verb, root)?;
     let (id, snapshot, pending_conflict, pending) =
-        shared::read_view_with(service, prepared.seal.root(), |tx, id| {
-            pending_work(tx, id, item, branch_observed(prepared.mode, prepared.verb))
+        shared::read_view_with(service, root, |tx, id| {
+            pending_work(
+                tx,
+                id,
+                item,
+                branch_observed(prepared.mode, prepared.verb),
+                plan.as_ref().map(|plan| (root, plan)),
+            )
         })?;
     if id != prepared.repository_id {
         return Err(shared::changed());
@@ -557,11 +603,16 @@ pub(in super::super) fn revalidate_observation_under_lease(
 /// close meets only at its confirm. The unfinished record's own children are
 /// left out: the binding's `held` answers for those, and a foreign
 /// synchronization alone is `busy` (R23).
+///
+/// `history` is the root and the plan of a pull-request close with a
+/// publication remote, whose new-branch situations read the remote history
+/// of the ticket's branch in this transaction (Part F).
 fn pending_work(
     tx: &rusqlite::Transaction<'_>,
     repository_id: i64,
     item: &ItemId,
     branch: bool,
+    history: Option<(&Path, &RemoteRefPlan)>,
 ) -> Result<PendingWork, RepositoryError> {
     let item_text = item.to_string();
     let mut statement = tx
@@ -603,12 +654,41 @@ fn pending_work(
     } else {
         None
     };
+    let history = history
+        .map(|(root, plan)| {
+            let (evidence, counted) =
+                sync::republish_evidence_in(tx, repository_id, root, plan, KIND.authoring(), item)?;
+            Ok::<_, RepositoryError>(NewBranchHistory { evidence, counted })
+        })
+        .transpose()?;
     Ok(PendingWork {
         local_operation,
         comment_publication,
         synchronization,
         record_unfinished: branch && super::record::holds_new_requests(tx, repository_id, item)?,
+        history,
     })
+}
+
+/// The plan a pull-request close reads the remote history by, when it has a
+/// publication remote.
+fn history_plan(
+    config: &canonical::RepositoryConfig,
+    mode: Integration,
+    verb: Verb,
+    root: &Path,
+) -> Result<Option<RemoteRefPlan>, RepositoryError> {
+    if mode != Integration::PullRequest || verb != Verb::Close {
+        return Ok(None);
+    }
+    config
+        .publication_remote
+        .as_ref()
+        .map(|remote| {
+            RemoteRefPlan::from_configuration(remote, &config.primary_branch)
+                .map_err(|_| shared::unavailable(root))
+        })
+        .transpose()
 }
 
 /// A live synchronization of the ticket's context that no unfinished closure
@@ -826,6 +906,10 @@ fn observe_git(
     let mut context_oid = None;
     let mut context_missing = false;
     let mut context_conforming = false;
+    // No worktree and no local branch: nothing of a context is left. A
+    // worktree path that something else holds is `worktree_occupied`.
+    let mut context_absent = false;
+    let mut worktree_occupied = false;
     if facts.not_ticket {
         blockers.insert(NotATicket);
     } else {
@@ -851,7 +935,18 @@ fn observe_git(
                     blockers.insert(ContextNonconforming);
                 }
             }
-            ContextPresence::Missing => context_missing = true,
+            ContextPresence::Missing => {
+                context_missing = true;
+                context_absent =
+                    shared::reference_oid(repository, &KIND.context_ref(item), root)?.is_none();
+                let name = item.to_string();
+                worktree_occupied = root
+                    .join(".manyhands/worktrees")
+                    .join(&name)
+                    .symlink_metadata()
+                    .is_ok()
+                    || repository.find_worktree(&name).is_ok();
+            }
             ContextPresence::Nonconforming => {
                 blockers.insert(ContextNonconforming);
             }
@@ -920,6 +1015,8 @@ fn observe_git(
             context_oid,
             context_missing,
             context_conforming,
+            context_absent,
+            worktree_occupied,
             primary_oid,
             tracking_primary,
             tracking_context,
@@ -1200,6 +1297,7 @@ fn observe_git(
         tracking_primary,
         tracking_context,
         path: (Integration::Direct, ClosureAction::Close),
+        new_branch: None,
     };
     observation.expectation = expectation(&observation);
     Ok(Ok(observation))
@@ -1370,6 +1468,11 @@ struct Gathered {
     context_oid: Option<Oid>,
     context_missing: bool,
     context_conforming: bool,
+    /// No context is materialized and its local branch is gone.
+    context_absent: bool,
+    /// No context is materialized, and its worktree path is held by
+    /// something else, or a worktree of that name is registered.
+    worktree_occupied: bool,
     primary_oid: Option<Oid>,
     tracking_primary: Option<Oid>,
     tracking_context: Option<Oid>,
@@ -1377,13 +1480,21 @@ struct Gathered {
 
 /// The pull-request close's observation. Nothing integrates, so there is no
 /// change set, no planned cleanup and no result tree to check: the situation
-/// (Part D) is read from the primaries' and the context's tickets, and the
-/// closure the context's tip would be given is checked as the checkpoint
-/// will build it. The situations, in order:
+/// (Part D) is read from the primaries' and the context's tickets, the remote
+/// history and the tracking refs, and the closure the context's tip would be
+/// given is checked as the checkpoint will build it. The situations, in
+/// order:
 ///
 /// 1. the local or the tracking primary's ticket is not open: `AlreadyClosed`;
-/// 2. a context whose remote branch's deletion is evidenced, and
-/// 3. no context: today's blockers, until Task 9;
+/// 2. a context whose remote branch's deletion is evidenced: a new branch,
+///    which keeps a provisional closure the context's ticket holds;
+/// 3. no context:
+///    1. the remote branch's deletion is evidenced: a new branch, retiring
+///       the remote history;
+///    2. a tracking ref of the branch that the tracking primary holds: a new
+///       branch with nothing to retire, which its publication fast-forwards;
+///    3. a tracking ref otherwise: `RemoteContextUnmaterialized`;
+///    4. no tracking ref: a new branch with nothing to retire;
 /// 4. the context's ticket holds a closure: `Existing`;
 /// 5. otherwise `Record`.
 #[allow(clippy::too_many_arguments)] // One observation's coherent inputs.
@@ -1405,6 +1516,8 @@ fn branch_observation(
         context_oid,
         context_missing,
         context_conforming,
+        context_absent,
+        worktree_occupied,
         primary_oid,
         tracking_primary,
         tracking_context,
@@ -1436,12 +1549,78 @@ fn branch_observation(
     {
         return Err(foreign_synchronization_busy(root, operation));
     }
-    // Situation 2, until Task 9.
-    if config.publication_remote.is_some() && tracking_context.is_none() && !facts.not_ticket {
-        blockers.extend(remote_history_blocker(snapshot, item));
+    // Situations 2 and 3. A new branch is `(old tip, retired)`.
+    let history = pending.history.as_ref().filter(|_| !facts.not_ticket);
+    let deleted = history.is_some_and(|history| history.evidence.deleted());
+    // A context that was published is not deleted for want of a fetch: its
+    // proven push alone reads as `Pushed` until the next poll, so a context
+    // is a deleted one only when a fetch saw its branch gone.
+    let fetched_deleted = history.is_some_and(|history| {
+        matches!(history.evidence.deletion, sync::DeletionEvidence::Fetched)
+    });
+    let mut new_branch: Option<(Option<Oid>, Option<Oid>)> = None;
+    let mut unmaterialized = false;
+    if let Some(history) = history {
+        if let Some(tip) = context_oid
+            && fetched_deleted
+        {
+            new_branch = Some((Some(tip), Some(tip)));
+        } else if context_absent {
+            if deleted {
+                // The stale tracking ref, else what the newest proven push
+                // or the fetch last found published: a commit that is here.
+                let retired = tracking_context
+                    .or(history.evidence.last_published)
+                    .filter(|oid| repository.find_commit(*oid).is_ok());
+                new_branch = Some((None, retired));
+            } else {
+                match (tracking_context, base) {
+                    (None, _) => new_branch = Some((None, None)),
+                    (Some(tip), Some(base)) if shared::ancestor(repository, tip, base, root)? => {
+                        new_branch = Some((None, None));
+                    }
+                    (Some(tip), Some(_)) => {
+                        unmaterialized = true;
+                        blockers.insert(RemoteContextUnmaterialized);
+                        if let Some(primary) = primary_oid
+                            && shared::ancestor(repository, tip, primary, root)?
+                        {
+                            blockers.insert(PrimaryAheadOfRemote);
+                        }
+                    }
+                    (Some(_), None) => {}
+                }
+            }
+        }
+        // Every publication the classification counts must be the retired
+        // tip or its ancestor, or the boundary after the retirement could
+        // still read the branch as deleted, ambiguous or unknown.
+        if let Some((_, retired)) = new_branch.filter(|_| deleted) {
+            let ancestors = retired.is_some_and(|retired| {
+                history.counted.iter().all(|published| {
+                    published.is_some_and(|published| {
+                        published == retired
+                            || repository
+                                .graph_descendant_of(retired, published)
+                                .unwrap_or(false)
+                    })
+                })
+            });
+            if !ancestors {
+                blockers.insert(HistoryUnresolved);
+            }
+        }
     }
-    // Situation 3, until Task 9.
-    if context_missing {
+    if config.publication_remote.is_some() && tracking_context.is_none() && !facts.not_ticket {
+        blockers.extend(
+            remote_history_blocker(snapshot, item)
+                // The deletion the new branch retires is not a blocker.
+                .filter(|blocker| {
+                    *blocker != RemoteContextDeleted || !deleted || new_branch.is_none()
+                }),
+        );
+    }
+    if context_missing && new_branch.is_none() && !unmaterialized {
         blockers.insert(ContextMissing);
     }
     let context_ticket = context_ticket_at(
@@ -1451,7 +1630,30 @@ fn branch_observation(
         root,
         &mut blockers,
     )?;
-    // Situations 4 and 5.
+    // F7: the tracking primary must hold the ticket for a new branch to be
+    // built on it.
+    let mut base_ticket = None;
+    if let (Some((old_tip, _)), Some(base)) = (new_branch, base) {
+        match tree_ticket(
+            repository,
+            commit_tree(repository, base, root)?,
+            &path,
+            root,
+        )? {
+            None => {
+                blockers.insert(if old_tip.is_some() {
+                    RemoteContextDeleted
+                } else {
+                    ContextMissing
+                });
+            }
+            Some(ticket) if !ticket.canonical_entry => {
+                blockers.insert(TicketInvalidAfterClosure);
+            }
+            Some(ticket) => base_ticket = Some(ticket),
+        }
+    }
+    // Situations 4 and 5, and for a new branch with no context 5.
     let effect = match context_ticket.as_ref().map(|t| file_closure(&t.bytes)) {
         Some(FileClosure::Open) => Some(Effect::Record),
         Some(FileClosure::Closed {
@@ -1465,8 +1667,11 @@ fn branch_observation(
             blockers.insert(TicketInvalidAfterClosure);
             None
         }
+        None if matches!(new_branch, Some((None, _))) => Some(Effect::Record),
         None => None,
     };
+    // A new branch's commit is authored by the selected identity, whatever
+    // the closure it carries.
     let IdentityChoice {
         identity,
         configuration: identity_configuration,
@@ -1475,9 +1680,41 @@ fn branch_observation(
         repository,
         root,
         confirmation,
-        matches!(effect, Some(Effect::Record)),
+        matches!(effect, Some(Effect::Record)) || (new_branch.is_some() && effect.is_some()),
     )?;
-    if let (Some(Effect::Record), Some(context_ticket)) = (&effect, &context_ticket) {
+    if new_branch.is_some() {
+        // The closure is written on the tracking primary's ticket, so it is
+        // checked against that one.
+        if let (Some(base_ticket), Some(effect)) = (&base_ticket, &effect) {
+            let refused = match effect {
+                Effect::Record => {
+                    // Any valid text stands in for a not yet selected identity.
+                    let closed_by = selected.as_deref().unwrap_or("Manyhands <closure@invalid>");
+                    closed_ticket_bytes(&base_ticket.bytes, at, closed_by).is_err()
+                }
+                Effect::Existing { .. } => {
+                    let kept = context_ticket
+                        .as_ref()
+                        .and_then(|ticket| parsed_ticket(&ticket.bytes).ok())
+                        .and_then(|(_, ticket)| Some((ticket.closed_at?, ticket.closed_by?)));
+                    kept.is_none_or(|(kept_at, kept_by)| {
+                        closure_replaced_bytes(&base_ticket.bytes, kept_at, &kept_by).is_err()
+                    })
+                }
+            };
+            if refused {
+                blockers.insert(TicketInvalidAfterClosure);
+            }
+        }
+        // A kept closure needs the identity too, and only when nothing else
+        // blocks, as a `Record` one does.
+        if matches!(effect, Some(Effect::Existing { .. }))
+            && selected.is_none()
+            && blockers.is_empty()
+        {
+            blockers.insert(IdentityRequired);
+        }
+    } else if let (Some(Effect::Record), Some(context_ticket)) = (&effect, &context_ticket) {
         // Any valid text stands in for a not yet selected identity.
         let closed_by = selected.as_deref().unwrap_or("Manyhands <closure@invalid>");
         if closed_ticket_bytes(&context_ticket.bytes, at, closed_by).is_err() {
@@ -1488,11 +1725,62 @@ fn branch_observation(
     if !blockers.is_empty() {
         return Ok(Err(refusal_of(blockers, identity_configuration)));
     }
-    let (Some(base), Some(context_oid), Some(primary_oid), Some(closure)) =
-        (base, context_oid, primary_oid, closure)
-    else {
+    let (Some(base), Some(primary_oid), Some(closure)) = (base, primary_oid, closure) else {
         // An unblocked observation always has every fact above.
         return Err(shared::unavailable(root));
+    };
+    let (context_oid, cleanup, facts_of_new_branch) = match new_branch {
+        Some((old_tip, retired_oid)) => {
+            // What the old tip holds that the tracking primary lacks. While
+            // an unfinished record holds the ticket, a history that cannot be
+            // compared is left to the hold, and the record's own step 1 still
+            // binds the entries it can read.
+            let unheld = match old_tip {
+                Some(tip) => match proof::unheld_entries(repository, tip, base) {
+                    Ok(entries) => entries,
+                    Err(_) if pending.record_unfinished => Vec::new(),
+                    Err(_) => return Err(state::recovery_required()),
+                },
+                None => Vec::new(),
+            };
+            // The new context's worktree path must be free once the old
+            // context is counted out.
+            if old_tip.is_none() && worktree_occupied && !pending.record_unfinished {
+                return Err(RepositoryError::new(
+                    RepositoryOperation::Read,
+                    Some(root.to_owned()),
+                    RepositoryErrorKind::OccupiedItemPath,
+                    "the ticket's worktree path is occupied",
+                ));
+            }
+            (
+                old_tip.unwrap_or(base),
+                PlannedCleanup {
+                    worktree: old_tip.is_some(),
+                    local_branch: old_tip.is_some(),
+                    remote_branch: false,
+                },
+                Some(NewBranchFacts {
+                    old_tip,
+                    retired_oid,
+                    unheld,
+                }),
+            )
+        }
+        None => {
+            let Some(context_oid) = context_oid else {
+                return Err(shared::unavailable(root));
+            };
+            (
+                context_oid,
+                PlannedCleanup {
+                    worktree: false,
+                    local_branch: false,
+                    remote_branch: false,
+                },
+                None,
+            )
+        }
     };
     let mut observation = ClosureObservation {
         item_id: item.clone(),
@@ -1503,12 +1791,8 @@ fn branch_observation(
         changes: Vec::new(),
         closure,
         integration: PlannedIntegration::MergeCommit,
-        needs_context_child: true,
-        cleanup: PlannedCleanup {
-            worktree: false,
-            local_branch: false,
-            remote_branch: false,
-        },
+        needs_context_child: facts_of_new_branch.is_none(),
+        cleanup,
         identity,
         expectation: ClosureExpectation::from_bytes([0; 32]),
         context_branch: KIND.context_branch(item),
@@ -1516,7 +1800,15 @@ fn branch_observation(
         primary_oid,
         tracking_primary,
         tracking_context,
-        path: (Integration::PullRequest, ClosureAction::Close),
+        path: (
+            Integration::PullRequest,
+            if facts_of_new_branch.is_some() {
+                ClosureAction::NewBranch
+            } else {
+                ClosureAction::Close
+            },
+        ),
+        new_branch: facts_of_new_branch,
     };
     observation.expectation = expectation(&observation);
     Ok(Ok(observation))
@@ -1566,6 +1858,7 @@ fn withdraw_observation(
         primary_oid,
         tracking_primary,
         tracking_context,
+        ..
     } = gathered;
     if config.publication_remote.is_none() {
         return Ok(Err(ClosureRefusal::unoffered(
@@ -1699,6 +1992,7 @@ fn withdraw_observation(
         tracking_primary,
         tracking_context,
         path: (mode, ClosureAction::Withdraw),
+        new_branch: None,
     };
     observation.expectation = expectation(&observation);
     Ok(Ok(observation))
@@ -1760,22 +2054,37 @@ fn closure_effect(hash: &mut blake3::Hasher, closure: &PlannedClosure) {
     }
 }
 
-/// The pull-request close's digest, which binds the context's head as the
-/// observation read it.
+/// The pull-request close's digest, which binds the head the consent
+/// reads (`consented_head`).
 fn branch_expectation(o: &ClosureObservation) -> ClosureExpectation {
-    branch_expectation_with_head(o, Some(o.context_oid))
+    branch_expectation_with_head(o, o.consented_head())
 }
 
 /// `blake3("manyhands pull request closure v1" ‖ fields)`, framed as the
 /// direct digest is: the action tag (`close` 0, `withdraw` 1, `new_branch`
 /// 2), the item, the context branch, the primary branch, the remote, the
-/// context's head (or none) and the closure effect. A `record` closure's
-/// `closed_at` is never bound (C6). Nothing of the change set or the
-/// cleanup is bound: nothing integrates.
+/// context's head (or none) and the closure effect. For a new branch they
+/// are followed by the tracking primary, what step 2 retires and the
+/// tracking context's tip (each framed as the head is), and the unheld
+/// entries: their count, then each path and its change (`added` 0,
+/// `modified` 1, `deleted` 2). A `record` closure's `closed_at` is never
+/// bound (C6). Nothing of the change set or the cleanup is bound: nothing
+/// integrates.
 pub(super) fn branch_expectation_with_head(
     o: &ClosureObservation,
     head: Option<Oid>,
 ) -> ClosureExpectation {
+    fn optional(hash: &mut blake3::Hasher, oid: Option<Oid>) {
+        match oid {
+            Some(oid) => {
+                hash.update(&[1]);
+                hash.update(oid.as_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
     let mut hash = blake3::Hasher::new();
     hash.update(PULL_REQUEST_CLOSURE_DIGEST_DOMAIN);
     hash.update(&[match o.path.1 {
@@ -1787,16 +2096,22 @@ pub(super) fn branch_expectation_with_head(
     digest::field(&mut hash, o.context_branch.as_bytes());
     digest::field(&mut hash, o.primary_branch.as_bytes());
     digest::remote(&mut hash, o.remote.as_deref());
-    match head {
-        Some(head) => {
-            hash.update(&[1]);
-            hash.update(head.as_bytes());
-        }
-        None => {
-            hash.update(&[0]);
+    optional(&mut hash, head);
+    closure_effect(&mut hash, &o.closure);
+    if let Some(new_branch) = &o.new_branch {
+        hash.update(o.base.as_bytes());
+        optional(&mut hash, new_branch.retired_oid);
+        optional(&mut hash, o.tracking_context);
+        hash.update(&(new_branch.unheld.len() as u64).to_be_bytes());
+        for entry in &new_branch.unheld {
+            digest::field(&mut hash, &entry.path);
+            hash.update(&[match entry.change {
+                PathChange::Added => 0,
+                PathChange::Modified => 1,
+                PathChange::Deleted => 2,
+            }]);
         }
     }
-    closure_effect(&mut hash, &o.closure);
     ClosureExpectation::from_bytes(*hash.finalize().as_bytes())
 }
 

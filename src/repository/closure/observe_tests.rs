@@ -237,6 +237,42 @@ impl Fixture {
             RemoteReservationOutcome::Reserved(_)
         ));
     }
+    /// Removes the ticket's context: its worktree and its local branch.
+    fn remove_context(&self) {
+        self.repo
+            .find_worktree(ID)
+            .unwrap()
+            .prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(true)
+                    .working_tree(true),
+            ))
+            .unwrap();
+        self.repo
+            .find_reference(&format!("refs/heads/manyhands/ticket/{ID}"))
+            .unwrap()
+            .delete()
+            .unwrap();
+    }
+    /// The tracking ref of the ticket's context, at `oid`.
+    fn tracking_context(&self, oid: Oid) {
+        self.tracking(&format!("manyhands/ticket/{ID}"), oid);
+    }
+    /// A publication of the ticket's context that put `oid` on the remote,
+    /// proven (its authority is `oid`), as a completed synchronization
+    /// leaves one.
+    fn proven_push(&self, oid: Oid) {
+        let operation = OperationId::new();
+        self.reserve_context(operation);
+        self.db().execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',reconciliation_required=0,sync_checkpoint='discovery_pending',authoritative_kind='published',authoritative_oid=?2,expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2 WHERE operation_ulid=?1", rusqlite::params![operation.to_string(), oid.to_string()]).unwrap();
+    }
+    /// A push of `oid` that nothing proved: its synchronization ended with
+    /// the push intended, not known to have returned.
+    fn intended_push(&self, oid: Oid) {
+        let operation = OperationId::new();
+        self.reserve_context(operation);
+        self.db().execute("UPDATE remote_operation_records SET phase='interrupted',sync_checkpoint='push_prepared',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2 WHERE operation_ulid=?1", rusqlite::params![operation.to_string(), oid.to_string()]).unwrap();
+    }
     /// The blockers of a preview that is blocked.
     fn blockers(&self) -> Vec<ClosureBlocker> {
         match self.preview() {
@@ -1603,6 +1639,7 @@ fn closure_digest_golden_vector() {
         tracking_primary: None,
         tracking_context: None,
         path: (Integration::Direct, ClosureAction::Close),
+        new_branch: None,
     };
     fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
         wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
@@ -1794,20 +1831,158 @@ fn pull_request_prepare_decides_the_situation_and_its_blockers() {
             if blockers == [ClosureBlocker::IdentityRequired]
     ));
 
-    // Situations 2 and 3, as the direct close has them until Task 9: a
-    // context whose remote branch was seen deleted, and no context.
+    // Situation 2: a context whose remote branch was seen deleted is a new
+    // branch, which retires its tip. Nothing integrates and no context child
+    // runs; the old worktree and branch are the ones to remove.
+    let new_branch = (Integration::PullRequest, ClosureAction::NewBranch);
     let f = pull_request_fixture();
     f.history("observed_published");
-    f.blocked(&[ClosureBlocker::RemoteContextDeleted]);
-    let f = pull_request_fixture();
-    fs::remove_dir_all(f.root.path().join(".manyhands/worktrees").join(ID)).unwrap();
-    f.repo
-        .find_branch(&format!("manyhands/ticket/{ID}"), git2::BranchType::Local)
-        .unwrap()
-        .delete()
-        .unwrap();
-    f.blocked(&[ClosureBlocker::ContextMissing]);
+    let tip = f.context_oid();
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, new_branch);
+    assert_eq!(f.ready().path(), new_branch);
+    assert_eq!(o.base, f.base);
+    assert_eq!(o.context_oid, tip);
+    assert!(!o.needs_context_child);
+    assert!(o.changes.is_empty());
+    assert_eq!(
+        o.cleanup,
+        PlannedCleanup {
+            worktree: true,
+            local_branch: true,
+            remote_branch: false,
+        }
+    );
+    assert!(matches!(&o.closure, PlannedClosure::Record { closed_by } if closed_by == FIXTURE_BY));
+    assert_eq!(
+        o.new_branch,
+        Some(NewBranchFacts {
+            old_tip: Some(tip),
+            retired_oid: Some(tip),
+            unheld: vec![proof::UnheldEntry {
+                path: ticket().into_bytes(),
+                change: PathChange::Modified,
+            }],
+        })
+    );
+    assert_eq!(o.consented_head(), Some(tip));
 
+    // Situation 3, no context. 3.4: no tracking ref; the ticket is never
+    // published, so nothing is retired and no worktree is removed.
+    let f = pull_request_fixture();
+    f.remove_context();
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, new_branch);
+    assert_eq!(o.context_oid, f.base);
+    assert!(!o.needs_context_child);
+    assert_eq!(
+        o.cleanup,
+        PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        }
+    );
+    assert_eq!(
+        o.new_branch,
+        Some(NewBranchFacts {
+            old_tip: None,
+            retired_oid: None,
+            unheld: Vec::new(),
+        })
+    );
+    assert_eq!(o.consented_head(), None);
+    // 3.2: a tracking ref the tracking primary holds is kept, and nothing is
+    // retired either.
+    let f = pull_request_fixture();
+    f.remove_context();
+    f.tracking_context(f.base);
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, new_branch);
+    assert_eq!(o.tracking_context, Some(f.base));
+    assert_eq!(o.new_branch.as_ref().unwrap().retired_oid, None);
+    // 3.3: a tracking ref that the tracking primary does not hold is
+    // unmaterialized.
+    let f = pull_request_fixture();
+    let off = tree_commit(
+        &f.repo,
+        f.base,
+        &[("elsewhere.txt", Some((b"remote only", 0o100644)))],
+    );
+    f.remove_context();
+    f.tracking_context(off);
+    f.blocked(&[ClosureBlocker::RemoteContextUnmaterialized]);
+    // 3.1: the deletion is evidenced. A stale tracking ref is what is
+    // retired,
+    let f = pull_request_fixture();
+    f.history("observed_published");
+    f.remove_context();
+    f.tracking_context(f.base);
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, new_branch);
+    assert_eq!(o.new_branch.as_ref().unwrap().old_tip, None);
+    assert_eq!(o.new_branch.as_ref().unwrap().retired_oid, Some(f.base));
+    // else the deletion record's last published commit, which has to be in
+    // the object store,
+    let f = pull_request_fixture();
+    f.history("observed_published");
+    let tip = f.context_oid();
+    f.remove_context();
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.new_branch.as_ref().unwrap().retired_oid, Some(tip));
+    f.db()
+        .execute(
+            "UPDATE remote_context_states SET last_advertised_oid=?1",
+            [Oid::from_bytes(&[7; 20]).unwrap().to_string()],
+        )
+        .unwrap();
+    f.blocked(&[ClosureBlocker::HistoryUnresolved]);
+    // else the newest proven push, when no fetch recorded the deletion. Every
+    // push the classification counts, intended or proven, must be that
+    // commit or its ancestor.
+    let off = |f: &Fixture| {
+        tree_commit(
+            &f.repo,
+            f.base,
+            &[("elsewhere.txt", Some((b"other history", 0o100644)))],
+        )
+    };
+    for (case, pushes, resolved) in [
+        (
+            "proven, the newest a descendant",
+            [(false, 0), (false, 1)],
+            true,
+        ),
+        (
+            "proven, an earlier one not an ancestor",
+            [(false, 2), (false, 1)],
+            false,
+        ),
+        ("intended, an ancestor", [(false, 1), (true, 0)], true),
+        ("intended, not an ancestor", [(false, 1), (true, 2)], false),
+    ] {
+        let f = pull_request_fixture();
+        let commits = [f.base, f.context_oid(), off(&f)];
+        f.remove_context();
+        for (intended, commit) in pushes {
+            if intended {
+                f.intended_push(commits[commit]);
+            } else {
+                f.proven_push(commits[commit]);
+            }
+        }
+        if resolved {
+            let o = f.observation(at(1_700_000_000));
+            assert_eq!(o.path, new_branch, "{case}");
+            assert_eq!(
+                o.new_branch.as_ref().unwrap().retired_oid,
+                Some(commits[1]),
+                "{case}"
+            );
+        } else {
+            f.blocked(&[ClosureBlocker::HistoryUnresolved]);
+        }
+    }
     // What the pull-request close keeps: the context's own blockers, and a
     // merge, rebase or cherry-pick in progress at the root, on whichever
     // branch the root is.
@@ -2000,7 +2175,7 @@ fn pending_work_leaves_out_a_record_s_own_children_and_finds_the_record() {
     let f = pull_request_fixture();
     let read_pending = |f: &Fixture| {
         state::with_transaction(&f.service, f.root.path(), |tx, rid| {
-            pending_work(tx, rid, &id(), true)
+            pending_work(tx, rid, &id(), true, None)
         })
         .unwrap()
     };
@@ -2082,6 +2257,7 @@ fn pull_request_digest_wire_format() {
         tracking_primary: Some(oid('b')),
         tracking_context: None,
         path: (Integration::PullRequest, ClosureAction::Close),
+        new_branch: None,
     };
     fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
         wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
@@ -2116,6 +2292,135 @@ fn pull_request_digest_wire_format() {
     observation.tracking_primary = Some(oid('e'));
     observation.base = oid('e');
     assert_eq!(expectation(&observation).to_bytes(), digest);
+}
+
+/// R-21: a provisional closure the old context's ticket holds is kept by the
+/// new branch, whose commit is authored by the selected identity, so a
+/// kept closure needs one too. The digest binds both of its fields.
+#[test]
+fn a_new_branch_keeps_a_provisional_closure_and_needs_an_identity() {
+    let f = pull_request_fixture();
+    f.close_context();
+    f.history("observed_published");
+    let o = f.observation(at(1_700_000_000));
+    assert_eq!(o.path, (Integration::PullRequest, ClosureAction::NewBranch));
+    assert!(matches!(
+        &o.closure,
+        PlannedClosure::Existing { closed_at, closed_by }
+            if closed_at == "2023-11-14T22:13:20Z" && closed_by == CLOSER
+    ));
+    assert!(o.identity.is_some());
+    f.missing_identity();
+    assert!(matches!(
+        f.preview(),
+        TicketClosurePreflight::Blocked { blockers, identity_configuration: Some(_) }
+            if blockers == [ClosureBlocker::IdentityRequired]
+    ));
+}
+
+/// A new branch's digest wire bytes, written out by hand: the pull-request
+/// domain and the action tag `2`, the old context's tip as the head, and the
+/// tracking primary, the retired tip, the tracking context's tip and the
+/// unheld entries after the closure effect.
+#[test]
+fn new_branch_digest_wire_format() {
+    use crate::canonical::Integration;
+    let oid = |digit: char| Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+    let build = |edit: &dyn Fn(&mut ClosureObservation)| {
+        let mut observation = ClosureObservation {
+            item_id: id(),
+            ticket_path: PathBuf::from(ticket()),
+            context_oid: oid('c'),
+            base: oid('b'),
+            remote: Some("origin".into()),
+            changes: Vec::new(),
+            closure: PlannedClosure::Record {
+                closed_by: CLOSER.into(),
+            },
+            integration: PlannedIntegration::MergeCommit,
+            needs_context_child: false,
+            cleanup: PlannedCleanup {
+                remote_branch: false,
+                worktree: true,
+                local_branch: true,
+            },
+            identity: None,
+            expectation: ClosureExpectation::from_bytes([0; 32]),
+            context_branch: format!("manyhands/ticket/{ID}"),
+            primary_branch: "main".into(),
+            primary_oid: oid('a'),
+            tracking_primary: Some(oid('b')),
+            tracking_context: Some(oid('7')),
+            path: (Integration::PullRequest, ClosureAction::NewBranch),
+            new_branch: Some(NewBranchFacts {
+                old_tip: Some(oid('c')),
+                retired_oid: Some(oid('9')),
+                unheld: vec![proof::UnheldEntry {
+                    path: b"code".to_vec(),
+                    change: PathChange::Modified,
+                }],
+            }),
+        };
+        edit(&mut observation);
+        observation
+    };
+    let observation = build(&|_| {});
+    fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
+        wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        wire.extend_from_slice(bytes);
+    }
+    let mut wire = b"manyhands pull request closure v1".to_vec();
+    wire.push(2); // new branch
+    field(&mut wire, ID.as_bytes());
+    field(&mut wire, format!("manyhands/ticket/{ID}").as_bytes());
+    field(&mut wire, b"main");
+    wire.push(1); // a remote
+    field(&mut wire, b"origin");
+    wire.push(1); // the old context's tip
+    wire.extend_from_slice(oid('c').as_bytes());
+    wire.push(0); // record
+    field(&mut wire, CLOSER.as_bytes());
+    wire.extend_from_slice(oid('b').as_bytes()); // the tracking primary
+    wire.push(1); // the retired tip
+    wire.extend_from_slice(oid('9').as_bytes());
+    wire.push(1); // the tracking context's tip
+    wire.extend_from_slice(oid('7').as_bytes());
+    wire.extend_from_slice(&1u64.to_be_bytes()); // one unheld entry
+    field(&mut wire, b"code");
+    wire.push(1); // modified
+    let digest = expectation(&observation).to_bytes();
+    assert_eq!(digest, *blake3::hash(&wire).as_bytes());
+    // Each of its facts is bound.
+    let changed = |edit: &dyn Fn(&mut ClosureObservation)| expectation(&build(edit)).to_bytes();
+    fn facts(o: &mut ClosureObservation) -> &mut NewBranchFacts {
+        o.new_branch.as_mut().unwrap()
+    }
+    for (case, other) in [
+        ("tracking primary", changed(&|o| o.base = oid('e'))),
+        ("tracking context", changed(&|o| o.tracking_context = None)),
+        ("retired tip", changed(&|o| facts(o).retired_oid = None)),
+        ("old tip", changed(&|o| facts(o).old_tip = None)),
+        (
+            "an entry's change",
+            changed(&|o| facts(o).unheld[0].change = PathChange::Deleted),
+        ),
+        (
+            "an entry's path",
+            changed(&|o| facts(o).unheld[0].path = b"other".to_vec()),
+        ),
+        ("an entry", changed(&|o| facts(o).unheld.clear())),
+    ] {
+        assert_ne!(other, digest, "{case}");
+    }
+    // The observation's own context OID (the head is `old_tip`) and the
+    // cleanup it plans are not.
+    assert_eq!(
+        changed(&|o| {
+            o.context_oid = oid('d');
+            o.cleanup.worktree = false;
+        }),
+        digest
+    );
 }
 
 // --- the withdraw observation (Task 8, slice A) ---
@@ -2374,7 +2679,7 @@ fn withdraw_prepare_decides_its_answers_and_blockers() {
             assert_eq!((record.integration_mode, record.action), holder, "{case}");
             // The holder is found, as the binding's `held` finds it.
             let found = state::with_transaction(&f.service, f.root.path(), |tx, rid| {
-                pending_work(tx, rid, &id(), true)
+                pending_work(tx, rid, &id(), true, None)
             })
             .unwrap();
             assert!(found.record_unfinished, "{case}");
@@ -2480,6 +2785,7 @@ fn withdraw_digest_wire_format() {
         tracking_primary: Some(oid('b')),
         tracking_context: None,
         path: (Integration::Direct, ClosureAction::Withdraw),
+        new_branch: None,
     };
     fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
         wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());

@@ -4119,3 +4119,361 @@ fn a_request_continues_only_its_own_verb_s_record() {
     p.assert_primary_untouched(&io);
     p.assert_primary_untouched(&other);
 }
+
+// --- the new branch: prepare and consent (Task 9, slice A) ---
+
+/// What a fetch that saw the context's remote branch gone records: its
+/// history says published, then deleted, at the tracking ref's tip.
+fn record_deletion(service: &RepositoryService, root: &Path) {
+    let advertised = git2::Repository::open(root)
+        .unwrap()
+        .refname_to_id(&tracking_context_ref())
+        .unwrap();
+    state::with_transaction(service, root, |tx, _| {
+        tx.execute(
+            "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at,last_advertised_oid) SELECT id,?1,?2,'ticket',?3,'observed_published','remotely_deleted',0,?4 FROM repositories",
+            rusqlite::params![context_ref(), tracking_context_ref(), ID, advertised.to_string()],
+        )
+        .map_err(|_| state::recovery_required())?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+impl PullRequest {
+    /// A fetch has seen the context's remote branch gone.
+    fn deleted_on_remote(&self) {
+        record_deletion(&self.f.service, self.f.root());
+    }
+    /// The context's worktree and local branch are gone.
+    fn remove_context(&self) {
+        self.f
+            .repo
+            .find_worktree(ID)
+            .unwrap()
+            .prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(true)
+                    .working_tree(true),
+            ))
+            .unwrap();
+        self.f
+            .repo
+            .find_reference(&context_ref())
+            .unwrap()
+            .delete()
+            .unwrap();
+    }
+    fn drop_tracking_context(&self) {
+        self.f
+            .repo
+            .find_reference(&tracking_context_ref())
+            .unwrap()
+            .delete()
+            .unwrap();
+    }
+    /// The forge's squash of the context is the tracking primary's tip. The
+    /// local primary does not move.
+    fn merged_on_tracking(&self) -> Oid {
+        let merged = squash_merge(self, self.f.context_oid());
+        self.f.tracking("main", merged);
+        merged
+    }
+    fn preflight(&self) -> TicketClosurePreflight {
+        self.f
+            .service
+            .preview_ticket_closure(PreviewTicketClosureRequest {
+                root: self.f.root().into(),
+                item_id: id(),
+                confirmed_identity: None,
+            })
+            .unwrap()
+    }
+    fn blockers(&self) -> Vec<ClosureBlocker> {
+        match self.preflight() {
+            TicketClosurePreflight::Blocked { blockers, .. } => blockers,
+            other => panic!("not blocked: {other:?}"),
+        }
+    }
+    /// The preview a ready prepare gives.
+    fn ready(&self) -> TicketClosurePreview {
+        match self.preflight() {
+            TicketClosurePreflight::Ready(preview) => preview,
+            other => panic!("not ready: {other:?}"),
+        }
+    }
+    /// A request that confirms `expected`.
+    fn confirming(&self, expected: ClosureExpectation) -> CloseTicketRequest {
+        CloseTicketRequest {
+            root: self.f.root().into(),
+            operation_id: OperationId::new(),
+            item_id: id(),
+            expected,
+            approval: None,
+            confirmed_identity: None,
+        }
+    }
+    /// A commit over `parent` that adds `name`: a tip nothing holds.
+    fn off(&self, parent: Oid, name: &str) -> Oid {
+        support::tree_commit(
+            &self.f.repo,
+            parent,
+            &[(name, Some((name.as_bytes(), 0o100644)))],
+        )
+    }
+}
+
+const NEW_BRANCH: (Integration, ClosureAction) =
+    (Integration::PullRequest, ClosureAction::NewBranch);
+
+/// F5: a ticket with no context whose remote branch exists, and that
+/// neither primary holds, is `remote_context_unmaterialized`, with the local
+/// primary's holding it a second blocker. A confirm of a prepare made before
+/// the ref moved is `external_change`, which stores no blocker.
+#[test]
+fn f5_a_remote_branch_neither_primary_holds_is_unmaterialized() {
+    for ahead in [false, true] {
+        let p = PullRequest::new();
+        p.remove_context();
+        let remote_only = p.off(p.f.primary(), "remote-only.txt");
+        p.f.repo
+            .reference(&tracking_context_ref(), remote_only, true, "fixture")
+            .unwrap();
+        if ahead {
+            p.f.repo
+                .reference("refs/heads/main", remote_only, true, "fixture")
+                .unwrap();
+        }
+        assert_eq!(
+            p.blockers(),
+            if ahead {
+                vec![
+                    ClosureBlocker::PrimaryAheadOfRemote,
+                    ClosureBlocker::RemoteContextUnmaterialized,
+                ]
+            } else {
+                vec![ClosureBlocker::RemoteContextUnmaterialized]
+            },
+            "ahead: {ahead}"
+        );
+    }
+    // The prepare made while the ref was the tracking primary's own.
+    let p = PullRequest::new();
+    p.remove_context();
+    let expected = p.ready().expectation();
+    let remote_only = p.off(p.f.primary(), "remote-only.txt");
+    p.f.repo
+        .reference(&tracking_context_ref(), remote_only, true, "fixture")
+        .unwrap();
+    let req = p.confirming(expected);
+    let refs_before = refs(&p.f.repo);
+    let mut io = PullRequestIo::default();
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::ExternalChange)),
+        "{result:?}"
+    );
+    // A blocked revalidation observed nothing, so the refused row is the
+    // configuration's path.
+    assert_refused_untouched(
+        &p.f,
+        &req,
+        &io.inner,
+        (Integration::PullRequest, ClosureAction::Close),
+        &refs_before,
+        "unmaterialized",
+    );
+    p.assert_primary_untouched(&io);
+}
+
+/// F7: a new branch is built on the tracking primary, so a tracking primary
+/// without the ticket keeps today's blocker: the remote context is deleted
+/// when there is an old context, and the context is missing when there is
+/// none.
+#[test]
+fn f7_a_tracking_primary_without_the_ticket_keeps_today_s_blocker() {
+    let p = PullRequest::new();
+    let without = support::tree_commit(&p.f.repo, p.f.primary(), &[(ticket().as_str(), None)]);
+    p.f.tracking("main", without);
+    p.deleted_on_remote();
+    assert_eq!(p.blockers(), [ClosureBlocker::RemoteContextDeleted]);
+    p.remove_context();
+    assert_eq!(p.blockers(), [ClosureBlocker::ContextMissing]);
+}
+
+/// F8, before step 1: what a new branch's consent bound, changed between
+/// prepare and confirm, is `external_change`. The refused row is the new
+/// branch's, nothing is held or written, and the old context stays. A dirty
+/// old worktree is a blocker, as for any close. An unchanged confirm writes
+/// no record yet.
+#[test]
+fn f8_a_change_before_the_retirement_is_external_change_or_abandons() {
+    type Change = fn(&PullRequest);
+    let changes: [(&str, Change); 3] = [
+        ("the tracking primary moved", |p| {
+            let moved = p.off(
+                p.f.repo.refname_to_id("refs/remotes/origin/main").unwrap(),
+                "later.txt",
+            );
+            p.f.tracking("main", moved);
+        }),
+        ("a commit on the context", |p| {
+            write(&p.f.context, "notes.txt", "notes\n");
+            commit(&p.f.context);
+        }),
+        ("the tracking context moved", |p| {
+            let moved = p.off(p.f.base, "elsewhere.txt");
+            p.f.repo
+                .reference(&tracking_context_ref(), moved, true, "fixture")
+                .unwrap();
+        }),
+    ];
+    let setup = || {
+        let p = PullRequest::new();
+        p.merged_on_tracking();
+        p.deleted_on_remote();
+        p
+    };
+    for (case, change) in changes {
+        let p = setup();
+        let preview = p.ready();
+        assert_eq!(preview.path(), NEW_BRANCH, "{case}");
+        let req = p.confirming(preview.expectation());
+        change(&p);
+        let refs_before = refs(&p.f.repo);
+        let mut io = PullRequestIo::default();
+        let result = p.run(req.clone(), &mut io);
+        assert!(
+            matches!(result, Err(TicketClosureError::ExternalChange)),
+            "{case}: {result:?}"
+        );
+        assert_refused_untouched(&p.f, &req, &io.inner, NEW_BRANCH, &refs_before, case);
+        assert!(p.f.context.workdir().unwrap().exists(), "{case}");
+        p.assert_primary_untouched(&io);
+    }
+    // A dirty old worktree blocks the revalidation: nothing was observed, so
+    // the refused row is the configuration's path.
+    let p = setup();
+    let req = p.confirming(p.ready().expectation());
+    write(&p.f.context, "draft.txt", "draft\n");
+    let mut io = PullRequestIo::default();
+    let result = p.run(req.clone(), &mut io);
+    assert!(
+        matches!(&result, Err(TicketClosureError::Blocked(b)) if *b == [ClosureBlocker::ContextDirty]),
+        "{result:?}"
+    );
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(
+        (r.integration_mode, r.action),
+        (Integration::PullRequest, ClosureAction::Close)
+    );
+    p.assert_primary_untouched(&io);
+    // Unchanged, the confirm writes no record: the new branch does not run
+    // yet.
+    let p = setup();
+    let req = p.confirming(p.ready().expectation());
+    let refs_before = refs(&p.f.repo);
+    let mut io = PullRequestIo::default();
+    let result = p.run(req, &mut io);
+    assert!(
+        matches!(result, Err(TicketClosureError::RecoveryRequired)),
+        "{result:?}"
+    );
+    let records: i64 =
+        p.f.db()
+            .query_row("SELECT count(*) FROM ticket_closures", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(records, 0);
+    assert_eq!(refs(&p.f.repo), refs_before);
+    assert!(io.inner.calls.borrow().children.is_empty());
+    p.assert_primary_untouched(&io);
+}
+
+/// F15: the new context's worktree path is held by something else, which
+/// the prepare answers `occupied_path`, however the old context is gone.
+#[test]
+fn f15_an_occupied_worktree_path_is_occupied_path_at_prepare() {
+    use crate::repository::{Mutation, TicketCloseInput};
+    let p = PullRequest::new();
+    p.remove_context();
+    p.drop_tracking_context();
+    let occupied = p.f.root().join(".manyhands/worktrees").join(ID);
+    fs::create_dir_all(&occupied).unwrap();
+    let error =
+        p.f.service
+            .preview_ticket_closure(PreviewTicketClosureRequest {
+                root: p.f.root().into(),
+                item_id: id(),
+                confirmed_identity: None,
+            })
+            .expect_err("an occupied path is an error");
+    assert_eq!(error.kind, RepositoryErrorKind::OccupiedItemPath);
+    let prepared =
+        p.f.service
+            .prepare(&Mutation::TicketClose(TicketCloseInput {
+                root: p.f.root().to_owned(),
+                id: id(),
+            }));
+    let value = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(value["code"], "occupied_path", "{value}");
+    fs::remove_dir(&occupied).unwrap();
+    assert_eq!(p.ready().path(), NEW_BRANCH);
+}
+
+/// A context child after which a poll has recorded the context's remote
+/// branch deleted.
+struct DeletedAfterChild {
+    inner: PullRequestIo,
+}
+impl PromotionIo for DeletedAfterChild {
+    fn synchronize(
+        &mut self,
+        service: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        let root = req.root.clone();
+        let result = self.inner.synchronize(service, req, observer, execution)?;
+        record_deletion(service, &root);
+        Ok(result)
+    }
+    fn delete(
+        &mut self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        configuration: &ObservationConfiguration,
+        expected: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner
+            .delete(service, request, plan, owner, configuration, expected, item)
+    }
+}
+
+/// R49: a deletion a poll records between the context child and step 3 makes
+/// the observation a new branch, whose digest differs: the close abandons as
+/// `external_change` before writing, and a new prepare offers the new branch.
+#[test]
+fn r49_a_deletion_recorded_after_the_context_child_abandons_as_external_change() {
+    let p = PullRequest::new();
+    let req = p.request();
+    let mut io = DeletedAfterChild {
+        inner: PullRequestIo::default(),
+    };
+    let outcome = PullRequest::branch(p.run(req.clone(), &mut io));
+    assert_eq!(outcome.answer(), BranchAnswer::ExternalChange);
+    assert_eq!(outcome.checkpoint_oid(), None);
+    let r = p.stored(&req);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ExternalChange));
+    assert_eq!(r.answer_code, Some(BranchAnswer::ExternalChange));
+    assert_eq!(r.closure_oid, None);
+    assert_eq!(p.f.commits_in_odb(&close_subject()), 0);
+    assert!(!p.held());
+    assert_eq!(p.ready().path(), NEW_BRANCH);
+    p.assert_primary_untouched(&io.inner);
+}

@@ -3,6 +3,7 @@
 //! runner (C3).
 use crate::canonical::{Integration, ItemId};
 use crate::forge::PullRequestLink;
+use crate::repository::context_retirement::proof::UnheldEntry;
 use crate::repository::promotion::{
     lifecycle::CancellationProbe,
     run::{RunObserver, Unobserved},
@@ -60,6 +61,11 @@ pub enum ClosureBlocker {
     IdentityRequired,
     /// Last, so the stored blocker masks keep their bits.
     HistoryUnresolved,
+    /// A pull-request close of a ticket with no context whose remote branch
+    /// exists and is held by neither primary. A preflight blocker only: a
+    /// confirm that meets it is `external_change`, so it is never stored and
+    /// has no bit in `CLOSURE_BLOCKERS`.
+    RemoteContextUnmaterialized,
 }
 
 /// What a closure record does to the ticket. With the integration mode it
@@ -233,6 +239,19 @@ impl fmt::Debug for PlannedClosure {
     }
 }
 
+/// What a new branch (Part F) retires and leaves behind, as its observation
+/// read it. The digest binds all of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct NewBranchFacts {
+    /// The old context's tip `T`; none when the ticket has no context.
+    pub(in super::super) old_tip: Option<Oid>,
+    /// What step 2 retires: `T`, or for no context the remote history's
+    /// last published commit; none when nothing is retired.
+    pub(in super::super) retired_oid: Option<Oid>,
+    /// What the old tip holds that the tracking primary lacks (R-19).
+    pub(in super::super) unheld: Vec<UnheldEntry>,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct TicketClosurePreview {
     item_id: ItemId,
@@ -251,6 +270,7 @@ pub struct TicketClosurePreview {
     cleanup: PlannedCleanup,
     expectation: ClosureExpectation,
     path: (Integration, ClosureAction),
+    new_branch: Option<NewBranchFacts>,
 }
 impl TicketClosurePreview {
     pub fn item_id(&self) -> &ItemId {
@@ -318,6 +338,10 @@ impl fmt::Debug for TicketClosurePreview {
             .field("publication", &self.publication)
             .field("cleanup", &self.cleanup)
             .field("path", &self.path)
+            .field(
+                "new_branch_unheld",
+                &self.new_branch.as_ref().map(|facts| facts.unheld.len()),
+            )
             .finish_non_exhaustive()
     }
 }

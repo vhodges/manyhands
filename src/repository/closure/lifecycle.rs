@@ -232,7 +232,7 @@ fn begin_closure_record(
             remote,
             kind,
             path,
-            observed.map(|observation| observation.context_oid),
+            observed.and_then(ClosureObservation::consented_head),
         ),
         _ => record::begin_record(tx, id, op, item, expectation, remote, kind),
     }
@@ -439,8 +439,26 @@ impl Lifecycle for TicketClosureLifecycle {
             Err(blockers) if blockers == [ClosureBlocker::IdentityRequired] => {
                 Err(record::Refusal::ExternalChange)
             }
+            // A situation that changed since the prepare: this blocker is a
+            // preflight's alone and is never stored.
+            Err(blockers) if blockers.contains(&ClosureBlocker::RemoteContextUnmaterialized) => {
+                Err(record::Refusal::ExternalChange)
+            }
             Err(blockers) => Err(record::Refusal::Blocked(blockers)),
         }
+    }
+    /// Interim, until a new branch runs: a confirm of an unchanged new-branch
+    /// preview writes no record. A refusal at insertion is unaffected, since
+    /// this runs only for an unchanged digest.
+    fn require_identity(
+        preview: &ClosureObservation,
+        _repository: &git2::Repository,
+        _confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), TicketClosureError> {
+        if preview.path == (Integration::PullRequest, ClosureAction::NewBranch) {
+            return Err(TicketClosureError::RecoveryRequired);
+        }
+        Ok(())
     }
     fn refusal_error(refusal: &record::Refusal) -> TicketClosureError {
         match refusal {
