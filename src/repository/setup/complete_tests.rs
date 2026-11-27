@@ -1,0 +1,472 @@
+//! Completion (design Part B, R-17): a setup is finished wherever the local
+//! primary already holds it, by the gate and at the end of a poll, with no
+//! poll of the setup's own. Local repositories on disk; no network, no waits.
+
+use std::time::Duration;
+
+use git2::Oid;
+
+use super::*;
+use crate::{
+    repository::{
+        Mutation, OperationId, PollPublicationRemoteRequest, RemotePollError, RemotePollInvocation,
+        RepoEnableInput, RepositoryOperation, RequestState,
+        coordination::setup_lock,
+        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        setup::{
+            record::SetupKind,
+            test_world::{CURRENT, OTHER, PRIMARY, World, create_ticket, edited_configuration},
+        },
+        transport::{SshDirection, SshTransportError, SshTransportErrorKind},
+    },
+    results::ResultCode,
+};
+
+/// A session whose credentials are never asked for: the poll's fetch is
+/// replaced by a synthetic one.
+struct NoPassphrase;
+
+impl SessionCredentialProvider for NoPassphrase {
+    fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
+        panic!("a synthetic fetch asks for no passphrase")
+    }
+}
+
+/// How the local primary comes to hold the setup: the remote merges it and
+/// the root pulls, as a person does after a pull request merges.
+#[derive(Clone, Copy, Debug)]
+enum Way {
+    MergeCommit,
+    Squash,
+    FastForward,
+}
+
+impl Way {
+    const ALL: [Self; 3] = [Self::MergeCommit, Self::Squash, Self::FastForward];
+
+    /// Merges on the remote with the configuration `merged`. A fast-forward
+    /// holds the setup commit's own file.
+    fn merge(self, world: &World, merged: &[u8]) -> Oid {
+        match self {
+            Self::MergeCommit => world.merge_commit(merged),
+            Self::Squash => world.squash(merged),
+            Self::FastForward => world.fast_forward(),
+        }
+    }
+}
+
+/// What the gate answers for `repo enable`, which every pending setup
+/// refuses: a prepare is gated, and finishes a complete setup first.
+fn gate(world: &World) -> ResultCode {
+    world
+        .service
+        .prepare(&Mutation::RepoEnable(RepoEnableInput {
+            root: world.root.clone(),
+            primary_branch: PRIMARY.into(),
+            identity: None,
+            slug_prefix: None,
+            publication_remote: None,
+            integration: None,
+            forge: None,
+        }))
+        .code
+}
+
+fn finish_without_waiting(world: &World) -> bool {
+    finish_waiting(&world.service, &world.root, Some(Duration::ZERO)).unwrap()
+}
+
+#[test]
+fn a_setup_completes_when_the_local_primary_holds_it() {
+    // A first-time setup and a change, each on another remote, and a change
+    // on the same remote; each merged as the setup intended, and edited in
+    // review.
+    for (kind, remote) in [
+        (SetupKind::Enable, OTHER),
+        (SetupKind::Change, OTHER),
+        (SetupKind::Change, CURRENT),
+    ] {
+        for way in Way::ALL {
+            for edited in [false, true] {
+                let what = format!("{kind:?} on {remote}, {way:?}, edited {edited}");
+                let world = World::new(kind, remote, true);
+                let intended = world.record().unwrap().configuration;
+                // A fast-forward holds the setup commit's own file, so it
+                // cannot be edited in review.
+                let edited = edited && !matches!(way, Way::FastForward);
+                let merged = if edited {
+                    edited_configuration(remote, "pull_request")
+                } else {
+                    intended
+                };
+
+                // Not before: the primary does not hold the setup, so nothing
+                // is finished and the gate refuses.
+                assert!(!finish_without_waiting(&world), "{what}: before");
+                assert!(world.record().is_some(), "{what}: before");
+                assert_eq!(gate(&world), ResultCode::SetupPending, "{what}: before");
+
+                let tip = way.merge(&world, &merged);
+                world.pull(tip);
+
+                // Not with the setup branch checked out: HEAD must name the
+                // primary.
+                let local = world.git();
+                local.set_head(&world.branch_ref()).unwrap();
+                assert!(!finish_without_waiting(&world), "{what}: setup branch");
+                assert!(world.record().is_some(), "{what}: setup branch");
+                assert!(world.local_ref(&world.branch_ref()).is_some(), "{what}");
+                local.set_head(&format!("refs/heads/{PRIMARY}")).unwrap();
+
+                // A held lock skips the finish and changes no answer: a
+                // complete setup refuses nothing.
+                {
+                    let held =
+                        setup_lock(&local, &world.root, RepositoryOperation::Enable).unwrap();
+                    assert!(!finish_without_waiting(&world), "{what}: lock held");
+                    assert_ne!(gate(&world), ResultCode::SetupPending, "{what}: lock held");
+                    assert!(world.record().is_some(), "{what}: lock held");
+                    assert_eq!(world.request().state, RequestState::Accepted, "{what}");
+                    drop(held);
+                }
+
+                // The gate finishes it, before it refuses anything.
+                assert_ne!(gate(&world), ResultCode::SetupPending, "{what}: gate");
+                assert!(world.record().is_none(), "{what}: finished by the gate");
+                assert_eq!(world.local_ref(&world.branch_ref()), None, "{what}");
+                assert_eq!(world.local_ref(&world.base_ref()), None, "{what}");
+                assert_eq!(
+                    world.local_primary(),
+                    tip,
+                    "{what}: the primary is not moved"
+                );
+                // The setup request, still accepted, was finished in the same
+                // transaction: L4, L5.
+                let request = world.request();
+                assert_eq!(request.state, RequestState::Finished, "{what}");
+                let result = request.result.unwrap();
+                assert_eq!(
+                    result.code,
+                    if edited {
+                        ResultCode::ExternalChange
+                    } else {
+                        ResultCode::AlreadyApplied
+                    },
+                    "{what}"
+                );
+                assert_eq!(
+                    result.data.as_ref().and_then(|data| data["type"].as_str()),
+                    Some("setup"),
+                    "{what}"
+                );
+                // A setup on another remote leaves the stored plan of remote
+                // selection: the new remote's.
+                if remote == OTHER {
+                    let stored: Option<String> = world
+                        .db()
+                        .query_row("SELECT remote_name FROM remote_polling_state", [], |row| {
+                            row.get(0)
+                        })
+                        .unwrap();
+                    assert_eq!(stored.as_deref(), Some(OTHER), "{what}: the plan");
+                }
+            }
+        }
+    }
+}
+
+/// The setup branch is deleted only at the commit the record names, and a
+/// peer's commits on it are kept (K-15).
+#[test]
+fn a_setup_branch_moved_since_publishing_is_kept() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    // The local setup branch is somewhere the record does not name.
+    world
+        .git()
+        .reference(&world.branch_ref(), world.c0, true, "moved")
+        .unwrap();
+
+    assert!(finish_without_waiting(&world));
+
+    assert!(world.record().is_none());
+    assert_eq!(world.local_ref(&world.branch_ref()), Some(world.c0));
+    assert_eq!(world.local_ref(&world.base_ref()), None);
+}
+
+/// A setup branch checked out in another worktree is not deleted from under
+/// it: the finish stops as it does when HEAD is off the primary, and the next
+/// look finishes it once the checkout is gone.
+#[test]
+fn a_setup_branch_checked_out_in_a_linked_worktree_stops_the_finish() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let at = world.local_ref(&world.branch_ref());
+    assert!(at.is_some());
+    world.check_the_setup_branch_out_in_a_linked_worktree();
+
+    assert!(!finish_without_waiting(&world), "checked out elsewhere");
+    assert!(world.record().is_some());
+    assert_eq!(world.local_ref(&world.branch_ref()), at);
+    assert_eq!(world.request().state, RequestState::Accepted);
+
+    world.drop_the_linked_worktree();
+
+    assert!(finish_without_waiting(&world), "the checkout is gone");
+    assert!(world.record().is_none());
+    assert_eq!(world.local_ref(&world.branch_ref()), None);
+}
+
+/// Worktree evidence that cannot be read is no checkout found: the finish
+/// completes and keeps the setup branch (as for one that moved), and does not
+/// stall for good with the setup never reconciled.
+#[test]
+fn unreadable_worktree_evidence_keeps_the_setup_branch_and_completes() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let at = world.local_ref(&world.branch_ref());
+    assert!(at.is_some());
+    world.leave_an_unreadable_worktree_registration();
+
+    assert!(finish_without_waiting(&world), "the evidence is unreadable");
+
+    assert!(world.record().is_none(), "completed");
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(
+        world.local_ref(&world.branch_ref()),
+        at,
+        "the branch is kept"
+    );
+    assert_eq!(world.local_ref(&world.base_ref()), None);
+    assert_eq!(world.local_primary(), tip, "the primary is not moved");
+}
+
+/// Reconciliation stopped by an operation in the way: the record stays and
+/// the next look finishes it. Nothing is half done: the request is not
+/// finished.
+#[test]
+fn an_operation_in_the_way_stops_the_finish_and_the_next_look_finishes_it() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    // Another operation of the repository has not finished.
+    world
+        .db()
+        .execute(
+            "INSERT INTO operation_records
+                (repository_id,root_path,operation_ulid,action,target,state,completed_step,observed_at)
+             VALUES (?1,?2,?3,'enable','','created',NULL,1)",
+            rusqlite::params![
+                world.repository_id,
+                world.root.to_str().unwrap(),
+                OperationId::new().to_string()
+            ],
+        )
+        .unwrap();
+
+    let stopped = finish_without_waiting(&world);
+
+    assert!(!stopped);
+    assert!(world.record().is_some());
+    assert_eq!(world.request().state, RequestState::Accepted);
+
+    // The operation ends; the next look finishes the setup.
+    world
+        .db()
+        .execute(
+            "UPDATE operation_records SET state = 'completed' WHERE state = 'created'",
+            [],
+        )
+        .unwrap();
+    assert!(finish_without_waiting(&world));
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+}
+
+/// The end of a poll finishes a setup the local primary holds, whatever the
+/// poll's own answer, and only after the poll's own remote row is final, so
+/// the plan store never fences the calling poll.
+#[test]
+fn the_end_of_a_poll_finishes_a_complete_setup() {
+    // A change on the same remote, merged and pulled: today's poll is the
+    // only poll there is, and it finds the remote unreachable.
+    let world = World::new(SetupKind::Change, CURRENT, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    crate::repository::remote::synthetic_fetch_error(SshTransportError {
+        root: world.root.clone(),
+        remote_name: CURRENT.into(),
+        direction: SshDirection::Fetch,
+        selected_key_id: None,
+        authority: None,
+        kind: SshTransportErrorKind::TransportUnavailable,
+    });
+    let mut session = SessionCredentials::new(NoPassphrase);
+
+    let answer = world.service.poll_publication_remote(
+        PollPublicationRemoteRequest {
+            root: world.root.clone(),
+            operation_id: OperationId::new(),
+            invocation: RemotePollInvocation::Explicit,
+            approval: None,
+            restart: false,
+        },
+        &mut session,
+    );
+
+    // The poll's own answer is the transport's, unchanged by the finish.
+    assert!(
+        matches!(&answer, Err(RemotePollError::Transport(error)) if error.kind == SshTransportErrorKind::TransportUnavailable),
+        "{answer:?}"
+    );
+    assert!(world.record().is_none(), "finished at the end of the poll");
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(world.local_ref(&world.branch_ref()), None);
+}
+
+/// A crash between the finish's `begin_lifecycle` and the end of its
+/// transaction leaves its row pending. The row is the next look's own (the
+/// operation ID is the setup's), so the next look takes it up and finishes the
+/// setup; and a finish that succeeds leaves no pending row of any kind.
+#[test]
+fn a_crashed_finish_is_taken_up_by_the_next_look_and_a_finish_leaves_no_row_pending() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    // The state of a crash after the lifecycle began: its row pending, its
+    // lease gone with the process.
+    {
+        let record = world.record().unwrap();
+        let repository = world.git();
+        let begun = world
+            .service
+            .begin_lifecycle(
+                &repository,
+                &world.root,
+                RepositoryOperation::SetPublicationRemote,
+                lifecycle_operation_id(&record),
+                &record.remote_name,
+            )
+            .unwrap();
+        drop(begun);
+    }
+    let pending = |world: &World| {
+        world.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'")
+    };
+    assert_eq!(pending(&world), 1, "the crash left its row");
+
+    assert!(finish_without_waiting(&world), "the next look takes it up");
+
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(pending(&world), 0, "nothing is left pending");
+}
+
+/// The lifecycle row ends in the record-deleting transaction itself: what a
+/// crash right after that commit would leave is the record gone and the row
+/// completed, never a pending row with nothing left to finish it.
+#[test]
+fn the_finish_s_lifecycle_row_ends_in_the_transaction_that_deletes_the_record() {
+    let clean = World::new(SetupKind::Enable, OTHER, true);
+    let tip = clean.squash(&clean.record().unwrap().configuration);
+    clean.pull(tip);
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let (db_path, root) = (
+        clean.data.path().join(crate::repository::REGISTRY_FILE),
+        clean.root.to_str().unwrap().to_owned(),
+    );
+    AFTER_COMMIT.with(|hook| {
+        let seen = seen.clone();
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let db = crate::repository::open_registry(&db_path, &mut |_| {}).unwrap();
+            let rows: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM operation_records WHERE state != 'completed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let setups: i64 = db
+                .query_row("SELECT COUNT(*) FROM repository_setups", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            *seen.borrow_mut() = Some((rows, setups, root));
+        }));
+    });
+
+    assert!(finish_without_waiting(&clean));
+
+    let (pending, setups, _) = seen
+        .borrow()
+        .clone()
+        .expect("the hook ran after the commit");
+    assert_eq!(setups, 0, "the record was deleted by that commit");
+    assert_eq!(pending, 0, "and the lifecycle row was completed by it");
+}
+
+/// A crash between the finish's `begin_lifecycle` and its transaction leaves
+/// the row pending, and a person who abandons it (it is offered) spends its
+/// operation ID. The setup is still finished: the next look begins under a
+/// fresh one.
+#[test]
+fn an_abandoned_finish_row_does_not_strand_a_complete_setup() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+    let record = world.record().unwrap();
+    let begun = world
+        .service
+        .begin_lifecycle(
+            &world.git(),
+            &world.root,
+            RepositoryOperation::SetPublicationRemote,
+            lifecycle_operation_id(&record),
+            &record.remote_name,
+        )
+        .unwrap();
+    let row = begun.1.id;
+    drop(begun);
+    assert!(crate::repository::recovery::abandon_row(&world.db(), row).unwrap());
+
+    assert!(
+        finish_without_waiting(&world),
+        "the abandoned row is no bar"
+    );
+
+    assert!(world.record().is_none());
+    assert_eq!(world.request().state, RequestState::Finished);
+    assert_eq!(
+        world.count("SELECT COUNT(*) FROM operation_records WHERE state != 'completed'"),
+        0
+    );
+}
+
+/// The gate finishes a first-time setup and leaves the registration marked for
+/// a refresh that activation's own refresh would have made. The command the
+/// gate was checking, and a read after it, still succeed.
+#[test]
+fn the_command_a_gate_finished_a_setup_for_runs_and_a_read_follows() {
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    let merged = world.record().unwrap().configuration;
+    let tip = world.squash(&merged);
+    world.pull(tip);
+
+    let created = create_ticket(&world);
+
+    assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    assert!(world.record().is_none(), "finished by the gate");
+    let inspected = world.service.inspect_repository(&world.root).unwrap();
+    assert!(inspected.registered);
+    assert!(inspected.setup.is_none());
+}

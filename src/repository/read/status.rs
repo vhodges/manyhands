@@ -240,6 +240,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "create_and_enable" => Some(OperationAction::CreateAndEnable),
         "enable" => Some(OperationAction::Enable),
         "remove_registration" => Some(OperationAction::RemoveRegistration),
+        "cancel_setup" => Some(OperationAction::CancelSetup),
         "add_remote" => Some(OperationAction::AddRemote),
         "remove_remote" => Some(OperationAction::RemoveRemote),
         "set_publication_remote" => Some(OperationAction::SetPublicationRemote),

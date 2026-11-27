@@ -164,6 +164,7 @@ pub(crate) fn empty_text(kind: ListKind, closure: ClosureFilter, repo: &str) -> 
         (ListKind::Documents, _) => format!("No documents in {repo} yet."),
         (ListKind::Tickets, ClosureFilter::Open) => format!("No open tickets in {repo}."),
         (ListKind::Tickets, ClosureFilter::Closed) => format!("No closed tickets in {repo}."),
+        (ListKind::Tickets, ClosureFilter::Closing) => format!("No closing tickets in {repo}."),
         (ListKind::Tickets, ClosureFilter::All) => format!("No tickets in {repo} yet."),
     }
 }

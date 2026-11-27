@@ -363,7 +363,9 @@ impl Pair {
         let request = self.request(side)?;
         match fixed(self.execute(&side.service, request))? {
             TicketClosureResult::Complete(outcome) => Ok(outcome),
-            TicketClosureResult::IndexPending(_) => Err(FixtureError),
+            TicketClosureResult::IndexPending(_)
+            | TicketClosureResult::Branch(_)
+            | TicketClosureResult::BranchIndexPending(_) => Err(FixtureError),
         }
     }
     fn diagnostics(&self, rendered: &str) -> Result<(), FixtureError> {
@@ -572,6 +574,9 @@ fn authoritative(result: TicketClosureResult) -> TicketClosureOutcome {
     match result {
         TicketClosureResult::Complete(o) => o,
         TicketClosureResult::IndexPending(p) => p.authoritative,
+        TicketClosureResult::Branch(_) | TicketClosureResult::BranchIndexPending(_) => {
+            unreachable!("a direct close answered as a branch record")
+        }
     }
 }
 /// Fixed categories only: never a result's `Debug`, paths or private data.

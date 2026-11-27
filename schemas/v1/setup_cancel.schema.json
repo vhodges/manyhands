@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 setup cancel",
+  "description": "The data of a repo setup-cancel: the setup it ended, what became of its branches, and whether a first-time setup's registration was removed. The setup's own request was finished as cancelled in the same transaction. It holds no remote location, credential or identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "setup_id",
+    "kind",
+    "remote_branch",
+    "local_branch",
+    "unregistered"
+  ],
+  "properties": {
+    "type": {
+      "description": "Always setup_cancel: the tag that tells this data from every other command's.",
+      "type": "string",
+      "enum": [
+        "setup_cancel"
+      ]
+    },
+    "setup_id": {
+      "type": "string"
+    },
+    "kind": {
+      "description": "enable for a first-time setup, change for a change of an enabled repository's setting.",
+      "type": "string",
+      "enum": [
+        "enable",
+        "change"
+      ]
+    },
+    "remote_branch": {
+      "description": "deleted: the setup's branch was deleted from the remote at its recorded commit. absent: the remote had none. kept: the remote's branch is at another commit than the recorded one, and was left. not_published: the setup was never pushed, and nothing was connected to.",
+      "type": "string",
+      "enum": [
+        "deleted",
+        "absent",
+        "kept",
+        "not_published"
+      ]
+    },
+    "local_branch": {
+      "description": "deleted: the local setup branch was deleted at its recorded commit. absent: there was none. kept: it is at another commit than the recorded one, and was left.",
+      "type": "string",
+      "enum": [
+        "deleted",
+        "absent",
+        "kept"
+      ]
+    },
+    "unregistered": {
+      "description": "True when the setup was a first-time one and the repository was taken out of the repository list.",
+      "type": "boolean"
+    }
+  }
+}

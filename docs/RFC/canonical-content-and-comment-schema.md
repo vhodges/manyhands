@@ -192,6 +192,8 @@ closed_by: "Vince Hodges <vhodges@gmail.com>"
 identity used for the closing checkpoint. The closure lifecycle owns changes to
 these fields.
 
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): closure immutability applies once the primary holds the closure (the [Pull-Request Mode RFC](pull-request-mode.md), decision 20). A closure that only the ticket's branch holds is provisional: the ticket reads `closing`, and its `closed_at` and `closed_by` stay frozen, but a withdraw commit may remove both fields from that branch, and a ticket save refuses any other change to them (`invalid_input`, in both modes). In a remote synchronization of a ticket's context, a resolution or an external integration must keep the closure that the stage's fetched primary holds, and otherwise may keep none, the local side's closure or the incoming side's closure, never one resurrected from the base alone; a clean merge result that lacks the fetched primary's closure is given it, and a head that lacks it is not published. A closed ticket on the primary stays immutable, and every other synchronization keeps the rule above.
+
 A ticket may also carry the optional `deps`, `parent` and `slug` fields
 defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
 They never decide conformity, they do not replace the ULID as identity, and

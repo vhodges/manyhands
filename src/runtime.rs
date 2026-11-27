@@ -36,7 +36,33 @@ pub unsafe fn initialize_git_transport_before_threads() -> Result<(), TransportI
 
 /// Operations must fail closed when the host has not completed startup.
 pub fn git_transport_initialized() -> bool {
+    #[cfg(test)]
+    if PRETENDING.with(std::cell::Cell::get) {
+        return true;
+    }
     matches!(INITIALIZATION.get(), Some(Ok(())))
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRETENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes `git_transport_initialized` true on this thread until the guard
+/// drops, for a test of a transport call that stops in its preparation,
+/// before any connection: a library test cannot initialize the process (it
+/// is single-shot, before threads), and one that connects would be an SSH
+/// test. Other threads are not affected.
+#[cfg(test)]
+pub(crate) fn pretend_initialized_for_preparation() -> impl Drop {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PRETENDING.with(|pretending| pretending.set(false));
+        }
+    }
+    PRETENDING.with(|pretending| pretending.set(true));
+    Guard
 }
 
 #[cfg(test)]

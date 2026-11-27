@@ -646,6 +646,35 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
         }
     };
     match details {
+        PreviewDetailsDto::SetupCancel(cancel) => {
+            put("Root", Some(cancel.root.clone()));
+            put("Setup", Some(cancel.setup_id.clone()));
+            put("Branch", Some(cancel.branch.clone()));
+            put("Remote", Some(cancel.remote.clone()));
+        }
+        PreviewDetailsDto::Setup(setup) => {
+            put("Root", Some(setup.root.clone()));
+            put("Primary branch", Some(setup.primary_branch.clone()));
+            put("Name", Some(setup.identity.name.clone()));
+            put("Email", Some(setup.identity.email.clone()));
+            put(
+                "Identity from",
+                Some(setup.identity.source.as_str().to_owned()),
+            );
+            put(
+                "Written to the repository",
+                Some(flag(setup.identity.written_locally)),
+            );
+            put("Short code prefix", setup.slug_prefix.clone());
+            put("Mode", Some(setup.integration.clone()));
+            put("Remote", Some(setup.remote_name.clone()));
+            put("Remote location", setup.remote_location.clone());
+            if let Some(forge) = &setup.forge {
+                put("Forge", forge.kind.clone());
+                put("Forge web address", forge.web_url.clone());
+                put("Pull request address", forge.pull_request_url.clone());
+            }
+        }
         PreviewDetailsDto::Repository(repository) => {
             put("Root", Some(repository.root.clone()));
             put("Primary branch", Some(repository.primary_branch.clone()));
@@ -773,6 +802,12 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Branch", Some(lifecycle.branch.clone()));
             put("Primary", Some(lifecycle.primary_branch.clone()));
             put("Remote", lifecycle.remote.clone());
+        }
+        // Nor for this one: the desktop has no pull-request close yet (R-22).
+        PreviewDetailsDto::PullRequestClosure(closure) => {
+            put("Branch", Some(closure.branch.clone()));
+            put("Primary", Some(closure.primary_branch.clone()));
+            put("Remote", closure.remote.clone());
         }
     }
     fields

@@ -38,7 +38,7 @@ use super::{
     progress::NoSession,
     records::{ConfirmationRecord, NewConfirmation},
     reply::Reply,
-    stored_time,
+    setup_gate, stored_time,
 };
 
 /// How long a confirmation is there for a request to accept: ten minutes
@@ -336,8 +336,15 @@ impl RepositoryService {
             }
             (None, Place::Application) => None,
         };
-        let scope = binding.scope(repository, None);
+        let scope = binding.scope(repository.clone(), None);
         if let Some(answer) = failure {
+            return without_preview(command, scope, answer);
+        }
+        // A pending setup refuses the preview of a command that must wait
+        // for it: the envelope's own code, not an entry of the blockers.
+        if let Some(root) = setup_gate::root_of(binding.place())
+            && let Err(answer) = setup_gate::check(self, command, root)
+        {
             return without_preview(command, scope, answer);
         }
         let call = CallContext {
@@ -345,11 +352,15 @@ impl RepositoryService {
             session: &NoSession,
             confirmation: None,
         };
+        let previewed = binding.preview(&call);
+        // The preview may have told the binding what its scope names: a branch
+        // record's names the ticket's branch.
+        let scope = binding.scope(repository, None);
         let Previewed {
             observation,
             effects,
             details,
-        } = match binding.preview(&call) {
+        } = match previewed {
             Ok(previewed) => previewed,
             Err(answer) => return without_preview(command, scope, answer),
         };

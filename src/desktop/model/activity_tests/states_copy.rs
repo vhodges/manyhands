@@ -104,6 +104,7 @@ fn state_copy_table() {
         (OperationAction::CreateAndEnable, "Adding a repository"),
         (OperationAction::Enable, "Adding a repository"),
         (OperationAction::RemoveRegistration, "Removing a repository"),
+        (OperationAction::CancelSetup, "Cancelling a setup"),
         (OperationAction::AddRemote, "Adding a shared copy"),
         (OperationAction::RemoveRemote, "Removing a shared copy"),
         (

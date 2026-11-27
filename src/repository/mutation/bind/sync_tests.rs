@@ -143,6 +143,26 @@ fn unresolved_history_is_answered_with_the_repair_and_no_retry() {
     assert_eq!(ran.answer.code, ResultCode::Cancelled);
 }
 
+/// A ticket context's refused push (R-30) ends its operation as a cancelled
+/// one too, and is answered as itself: `ticket_closed`, not the caller's
+/// cancellation.
+#[test]
+fn a_ticket_closed_refusal_is_answered_as_itself() {
+    let ended = Ended::new();
+    let ran = ended.stopped(&SynchronizationError::TicketClosed);
+    assert_eq!(ran.answer.code, ResultCode::TicketClosed);
+    assert_ne!(ran.answer.code, ResultCode::Cancelled);
+    assert!(matches!(
+        ran.standing,
+        Standing::Stopped {
+            journal: Some(JournalRow::Final {
+                kind: FinalKind::Cancelled,
+                ..
+            })
+        }
+    ));
+}
+
 /// A pull-only refusal ends its operation as a cancelled one (design Part
 /// D), and is answered as itself: its own code, blocked, with no recovery
 /// action, every effect `not_requested` (`effects_so_far(Unknown)` would
@@ -317,4 +337,270 @@ fn a_synchronization_refused_for_another_s_unanswered_push_names_it() {
     assert_eq!(blocker.family, OperationFamily::Remote);
     // It holds no reservation: no call works under it.
     assert_eq!(blocker.live, Some(false));
+}
+
+const CLOSING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const PULL_REQUEST: &str = "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n\n[forge]\npull_request_url = \"https://forge.example/new?from={source}&to={target}\"\n";
+const DIRECT: &str =
+    "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
+const OPEN_TICKET: &str = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: A ticket\n---\nBody\n";
+const CLOSED_TICKET: &str = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: A ticket\nclosed_at: '2026-11-25T10:00:00Z'\nclosed_by: A <a@example.invalid>\n---\nBody\n";
+
+/// A commit of exactly `files`, on `parent`, made with no working tree.
+fn commit_files(
+    repository: &git2::Repository,
+    parent: Option<git2::Oid>,
+    files: &[(String, &str)],
+) -> git2::Oid {
+    // The repository's index, never written: only its tree is.
+    let mut index = repository.index().unwrap();
+    index.clear().unwrap();
+    for (path, content) in files {
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: content.len() as u32,
+            id: git2::Oid::zero(),
+            flags: 0,
+            flags_extended: 0,
+            path: path.as_bytes().to_vec(),
+        };
+        index.add_frombuffer(&entry, content.as_bytes()).unwrap();
+    }
+    let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    let parents: Vec<git2::Commit<'_>> = parent
+        .map(|parent| repository.find_commit(parent).unwrap())
+        .into_iter()
+        .collect();
+    repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "commit",
+            &tree,
+            &parents.iter().collect::<Vec<_>>(),
+        )
+        .unwrap()
+}
+
+/// A registered repository holding `configuration`, whose primary and the
+/// remote's tracking ref hold `primary` of the ticket, and whose ticket's
+/// editing branch holds `context` of it.
+struct Closing {
+    _data: tempfile::TempDir,
+    root: tempfile::TempDir,
+    service: RepositoryService,
+    /// The tip of the ticket's editing branch.
+    context: git2::Oid,
+}
+
+impl Closing {
+    fn new(configuration: &str, primary: &str, context: &str) -> Self {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repository = git2::Repository::init_opts(root.path(), &options).unwrap();
+        repository
+            .remote("origin", "ssh://git@example.invalid/team/repo.git")
+            .unwrap();
+        std::fs::create_dir_all(root.path().join(".manyhands")).unwrap();
+        std::fs::write(
+            root.path().join(crate::canonical::CONFIG_PATH),
+            configuration,
+        )
+        .unwrap();
+        let ticket = format!(".manyhands/tickets/{CLOSING}/ticket.md");
+        let config = (crate::canonical::CONFIG_PATH.to_owned(), configuration);
+        let main = commit_files(
+            &repository,
+            None,
+            &[config.clone(), (ticket.clone(), primary)],
+        );
+        let context = commit_files(&repository, Some(main), &[config, (ticket, context)]);
+        for (name, oid) in [
+            ("refs/heads/main", main),
+            ("refs/remotes/origin/main", main),
+            (&format!("refs/heads/manyhands/ticket/{CLOSING}"), context),
+        ] {
+            repository.reference(name, oid, true, "fixture").unwrap();
+        }
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let scope = ScopeKey::for_repository(root.path()).unwrap();
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .execute(
+                "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+                [scope.as_str()],
+            )
+            .unwrap();
+        Self {
+            _data: data,
+            root,
+            service,
+            context,
+        }
+    }
+
+    fn binding(&self, target: SynchronizationTarget) -> SyncBinding {
+        SyncBinding {
+            root: self.root.path().to_owned(),
+            target,
+            republish: None,
+        }
+    }
+
+    fn ticket() -> SynchronizationTarget {
+        SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id: CLOSING.parse().unwrap(),
+        }
+    }
+
+    /// What `item sync` answers for `result`, and the link row afterwards.
+    fn finished(
+        &self,
+        binding: &SyncBinding,
+        result: &SynchronizationResult,
+    ) -> (Ran, Option<crate::forge::PullRequestLink>) {
+        let accepted = Accepted {
+            request_id: RequestId::new(),
+            attempt: 1,
+            scope: ScopeKey::for_repository(self.root.path()).unwrap(),
+            family: Some(OperationFamily::Remote),
+            operation_id: OperationId::new(),
+            position: Position {
+                base_ref: None,
+                base_oid: None,
+            },
+            expected: None,
+        };
+        let ran = binding.finished(&self.service, &accepted, result);
+        let link = self
+            .service
+            .read_session(RepositoryOperation::Read, |db| {
+                let id: i64 = db.query_row("SELECT id FROM repositories", [], |row| row.get(0))?;
+                Ok(crate::repository::pull_request_links::link_of(
+                    db, id, "ticket", CLOSING,
+                )?)
+            })
+            .unwrap();
+        (ran, link)
+    }
+
+    fn published(&self) -> SynchronizationResult {
+        SynchronizationResult::Complete(SynchronizationOutcome::Published {
+            target: Self::ticket(),
+            oid: self.context,
+        })
+    }
+
+    fn current(&self) -> SynchronizationResult {
+        SynchronizationResult::Complete(SynchronizationOutcome::AlreadyCurrent {
+            target: Self::ticket(),
+            oid: self.context,
+        })
+    }
+}
+
+/// `item sync` of a ticket in a pull-request repository that publishes, or
+/// finds current, a branch whose ticket holds a closure the primary does not
+/// answers with the pull request link and gives the link record its row
+/// (design Part H, decision 12). Every other answer is unchanged: no data and
+/// no row.
+#[test]
+fn item_sync_gives_the_link_of_a_closing_ticket() {
+    let closing = Closing::new(PULL_REQUEST, OPEN_TICKET, CLOSED_TICKET);
+    let (ran, link) = closing.finished(&closing.binding(Closing::ticket()), &closing.published());
+    assert_eq!(ran.answer.code, ResultCode::Ok);
+    let Some(MutationDataDto::PullRequestLink(data)) = &ran.answer.data else {
+        panic!("{:?}", ran.answer.data)
+    };
+    let url = data.pull_request.url.clone().expect("the forge's template");
+    assert!(
+        url.starts_with("https://forge.example/new?from=") && url.ends_with("&to=main"),
+        "{url}"
+    );
+    assert_eq!(
+        data.pull_request.source,
+        format!("manyhands/ticket/{CLOSING}")
+    );
+    assert_eq!(data.pull_request.target, "main");
+    // The row is the link the answer shows.
+    let link = link.expect("a row");
+    assert_eq!(
+        crate::repository::PullRequestDto::from(&link),
+        data.pull_request
+    );
+    // What the publication did is told as it is of any `item sync`.
+    assert_eq!(ran.answer.effects.publication, PublicationEffect::Published);
+    assert_eq!(
+        ran.answer.effects.commit_oid,
+        Some(closing.context.to_string())
+    );
+
+    // A branch the remote already holds gives the link again.
+    let again = Closing::new(PULL_REQUEST, OPEN_TICKET, CLOSED_TICKET);
+    let (ran, link) = again.finished(&again.binding(Closing::ticket()), &again.current());
+    assert!(matches!(
+        ran.answer.data,
+        Some(MutationDataDto::PullRequestLink(_))
+    ));
+    assert!(link.is_some());
+
+    // Anything else is as it was: a ticket that holds no closure, one the
+    // primary holds the closure of (it is closed, not closing), a direct
+    // repository, another item's or the primary's synchronization, and a
+    // republish.
+    let anyone = |closing: &Closing, binding: SyncBinding, result| {
+        let (ran, link) = closing.finished(&binding, &result);
+        assert!(ran.answer.data.is_none(), "{:?}", ran.answer.data);
+        assert!(link.is_none());
+    };
+    let open = Closing::new(PULL_REQUEST, OPEN_TICKET, OPEN_TICKET);
+    anyone(&open, open.binding(Closing::ticket()), open.published());
+    let closed = Closing::new(PULL_REQUEST, CLOSED_TICKET, CLOSED_TICKET);
+    anyone(
+        &closed,
+        closed.binding(Closing::ticket()),
+        closed.published(),
+    );
+    let direct = Closing::new(DIRECT, OPEN_TICKET, CLOSED_TICKET);
+    anyone(
+        &direct,
+        direct.binding(Closing::ticket()),
+        direct.published(),
+    );
+    let primary = Closing::new(PULL_REQUEST, OPEN_TICKET, CLOSED_TICKET);
+    anyone(
+        &primary,
+        primary.binding(SynchronizationTarget::Primary),
+        primary.published(),
+    );
+    let document = Closing::new(PULL_REQUEST, OPEN_TICKET, CLOSED_TICKET);
+    anyone(
+        &document,
+        document.binding(SynchronizationTarget::Context {
+            kind: AuthoringKind::Document,
+            item_id: CLOSING.parse().unwrap(),
+        }),
+        document.published(),
+    );
+    let pending = Closing::new(PULL_REQUEST, OPEN_TICKET, CLOSED_TICKET);
+    anyone(
+        &pending,
+        pending.binding(Closing::ticket()),
+        SynchronizationResult::Complete(SynchronizationOutcome::PublishPending {
+            target: Closing::ticket(),
+            local_oid: pending.context,
+            reason: crate::repository::PublishPendingReason::NoPublicationRemote,
+        }),
+    );
 }

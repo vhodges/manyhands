@@ -1139,6 +1139,7 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
             "promotion_refusal_blockers_v2",
             "remote_history_per_context_v1",
             "remote_poll_dispositions_unpublished_v1",
+            "wave_06_closure_modes_v1",
         ]
     );
     let legacy_columns = connection

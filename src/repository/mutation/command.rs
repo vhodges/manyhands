@@ -75,12 +75,26 @@ commands! {
     ContextRetire => "context retire",
     DocumentPromote => "document promote",
     TicketClose => "ticket close",
+    TicketWithdrawClosure => "ticket withdraw-closure",
     PollConfigure => "poll configure",
     PollPause => "poll pause",
     PollResume => "poll resume",
     PollOnce => "poll once",
     ItemResolveHistory => "item resolve-history",
     RemoteResolveHistory => "remote resolve-history",
+    RepoSetupCancel => "repo setup-cancel",
+}
+
+/// What a pending setup does to a command (Wave 06 Cycle 02, design Part B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SetupGate {
+    /// The command runs whatever the repository's setup.
+    Carries,
+    /// Refused while a first-time setup is pending: the repository has no
+    /// configuration yet, so its items cannot be written or published.
+    RefusedBeforeEnable,
+    /// Refused while any setup is pending.
+    Refused,
 }
 
 impl Command {
@@ -128,6 +142,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             // The refresh that puts the folder in the index: making the
             // directory records nothing, and the refresh's row is the
@@ -154,7 +169,7 @@ impl Command {
             // One parent operation, recorded in its lifecycle's own table
             // and, once it deletes the remote context, in the remote
             // journal under the same ID.
-            Self::DocumentPromote | Self::TicketClose => true,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
             // One write in the request's own transaction, with no operation
             // ID and no row: the record finished with it is
             // what says it was made.
@@ -205,7 +220,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -223,6 +239,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -258,7 +275,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -278,6 +296,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -299,6 +318,62 @@ impl Command {
         }
     }
 
+    /// What a pending setup does to the command: the design's table, a
+    /// total partition of the commands. A command added here does not
+    /// compile until it has a place in it.
+    pub(crate) const fn setup_gate(self) -> SetupGate {
+        match self {
+            Self::TicketClose
+            | Self::TicketWithdrawClosure
+            | Self::DocumentPromote
+            | Self::RemoteSelect
+            | Self::RemoteRemove
+            | Self::RepoEnable => SetupGate::Refused,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::DocumentRepair
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::TicketRepair
+            | Self::FolderCreate
+            | Self::CommentAdd
+            | Self::ItemSync
+            | Self::RepoSync
+            | Self::ItemRepublish
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory
+            | Self::ConflictResolve
+            | Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::ContextRetire => SetupGate::RefusedBeforeEnable,
+            Self::RepoCreate
+            | Self::RepoRemove
+            | Self::RepoSetupCancel
+            | Self::RepoIdentitySet
+            | Self::RemoteAdd
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::KeyDelete
+            | Self::HostApprove
+            | Self::HostReplace
+            | Self::OperationResume
+            | Self::OperationAbandon
+            | Self::PollOnce
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::IndexRefresh
+            | Self::IndexRebuild => SetupGate::Carries,
+        }
+    }
+
     /// Whether the command makes the repository it works in. Before it
     /// has, there is no repository to set anything on: an identity it
     /// lacks is supplied with the request.
@@ -312,7 +387,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -332,6 +408,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -377,7 +454,7 @@ impl Command {
             Self::ItemRepublish => true,
             // A promotion and a closure stop at the safe points of their
             // one runner, and of the children it runs.
-            Self::DocumentPromote | Self::TicketClose => true,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -397,6 +474,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -452,7 +530,8 @@ impl Command {
             // This only decides how a replay reads a finished row, and keeps
             // `finishes == stops || resume` (design, Command Predicates).
             | Self::DocumentPromote
-            | Self::TicketClose => true,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -472,6 +551,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -506,7 +586,7 @@ impl Command {
             // and the repository: a local-only or cleanup-only run never
             // connects, and one that does reports `connecting` itself (D5
             // decision 11).
-            Self::DocumentPromote | Self::TicketClose => ProgressStage::Observing,
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -530,6 +610,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -575,7 +656,8 @@ impl Command {
             | Self::ConflictResolve
             | Self::ItemRepublish
             | Self::DocumentPromote
-            | Self::TicketClose => false,
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -596,6 +678,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -640,6 +723,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -658,6 +742,7 @@ impl Command {
             // its caller is shown all of it, and consents to that state.
             | Self::DocumentPromote
             | Self::TicketClose
+            | Self::TicketWithdrawClosure
             // A resolution records that a context was never published: its
             // caller is shown the context, the remote's answer and the choice.
             | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
@@ -743,6 +828,7 @@ mod tests {
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
+        assert_eq!(Command::RepoSetupCancel.name(), "repo setup-cancel");
         assert_eq!(Command::KeyDelete.name(), "key delete");
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
         assert_eq!(Command::ItemSync.name(), "item sync");
@@ -759,6 +845,10 @@ mod tests {
         assert_eq!(Command::ItemRepublish.name(), "item republish");
         assert_eq!(Command::DocumentPromote.name(), "document promote");
         assert_eq!(Command::TicketClose.name(), "ticket close");
+        assert_eq!(
+            Command::TicketWithdrawClosure.name(),
+            "ticket withdraw-closure"
+        );
         assert_eq!(Command::PollConfigure.name(), "poll configure");
         assert_eq!(Command::PollPause.name(), "poll pause");
         assert_eq!(Command::PollResume.name(), "poll resume");
@@ -782,11 +872,17 @@ mod tests {
             // closure do, which stop at the safe points of their runner.
             let confirmed = matches!(
                 command,
-                Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
+                Command::ItemRepublish
+                    | Command::DocumentPromote
+                    | Command::TicketClose
+                    | Command::TicketWithdrawClosure
             );
             // A promotion or a closure looks first, and reports its steps'
             // stages itself (D5 decision 11).
-            let lifecycle = matches!(command, Command::DocumentPromote | Command::TicketClose);
+            let lifecycle = matches!(
+                command,
+                Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure
+            );
             let stopping = local
                 || comment
                 || confirmed
@@ -877,6 +973,7 @@ mod tests {
                         | Command::RepoEnable
                         | Command::RemoteRemove
                         | Command::RepoRemove
+                        | Command::RepoSetupCancel
                         | Command::KeyDelete
                         | Command::OperationAbandon
                         | Command::RepoIdentitySet
@@ -887,6 +984,7 @@ mod tests {
                         | Command::ItemRepublish
                         | Command::DocumentPromote
                         | Command::TicketClose
+                        | Command::TicketWithdrawClosure
                         | Command::ItemResolveHistory
                         | Command::RemoteResolveHistory
                 ),
@@ -1011,12 +1109,17 @@ mod tests {
         assert_eq!(command.stage(), ProgressStage::Writing);
     }
 
-    /// The design's Command Predicates row of both lifecycle verbs. They
+    /// The design's Command Predicates row of the lifecycle verbs, and of the
+    /// withdraw of a pull-request closure, which is a closure's twin. They
     /// finish as a synchronization only in how a replay reads a finished
     /// row, which keeps the pinned equality.
     #[test]
     fn a_promotion_and_a_closure_are_confirmed_operations_with_safe_points() {
-        for command in [Command::DocumentPromote, Command::TicketClose] {
+        for command in [
+            Command::DocumentPromote,
+            Command::TicketClose,
+            Command::TicketWithdrawClosure,
+        ] {
             assert!(command.needs_confirmation(), "{command:?}");
             assert!(command.has_operation(), "{command:?}");
             assert!(command.stops_at_safe_points(), "{command:?}");
@@ -1072,6 +1175,91 @@ mod tests {
                 command == Command::IndexRebuild,
                 "{command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_command_has_the_setup_gate_of_the_design() {
+        use super::SetupGate::{Carries, Refused, RefusedBeforeEnable};
+        // Design Part B's table, written out.
+        let table = [
+            (
+                Refused,
+                &[
+                    "ticket close",
+                    "ticket withdraw-closure",
+                    "document promote",
+                    "remote select",
+                    "remote remove",
+                    "repo enable",
+                ][..],
+            ),
+            (
+                RefusedBeforeEnable,
+                &[
+                    "document create",
+                    "document save",
+                    "document move",
+                    "document repair",
+                    "ticket create",
+                    "ticket save",
+                    "ticket slug-assign",
+                    "ticket repair",
+                    "folder create",
+                    "comment add",
+                    "item sync",
+                    "repo sync",
+                    "item republish",
+                    "item resolve-history",
+                    "remote resolve-history",
+                    "conflict resolve",
+                    "context sync-local",
+                    "context resolve-local",
+                    "context prepare",
+                    "context release",
+                    "context retire",
+                ][..],
+            ),
+            (
+                Carries,
+                &[
+                    "repo create",
+                    "repo remove",
+                    "repo setup-cancel",
+                    "repo identity-set",
+                    "remote add",
+                    "key generate",
+                    "key import",
+                    "key select",
+                    "key clear",
+                    "key remove",
+                    "key delete",
+                    "host approve",
+                    "host replace",
+                    "operation resume",
+                    "operation abandon",
+                    "poll once",
+                    "poll configure",
+                    "poll pause",
+                    "poll resume",
+                    "index refresh",
+                    "index rebuild",
+                ][..],
+            ),
+        ];
+        let mut seen = Vec::new();
+        for (gate, names) in table {
+            for name in names {
+                let command = Command::parse(name).unwrap_or_else(|| panic!("{name}"));
+                assert_eq!(command.setup_gate(), gate, "{name}");
+                assert!(!seen.contains(&command), "{name} is in the table twice");
+                seen.push(command);
+            }
+        }
+        // The table names every command, once.
+        assert_eq!(seen.len(), Command::ALL.len());
+        for command in Command::ALL {
+            assert!(seen.contains(&command), "{command:?} is not in the table");
         }
     }
 

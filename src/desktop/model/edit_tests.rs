@@ -51,6 +51,7 @@ fn ticket() -> ItemDto {
         parent: None,
         deps: vec![dependency(DEP_B), dependency(DEP_A)],
         readiness: None,
+        pull_request: None,
         closure: None,
         context: ItemContextDto {
             kind: ItemContextKind::Primary,
@@ -92,6 +93,7 @@ fn edit_is_offered_for_an_open_conforming_item_in_its_own_tab_only() {
         state: ClosureState::Closed,
         closed_at: None,
         closed_by: None,
+        publication: None,
     });
     assert!(!edit_offered(&tab(), &closed), "a closed ticket");
 

@@ -25,6 +25,7 @@ pub(crate) mod requests;
 pub(crate) mod resends;
 pub(crate) mod resolutions;
 pub(crate) mod scheduler;
+pub(crate) mod setup_poll;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
@@ -45,7 +46,8 @@ use manyhands::{
         AutomaticPollEligibility, ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto,
         OperationId, PollPublicationRemoteRequest, PollingStatusDto, PrepareDataDto, ProgressStage,
         ReadError, RemoteListDto, RemotePollError, RemotePollResult, RemoteSnapshot,
-        RepositoryError, RepositoryService, ResolvedRepository, SharedKeyId,
+        RepositoryError, RepositoryService, ResolvedRepository, SetupPollError, SetupPollReport,
+        SharedKeyId,
         keys::{KeyStore, SessionCredentials},
     },
     results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
@@ -336,6 +338,38 @@ pub(crate) trait Backend: Send + Sync + 'static {
         session: &mut SessionCredentials<DesktopProvider>,
     ) -> Result<RemotePollResult, RemotePollError> {
         self.service().poll_publication_remote(request, session)
+    }
+
+    // A setup published on another remote (Wave 06 Cycle 02, Part J).
+    // `pending_setup` is a local read that contacts nothing: an automatic
+    // poll calls it right after `polling_status`, and the scheduler's
+    // registration reads it, so the consent test's recorder forwards and
+    // logs it (it is in B4's sequence and the reads allowed off the worker).
+    // `poll_setup` is the setup's own poll, made only for a repository with
+    // a setup. The doubles inherit these defaults unless they forward them,
+    // as the recorder does; a repository without a setup answers `None`
+    // here and is read and polled exactly as before.
+
+    /// The setup of the repository at `root` that the desktop polls, and
+    /// the remote it is on. `None` for a repository with no setup, a
+    /// recorded one that is not on its remote yet, a change on the current
+    /// remote, and a read that failed: the scheduler reads and polls it as
+    /// today.
+    fn pending_setup(&self, root: &Path) -> Option<setup_poll::PendingSetup> {
+        let inspection = self.service().inspect_repository(root).ok()?;
+        setup_poll::pending_setup_of(&inspection)
+    }
+
+    /// The setup poll of the repository at `root`. `automatic` never
+    /// prompts `session`'s provider.
+    #[allow(clippy::result_large_err)] // The library's `SetupPollError`.
+    fn poll_setup(
+        &self,
+        root: &Path,
+        automatic: bool,
+        session: &mut SessionCredentials<DesktopProvider>,
+    ) -> Result<SetupPollReport, SetupPollError> {
+        self.service().poll_setup(root, automatic, session)
     }
 
     /// What the registry stores of the remote after the poll: its

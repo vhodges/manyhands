@@ -19,8 +19,8 @@ use crate::support::{
     cli::{self, CliEnv, CliRun, stderr, stdout},
     items,
     mutation::{
-        DOCUMENT_NEW, DOCUMENT_NEW_PATH, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TITLE, World,
-        execute_confirmed,
+        DOCUMENT_NEW, DOCUMENT_NEW_PATH, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_CLOSED,
+        TITLE, World, execute_confirmed,
     },
 };
 
@@ -28,6 +28,9 @@ const SAVE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
 const SLUG: &str = "mh-vh-k9x2b";
 const BLOCKED: &str = "lifecycle_blocked.schema.json";
 const PREVIEW: &str = "lifecycle_preview.schema.json";
+const PULL_REQUEST_PREVIEW: &str = "pull_request_closure_preview.schema.json";
+const KEY_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR7";
+const SELECT_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR8";
 const MUTATION: &str = "lifecycle_mutation.schema.json";
 const CLOSED_BY_NAME: &str = "SENTINEL-CLOSED-BY-5e1d";
 const CLOSED_BY_EMAIL: &str = "sentinel-closed-by-5e1d@example.invalid";
@@ -51,6 +54,12 @@ const CLOSE: Verb = Verb {
     name: "close",
     id: items::TICKET_A,
     golden: "ticket_close",
+};
+const WITHDRAW: Verb = Verb {
+    resource: "ticket",
+    name: "withdraw-closure",
+    id: items::TICKET_A,
+    golden: "ticket_withdraw_closure",
 };
 const BOTH: [Verb; 2] = [PROMOTE, CLOSE];
 
@@ -220,6 +229,10 @@ fn golden(name: &str, value: &Value, root: &Path) {
         ("/data/expires_at", "<expires-at>"),
         ("/data/details/context_oid", "<context-oid>"),
         ("/data/details/primary_oid", "<primary-oid>"),
+        (
+            "/data/details/tracking_primary_oid",
+            "<tracking-primary-oid>",
+        ),
         ("/data/checkpoint_oid", "<checkpoint-oid>"),
         ("/data/integration_oid", "<commit-oid>"),
         ("/effects/commit_oid", "<commit-oid>"),
@@ -954,6 +967,33 @@ fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
             assert_only_the_index_holds(data, &[title]);
         }
     }
+
+    // Pull-request mode: the preview consents to `closed_by`, and a confirm
+    // that stops at its context child records nothing of it anywhere.
+    let case = Case::pull_request_with_a_key(CLOSE);
+    case.world.set_local_config("user.name", CLOSED_BY_NAME);
+    case.world.set_local_config("user.email", CLOSED_BY_EMAIL);
+    let title = SENTINELS[0];
+    let data = case.world.data.path();
+    let preview = case.preview_of_the_record();
+    let shown = serde_json::to_string(&preview).unwrap();
+    assert!(shown.contains(CLOSED_BY_NAME), "{shown}");
+    assert!(!shown.contains(title), "{shown}");
+    assert_only_the_index_holds(data, &[title]);
+    let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+    let stopped = case.json(
+        &["--request-id", REQUEST_1, "--confirm", confirmation],
+        5,
+        "transport_unavailable",
+        None,
+    );
+    let answered = serde_json::to_string(&stopped).unwrap();
+    assert!(!answered.contains(CLOSED_BY_NAME), "{answered}");
+    assert!(!answered.contains(CLOSED_BY_EMAIL), "{answered}");
+    assert!(!answered.contains(title), "{answered}");
+    // The stored record and the data hold no `closed_by`, and nothing of the
+    // closure is in the index either: the context child never finished.
+    assert_only_the_index_holds(data, &[title]);
 }
 
 /// A closure stopped past its checkpoint, whose merge primary then refuses.
@@ -1181,4 +1221,500 @@ fn a_repository_never_enabled_is_refused() {
         let value = mutation::checked(&args, &env, &[], 2, "repository_not_enabled", None);
         assert_eq!(value["command"], verb.command());
     }
+}
+
+// ---------------------------------------------------------------- Cycle 03
+//
+// `ticket close` and `ticket withdraw-closure` in a pull-request repository,
+// through the binary. Nothing here reaches a server: the publication remote is
+// an SSH address nothing listens on, so a prepare reads local state only and a
+// confirm stops at its context child.
+
+/// A port nothing listens on, so a connection would be refused.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Imports the fixture's private key and selects it, so a confirm gets as far
+/// as connecting.
+fn usable_key(env: &CliEnv) {
+    fs::write(
+        env.home.path().join("imported"),
+        support::credentials::private_fixture_bytes(),
+    )
+    .unwrap();
+    let input = serde_json::to_vec(
+        &serde_json::json!({"label": "Selected", "private_key_path": "imported"}),
+    )
+    .unwrap();
+    let imported = mutation::checked(
+        &[
+            "key",
+            "import",
+            "--input",
+            "-",
+            "--request-id",
+            KEY_REQUEST,
+            "--json",
+        ],
+        env,
+        &input,
+        0,
+        "ok",
+        None,
+    );
+    mutation::checked(
+        &[
+            "key",
+            "select",
+            "--key-id",
+            imported["data"]["id"].as_str().unwrap(),
+            "--request-id",
+            SELECT_REQUEST,
+            "--json",
+        ],
+        env,
+        &[],
+        0,
+        "ok",
+        None,
+    );
+}
+
+impl Case {
+    /// The case in a pull-request repository: the version 2 configuration
+    /// committed on primary (as `closure/run_pull_request_tests.rs` commits
+    /// it; turning the mode on through `repo enable` would record a pending
+    /// setup), a publication remote nothing listens on, and the tracking
+    /// primary where primary is.
+    fn pull_request(verb: Verb) -> Self {
+        let case = Self::new(verb);
+        let repository = &case.world.fixture.repository;
+        repository
+            .remote(
+                "origin",
+                &format!("ssh://git@127.0.0.1:{}/repository.git", closed_port()),
+            )
+            .unwrap();
+        let configuration = manyhands::canonical::parse_repository_config(
+            "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        support::commit_tracked_configuration(
+            &case.world.fixture,
+            &manyhands::canonical::serialize_repository_config(&configuration).unwrap(),
+        );
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&case.world.service, &case.world.root);
+        case
+    }
+
+    /// The same, with a selected key: a confirm reaches its context child.
+    fn pull_request_with_a_key(verb: Verb) -> Self {
+        let case = Self::pull_request(verb);
+        usable_key(&case.env);
+        case
+    }
+
+    /// The ticket's context holds a closure of its own, committed.
+    fn context_closed(&self) {
+        let worktree = self.world.worktree(self.verb.id);
+        let path = self.verb.file();
+        let source = fs::read_to_string(worktree.join(&path)).unwrap();
+        fs::write(
+            worktree.join(&path),
+            source.replacen("---\n", &format!("---\n{}", items::CLOSURE), 1),
+        )
+        .unwrap();
+        let mut git = Command::new("git");
+        cli::cli_environment(&mut git, &self.env);
+        let status = git
+            .arg("-C")
+            .arg(&worktree)
+            .args([
+                "-c",
+                "user.name=Manyhands Test",
+                "-c",
+                "user.email=manyhands-test@example.invalid",
+                "commit",
+                "--quiet",
+                "--all",
+                "--message",
+                "closed on the branch",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        items::refresh_completely(&self.world.service, &self.world.root);
+    }
+
+    /// The remote's copy of the ticket's branch is evidenced deleted, as
+    /// `closure/observe_tests.rs` writes it: a push that was observed, and a
+    /// poll that then found the branch gone.
+    fn remote_branch_deleted(&self) {
+        let tip = self.world.branch_tip(self.verb.id).unwrap();
+        items::index(self.world.data.path())
+            .execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at,last_advertised_oid) SELECT id,?1,?2,'ticket',?3,'observed_published','remotely_deleted',0,?4 FROM repositories",
+                rusqlite::params![
+                    format!("refs/heads/manyhands/ticket/{}", self.verb.id),
+                    format!("refs/remotes/origin/manyhands/ticket/{}", self.verb.id),
+                    self.verb.id,
+                    tip.to_string(),
+                ],
+            )
+            .unwrap();
+    }
+
+    fn preview_of_the_record(&self) -> Value {
+        self.json(&["--prepare"], 0, "ok", Some(PULL_REQUEST_PREVIEW))
+    }
+
+    fn effects(preview: &Value) -> Vec<&str> {
+        preview["data"]["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|effect| effect["effect"].as_str().unwrap())
+            .collect()
+    }
+}
+
+#[test]
+fn pull_request_close_prepare_previews_the_record() {
+    let case = Case::pull_request(CLOSE);
+    let refs = case.refs();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["type"], "pull_request_closure_preview");
+    assert_eq!(details["action"], "close");
+    assert_eq!(details["closure"]["recording"], "record");
+    assert_eq!(details["retired_context"], Value::Null);
+    assert_eq!(details["unheld"], serde_json::json!([]));
+    assert!(details["remote"] == "origin", "{details}");
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "context_synchronized",
+            "closure_recorded",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+    golden(
+        "ticket_close_pull_request_preview",
+        &preview,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs, "a preview changes nothing");
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    for line in [
+        "Will synchronize the editing branch with the remote.\n",
+        "Will record the closure on the editing branch.\n",
+        "Will publish the editing branch.\n",
+        "Will record the pull request link.\n",
+    ] {
+        assert!(stdout(&human).contains(line), "{line}: {}", stdout(&human));
+    }
+    assert!(
+        !stdout(&human).contains("Will merge the editing branch into primary.\n"),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
+fn pull_request_close_prepare_previews_an_existing_closure() {
+    let case = Case::pull_request(CLOSE);
+    case.context_closed();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["action"], "close");
+    assert_eq!(details["closure"]["recording"], "existing");
+    assert_eq!(
+        Case::effects(&preview),
+        ["context_synchronized", "pull_request_link"]
+    );
+}
+
+#[test]
+fn pull_request_close_prepare_previews_the_new_branch() {
+    let case = Case::pull_request(CLOSE);
+    case.remote_branch_deleted();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["action"], "new_branch");
+    assert_eq!(details["closure"]["recording"], "record");
+    assert_eq!(
+        details["retired_context"],
+        case.world.branch_tip(CLOSE.id).unwrap().to_string()
+    );
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "worktree_removed",
+            "branch_deleted",
+            "context_created",
+            "closure_recorded",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+}
+
+#[test]
+fn withdraw_of_a_closure_the_primary_holds_is_ticket_closed() {
+    let case = Case::pull_request(WITHDRAW);
+    let refs = case.refs();
+    // The world's closed ticket is closed on primary, and has no context: the
+    // closed primary alone decides.
+    let mut args = case.args(TICKET_CLOSED, &["--prepare"]);
+    args.push("--json");
+    let blocked = mutation::checked(&args, &case.env, &[], 3, "ticket_closed", Some(BLOCKED));
+    assert_eq!(blocked["command"], "ticket withdraw-closure");
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["already_closed"])
+    );
+    golden(
+        "ticket_withdraw_closure_ticket_closed",
+        &blocked,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+impl Case {
+    /// A confirm of the preview, under `request`, that stops at the context
+    /// child: the remote refuses the connection.
+    fn stopped_at_the_context_child(&self, request: &str) -> Value {
+        let preview = self.preview_of_the_record();
+        let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+        self.json(
+            &["--request-id", request, "--confirm", confirmation],
+            5,
+            "transport_unavailable",
+            None,
+        )
+    }
+}
+
+#[test]
+fn pull_request_close_stops_at_the_context_child() {
+    let case = Case::pull_request_with_a_key(CLOSE);
+    let refs = case.refs();
+    let source = case.world.worktree_source(CLOSE.id);
+    let stopped = case.stopped_at_the_context_child(REQUEST_1);
+    assert_eq!(stopped["outcome"], "error", "{stopped}");
+    // Nothing is written: no commit, no pending ref, no change to the file.
+    assert_eq!(stopped["effects"]["write"], "not_requested");
+    assert_eq!(stopped["effects"]["checkpoint"], "not_requested");
+    assert_eq!(stopped["effects"]["publication"], "not_requested");
+    assert_eq!(case.refs(), refs);
+    assert_eq!(case.world.worktree_source(CLOSE.id), source);
+    // The same request is what continues it.
+    assert_eq!(stopped["recovery"][0]["action"], "request.retry");
+    assert_eq!(stopped["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    // A stop of the child, and no closure: the ticket is still open.
+    assert_eq!(case.merges(), 0);
+}
+
+/// A stopped pull-request close and withdraw are held by the same record:
+/// `request cancel` of either is answered by the same request as `cancelled`,
+/// which leaves the record and lets the next call continue it.
+#[test]
+fn request_cancel_of_a_stopped_withdraw_is_cancelled_and_the_same_request_continues() {
+    let case = Case::pull_request_with_a_key(WITHDRAW);
+    case.context_closed();
+    let preview = case.preview_of_the_record();
+    assert_eq!(preview["data"]["details"]["action"], "withdraw");
+    assert_eq!(preview["data"]["details"]["pull_request"], Value::Null);
+    let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+    case.json(
+        &["--request-id", REQUEST_1, "--confirm", confirmation],
+        5,
+        "transport_unavailable",
+        None,
+    );
+
+    let cancel = ["request", "cancel", "--request-id", REQUEST_1, "--json"];
+    let asked = mutation::checked(&cancel, &case.env, &[], 0, "ok", None);
+    assert_eq!(asked["data"]["requested"], true, "{asked}");
+
+    // The request, sent again, answers `cancelled` and keeps its record.
+    let cancelled = case.json(&["--request-id", REQUEST_1], 130, "cancelled", None);
+    assert_eq!(
+        cancelled["recovery"][0]["action"], "request.retry",
+        "{cancelled}"
+    );
+    // Sent once more, it continues: the child is tried again.
+    case.json(
+        &["--request-id", REQUEST_1],
+        5,
+        "transport_unavailable",
+        None,
+    );
+}
+
+/// D20's binding half: a resume takes up no unfinished branch record that a
+/// request holds. The answer names that request, whatever the record's action.
+#[test]
+fn operation_resume_of_an_unfinished_branch_record_is_original_request_required() {
+    for verb in [CLOSE, WITHDRAW] {
+        let case = Case::pull_request_with_a_key(verb);
+        if verb.name == "withdraw-closure" {
+            case.context_closed();
+        }
+        let stopped = case.stopped_at_the_context_child(REQUEST_1);
+        let operation = stopped["operation_id"].as_str().unwrap();
+        let resumed = mutation::checked(
+            &[
+                "operation",
+                "resume",
+                "--repo",
+                case.root(),
+                "--operation-id",
+                operation,
+                "--request-id",
+                REQUEST_2,
+                "--json",
+            ],
+            &case.env,
+            &[],
+            3,
+            "original_request_required",
+            None,
+        );
+        assert_eq!(
+            resumed["recovery"][0]["arguments"]["request_id"], REQUEST_1,
+            "{}: {resumed}",
+            verb.name
+        );
+    }
+}
+
+/// A branch record no request holds is continued by a resume, as a direct
+/// close's is, with the input its action rebuilds: a withdraw's resume takes
+/// up the withdraw, whose child stops again at the closed port.
+#[test]
+fn operation_resume_of_an_unheld_withdraw_continues_it_as_a_withdraw() {
+    let case = Case::pull_request_with_a_key(WITHDRAW);
+    case.context_closed();
+    let stopped = case.stopped_at_the_context_child(REQUEST_1);
+    let operation = stopped["operation_id"].as_str().unwrap();
+    // The request that held it is gone.
+    items::index(case.world.data.path())
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid = ?1",
+            [REQUEST_1],
+        )
+        .unwrap();
+    let resumed = mutation::checked(
+        &[
+            "operation",
+            "resume",
+            "--repo",
+            case.root(),
+            "--operation-id",
+            operation,
+            "--request-id",
+            REQUEST_2,
+            "--json",
+        ],
+        &case.env,
+        &[],
+        5,
+        "transport_unavailable",
+        None,
+    );
+    assert_eq!(resumed["command"], "operation resume");
+    // A resume that continues a branch record names the ticket's branch and
+    // its worktree, as the record's own request does (decision 17).
+    assert_eq!(
+        resumed["scope"]["branch"],
+        format!("manyhands/ticket/{}", WITHDRAW.id),
+        "{resumed}"
+    );
+    assert_eq!(resumed["scope"]["item_id"], WITHDRAW.id, "{resumed}");
+    assert_eq!(
+        resumed["scope"]["worktree"],
+        std::path::Path::new(case.root())
+            .join(".manyhands")
+            .join("worktrees")
+            .join(WITHDRAW.id)
+            .to_str()
+            .unwrap(),
+        "{resumed}"
+    );
+    // It was taken up as the withdraw it is: its record is still the one
+    // withdraw record, unfinished and at its first step, and nothing was
+    // written to the branch.
+    let step: (String, String) = items::index(case.world.data.path())
+        .query_row(
+            "SELECT action, step FROM ticket_closures WHERE operation_id = ?1",
+            [operation],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(step, ("withdraw".to_owned(), "confirmed".to_owned()));
+}
+
+/// W12 and W4, in the order the binding answers them: no publication remote
+/// is answered before the hold, which names the unfinished close's request.
+#[test]
+fn withdraw_prepare_answers_publication_remote_required_ahead_of_the_hold() {
+    // No publication remote at all.
+    let bare = Case::new(WITHDRAW);
+    let refused = bare.json(&["--prepare"], 3, "publication_remote_required", None);
+    assert_eq!(refused["outcome"], "blocked", "{refused}");
+    golden(
+        "ticket_withdraw_closure_publication_remote_required",
+        &refused,
+        &bare.world.root,
+    );
+
+    // An unfinished close holds the ticket: the withdraw is held, naming it.
+    let case = Case::pull_request_with_a_key(CLOSE);
+    case.stopped_at_the_context_child(REQUEST_1);
+    let withdraw = Case {
+        verb: WITHDRAW,
+        ..case
+    };
+    let held = withdraw.json(&["--prepare"], 3, "recovery_required", None);
+    assert_eq!(held["recovery"][0]["action"], "request.retry", "{held}");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    // The human line sends the holder's request again under the holder's own
+    // command: the request ID is refused under any other.
+    let human = withdraw.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(
+        stderr(&human).contains(&format!(
+            "next: manyhands-cli ticket close --repo '{}' --id {} --request-id {REQUEST_1}\n",
+            withdraw.root(),
+            items::TICKET_A
+        )),
+        "{}",
+        stderr(&human)
+    );
+
+    // And with the remote gone from the configuration, the configuration's
+    // answer comes first.
+    let configuration = manyhands::canonical::parse_repository_config(
+        "format_version = 1\nprimary_branch = \"main\"\n",
+    )
+    .unwrap();
+    support::commit_tracked_configuration(
+        &withdraw.world.fixture,
+        &manyhands::canonical::serialize_repository_config(&configuration).unwrap(),
+    );
+    withdraw.json(&["--prepare"], 3, "publication_remote_required", None);
 }

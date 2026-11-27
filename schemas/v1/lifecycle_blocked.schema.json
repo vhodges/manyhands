@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 lifecycle blockers",
-  "description": "The data of a prepare envelope of document promote or ticket close that is refused for what stands in its way: every blocker, in the domain's order. identity_required alone answers identity_required, already_closed alone answers ticket_closed, and anything else answers recovery_required.",
+  "description": "The data of a prepare envelope of document promote or ticket close that is refused for what stands in its way: every blocker, in the domain's order. identity_required alone answers identity_required, already_closed alone answers ticket_closed, and anything else answers recovery_required. remote_context_unmaterialized: the remote holds the item's editing branch and no tracking ref on this computer does, so a poll is the way out (repo sync when only the local primary holds the tip).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -36,7 +36,8 @@
           "primary_reopened",
           "document_invalid_after_integration",
           "ticket_invalid_after_closure",
-          "identity_required"
+          "identity_required",
+          "remote_context_unmaterialized"
         ]
       }
     }

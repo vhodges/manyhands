@@ -20,6 +20,7 @@ fn ticket(id: &str, deps: &[&str]) -> TicketNode {
     TicketNode {
         id: id.to_owned(),
         closed: false,
+        closing: false,
         parent: None,
         deps: deps.iter().map(|id| (*id).to_owned()).collect(),
     }
@@ -28,6 +29,14 @@ fn ticket(id: &str, deps: &[&str]) -> TicketNode {
 fn closed(id: &str, deps: &[&str]) -> TicketNode {
     TicketNode {
         closed: true,
+        ..ticket(id, deps)
+    }
+}
+
+/// A ticket only its own worktree holds the closure of.
+fn closing(id: &str, deps: &[&str]) -> TicketNode {
+    TicketNode {
+        closing: true,
         ..ticket(id, deps)
     }
 }
@@ -88,6 +97,9 @@ fn lines(graph: &TicketGraph, id: &str, upward: bool, limit: Option<u32>) -> Vec
                 match entry.state {
                     DependencyState::Unresolved => "?",
                     DependencyState::Open | DependencyState::Closed => "",
+                    DependencyState::Closing => {
+                        panic!("{}: a tree here has no closing ticket", entry.id)
+                    }
                 },
             )
         })
@@ -545,6 +557,100 @@ fn a_plan_puts_each_ticket_after_all_its_open_dependencies() {
 }
 
 #[test]
+fn a_closing_ticket_is_open_to_its_dependents_and_left_out_of_the_queries() {
+    let graph = graph([
+        closing("A", &[]),
+        ticket("B", &["A"]),
+        ticket("C", &["B"]),
+        // Waits for an ID no ticket has.
+        closing("X", &["Z"]),
+        ticket("Y", &["X"]),
+    ]);
+
+    // A closing ticket's own readiness is an open ticket's; a dependent of
+    // it is blocked for its own reason, and not for an open dependency.
+    assert_eq!(readiness(&graph, "A"), (ReadinessState::Ready, vec![]));
+    assert_eq!(
+        readiness(&graph, "B"),
+        (
+            ReadinessState::Blocked,
+            vec![("closing_dependency", names(&["A"]))]
+        )
+    );
+    assert_eq!(
+        readiness(&graph, "C"),
+        (
+            ReadinessState::Blocked,
+            vec![("open_dependency", names(&["B"]))]
+        )
+    );
+    assert_eq!(
+        readiness(&graph, "X"),
+        (
+            ReadinessState::Blocked,
+            vec![("unresolved_dependency", names(&["Z"]))]
+        )
+    );
+    assert!(graph.is_closing("A") && graph.is_closing("X"));
+    assert!(!graph.is_closing("B") && !graph.is_closing("Missing"));
+
+    // A tree line calls it closing, and it is not closed.
+    let tree = graph.tree("B", false, None).unwrap();
+    assert_eq!(
+        tree.entries
+            .iter()
+            .map(|entry| (entry.id, entry.state))
+            .collect::<Vec<_>>(),
+        [("A", DependencyState::Closing)]
+    );
+    assert_eq!(graph.made_ready("A"), Some((vec![], false)));
+
+    // The plan computes with closing tickets as open nodes and then leaves
+    // them out: a batch keeps its number, and one left empty is listed
+    // empty here, for the caller to drop. A ticket that waits for an
+    // unplannable closing ticket is unplannable, and the closing ticket is
+    // not listed.
+    let plan = graph.plan();
+    assert_eq!(plan.batches, [vec![], vec!["B"], vec!["C"]]);
+    assert_eq!(
+        unplannable(&plan),
+        [(
+            "Y".to_owned(),
+            vec![("unplannable_dependency", names(&["X"]))]
+        )]
+    );
+}
+
+#[test]
+fn critical_path_gives_closing_tickets_no_length() {
+    // The longest chain counts tickets, and a closing ticket is not one of
+    // them: B waits for A, which counts for nothing, so C and D, two
+    // tickets, are longer than B alone. Were A a ticket of the chain and
+    // dropped afterwards, B, the lower ID, would end the chain.
+    let beside = graph([
+        closing("A", &[]),
+        ticket("B", &["A"]),
+        ticket("C", &[]),
+        ticket("D", &["C"]),
+    ]);
+    assert_eq!(beside.critical_path(), ["C", "D"]);
+
+    // A closing ticket in the middle of a chain adds nothing to it and is
+    // left out of it.
+    let through = graph([
+        ticket("P", &[]),
+        closing("A", &["P"]),
+        ticket("R", &["A"]),
+        ticket("Q", &[]),
+    ]);
+    assert_eq!(through.critical_path(), ["P", "R"]);
+
+    // Only closing tickets: there is no chain.
+    let only = graph([closing("A", &[]), closing("B", &["A"])]);
+    assert!(only.critical_path().is_empty());
+}
+
+#[test]
 fn tickets_on_or_behind_a_cycle_or_an_unresolved_dependency_are_unplannable() {
     let graph = graph([
         ticket("A", &["B"]),
@@ -654,6 +760,7 @@ fn a_very_long_chain_is_walked_without_recursion() {
     let chain = graph((0..MANY).map(|number| TicketNode {
         id: numbered(number),
         closed: false,
+        closing: false,
         parent: number.checked_sub(1).map(numbered),
         deps: number.checked_sub(1).map(numbered).into_iter().collect(),
     }));
@@ -679,6 +786,7 @@ fn a_very_long_chain_is_walked_without_recursion() {
     let ring = graph((0..MANY).map(|number| TicketNode {
         id: numbered(number),
         closed: false,
+        closing: false,
         parent: Some(numbered((number + 1) % MANY)),
         deps: vec![numbered((number + 1) % MANY)],
     }));
@@ -721,6 +829,7 @@ fn a_very_wide_graph_is_walked_once() {
     nodes.push(TicketNode {
         id: sink.clone(),
         closed: false,
+        closing: false,
         parent: None,
         deps: (0..MANY).map(numbered).collect(),
     });
@@ -756,6 +865,7 @@ fn a_reason_names_a_whole_cycle_until_it_is_longer_than_a_reason_holds() {
         graph((0..length).map(|number| TicketNode {
             id: numbered(number),
             closed: false,
+            closing: false,
             parent: None,
             deps: vec![numbered((number + 1) % length)],
         }))

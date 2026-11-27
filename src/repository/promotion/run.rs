@@ -2,6 +2,7 @@
 //! this journal owns consent, primary integration and ordered retirement.
 #![allow(clippy::result_large_err)]
 use super::*;
+use crate::canonical::RepositoryConfig;
 use crate::repository::{
     cleanup::{BranchDeletion, ContextCleanup, Precheck, TrackingDeletion, WorktreeRemoval},
     remote::{observation::ObservationConfiguration, reservation, state},
@@ -9,8 +10,9 @@ use crate::repository::{
     *,
 };
 use lifecycle::{
-    CancellationProbe, DocumentPromotionLifecycle, Lifecycle, LifecycleError, LifecycleKind,
-    LifecyclePreview, LifecycleRecord, LifecycleRefusal, LifecycleRequest, ParentStep as Step,
+    BranchEnd, BranchStep, CancellationProbe, DocumentPromotionLifecycle, Lifecycle,
+    LifecycleError, LifecycleKind, LifecyclePreview, LifecycleRecord, LifecycleRefusal,
+    LifecycleRequest, ParentStep as Step, RecordPath,
 };
 use record::{
     ChildRole, ChildState, CleanupCategory as Clean, IntegrationKind, PublicationCategory as Pub,
@@ -210,7 +212,7 @@ fn mapped<E: LifecycleError>(error: RepositoryError) -> E {
         _ => E::from(error),
     }
 }
-fn load<L: Lifecycle>(
+pub(in super::super) fn load<L: Lifecycle>(
     service: &RepositoryService,
     root: &Path,
     op: OperationId,
@@ -219,7 +221,7 @@ fn load<L: Lifecycle>(
         L::read_record(tx, id, op)?.ok_or_else(state::recovery_required)
     })
 }
-fn save<L: Lifecycle>(
+pub(in super::super) fn save<L: Lifecycle>(
     service: &RepositoryService,
     root: &Path,
     r: &L::Record,
@@ -236,7 +238,7 @@ fn save<L: Lifecycle>(
         L::save_record(tx, id, &updated)
     })
 }
-fn boundary(
+pub(in super::super) fn boundary(
     service: &RepositoryService,
     root: &Path,
     point: FailurePoint,
@@ -250,10 +252,11 @@ fn preview<L: Lifecycle>(
     root: &Path,
     item: &ItemId,
     identity: Option<&ConfirmedCommitIdentity>,
+    record: Option<&L::Record>,
 ) -> Result<L::Preflight, RepositoryError> {
     L::preview(
         service,
-        L::preview_request(root.into(), item.clone(), identity),
+        L::preview_request(root.into(), item.clone(), identity, record),
     )
 }
 fn abandon<L: Lifecycle>(
@@ -270,7 +273,7 @@ fn abandon<L: Lifecycle>(
         Err(e) => mapped::<L::Error>(e),
     }
 }
-fn cancelled<L: Lifecycle>(
+pub(in super::super) fn cancelled<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
     r: &L::Record,
@@ -303,6 +306,7 @@ pub(super) fn lifecycle_request(
         approval,
         confirmed_identity,
         probe: None,
+        clock: time::OffsetDateTime::now_utc,
     }
 }
 
@@ -361,7 +365,18 @@ fn run_observed<L: Lifecycle>(
     let Ok(mut r) = load::<L>(service, &root, request.operation_id) else {
         return Err(error);
     };
-    if r.item_id() != &request.item_id || r.expectation() != request.expected {
+    // A record of another verb is not this request's, whatever its ID and
+    // digest say: it is never answered from.
+    if r.item_id() != &request.item_id || r.expectation() != request.expected || !L::continues(&r) {
+        return Err(error);
+    }
+    // A branch record never integrates: a finished one answers from its
+    // record, and an unfinished one owes what its children changed.
+    if r.path() == RecordPath::Branch {
+        if r.answered() {
+            return Ok(refresh::<L>(service, &root, &r, true));
+        }
+        index_children_owed(service, &root, &r);
         return Err(error);
     }
     // An exit before integration (an abandon, an interruption, a primary
@@ -415,6 +430,14 @@ fn run_observed<L: Lifecycle>(
     Ok(recovery::<L>(service, &root, &mut r))
 }
 fn recorded_primary<R: LifecycleRecord>(root: &Path, r: &R) -> Result<String, RepositoryError> {
+    Ok(recorded_config(root, r)?.primary_branch)
+}
+/// The configuration the record's base commit holds: what a record past its
+/// base is run by, whatever the live configuration says now.
+pub(in super::super) fn recorded_config<R: LifecycleRecord>(
+    root: &Path,
+    r: &R,
+) -> Result<RepositoryConfig, RepositoryError> {
     let repo = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
     let tree = repo
         .find_commit(r.base_oid().ok_or_else(state::recovery_required)?)
@@ -427,9 +450,7 @@ fn recorded_primary<R: LifecycleRecord>(root: &Path, r: &R) -> Result<String, Re
         .find_blob(entry.id())
         .map_err(|_| state::recovery_required())?;
     let source = std::str::from_utf8(blob.content()).map_err(|_| state::recovery_required())?;
-    Ok(crate::canonical::parse_repository_config(source)
-        .map_err(|_| state::recovery_required())?
-        .primary_branch)
+    crate::canonical::parse_repository_config(source).map_err(|_| state::recovery_required())
 }
 fn promote_inner<L: Lifecycle>(
     lifecycle: &L,
@@ -458,6 +479,11 @@ fn promote_inner<L: Lifecycle>(
             )
         })
         .map_err(mapped::<L::Error>)?;
+        // A finished branch record answers from what it stored, whatever
+        // ended it.
+        if validated.answered() {
+            return Ok(refresh::<L>(service, &root, &validated, true));
+        }
         if let Some(refusal) = validated.refusal() {
             return Err(L::refusal_error(refusal));
         }
@@ -470,12 +496,30 @@ fn promote_inner<L: Lifecycle>(
         // Live configuration is not a prerequisite for reporting an existing
         // primary effect. Invalid/unreadable configuration stops unfinished work
         // as an Ok recovery outcome, and cannot turn integration into an Err.
-        if !matches!(
+        let configured = matches!(
             read_configuration(&root),
             Ok(ConfigurationInspection::Valid(_))
-        ) && validated.integration_oid().is_some()
-        {
+        );
+        if !configured && validated.integration_oid().is_some() {
             return Ok(recovery::<L>(service, &root, &mut validated));
+        }
+        // A branch record that has its publication child has no live
+        // configuration to publish by: it completes with its commit kept on
+        // the local branch (R-35), by the primary its base recorded.
+        if !configured
+            && validated.path() == RecordPath::Branch
+            && validated.primary_sync_id().is_some()
+        {
+            let primary = recorded_primary(&root, &validated).map_err(mapped::<L::Error>)?;
+            return finish_branch::<L>(
+                service,
+                &request,
+                None,
+                &primary,
+                &mut validated,
+                io,
+                progress,
+            );
         }
     }
     let ConfigurationInspection::Valid(mut config) = read_configuration(&root)? else {
@@ -502,6 +546,7 @@ fn promote_inner<L: Lifecycle>(
                 root.clone(),
                 request.item_id.clone(),
                 request.confirmed_identity.as_ref(),
+                None,
             ),
         )?;
         config = L::configuration(&observation).clone();
@@ -551,7 +596,7 @@ fn promote_inner<L: Lifecycle>(
                 request.operation_id,
                 &request.item_id,
                 request.expected,
-                config.publication_remote.as_deref(),
+                &config,
                 observed.as_ref(),
                 refusal,
             )?
@@ -570,6 +615,9 @@ fn promote_inner<L: Lifecycle>(
     })
     .map_err(mapped::<L::Error>)?;
     drop(preflight_lease);
+    if r.answered() {
+        return Ok(refresh::<L>(service, &root, &r, true));
+    }
     if let Some(refusal) = r.refusal() {
         return Err(L::refusal_error(refusal));
     }
@@ -602,6 +650,21 @@ fn promote_inner<L: Lifecycle>(
     } else {
         config.primary_branch.clone()
     };
+    // A branch record publishes its context instead of integrating it.
+    if r.path() == RecordPath::Branch {
+        return promote_branch::<L>(
+            lifecycle,
+            service,
+            &request,
+            &config,
+            &bound_primary,
+            &mut r,
+            existing,
+            observed.as_ref(),
+            io,
+            progress,
+        );
+    }
     // Reconcile Git before configuration/preflight errors can escape.
     if r.step() == Step::Integrating {
         let (repo, _) = canonical_repository_root(&root, RepositoryOperation::RepositorySnapshot)?;
@@ -663,52 +726,29 @@ fn promote_inner<L: Lifecycle>(
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
-        // Two previews per attempt: the consent preview, which this call took
-        // when it inserted the record, says whether a context child runs. A
-        // resumed attempt has none, so with a remote it previews for that.
-        let cleanup_only = r.remote_name().is_some()
-            && match &observed {
-                Some(p) => !p.runs_context_child(),
-                None => preview::<L>(
+        match context_step::<L>(
+            service,
+            &request,
+            &config.primary_branch,
+            &mut r,
+            observed.as_ref(),
+            io,
+            progress,
+        ) {
+            Ok(ContextStep::Synchronized) => (),
+            Ok(ContextStep::Gone) => {
+                return Err(abandon::<L>(
                     service,
                     &root,
-                    r.item_id(),
-                    request.confirmed_identity.as_ref(),
-                )
-                .ok()
-                .and_then(|p| L::ready(p).ok())
-                .is_some_and(|p| !p.runs_context_child()),
-            };
-        if r.remote_name().is_some()
-            && !cleanup_only
-            && let Err(error) =
-                child::<L>(service, &request, &mut r, ChildRole::Context, io, progress)
-        {
-            if cancelled::<L>(service, &request, &r)? {
-                release_child::<L>(service, &request, &r, ChildRole::Context);
-                return Err(L::Error::interrupted());
+                    &mut r,
+                    L::Refusal::reconfirmation_required(),
+                ));
             }
-            return Err(L::Error::context_synchronization(Box::new(error)));
+            Err(ContextStop::Child(error)) => {
+                return Err(L::Error::context_synchronization(error));
+            }
+            Err(ContextStop::Error(error)) => return Err(error),
         }
-        // The synchronized context as Git holds it. The integration preview
-        // checks it, and the consent, under the integration lease
-        // (`prepare_integration_for`); a refusal there abandons as one here
-        // did. A context branch that is gone cannot be consented.
-        let Some((context, tracking)) =
-            synchronized_context::<L>(&root, &r, &config.primary_branch)?
-        else {
-            return Err(abandon::<L>(
-                service,
-                &root,
-                &mut r,
-                L::Refusal::reconfirmation_required(),
-            ));
-        };
-        r.set_context_oid(Some(context));
-        r.set_remote_context_oid(tracking);
-        r.set_step(Step::ContextSynchronized);
-        save::<L>(service, &root, &r)?;
-        boundary(service, &root, FailurePoint::AfterContextSync)?;
     }
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
@@ -728,6 +768,7 @@ fn promote_inner<L: Lifecycle>(
             &root,
             r.item_id(),
             request.confirmed_identity.as_ref(),
+            Some(&r),
         )?) {
             Ok(p) => p,
             _ => {
@@ -869,6 +910,287 @@ fn promote_inner<L: Lifecycle>(
     ))
 }
 
+/// A branch record's run: no integration, no cleanup. Its context is
+/// synchronized, its closure written on the context by the lifecycle's
+/// hook, and its context published by a child of its own.
+#[allow(clippy::too_many_arguments)] // The runner's whole state, as `promote_inner` holds it.
+fn promote_branch<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    config: &RepositoryConfig,
+    primary: &str,
+    r: &mut L::Record,
+    existing: bool,
+    observed: Option<&L::Preview>,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    // The publication child exists: what is left is its.
+    if r.primary_sync_id().is_some() {
+        return finish_branch::<L>(service, request, Some(config), primary, r, io, progress);
+    }
+    // Before `closing` (it records a base) the remote the record was made
+    // for is the one configured; after it, the answer says.
+    if r.base_oid().is_none() && r.remote_name() != config.publication_remote.as_deref() {
+        return Err(L::Error::interrupted());
+    }
+    if !existing {
+        boundary(service, root, FailurePoint::AfterConfirmed)?;
+    }
+    if cancelled::<L>(service, request, r)? {
+        if r.step() == Step::Confirmed {
+            release_child::<L>(service, request, r, ChildRole::Context);
+        }
+        return Err(L::Error::interrupted());
+    }
+    if r.step() == Step::Confirmed && r.synchronizes_context() {
+        match context_step::<L>(service, request, primary, r, observed, io, progress) {
+            Ok(ContextStep::Synchronized) => (),
+            Ok(ContextStep::Gone) => {
+                L::end_branch(service, root, r, BranchEnd::ContextGone)
+                    .map_err(mapped::<L::Error>)?;
+                *r = load::<L>(service, root, r.operation_id())?;
+                return Ok(refresh::<L>(service, root, r, false));
+            }
+            // A stop with nothing written that only a new prepare gets past
+            // (D6): the child is let go and the record ends with its code.
+            Err(ContextStop::Child(error))
+                if ends_context_child(&error)
+                    && let_go::<L>(service, request, r, ChildRole::Context, io)? =>
+            {
+                L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
+                    .map_err(mapped::<L::Error>)?;
+                *r = load::<L>(service, root, r.operation_id())?;
+                return Ok(refresh::<L>(service, root, r, false));
+            }
+            // Any other stop, or an end whose child is retained (a conflict
+            // is the user's): the child is left as it stands, kept or not,
+            // for the same request, and the record stays `confirmed`.
+            Err(ContextStop::Child(error)) => {
+                return Err(L::Error::context_synchronization(error));
+            }
+            Err(ContextStop::Error(error)) => return Err(error),
+        }
+    }
+    if cancelled::<L>(service, request, r)? {
+        return Err(L::Error::interrupted());
+    }
+    if !r.effect_written() || r.step() == Step::ContextSynchronized {
+        progress.event(RunEvent::Recording);
+    }
+    let step = lifecycle.branch_step(service, request, r)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    match step {
+        BranchStep::Closing => {
+            finish_branch::<L>(service, request, Some(config), primary, r, io, progress)
+        }
+        BranchStep::Finished => Ok(refresh::<L>(service, root, r, false)),
+    }
+}
+
+/// A branch record from its publication child on: the child mints, runs
+/// and, with its result, answers the record, which completes with that
+/// answer stored. A child that stops leaves the record at
+/// `publication_pending` for the same request, unless the stop is one the
+/// answer table ends the record over; a record whose remote is no longer
+/// the one it was made for runs no child, and ends the same way (R-35).
+fn finish_branch<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    config: Option<&RepositoryConfig>,
+    primary: &str,
+    r: &mut L::Record,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    if r.primary_sync_id().is_none() {
+        let op = r.operation_id();
+        *r = state::with_transaction(service, root, |tx, id| L::begin_publication(tx, id, op))
+            .map_err(mapped::<L::Error>)?;
+    }
+    // A completed child comes first, whatever the configuration or a
+    // cancellation says: it cannot be undone, and the child replays it.
+    let completed = matches!(
+        state::with_transaction(service, root, |tx, _| L::child_state(
+            tx,
+            r,
+            ChildRole::Publication
+        )),
+        Ok(ChildState::Complete(_))
+    );
+    let remote_current = config.is_some_and(|config| {
+        config.primary_branch == primary && config.publication_remote.as_deref() == r.remote_name()
+    });
+    let result = if remote_current || completed {
+        if !completed && cancelled::<L>(service, request, r)? {
+            return Err(publication_cancelled::<L>(service, request, r));
+        }
+        let result = child::<L>(service, request, r, ChildRole::Publication, io, progress);
+        let authority = match &result {
+            Ok(SynchronizationOutcome::Published { oid, .. }) => {
+                Some(state::SynchronizationAuthority::Published(*oid))
+            }
+            Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => {
+                Some(state::SynchronizationAuthority::AlreadyCurrent(*oid))
+            }
+            Ok(SynchronizationOutcome::PublishPending { .. }) => {
+                r.set_publication(Some(Pub::RecoveryRequired));
+                save::<L>(service, root, r)?;
+                return Err(L::Error::recovery_required());
+            }
+            Err(_) => None,
+        };
+        if let Some(authority) = authority {
+            remember_publication(r, &mut None, authority)
+                .map_err(|_| L::Error::recovery_required())?;
+            save::<L>(service, root, r)?;
+            boundary(service, root, FailurePoint::AfterPublication)?;
+        } else if result.is_err() && cancelled::<L>(service, request, r)? {
+            return Err(publication_cancelled::<L>(service, request, r));
+        }
+        Some(result)
+    } else {
+        None
+    };
+    let answered = L::branch_answer(service, request, r, primary, result.as_ref())
+        .map_err(mapped::<L::Error>)?;
+    // A child that stopped, or none that ran, is let go before the record
+    // completes, or its row would hold the context (R-36). A retained child
+    // is not let go: its stop stands.
+    let gone = match &answered {
+        Some(_) if !matches!(result, Some(Ok(_))) => {
+            let_go::<L>(service, request, r, ChildRole::Publication, io)?
+        }
+        _ => true,
+    };
+    let (Some(finish), true) = (answered, gone) else {
+        // The stop stands: the record keeps its step, with the category.
+        let Some(Err(error)) = result else {
+            return Err(L::Error::recovery_required());
+        };
+        r.set_publication(Some(publication_error(&error)));
+        save::<L>(service, root, r)?;
+        return Err(L::Error::context_synchronization(Box::new(error)));
+    };
+    boundary(service, root, FailurePoint::BeforeCompletion)?;
+    let (op, root_path) = (r.operation_id(), root.as_path());
+    let completed = state::with_transaction(service, root_path, |tx, id| {
+        L::complete_branch(tx, id, op, &finish)
+    });
+    #[cfg(test)]
+    let completed = super::run_tests::completion_returned(service, root_path, completed);
+    let completed = completed.and_then(|()| {
+        boundary(
+            service,
+            root_path,
+            FailurePoint::PromotionAfterCompletionCommit,
+        )
+    });
+    // A commit error does not prove rollback. Reopen the real durable
+    // authority before returning recovery.
+    if completed.is_err()
+        && !state::with_transaction(service, root_path, |tx, id| {
+            L::reconcile_completion(tx, id, op)
+        })
+        .unwrap_or(false)
+    {
+        return Err(L::Error::recovery_required());
+    }
+    *r = load::<L>(service, root, op)?;
+    boundary(service, root, FailurePoint::AfterCompletion)?;
+    Ok(refresh::<L>(service, root, r, false))
+}
+
+/// A cancellation that stops the publication: its child is let go, and the
+/// record says so, at `publication_pending`, for the same request.
+fn publication_cancelled<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &mut L::Record,
+) -> L::Error {
+    release_child::<L>(service, request, r, ChildRole::Publication);
+    r.set_publication(Some(Pub::Cancelled));
+    match save::<L>(service, &request.root, r) {
+        Ok(()) => L::Error::interrupted(),
+        Err(error) => mapped::<L::Error>(error),
+    }
+}
+
+/// What a record's context synchronization came to.
+enum ContextStep {
+    /// The context is as the child left it, and the record says so.
+    Synchronized,
+    /// The context branch is gone after its child ran.
+    Gone,
+}
+/// What stopped it: the child, with its own error (not a cancellation), or
+/// the run.
+enum ContextStop<E> {
+    Child(Box<SynchronizationError>),
+    Error(E),
+}
+/// The record's step at `confirmed`: the context's child, with a remote that
+/// has one to run, then the synchronized context as Git holds it, recorded
+/// as `context_synchronized`. A cancellation lets the child go and
+/// interrupts the run.
+fn context_step<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    primary: &str,
+    r: &mut L::Record,
+    observed: Option<&L::Preview>,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<ContextStep, ContextStop<L::Error>> {
+    let root = &request.root;
+    let stop = |error: RepositoryError| ContextStop::Error(L::Error::from(error));
+    // Two previews per attempt: the consent preview, which this call took
+    // when it inserted the record, says whether a context child runs. A
+    // resumed attempt has none, so with a remote it previews for that.
+    let cleanup_only = r.remote_name().is_some()
+        && match observed {
+            Some(p) => !p.runs_context_child(),
+            None => preview::<L>(
+                service,
+                root,
+                r.item_id(),
+                request.confirmed_identity.as_ref(),
+                Some(&*r),
+            )
+            .ok()
+            .and_then(|p| L::ready(p).ok())
+            .is_some_and(|p| !p.runs_context_child()),
+        };
+    if r.remote_name().is_some()
+        && !cleanup_only
+        && let Err(error) = child::<L>(service, request, r, ChildRole::Context, io, progress)
+    {
+        if cancelled::<L>(service, request, r).map_err(stop)? {
+            release_child::<L>(service, request, r, ChildRole::Context);
+            return Err(ContextStop::Error(L::Error::interrupted()));
+        }
+        return Err(ContextStop::Child(Box::new(error)));
+    }
+    // The synchronized context as Git holds it. The integration preview
+    // checks it, and the consent, under the integration lease
+    // (`prepare_integration_for`); a refusal there abandons as one here
+    // did. A context branch that is gone cannot be consented.
+    let Some((context, tracking)) =
+        synchronized_context::<L>(root, r, primary).map_err(ContextStop::Error)?
+    else {
+        return Ok(ContextStep::Gone);
+    };
+    r.set_context_oid(Some(context));
+    r.set_remote_context_oid(tracking);
+    r.set_step(Step::ContextSynchronized);
+    save::<L>(service, root, r).map_err(stop)?;
+    boundary(service, root, FailurePoint::AfterContextSync).map_err(stop)?;
+    Ok(ContextStep::Synchronized)
+}
+
 /// The context branch's tip and, with a remote, its tracking ref, as a
 /// preview reads them (`observe::context_presence`, `observe::remote_facts`);
 /// `None` when the context branch is gone.
@@ -975,8 +1297,91 @@ impl<L: Lifecycle> SynchronizationObserver for CancellationObserver<'_, L> {
 fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
     match role {
         ChildRole::Context => r.context_sync_id(),
-        ChildRole::Primary => r.primary_sync_id(),
+        ChildRole::Primary | ChildRole::Publication => r.primary_sync_id(),
     }
+}
+/// The stops of a context child that `ended_if_unresolved` keeps for a
+/// lifecycle child, or that only `request cancel` lets go: with nothing
+/// written, they end a branch record (D6).
+fn ends_context_child(error: &SynchronizationError) -> bool {
+    matches!(
+        error,
+        SynchronizationError::RemoteContextDeleted
+            | SynchronizationError::HistoryUnresolved
+            | SynchronizationError::TicketClosed
+    )
+}
+/// Lets a stopped child go before its record ends or completes over it
+/// (R-36), or its row would hold the context: released when it has nothing
+/// to lose, otherwise cancelled and acknowledged. A child that is retained
+/// (a conflict, a resolution) is the user's, and is not let go: the answer is
+/// `false`, and the caller lets the child's own stop stand. `true` says the
+/// child is gone.
+fn let_go<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    io: &mut impl PromotionIo,
+) -> Result<bool, L::Error> {
+    let root = &request.root;
+    release_child::<L>(service, request, r, role);
+    let ended = |phase: RemoteOperationPhase| {
+        matches!(
+            phase,
+            RemoteOperationPhase::Cancelled
+                | RemoteOperationPhase::Interrupted
+                | RemoteOperationPhase::Failed
+                | RemoteOperationPhase::Completed
+        )
+    };
+    let mut state = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
+        .map_err(mapped::<L::Error>)?;
+    if let ChildState::Unowned(stored) = &state
+        && !ended(stored.phase)
+    {
+        acknowledge_cancellation::<L>(service, request, r, role, stored.operation_id, io)
+            .map_err(|_| L::Error::recovery_required())?;
+        state = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
+            .map_err(mapped::<L::Error>)?;
+    }
+    match state {
+        ChildState::Absent | ChildState::Complete(_) => Ok(true),
+        ChildState::Unowned(stored) if ended(stored.phase) => Ok(true),
+        ChildState::Retained(_) => Ok(false),
+        ChildState::Unowned(_) => Err(L::Error::recovery_required()),
+    }
+}
+/// Cancels a child's row and runs the acknowledgement, as a real child does at
+/// its first safe point: the row ends. A cancellation acknowledgement may
+/// itself return `RecoveryRequired`; the durable state of the row, never that
+/// error, decides what comes next.
+fn acknowledge_cancellation<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    child: OperationId,
+    io: &mut impl PromotionIo,
+) -> Result<(), SynchronizationError> {
+    service.cancel_remote_operation(&request.root, child)?;
+    let ack = SynchronizeRemoteRequest {
+        root: request.root.clone(),
+        operation_id: child,
+        target: synchronization_target(L::KIND, role, r.item_id()),
+        approval: request.approval.clone(),
+        confirmed_identity: request.confirmed_identity.clone(),
+        restart: true,
+    };
+    let mut observer = CancellationObserver::<L> {
+        service,
+        request,
+        record: r,
+        progress: None,
+    };
+    let execution = L::child_execution(r, role)?;
+    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+    Ok(())
 }
 /// A cancellation that stops the parent lets its stopped child go, or the
 /// child's reservation would refuse what the caller does next. The
@@ -1042,23 +1447,14 @@ fn child<L: Lifecycle>(
                         | RemoteOperationPhase::Interrupted
                         | RemoteOperationPhase::Failed
                 ) {
-                    service.cancel_remote_operation(root, stored.operation_id)?;
-                    let ack = SynchronizeRemoteRequest {
-                        root: root.clone(),
-                        operation_id: stored.operation_id,
-                        target: synchronization_target(L::KIND, role, r.item_id()),
-                        approval: request.approval.clone(),
-                        confirmed_identity: request.confirmed_identity.clone(),
-                        restart: true,
-                    };
-                    let mut observer = CancellationObserver::<L> {
+                    acknowledge_cancellation::<L>(
                         service,
                         request,
-                        record: &*r,
-                        progress: None,
-                    };
-                    let execution = L::child_execution(r, role)?;
-                    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+                        r,
+                        role,
+                        stored.operation_id,
+                        io,
+                    )?;
                 }
                 // A cancellation acknowledgement may itself return RecoveryRequired;
                 // durable ownership/terminal state, never that error, decides.
@@ -1134,7 +1530,7 @@ fn synchronization_target(
 ) -> SynchronizationTarget {
     match role {
         ChildRole::Primary => SynchronizationTarget::Primary,
-        ChildRole::Context => SynchronizationTarget::Context {
+        ChildRole::Context | ChildRole::Publication => SynchronizationTarget::Context {
             kind: kind.authoring(),
             item_id: item.clone(),
         },
@@ -1740,7 +2136,7 @@ fn safe(
         _ => Err(Clean::Cancelled),
     }
 }
-fn validate_cleanup_owner(
+pub(in super::super) fn validate_cleanup_owner(
     service: &RepositoryService,
     root: &Path,
     owner: Option<&RemoteReservation>,
@@ -1765,7 +2161,11 @@ fn validate_cleanup_owner(
     }
     Ok(())
 }
-fn require_configuration(root: &Path, primary: &str, remote: Option<&str>) -> Result<(), Clean> {
+pub(in super::super) fn require_configuration(
+    root: &Path,
+    primary: &str,
+    remote: Option<&str>,
+) -> Result<(), Clean> {
     match read_configuration(root) {
         Ok(ConfigurationInspection::Valid(config))
             if config.primary_branch == primary
@@ -1834,9 +2234,19 @@ fn refresh_with_publication<L: Lifecycle>(
     known: Option<KnownPublication>,
 ) -> L::Output {
     let outcome = make_outcome::<L>(service, root, r, known);
+    // What a branch record changed is its item's context alone: nothing of
+    // it reaches the primary.
+    let branch = r.path() == RecordPath::Branch;
+    let branch_contexts = [ContextKey::Item(r.item_id().clone())];
     // A replay is complete once the index holds what this lifecycle
     // changed, whatever other contexts are owed.
-    if replay && service.lifecycle_indexed(root, r.item_id()) {
+    if replay
+        && if branch {
+            service.contexts_indexed(root, &branch_contexts)
+        } else {
+            service.lifecycle_indexed(root, r.item_id())
+        }
+    {
         return L::complete(outcome);
     }
     // Past integration, what the lifecycle and its children changed is its
@@ -1845,7 +2255,11 @@ fn refresh_with_publication<L: Lifecycle>(
     // which its checkpoint or its context's child moved and its cleanup
     // removes. Both are marked, the item's only while rows are stored for it
     // once it is gone, and indexed in the exit's one step.
-    let contexts = lifecycle_contexts(r.item_id());
+    let contexts = if branch {
+        branch_contexts.to_vec()
+    } else {
+        lifecycle_contexts(r.item_id()).to_vec()
+    };
     let marked = mark_lifecycle_contexts_dirty(
         &service.registry_path,
         root,
@@ -1875,6 +2289,14 @@ fn index_exit(service: &RepositoryService, root: &Path, contexts: &[ContextKey])
 /// A child begins no index hand-off of its own (P-4): what its local update
 /// changes it marks dirty under its lease, and its parent indexes it.
 fn children_contexts<R: LifecycleRecord>(r: &R) -> Vec<ContextKey> {
+    // A branch record's children both change its item's context.
+    if r.path() == RecordPath::Branch {
+        return if r.primary_sync_id().is_some() || r.context_sync_id().is_some() {
+            vec![ContextKey::Item(r.item_id().clone())]
+        } else {
+            Vec::new()
+        };
+    }
     let mut contexts = Vec::new();
     if r.primary_sync_id().is_some() {
         contexts.push(ContextKey::Primary);
@@ -1901,6 +2323,19 @@ fn make_outcome<L: Lifecycle>(
     r: &L::Record,
     known: Option<KnownPublication>,
 ) -> L::Outcome {
+    if r.path() == RecordPath::Branch {
+        // Its publication is the child's result, when the child completed.
+        let publication = match primary_authority::<L>(service, root, r) {
+            Ok(Some(state::SynchronizationAuthority::Published(oid))) => {
+                Some(PromotionPublication::Published { oid })
+            }
+            Ok(Some(state::SynchronizationAuthority::AlreadyCurrent(oid))) => {
+                Some(PromotionPublication::AlreadyCurrent { oid })
+            }
+            Ok(None) | Err(_) => None,
+        };
+        return L::branch_outcome(r, publication);
+    }
     let oid = r
         .integration_oid()
         .or(r.base_oid())

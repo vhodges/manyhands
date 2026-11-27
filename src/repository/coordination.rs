@@ -11,10 +11,14 @@ use git2::Repository;
 
 use super::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
 
-const LEASE_TIMEOUT: Duration = Duration::from_millis(250);
+pub(super) const LEASE_TIMEOUT: Duration = Duration::from_millis(250);
 const RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 pub(super) struct RepositoryLease(File);
+/// A setup operation's lock (design Part D, R-4): its own file beside the
+/// repository lease's, held for the operation's whole run, the network
+/// included.
+pub(super) struct SetupLock(File);
 pub(super) struct BootstrapLease(File);
 pub(super) struct CacheReadGuard(File);
 pub(super) struct CacheWriteGuard(File);
@@ -128,6 +132,7 @@ macro_rules! unlock_on_drop {
 }
 
 unlock_on_drop!(RepositoryLease);
+unlock_on_drop!(SetupLock);
 unlock_on_drop!(BootstrapLease);
 unlock_on_drop!(CacheReadGuard);
 unlock_on_drop!(CacheWriteGuard);
@@ -137,12 +142,54 @@ pub(super) fn repository_lease(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<RepositoryLease, RepositoryError> {
-    acquire_exclusive(
+    repository_lease_waiting(repository, root, operation, LEASE_TIMEOUT)
+}
+
+/// `repository_lease`, waiting `wait` for a holder instead of the usual
+/// timeout, so that a test that needs the busy answer spends no real time.
+pub(super) fn repository_lease_waiting(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+    wait: Duration,
+) -> Result<RepositoryLease, RepositoryError> {
+    acquire(
         repository.commondir().join(REPOSITORY_LOCK_FILE),
         root,
         operation,
+        FileExt::try_lock_exclusive,
+        wait,
     )
     .map(RepositoryLease)
+}
+
+/// The setup lock of the repository `repository`, with the same timeout as
+/// the repository lease: a second setup operation meeting it is `busy`. It
+/// is taken only by whoever has read a setup record first, so a repository
+/// with no record never gets the file.
+pub(super) fn setup_lock(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<SetupLock, RepositoryError> {
+    setup_lock_waiting(repository, root, operation, LEASE_TIMEOUT)
+}
+
+/// `setup_lock`, waiting `wait` for a holder instead of the usual timeout.
+pub(super) fn setup_lock_waiting(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+    wait: Duration,
+) -> Result<SetupLock, RepositoryError> {
+    acquire(
+        repository.commondir().join(SETUP_LOCK_FILE),
+        root,
+        operation,
+        FileExt::try_lock_exclusive,
+        wait,
+    )
+    .map(SetupLock)
 }
 
 pub(super) fn bootstrap_lease(
@@ -215,6 +262,10 @@ pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
 /// directory.
 const REPOSITORY_LOCK_FILE: &str = "manyhands-operation.lock";
 
+/// The file the setup lock is taken on, in the repository's common
+/// directory.
+const SETUP_LOCK_FILE: &str = "manyhands-setup.lock";
+
 /// Whether this process holds the read lock SQLite's unix VFS keeps on a
 /// database's shared byte range (`SHARED_FIRST`, 510 bytes from offset
 /// 2^30 + 2) while a connection of it has the database open in WAL mode,
@@ -251,17 +302,16 @@ pub(super) fn sqlite_shared_lock_held(database: &Path) -> bool {
 /// Full-content snapshot for repository fixtures, including the empty lease file.
 #[cfg(test)]
 pub(super) fn snapshot_file_hash(root: &Path, path: &Path) -> [u8; 32] {
-    if path == root.join(".git").join(REPOSITORY_LOCK_FILE) {
+    if path == root.join(".git").join(REPOSITORY_LOCK_FILE)
+        || path == root.join(".git").join(SETUP_LOCK_FILE)
+    {
         // Windows mandatory byte locks forbid a second handle's read even in
         // this process. This exact coordination file is never written to. Prove
         // its entire content is empty using metadata instead; keep its entry in
         // the snapshot so removal is detected too. Never exempt a namesake file.
         let metadata = std::fs::symlink_metadata(path).unwrap();
-        assert!(
-            metadata.is_file(),
-            "repository lease must be a regular file"
-        );
-        assert_eq!(metadata.len(), 0, "repository lease must remain empty");
+        assert!(metadata.is_file(), "a lock file must be a regular file");
+        assert_eq!(metadata.len(), 0, "a lock file must remain empty");
         return *blake3::hash(b"").as_bytes();
     }
     *blake3::hash(&std::fs::read(path).unwrap()).as_bytes()
@@ -286,7 +336,13 @@ fn acquire_exclusive(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<File, RepositoryError> {
-    acquire(path, root, operation, FileExt::try_lock_exclusive)
+    acquire(
+        path,
+        root,
+        operation,
+        FileExt::try_lock_exclusive,
+        LEASE_TIMEOUT,
+    )
 }
 
 fn acquire_shared(
@@ -294,7 +350,13 @@ fn acquire_shared(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<File, RepositoryError> {
-    acquire(path, root, operation, FileExt::try_lock_shared)
+    acquire(
+        path,
+        root,
+        operation,
+        FileExt::try_lock_shared,
+        LEASE_TIMEOUT,
+    )
 }
 
 fn acquire(
@@ -302,6 +364,7 @@ fn acquire(
     root: &Path,
     operation: RepositoryOperation,
     lock: impl Fn(&File) -> io::Result<bool>,
+    wait: Duration,
 ) -> Result<File, RepositoryError> {
     let file = OpenOptions::new()
         .read(true)
@@ -310,7 +373,7 @@ fn acquire(
         .truncate(false)
         .open(path)
         .map_err(|error| RepositoryError::io(operation, Some(root.to_owned()), error))?;
-    let deadline = Instant::now() + LEASE_TIMEOUT;
+    let deadline = Instant::now() + wait;
     loop {
         match lock(&file) {
             Ok(true) => return Ok(file),
@@ -390,6 +453,60 @@ mod tests {
         assert!(std::panic::catch_unwind(|| snapshot_file_hash(&root, &lease_path)).is_err());
         std::fs::remove_file(&lease_path).unwrap();
         assert!(std::panic::catch_unwind(|| snapshot_file_hash(&root, &lease_path)).is_err());
+    }
+
+    #[test]
+    fn the_setup_lock_is_exclusive_beside_the_lease_and_exempt_from_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let repo = Repository::init(&root).unwrap();
+        let operation = RepositoryOperation::Enable;
+        let lock_path = root.join(".git").join(SETUP_LOCK_FILE);
+        assert!(
+            !lock_path.exists(),
+            "nothing makes the file before it is asked for"
+        );
+
+        let held = setup_lock(&repo, &root, operation).unwrap();
+        assert!(lock_path.is_file());
+        // A second setup operation meets it as busy, even in this process.
+        let busy = setup_lock_waiting(&repo, &root, operation, Duration::ZERO)
+            .err()
+            .unwrap();
+        assert_eq!(busy.kind, RepositoryErrorKind::RepositoryBusy);
+        // It is not the repository lease: item writers take that one, and
+        // neither blocks the other.
+        let lease = repository_lease(&repo, &root, operation).unwrap();
+        drop(lease);
+        drop(held);
+        let held = setup_lock(&repo, &root, operation).unwrap();
+        let lease = repository_lease(&repo, &root, operation).unwrap();
+        assert_eq!(
+            setup_lock_waiting(&repo, &root, operation, Duration::ZERO)
+                .err()
+                .unwrap()
+                .kind,
+            RepositoryErrorKind::RepositoryBusy
+        );
+        drop((held, lease));
+        // A released lock is taken again.
+        drop(setup_lock(&repo, &root, operation).unwrap());
+
+        // A snapshot proves it empty from its metadata, as it does the
+        // lease, and refuses it with content in it.
+        assert_eq!(
+            snapshot_file_hash(&root, &lock_path),
+            *blake3::hash(b"").as_bytes()
+        );
+        std::fs::write(&lock_path, b"unexpected protected contents").unwrap();
+        assert!(std::panic::catch_unwind(|| snapshot_file_hash(&root, &lock_path)).is_err());
+        // A namesake elsewhere is read as any file is.
+        let namesake = root.join("nested").join(SETUP_LOCK_FILE);
+        std::fs::create_dir_all(namesake.parent().unwrap()).unwrap();
+        std::fs::write(&namesake, b"before").unwrap();
+        let before = snapshot_file_hash(&root, &namesake);
+        std::fs::write(&namesake, b"after").unwrap();
+        assert_ne!(snapshot_file_hash(&root, &namesake), before);
     }
 
     fn files(directory: &Path) -> Vec<std::ffi::OsString> {

@@ -197,31 +197,42 @@ impl OriginalPollSource {
             child_request: repository::mutation::RequestId::new().to_string(),
         };
         let mut selection = None;
-        match super::run::branch_only(git, &request) {
-            Ok(Some(tip)) => {
-                c.resources = "branch_only".into();
-                c.tip = Some(tip.to_string());
-            }
-            _ => match super::execution::initial_inventory(git, &self.root, &request) {
-                super::execution::Inventory::Absent => {
-                    c.resources = "absent".into();
-                    c.tip = None;
+        // A ticket the closure fence holds (R-17, a direct record and a
+        // branch record alike) keeps its context: a poll that sees it
+        // deleted and the closure on the primary leaves it to the record's
+        // own request. Read before any resource is selected.
+        let held = state::with_transaction(service, &self.root, |tx, id| {
+            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+        })?;
+        if held {
+            c.refusal = Some("recovery_required".into());
+        } else {
+            match super::run::branch_only(git, &request) {
+                Ok(Some(tip)) => {
+                    c.resources = "branch_only".into();
+                    c.tip = Some(tip.to_string());
                 }
-                super::execution::Inventory::PresentOrBranchOnly => {
-                    match super::instance::Selection::capture(git, &request, cleanup) {
-                        Ok(s) => {
-                            c.resources = "present".into();
-                            c.tip = Some(s.tip().to_string());
-                            c.nonce = Some(s.nonce().to_string());
-                            selection = Some(s);
-                        }
-                        Err(code) => {
-                            c.refusal = Some(code.as_str().into());
+                _ => match super::execution::initial_inventory(git, &self.root, &request) {
+                    super::execution::Inventory::Absent => {
+                        c.resources = "absent".into();
+                        c.tip = None;
+                    }
+                    super::execution::Inventory::PresentOrBranchOnly => {
+                        match super::instance::Selection::capture(git, &request, cleanup) {
+                            Ok(s) => {
+                                c.resources = "present".into();
+                                c.tip = Some(s.tip().to_string());
+                                c.nonce = Some(s.nonce().to_string());
+                                selection = Some(s);
+                            }
+                            Err(code) => {
+                                c.refusal = Some(code.as_str().into());
+                            }
                         }
                     }
-                }
-                _ => c.refusal = Some("recovery_required".into()),
-            },
+                    _ => c.refusal = Some("recovery_required".into()),
+                },
+            }
         }
         if row.after_oid().map(|o| o.to_string()) != c.tip && c.refusal.is_none() {
             return Err(recovery_required());

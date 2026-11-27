@@ -371,6 +371,13 @@ fn every_ticket_filter_matches_the_same_f1_filter() {
             },
         ),
         (
+            vec!["--closure", "closing"],
+            TicketFilter {
+                closure: ClosureFilter::Closing,
+                ..Default::default()
+            },
+        ),
+        (
             vec!["--closure", "all"],
             TicketFilter {
                 closure: ClosureFilter::All,

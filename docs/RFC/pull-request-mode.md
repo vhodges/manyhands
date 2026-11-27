@@ -92,6 +92,8 @@ Proposed by this RFC, approved with it on 2026-11-24:
 ## Approaches considered
 
 - **A. The setting changes what the existing commands do (chosen).** Callers keep one verb per intent and the desktop keeps its actions. The mode decides the path, and the preview says which. Inside, the pull-request path is its own runner that close and promote hand off to, so it is not tangled with the direct runner.
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 13 of Cycle 03 replaces that runner with a mode of the existing one. The pull-request close, the withdraw and the closure-only recovery (a new branch) are branch records of the direct close's ticket-closure lifecycle, run by it with its child attempts, holds, cancellation, abandon, attribution, conflict lookups and listing, and with the branch path only in its middle: record on the branch, publish the branch, no integration and no cleanup. Three review rounds had found the direct close's rules missing from a separate runner one at a time.
 - **B. New commands beside the old ones** (for example `ticket record-closure`, `document request-merge` and a pull-only sync), with close and promote refusing in a pull-request repository. The existing code is untouched, but every person and agent must know the mode and pick the right command. That moves the mode decision from the repository to each caller, which is where refused pushes and jammed clones come from. Rejected.
 - **A `--pull-request` flag on each command.** Easy to forget, and forgetting it jams the clone. Rejected.
 - Also rejected in discussion: a second pull request carrying only the closure; calling a forge API to open pull requests; letting a repository work on top of an unmerged setup branch, because every early item's branch would carry the setup commit, which after a squash never matches the primary.
@@ -192,6 +194,8 @@ No step merges into the local primary or pushes it. If the remote is unreachable
 
 The close leaves no unfinished operation, lease or reservation behind: the wait for the pull request is not part of any operation. A closure that is recorded but not yet published shows in `ticket show` as closing, with publication pending.
 
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 8 departs from that paragraph and from "`item sync` finishes it" for a close that stops partway. A step that stops on its synchronization (a transport, key, host or `busy` stop, a conflict) answers as `item sync` answers that stop and leaves the close unfinished, as a direct close's stop does, and the same request, sent again, finishes it. Once its commit is written the unfinished record holds the ticket against every other writer and synchronization of it, and the poll, until its own publication finishes (a stopped close keeps the remote as any stopped synchronization does); a new request's prepare is held by it; `request cancel` and Ctrl-C answer `cancelled`, exit 130, and leave it unfinished, as the CLI contract's cancellation rules say for a close. A close that is finished leaves nothing held. Decision 10: no answer and no record holds `closed_by`, as Wave 02 Cycle 10's Contract 12 keeps it out of every record and answer: the preview shows it before confirmation, and `ticket show` reads it from the file, so "Answers with the pull request link" means the link, the action and the closure's recording and time.
+
 ### Provisional closure
 
 A closure is provisional when the ticket's branch holds `closed_at` and the primary's copy does not. This is derived from the two copies the index already stores (Table A of the fast-writes design), so the canonical schema does not change.
@@ -204,9 +208,13 @@ A closure is provisional when the ticket's branch holds `closed_at` and the prim
 
 The provisional closure is on the published branch, so every clone shows it after a poll that materializes or updates that branch.
 
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 9 changes "`ticket ready` and `ticket blocked` say so". A closing ticket counts as open for its dependents and for `--closure open`, which are blocked with the reason `closing_dependency`, but `ticket ready`, `ticket blocked`, `ticket plan` and `ticket critical-path` leave closing tickets themselves out (a closing ticket is found through `ticket list --closure closing` or `ticket show`), `ticket plan` keeping the number of every batch. Decision 11: the closing state is derived from the two copies in both modes, as this section words it, so a closure that only a ticket's own context holds reads `closing` in direct mode too, an interrupted direct close's included; the two relationship tests that pinned the old rule were rewritten for it.
+
 ### Withdraw
 
 `ticket withdraw-closure --id <ULID>` (the name is proposed) removes a provisional closure: it makes a commit on the ticket's branch that drops `closed_at` and `closed_by`, then publishes the branch. It is confirmed, like close. It refuses when the primary holds the closure (that would be a reopen), when the ticket has no closure, and while an unfinished direct-mode close holds the item.
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 11 departs from "when the ticket has no closure": a ticket whose branch and whose remote copy hold no closure answers `already_applied` at prepare, with nothing to confirm and no data. It also works in either mode, in a repository with a publication remote, and `ticket_closed` is its answer when the primary holds the closure, also when the forge merged it while the withdraw ran.
 
 Closure immutability changes to match (proposed decision 20). The canonical validation, merge and gate checks that refuse dropping `closed_at` apply once the primary holds the closure. On the ticket's branch, a withdraw commit may drop it, and a merge between clones that carries a withdraw is accepted. A closed ticket on the primary stays immutable.
 
@@ -221,6 +229,8 @@ Step 1 lets a second clone see a closure that is already published. A second clo
 Someone can open the pull request from the ticket's branch by hand, and it can merge before `ticket close`. The ticket then stays open on the primary, and with "Close source branch" its remote branch is gone as well. Because the primary is protected, the only way to close the ticket is a pull request that carries only the closure. That is allowed as the recovery for this case (owner decision 12), and nowhere else.
 
 When step 1 finds the remote branch deleted, or finds that the primary already holds the branch's work without its closure, close warns and offers the recovery instead of recording the closure on the old branch. The recovery retires the old context (its work is on the primary), makes a new branch for the ticket from the remote's primary with only the closure commit, publishes it, and gives the link. Its pull request therefore shows only the closure. When the content proof cannot tell whether the old branch's work reached the primary (a squash after which the primary moved on), close shows what the primary does not hold, and the person confirms. The exact steps and their preview are for planning.
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 6 narrows the recovery to a remote branch that is gone. When the branch merged before close but its remote branch survives, close records the closure on that branch after its synchronization merges the primary in, so nothing on the remote is deleted or replaced, because no guarded replacement of a remote branch exists outside the direct close's cleanup. Decision 7 adds the second place the new branch is used, beside decision 12: a ticket with no context in pull-request mode is closed through the new branch, in place of `context_missing`. In both, the new branch is made from the remote's primary as last fetched with one commit holding only the closure (keeping a provisional closure the old context held), the preview lists every entry of the old branch that the primary does not hold, and the old context is retired locally.
 
 ## Document promote in pull-request mode
 
@@ -325,7 +335,7 @@ As AGENTS.md's Testing Strategy requires:
 - A checkout that is not on the primary: the poll warns and detection waits.
 - Onboarding: setup pending, refused writes, activation by a poll, a merged configuration that differs, an empty remote, and abandoning.
 - The link builder: a table from remote URLs and forge settings to URLs.
-- CLI contract tests against a local remote. No new SSH case, because the transport does not change.
+- CLI contract tests against a local remote. No new SSH case, because the transport does not change. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): decision 11 adds one SSH case in `mutation_remote`, `a_pull_request_close_publishes_only_the_ticket_branch`: close, close again, `item sync`, withdraw and close again, with every server ref update checked to be the ticket branch's, so that the server's primary never moves (Required evidence 1 and 2). No non-SSH publication remote can be selected, so only a case over the harness writes the success goldens. Its edge cases are library tests.
 
 ## Left to planning
 

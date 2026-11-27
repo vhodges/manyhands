@@ -57,6 +57,7 @@ Command catalog:
   repo create  Create a repository. Available now.
   repo enable  Enable Manyhands in a repository. Available now.
   repo remove  Remove a repository registration. Available now.
+  repo setup-cancel  Cancel the repository's pending setup. Available now.
   repo identity-set  Set repository identity. Available now.
   remote add  Add a repository remote. Available now.
   remote remove  Remove a repository remote. Available now.
@@ -98,6 +99,7 @@ Command catalog:
   operation abandon  Abandon an operation. Available now.
   document promote  Promote a document. Available now.
   ticket close  Close a ticket. Available now.
+  ticket withdraw-closure  Withdraw a ticket's closure from its branch. Available now.
   poll once  Poll a repository once. Available now.
   poll configure  Configure polling. Available now.
   poll pause  Pause polling. Available now.
