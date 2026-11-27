@@ -319,6 +319,10 @@ impl Pair {
                 ssh_harness::observation(&[801]);
                 Err(FixtureError)
             }
+            // A direct fixture never answers as a pull-request promotion.
+            DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
+                Err(FixtureError)
+            }
         }
     }
     fn request(&self) -> Result<PromoteDocumentRequest, FixtureError> {

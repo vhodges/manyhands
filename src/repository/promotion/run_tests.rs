@@ -5070,6 +5070,9 @@ fn authoritative(result: DocumentPromotionResult) -> DocumentPromotionOutcome {
     match result {
         DocumentPromotionResult::Complete(o) => o,
         DocumentPromotionResult::IndexPending(p) => p.authoritative,
+        DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
+            unreachable!("a direct fixture never answers as a pull-request promotion")
+        }
     }
 }
 #[test]
@@ -7299,34 +7302,5 @@ fn a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Until the pull-request runner lands, a confirm in a pull-request
-/// repository begins no record: the direct runner, which merges into and
-/// publishes the primary, never runs for it.
-#[test]
-fn a_pull_request_confirm_stops_before_any_direct_record() {
-    let f = Fixture::new();
-    f.remote();
-    write(
-        &f.repo,
-        ".manyhands/config.toml",
-        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
-    );
-    let request = f.request();
-    let primary = f.primary();
-    let mut io = FakeIo::default();
-    let result = f.run_io(request, &mut io);
-    assert!(
-        matches!(result, Err(DocumentPromotionError::RecoveryRequired)),
-        "{result:?}"
-    );
-    assert!(io.calls.borrow().children.is_empty());
-    assert_eq!(io.calls.borrow().deletes, 0);
-    assert_eq!(f.primary(), primary);
-    let rows: i64 = f
-        .db()
-        .query_row("SELECT COUNT(*) FROM document_promotions", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(rows, 0);
-}
+#[path = "run_pull_request_tests.rs"]
+mod pull_request;

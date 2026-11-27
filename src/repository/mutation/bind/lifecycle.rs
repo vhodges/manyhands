@@ -67,10 +67,11 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchRecording, ClosureAction,
-            ClosureRecording, OperationFamily, OperationId, PlannedClosure, PlannedIntegration,
-            PlannedPublication, PromotionCleanup, PromotionCleanupPending, PromotionIntegration,
-            PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
+            AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchPromotionOutcome,
+            BranchRecording, ClosureAction, ClosureRecording, OperationFamily, OperationId,
+            PlannedClosure, PlannedIntegration, PlannedPublication, PromotionCleanup,
+            PromotionCleanupPending, PromotionIntegration, PromotionPublication,
+            PromotionPublicationPending, PromotionRemoteDeletionCategory,
             PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryErrorKind,
             RepositoryOperation, RepositoryService, SynchronizationError,
             promotion::{
@@ -112,7 +113,8 @@ use super::{
 mod verb;
 use verb::{BranchReady, Ready};
 use verb::{
-    Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change, publication_pending,
+    Branched, Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change,
+    promotion_branch_code, publication_pending,
 };
 pub(in super::super) use verb::{Close, LifecycleVerb, Promote, Withdraw};
 pub use verb::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput};
@@ -1031,6 +1033,70 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// The answer of a pull-request promote that finished, whatever way: its
+    /// code is the answer's, and it names what its context child published.
+    /// Nothing reached primary. A promote whose index step is yet to run is
+    /// owed, and the request that gave the answer continues it. The answer's
+    /// data is its own shape, which the answer's reader builds.
+    fn promotion_branch_reached(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        outcome: &BranchPromotionOutcome,
+        index_pending: bool,
+    ) -> Ran {
+        self.branch_record.store(true, Ordering::Relaxed);
+        let code = promotion_branch_code(outcome.answer());
+        // The index step is yet to run: only a promote that answered `ok`
+        // says so.
+        let pending = index_pending && code == ResultCode::Ok;
+        // What the context child pushed is its own result; a record that
+        // ended after its child still shows what that child pushed.
+        let published = match outcome.publication() {
+            Some(PromotionPublication::Published { oid }) => Some(oid),
+            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
+            Some(PromotionPublication::Pending { reason: _ }) | None => {
+                self.context_child_push(service, accepted)
+            }
+        };
+        let effects = Effects {
+            discovery: if index_pending {
+                DiscoveryEffect::Pending
+            } else {
+                DiscoveryEffect::Current
+            },
+            publication: match (outcome.publication(), published) {
+                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
+                    PublicationEffect::Current
+                }
+                (_, Some(_)) => PublicationEffect::Published,
+                (_, None) => PublicationEffect::NotRequested,
+            },
+            commit_oid: published.map(|oid| oid.to_string()),
+            ..Effects::not_requested()
+        };
+        Ran {
+            answer: Answer {
+                effects,
+                recovery: if pending {
+                    vec![outcome::same_request(accepted.request_id)]
+                } else {
+                    Vec::new()
+                },
+                ..Answer::stopped(if pending {
+                    ResultCode::DiscoveryPending
+                } else {
+                    code
+                })
+            },
+            standing: if pending {
+                Standing::Owed
+            } else {
+                Standing::Final
+            },
+        }
+    }
+
     /// The commit the record's context child pushed, which its row says the
     /// remote accepted.
     fn context_child_push(
@@ -1378,9 +1444,13 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let ran = match called {
             Some(Ok(Called::Reached(reached))) => self.reached(call.service, accepted, &reached),
             Some(Ok(Called::Branch {
-                outcome,
+                outcome: Branched::Closure(outcome),
                 index_pending,
             })) => self.branch_reached(call.service, accepted, &outcome, index_pending),
+            Some(Ok(Called::Branch {
+                outcome: Branched::Promotion(outcome),
+                index_pending,
+            })) => self.promotion_branch_reached(call.service, accepted, &outcome, index_pending),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)

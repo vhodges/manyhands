@@ -977,7 +977,10 @@ fn promote_branch<L: Lifecycle>(
     if cancelled::<L>(service, request, r)? {
         return Err(L::Error::interrupted());
     }
-    if !r.effect_written() || r.step() == Step::ContextSynchronized {
+    // Only a closure records anything on its branch.
+    if L::KIND == LifecycleKind::TicketClosure
+        && (!r.effect_written() || r.step() == Step::ContextSynchronized)
+    {
         progress.event(RunEvent::Recording);
     }
     let step = lifecycle.branch_step(service, request, r)?;

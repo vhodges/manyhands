@@ -4,10 +4,10 @@
 //! Cycle 10 Task 1; its methods forward to the promotion module's existing
 //! functions and fields.
 use super::{
-    DocumentPromotionError, DocumentPromotionOutcome, DocumentPromotionPreflight,
-    DocumentPromotionPreview, DocumentPromotionResult, PlannedIntegration,
-    PreviewDocumentPromotionRequest, PromotionCleanup, PromotionExpectation, PromotionIntegration,
-    PromotionPublication, integrate, observe,
+    BranchPromotionOutcome, DocumentPromotionError, DocumentPromotionOutcome,
+    DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult,
+    PlannedIntegration, PreviewDocumentPromotionRequest, PromotionCleanup, PromotionExpectation,
+    PromotionIntegration, PromotionOutcome, PromotionPublication, answer, integrate, observe,
     record::{
         self, ChildExecution, ChildRole, ChildState, CleanupCategory, IntegrationKind,
         PromotionRecord, PromotionStep, PublicationCategory,
@@ -887,7 +887,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
     type Observation = observe::PreparedObservation;
     type Refusal = record::Refusal;
     type ReplacementGuard = record::ReplacementGuard;
-    type Outcome = DocumentPromotionOutcome;
+    type Outcome = PromotionOutcome;
     type Output = DocumentPromotionResult;
     type BranchFinish = std::convert::Infallible;
     const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;
@@ -915,13 +915,27 @@ impl Lifecycle for DocumentPromotionLifecycle {
         remote: Option<&str>,
         observed: Option<&DocumentPromotionPreview>,
     ) -> Result<PromotionRecord, RepositoryError> {
-        // Interim, until the pull-request begin lands with its runner: no
-        // record is begun for a pull-request promotion, so the direct runner
-        // never merges into or publishes the primary of such a repository.
-        if observed.is_some_and(|preview| preview.pull_request().is_some()) {
-            return Err(state::recovery_required());
-        }
-        record::begin_record(tx, id, op, item, expectation, remote)
+        // A pull-request preview begins a pull-request record, with what it
+        // consented to; any other request continues its own record, in the
+        // mode it began in, or begins a direct one.
+        let Some((preview, facts)) = observed.and_then(|p| p.pull_request().map(|f| (p, f))) else {
+            return record::begin_record(tx, id, op, item, expectation, remote);
+        };
+        let remote = remote.ok_or_else(state::recovery_required)?;
+        record::begin_pull_request_record(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            Some(remote),
+            &record::PullRequestBegin {
+                consented: preview.context_oid(),
+                situation: facts.situation,
+                primary_branch: preview.primary_branch().to_owned(),
+                endpoint_digest: endpoint_digest_at_begin(tx, id, remote)?,
+            },
+        )
     }
     fn replacement_guard(
         tx: &Transaction<'_>,
@@ -940,7 +954,8 @@ impl Lifecycle for DocumentPromotionLifecycle {
         _observed: Option<&DocumentPromotionPreview>,
         refusal: &record::Refusal,
     ) -> Result<PromotionRecord, RepositoryError> {
-        record::refuse_record(
+        // The refused confirm's own mode: the configuration it observed in.
+        record::refuse_record_on(
             tx,
             id,
             op,
@@ -948,6 +963,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
             expectation,
             config.publication_remote.as_deref(),
             refusal,
+            config.integration(),
         )
     }
     fn clear_cancellation(
@@ -1124,22 +1140,26 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<PreIntegration, DocumentPromotionError> {
         Ok(PreIntegration::None)
     }
-    /// A promotion record is always direct: the runner never asks.
+    /// A pull-request record's step 3: the first answer table, which
+    /// finishes the record. It has no publication child, so the runner never
+    /// goes on to one.
     fn branch_step(
         &self,
-        _service: &RepositoryService,
-        _request: &LifecycleRequest<PromotionExpectation>,
-        _r: &PromotionRecord,
+        service: &RepositoryService,
+        request: &LifecycleRequest<PromotionExpectation>,
+        r: &PromotionRecord,
     ) -> Result<BranchStep, DocumentPromotionError> {
-        Err(DocumentPromotionError::RecoveryRequired)
+        answer::finish(service, request, r)?;
+        Ok(BranchStep::Finished)
     }
+    /// The second answer table, for a context child that ended.
     fn end_branch(
-        _service: &RepositoryService,
-        _root: &Path,
-        _r: &PromotionRecord,
-        _end: BranchEnd<'_>,
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+        end: BranchEnd<'_>,
     ) -> Result<(), RepositoryError> {
-        Err(state::recovery_required())
+        answer::end(service, root, r, end)
     }
     fn begin_publication(
         _tx: &Transaction<'_>,
@@ -1165,31 +1185,80 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<(), RepositoryError> {
         match *finish {}
     }
+    /// What a finished pull-request record says: its answer, and what its
+    /// context child published, which the record holds as the child's
+    /// category and the tip the branch had once the child was done. The
+    /// runner's own `publication` is the second slot's, which it has none of.
     fn branch_outcome(
-        _r: &PromotionRecord,
+        r: &PromotionRecord,
         _publication: Option<PromotionPublication>,
-    ) -> DocumentPromotionOutcome {
-        unreachable!("a promotion record is always direct")
+    ) -> PromotionOutcome {
+        let publication = r.context_oid.and_then(|oid| match r.publication {
+            Some(PublicationCategory::Published) => Some(PromotionPublication::Published { oid }),
+            Some(PublicationCategory::AlreadyCurrent) => {
+                Some(PromotionPublication::AlreadyCurrent { oid })
+            }
+            _ => None,
+        });
+        PromotionOutcome::Branch(BranchPromotionOutcome {
+            operation_id: r.operation_id,
+            answer: r
+                .answer_code
+                .expect("a finished branch record has its answer"),
+            publication,
+        })
     }
     fn outcome(
         r: &PromotionRecord,
         integration: PromotionIntegration,
         publication: PromotionPublication,
         cleanup: PromotionCleanup,
-    ) -> DocumentPromotionOutcome {
-        DocumentPromotionOutcome {
+    ) -> PromotionOutcome {
+        PromotionOutcome::Direct(DocumentPromotionOutcome {
             operation_id: r.operation_id,
             integration,
             publication,
             cleanup,
+        })
+    }
+    fn complete(outcome: PromotionOutcome) -> DocumentPromotionResult {
+        match outcome {
+            PromotionOutcome::Direct(outcome) => DocumentPromotionResult::Complete(outcome),
+            PromotionOutcome::Branch(outcome) => DocumentPromotionResult::Branch(outcome),
         }
     }
-    fn complete(outcome: DocumentPromotionOutcome) -> DocumentPromotionResult {
-        DocumentPromotionResult::Complete(outcome)
+    fn index_pending(outcome: PromotionOutcome) -> DocumentPromotionResult {
+        match outcome {
+            PromotionOutcome::Direct(outcome) => {
+                DocumentPromotionResult::IndexPending(IndexPending::new(outcome))
+            }
+            PromotionOutcome::Branch(outcome) => {
+                DocumentPromotionResult::BranchIndexPending(IndexPending::new(outcome))
+            }
+        }
     }
-    fn index_pending(outcome: DocumentPromotionOutcome) -> DocumentPromotionResult {
-        DocumentPromotionResult::IndexPending(IndexPending::new(outcome))
-    }
+}
+
+/// The digest of the publication remote's endpoints, read when a
+/// pull-request record begins: under the lease its revalidation held, from
+/// the repository the registration names.
+fn endpoint_digest_at_begin(
+    tx: &Transaction<'_>,
+    id: i64,
+    remote: &str,
+) -> Result<[u8; 32], RepositoryError> {
+    let root: String = tx
+        .query_row(
+            "SELECT root_path FROM repositories WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+    Ok(crate::repository::remote::observation::endpoint_digest_of(
+        &repository,
+        remote,
+    ))
 }
 
 #[cfg(test)]

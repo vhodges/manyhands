@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(super) mod answer;
 #[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
 pub(super) mod integrate;
 pub(super) mod lifecycle;
@@ -184,10 +185,54 @@ impl DocumentPromotionOutcome {
         self.cleanup
     }
 }
+/// A finished pull-request promotion's answer: it never reached the primary,
+/// so it has no integration or cleanup to report. `Debug` shows IDs, OIDs and
+/// categories only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchPromotionOutcome {
+    operation_id: OperationId,
+    answer: record::PromotionAnswer,
+    publication: Option<PromotionPublication>,
+}
+impl BranchPromotionOutcome {
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    /// How the record answered.
+    pub(super) fn answer(&self) -> record::PromotionAnswer {
+        self.answer
+    }
+    /// What the record's context child published, when that child completed.
+    pub fn publication(&self) -> Option<PromotionPublication> {
+        self.publication
+    }
+    /// An outcome of the answer given, for the binding's tests.
+    #[cfg(test)]
+    pub(super) fn for_testing(
+        answer: record::PromotionAnswer,
+        publication: Option<PromotionPublication>,
+    ) -> Self {
+        Self {
+            operation_id: OperationId::new(),
+            answer,
+            publication,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocumentPromotionResult {
     Complete(DocumentPromotionOutcome),
     IndexPending(IndexPending<DocumentPromotionOutcome>),
+    /// A pull-request promote, finished: whatever way it answered.
+    Branch(BranchPromotionOutcome),
+    BranchIndexPending(IndexPending<BranchPromotionOutcome>),
+}
+/// What the promotion lifecycle's runner builds an outcome of: a direct
+/// promote's, or a pull-request promote's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PromotionOutcome {
+    Direct(DocumentPromotionOutcome),
+    Branch(BranchPromotionOutcome),
 }
 
 #[derive(Clone)]

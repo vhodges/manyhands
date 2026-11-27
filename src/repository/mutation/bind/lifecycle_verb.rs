@@ -10,20 +10,22 @@ use crate::{
 
 use super::super::super::{
     super::{
-        AuthoringKind, BranchAnswer, BranchClosureOutcome, CloseTicketRequest, ClosureAction,
-        ClosureBlocker, ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight,
-        ConfigurationInspection, DocumentPromotionError, DocumentPromotionOutcome,
-        DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult, ItemDtoKind,
-        OperationId, PathChange, PlannedCleanup, PlannedClosure, PlannedIntegration,
-        PlannedPublication, PreviewDocumentPromotionRequest, PreviewTicketClosureRequest,
-        PromoteDocumentRequest, PromotionBlocker, PromotionCleanup, PromotionCleanupPending,
-        PromotionExpectation, PromotionIntegration, PromotionPathChange, PromotionPublication,
-        PromotionPublicationPending, PromotionRemoteDeletionCategory,
+        AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchPromotionOutcome,
+        CloseTicketRequest, ClosureAction, ClosureBlocker, ClosureExpectation, ClosureRecording,
+        ClosureWithdrawalPreflight, ConfigurationInspection, DocumentPromotionError,
+        DocumentPromotionOutcome, DocumentPromotionPreflight, DocumentPromotionPreview,
+        DocumentPromotionResult, ItemDtoKind, OperationId, PathChange, PlannedCleanup,
+        PlannedClosure, PlannedIntegration, PlannedPublication, PreviewDocumentPromotionRequest,
+        PreviewTicketClosureRequest, PromoteDocumentRequest, PromotionBlocker, PromotionCleanup,
+        PromotionCleanupPending, PromotionExpectation, PromotionIntegration, PromotionPathChange,
+        PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
         PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
         closure, promotion,
-        promotion::{ParentView, lifecycle::LifecyclePreview, run::RunObserver},
+        promotion::{
+            ParentView, lifecycle::LifecyclePreview, record::PromotionAnswer, run::RunObserver,
+        },
         read_configuration_for,
         remote::{state, sync},
         transport::SshTransportError,
@@ -125,9 +127,15 @@ pub(in super::super::super) enum Called {
     /// A branch record's answer, whatever it was. `index_pending` is the
     /// domain's own: its refresh is yet to run.
     Branch {
-        outcome: BranchClosureOutcome,
+        outcome: Branched,
         index_pending: bool,
     },
+}
+
+/// How a branch record answered, of either lifecycle.
+pub(in super::super::super) enum Branched {
+    Closure(BranchClosureOutcome),
+    Promotion(BranchPromotionOutcome),
 }
 
 /// What stopped an operation before it could report that, of either verb.
@@ -377,11 +385,11 @@ fn called_of(result: Result<TicketClosureResult, TicketClosureError>) -> Result<
             true,
         ))),
         Ok(TicketClosureResult::Branch(outcome)) => Ok(Called::Branch {
-            outcome,
+            outcome: Branched::Closure(outcome),
             index_pending: false,
         }),
         Ok(TicketClosureResult::BranchIndexPending(pending)) => Ok(Called::Branch {
-            outcome: pending.authoritative,
+            outcome: Branched::Closure(pending.authoritative),
             index_pending: true,
         }),
         Err(error) => Err(match error {
@@ -472,6 +480,14 @@ impl LifecycleVerb for Promote {
             Ok(DocumentPromotionResult::IndexPending(pending)) => Ok(Called::Reached(
                 promotion_reached(&pending.authoritative, true),
             )),
+            Ok(DocumentPromotionResult::Branch(outcome)) => Ok(Called::Branch {
+                outcome: Branched::Promotion(outcome),
+                index_pending: false,
+            }),
+            Ok(DocumentPromotionResult::BranchIndexPending(pending)) => Ok(Called::Branch {
+                outcome: Branched::Promotion(pending.authoritative),
+                index_pending: true,
+            }),
             Err(error) => Err(match error {
                 DocumentPromotionError::Repository(error) => Stop::Repository(error),
                 DocumentPromotionError::Transport(error) => Stop::Transport(error),
@@ -709,6 +725,21 @@ pub(super) fn branch_code(answer: BranchAnswer) -> ResultCode {
         BranchAnswer::ExternalChange | BranchAnswer::ReconfirmationRequired => {
             ResultCode::ExternalChange
         }
+    }
+}
+
+/// The code a pull-request promotion's answer gives. A document the primary
+/// holds is `already_applied` whichever way the record got there; a branch
+/// that is gone after its child answers as a closure's does.
+pub(super) fn promotion_branch_code(answer: PromotionAnswer) -> ResultCode {
+    match answer {
+        PromotionAnswer::Promoted => ResultCode::Ok,
+        PromotionAnswer::AlreadyPromoted | PromotionAnswer::PrimaryHolds => {
+            ResultCode::AlreadyApplied
+        }
+        PromotionAnswer::RemoteBranchDeleted => ResultCode::RemoteBranchDeleted,
+        PromotionAnswer::HistoryUnresolved => ResultCode::RecoveryRequired,
+        PromotionAnswer::ContextGone => ResultCode::ExternalChange,
     }
 }
 

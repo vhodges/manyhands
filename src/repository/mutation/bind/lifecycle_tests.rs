@@ -359,6 +359,120 @@ fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
     assert!(ran.answer.recovery.is_empty());
 }
 
+/// A pull-request promotion's answer is a branch answer: it names the
+/// document's branch, each answer has its code, one whose index step is yet to
+/// run is owed only when it answered `ok`, and what it published is its
+/// effect. No data is built for it here: the data is the answer's own shape.
+#[test]
+fn a_pull_request_promotion_answers_by_its_answer() {
+    use crate::repository::{BranchPromotionOutcome, promotion::record::PromotionAnswer as A};
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let binding = || LifecycleBinding::<Fixed> {
+        root: PathBuf::from("/nowhere"),
+        id: ITEM.parse().unwrap(),
+        expected: None,
+        closure_exists: false,
+        branch_record: AtomicBool::new(false),
+        verb: PhantomData,
+    };
+    let accepted = accepted();
+    let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+    let published = Some(PromotionPublication::Published { oid });
+    let current = Some(PromotionPublication::AlreadyCurrent { oid });
+    // (the answer, its code, what it published, the effect that shows it)
+    for (answer, code, publication, effect) in [
+        (
+            A::Promoted,
+            ResultCode::Ok,
+            published,
+            PublicationEffect::Published,
+        ),
+        (
+            A::AlreadyPromoted,
+            ResultCode::AlreadyApplied,
+            current,
+            PublicationEffect::Current,
+        ),
+        (
+            A::PrimaryHolds,
+            ResultCode::AlreadyApplied,
+            published,
+            PublicationEffect::Published,
+        ),
+        (
+            A::PrimaryHolds,
+            ResultCode::AlreadyApplied,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::RemoteBranchDeleted,
+            ResultCode::RemoteBranchDeleted,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::HistoryUnresolved,
+            ResultCode::RecoveryRequired,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::ContextGone,
+            ResultCode::ExternalChange,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+    ] {
+        assert_eq!(promotion_branch_code(answer), code, "{answer:?}");
+        let binding = binding();
+        let outcome = BranchPromotionOutcome::for_testing(answer, publication);
+        let ran = binding.promotion_branch_reached(&service, &accepted, &outcome, false);
+        assert_eq!(ran.answer.code, code, "{answer:?}");
+        assert_eq!(ran.answer.effects.publication, effect, "{answer:?}");
+        assert_eq!(
+            ran.answer.effects.commit_oid,
+            (effect == PublicationEffect::Published).then(|| oid.to_string()),
+            "{answer:?}"
+        );
+        assert_eq!(
+            ran.answer.effects.discovery,
+            DiscoveryEffect::Current,
+            "{answer:?}"
+        );
+        assert!(matches!(ran.standing, Standing::Final), "{answer:?}");
+        assert!(ran.answer.recovery.is_empty(), "{answer:?}");
+        assert!(binding.names_branch(), "{answer:?}");
+    }
+    // An index step yet to run is owed for an `ok` answer, and offers the
+    // request that gave it; any other answer is final.
+    let binding_ = binding();
+    let ran = binding_.promotion_branch_reached(
+        &service,
+        &accepted,
+        &BranchPromotionOutcome::for_testing(A::Promoted, published),
+        true,
+    );
+    assert_eq!(ran.answer.code, ResultCode::DiscoveryPending);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(ran.answer.effects.discovery, DiscoveryEffect::Pending);
+    assert_eq!(
+        ran.answer.recovery,
+        vec![crate::repository::mutation::outcome::same_request(
+            accepted.request_id
+        )]
+    );
+    let ran = binding_.promotion_branch_reached(
+        &service,
+        &accepted,
+        &BranchPromotionOutcome::for_testing(A::AlreadyPromoted, current),
+        true,
+    );
+    assert_eq!(ran.answer.code, ResultCode::AlreadyApplied);
+    assert!(matches!(ran.standing, Standing::Final));
+}
+
 /// A registered Git repository, and the link row its ticket was given.
 struct Registered {
     _data: tempfile::TempDir,

@@ -2131,6 +2131,12 @@ fn pull_request_promotion_steps_and_checks() {
             Expect::Rust,
         ),
         (
+            "an answer with no begin-time columns",
+            Abandoned,
+            |r| bundle(r, false),
+            Expect::Both,
+        ),
+        (
             "abandoned with promoted",
             Abandoned,
             |r| r.answer_code = Some(PromotionAnswer::Promoted),
@@ -2424,4 +2430,423 @@ fn pull_request_promotion_steps_and_checks() {
     let mut filled = refused.clone();
     bundle(&mut filled, true);
     assert!(save_record(&tx, 1, &filled).is_err());
+}
+
+/// The pull-request begin writes the mode and the four begin-time columns, a
+/// refused record takes the confirm's mode with none of them, and the two
+/// finishes store the answer, the child's category and what the link record
+/// is told, each pairing held by the record layer.
+#[test]
+fn pull_request_begin_and_finish_write_their_columns() {
+    use crate::forge::PullRequestLink;
+    use crate::repository::pull_request_links::{link_of, upsert_link};
+    use PromotionStep::*;
+    let expectation = PromotionExpectation::from_bytes([7; 32]);
+    let item = |n: usize| -> ItemId { ITEMS[n].parse().unwrap() };
+    let link = |target: &str| PullRequestLink {
+        source: format!("manyhands/document/{}", ITEMS[0]),
+        target: target.into(),
+        forge: None,
+        url: None,
+    };
+    let begin_data = || PullRequestBegin {
+        consented: oid(),
+        situation: PromotionSituation::Again,
+        primary_branch: "main".into(),
+        endpoint_digest: [9; 32],
+    };
+
+    // The begin.
+    let mut registry = db();
+    let tx = registry.transaction().unwrap();
+    let op = OperationId::new();
+    let r = begin_pull_request_record(
+        &tx,
+        1,
+        op,
+        &item(0),
+        expectation,
+        Some("origin"),
+        &begin_data(),
+    )
+    .unwrap();
+    assert_eq!(r.step, Confirmed);
+    assert_eq!(r.integration_mode, Integration::PullRequest);
+    assert_eq!(r.path(), RecordPath::Branch);
+    assert_eq!(r.remote_name.as_deref(), Some("origin"));
+    assert_eq!(r.consented_context_oid, Some(oid()));
+    assert_eq!(r.situation, Some(PromotionSituation::Again));
+    assert_eq!(r.primary_branch.as_deref(), Some("main"));
+    assert_eq!(r.endpoint_digest, Some([9; 32]));
+    assert_eq!(
+        (r.answer_code, r.publication, r.refusal.clone()),
+        (None, None, None)
+    );
+    assert_eq!(read_record(&tx, 1, op).unwrap().unwrap(), r);
+    // The same operation finds its record, whatever it is asked again.
+    let mut other = begin_data();
+    other.situation = PromotionSituation::First;
+    assert_eq!(
+        begin_pull_request_record(&tx, 1, op, &item(0), expectation, Some("origin"), &other)
+            .unwrap(),
+        r
+    );
+    // Another operation is held off by the unfinished record, and a pull-request
+    // begin has a remote to publish to.
+    assert!(
+        begin_pull_request_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(0),
+            expectation,
+            Some("origin"),
+            &begin_data()
+        )
+        .is_err()
+    );
+    assert!(
+        begin_pull_request_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(1),
+            expectation,
+            None,
+            &begin_data()
+        )
+        .is_err()
+    );
+
+    // A refused record takes the confirm's mode and none of the four.
+    let refused = refuse_record_on(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(1),
+        expectation,
+        Some("origin"),
+        &Refusal::ExternalChange,
+        Integration::PullRequest,
+    )
+    .unwrap();
+    assert_eq!(refused.integration_mode, Integration::PullRequest);
+    assert_eq!(refused.step, Abandoned);
+    assert_eq!(
+        (
+            refused.consented_context_oid,
+            refused.situation,
+            refused.primary_branch.clone(),
+            refused.endpoint_digest
+        ),
+        (None, None, None, None)
+    );
+    let direct = refuse_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(2),
+        expectation,
+        Some("origin"),
+        &Refusal::ExternalChange,
+    )
+    .unwrap();
+    assert_eq!(direct.integration_mode, Integration::Direct);
+    drop(tx);
+    drop(registry);
+
+    // The finishes. A fresh registry each, with a record at `step` and the
+    // link row `row` (its `given_at` is 1).
+    let at = |tx: &rusqlite::Transaction<'_>, step: PromotionStep, row: bool| {
+        let op = OperationId::new();
+        let mut r = begin_pull_request_record(
+            tx,
+            1,
+            op,
+            &item(0),
+            expectation,
+            Some("origin"),
+            &begin_data(),
+        )
+        .unwrap();
+        if step == ContextSynchronized {
+            r.context_oid = Some(oid());
+            r.step = step;
+            save_record(tx, 1, &r).unwrap();
+        }
+        if row {
+            upsert_link(tx, 1, "document", ITEMS[0], &link("main"), 1).unwrap();
+        }
+        op
+    };
+    let given_at = |tx: &rusqlite::Transaction<'_>| -> Option<i64> {
+        tx.query_row(
+            "SELECT given_at FROM pull_request_links WHERE kind='document' AND item_ulid=?1",
+            [ITEMS[0]],
+            |row| row.get(0),
+        )
+        .ok()
+    };
+    use PromotionAnswer::*;
+    use PublicationCategory as Category;
+    type Make = fn(PullRequestLink) -> BranchFinish;
+    // (label, step, a link row first, the finish, whether it is accepted,
+    // the row's given_at after, the link's target after).
+    type Row = (
+        &'static str,
+        PromotionStep,
+        bool,
+        Make,
+        bool,
+        Option<i64>,
+        &'static str,
+    );
+    let complete: Vec<Row> = vec![
+        (
+            "promoted gives a link",
+            ContextSynchronized,
+            false,
+            |l| BranchFinish {
+                answer: Promoted,
+                category: Category::Published,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            true,
+            Some(5),
+            "other",
+        ),
+        (
+            "promoted over a row replaces it",
+            ContextSynchronized,
+            true,
+            |l| BranchFinish {
+                answer: Promoted,
+                category: Category::AlreadyCurrent,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            true,
+            Some(5),
+            "other",
+        ),
+        (
+            "already_promoted renews given_at alone",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: AlreadyPromoted,
+                category: Category::AlreadyCurrent,
+                link: LinkWrite::Renew { given_at: 9 },
+            },
+            true,
+            Some(9),
+            "main",
+        ),
+        (
+            "already_promoted with no row renews nothing",
+            ContextSynchronized,
+            false,
+            |_| BranchFinish {
+                answer: AlreadyPromoted,
+                category: Category::Published,
+                link: LinkWrite::Renew { given_at: 9 },
+            },
+            true,
+            None,
+            "main",
+        ),
+        (
+            "primary_holds leaves the row",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: PrimaryHolds,
+                category: Category::Published,
+                link: LinkWrite::Untouched,
+            },
+            true,
+            Some(1),
+            "main",
+        ),
+        (
+            "primary_holds writes none",
+            ContextSynchronized,
+            false,
+            |_| BranchFinish {
+                answer: PrimaryHolds,
+                category: Category::Published,
+                link: LinkWrite::Untouched,
+            },
+            true,
+            None,
+            "main",
+        ),
+        (
+            "promoted with a renewal",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: Promoted,
+                category: Category::Published,
+                link: LinkWrite::Renew { given_at: 9 },
+            },
+            false,
+            Some(1),
+            "main",
+        ),
+        (
+            "primary_holds with a link",
+            ContextSynchronized,
+            true,
+            |l| BranchFinish {
+                answer: PrimaryHolds,
+                category: Category::Published,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            false,
+            Some(1),
+            "main",
+        ),
+        (
+            "already_promoted untouched",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: AlreadyPromoted,
+                category: Category::Published,
+                link: LinkWrite::Untouched,
+            },
+            false,
+            Some(1),
+            "main",
+        ),
+        (
+            "a conflict category",
+            ContextSynchronized,
+            false,
+            |l| BranchFinish {
+                answer: Promoted,
+                category: Category::Conflict,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            false,
+            None,
+            "main",
+        ),
+        (
+            "an ended answer",
+            ContextSynchronized,
+            false,
+            |l| BranchFinish {
+                answer: RemoteBranchDeleted,
+                category: Category::Published,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            false,
+            None,
+            "main",
+        ),
+        (
+            "at confirmed",
+            Confirmed,
+            false,
+            |l| BranchFinish {
+                answer: Promoted,
+                category: Category::Published,
+                link: LinkWrite::Give {
+                    link: l,
+                    given_at: 5,
+                },
+            },
+            false,
+            None,
+            "main",
+        ),
+    ];
+    for (label, step, row, finish, accepted, given, target) in complete {
+        let mut db = db();
+        let tx = db.transaction().unwrap();
+        let op = at(&tx, step, row);
+        let finish = finish(link("other"));
+        let result = complete_branch_record(&tx, 1, op, &finish);
+        assert_eq!(result.is_ok(), accepted, "{label}");
+        let r = read_record(&tx, 1, op).unwrap().unwrap();
+        if accepted {
+            assert_eq!(r.step, Complete, "{label}");
+            assert_eq!(r.answer_code, Some(finish.answer), "{label}");
+            assert_eq!(r.publication, Some(finish.category), "{label}");
+            assert!(!r.cancel_requested, "{label}");
+        } else {
+            assert_eq!(r.step, step, "{label}");
+            assert_eq!((r.answer_code, r.publication), (None, None), "{label}");
+        }
+        assert_eq!(given_at(&tx), given, "{label}");
+        let stored = link_of(&tx, 1, "document", ITEMS[0]).unwrap();
+        assert_eq!(
+            stored.map(|l| l.target),
+            given.map(|_| target.to_owned()),
+            "{label}"
+        );
+    }
+    // The ended finish: from `confirmed` only, with the four answers an ended
+    // record has; a deleted branch takes its row, the rest keep it.
+    let ended: [(PromotionAnswer, bool); 6] = [
+        (PrimaryHolds, true),
+        (RemoteBranchDeleted, true),
+        (HistoryUnresolved, true),
+        (ContextGone, true),
+        (Promoted, false),
+        (AlreadyPromoted, false),
+    ];
+    for (answer, accepted) in ended {
+        let mut db = db();
+        let tx = db.transaction().unwrap();
+        let op = at(&tx, Confirmed, true);
+        let result = abandon_branch_record(&tx, 1, op, answer);
+        assert_eq!(result.is_ok(), accepted, "{answer:?}");
+        let r = read_record(&tx, 1, op).unwrap().unwrap();
+        if accepted {
+            assert_eq!(r.step, Abandoned, "{answer:?}");
+            assert_eq!(
+                r.refusal,
+                Some(Refusal::ReconfirmationRequired),
+                "{answer:?}"
+            );
+            assert_eq!(r.answer_code, Some(answer), "{answer:?}");
+            assert_eq!(r.publication, None, "{answer:?}");
+            assert_eq!(
+                given_at(&tx),
+                if answer == RemoteBranchDeleted {
+                    None
+                } else {
+                    Some(1)
+                },
+                "{answer:?}"
+            );
+        } else {
+            assert_eq!(r.step, Confirmed, "{answer:?}");
+            assert_eq!(given_at(&tx), Some(1), "{answer:?}");
+        }
+    }
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let op = at(&tx, ContextSynchronized, false);
+    assert!(
+        abandon_branch_record(&tx, 1, op, ContextGone).is_err(),
+        "not from context_synchronized"
+    );
 }

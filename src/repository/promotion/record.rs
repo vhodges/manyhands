@@ -11,6 +11,7 @@ use crate::{
     repository::{
         OperationId, RepositoryError, RepositoryService,
         cleanup::RetirementEvidence,
+        pull_request_links,
         remote::{reservation::RemoteReservation, state},
     },
 };
@@ -264,6 +265,7 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK(integration_mode='direct' OR (base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND cleanup_category IS NULL AND primary_attempt=0 AND step NOT IN ('integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','superseded'))),
     CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
     CHECK(answer_code IS NULL OR step='complete' OR refusal_category='reconfirmation_required'),
+    CHECK(answer_code IS NULL OR consented_context_oid IS NOT NULL),
     CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current')))
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
@@ -522,6 +524,8 @@ fn validate_pull_request(r: &PromotionRecord) -> Result<(), RepositoryError> {
         .into_iter()
         .any(|set| set != begun)
         || !begun && r.step != Abandoned
+        // An answer is given by a record that began.
+        || !begun && r.answer_code.is_some()
         // A record that began has the publication remote it began with.
         || r.step != Abandoned && r.remote_name.is_none()
         || r.primary_branch.as_deref().is_some_and(|branch| {
@@ -605,7 +609,60 @@ pub(in super::super) fn begin_record(
         }
         parent::supersede(tx, id, &old)?;
     }
-    insert_record(tx, id, op, item, expectation, remote, None)
+    insert_record(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        None,
+        Integration::Direct,
+        None,
+    )
+}
+/// A pull-request record's begin-time columns, as the confirm's observation
+/// gives them: the consented tip, the situation consented to, the configured
+/// primary branch and the digest of the publication remote's endpoints. All
+/// four are set at begin and immutable.
+pub(in super::super) struct PullRequestBegin {
+    pub consented: Oid,
+    pub situation: PromotionSituation,
+    pub primary_branch: String,
+    pub endpoint_digest: [u8; 32],
+}
+/// The begin of a pull-request promotion: the operation's own record when it
+/// has one, whatever mode it began in, else a new `confirmed` record with the
+/// mode and the four columns. A pull-request record supersedes nothing: any
+/// other unfinished record of the document holds it off.
+pub(in super::super) fn begin_pull_request_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: PromotionExpectation,
+    remote: Option<&str>,
+    begin: &PullRequestBegin,
+) -> Result<PromotionRecord, RepositoryError> {
+    if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
+        return Ok(existing);
+    }
+    if parent::unfinished_record::<PromotionRecord>(tx, id, item)?.is_some() {
+        return Err(parent::busy(KIND));
+    }
+    // A pull-request promotion publishes to its remote.
+    let remote = remote.ok_or_else(state::recovery_required)?;
+    insert_record(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        Some(remote),
+        None,
+        Integration::PullRequest,
+        Some(begin),
+    )
 }
 /// A refused new request is terminal from insertion. It can coexist with the
 /// original unfinished parent without superseding/fencing that parent's owner.
@@ -618,6 +675,30 @@ pub(in super::super) fn refuse_record(
     remote: Option<&str>,
     refusal: &Refusal,
 ) -> Result<PromotionRecord, RepositoryError> {
+    refuse_record_on(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        refusal,
+        Integration::Direct,
+    )
+}
+/// `refuse_record` in the mode the refused confirm was made in: a refused
+/// pull-request record has none of the four begin-time columns.
+#[allow(clippy::too_many_arguments)] // `refuse_record`'s, with the mode.
+pub(in super::super) fn refuse_record_on(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: PromotionExpectation,
+    remote: Option<&str>,
+    refusal: &Refusal,
+    mode: Integration,
+) -> Result<PromotionRecord, RepositoryError> {
     if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
     }
@@ -626,8 +707,19 @@ pub(in super::super) fn refuse_record(
     {
         return Err(parent::busy(KIND));
     }
-    insert_record(tx, id, op, item, expectation, remote, Some(refusal))
+    insert_record(
+        tx,
+        id,
+        op,
+        item,
+        expectation,
+        remote,
+        Some(refusal),
+        mode,
+        None,
+    )
 }
+#[allow(clippy::too_many_arguments)] // One INSERT of every column a begin or a refusal writes.
 fn insert_record(
     tx: &Transaction<'_>,
     id: i64,
@@ -636,6 +728,8 @@ fn insert_record(
     expectation: PromotionExpectation,
     remote: Option<&str>,
     refusal: Option<&Refusal>,
+    mode: Integration,
+    begin: Option<&PullRequestBegin>,
 ) -> Result<PromotionRecord, RepositoryError> {
     if let Some(remote) = remote {
         crate::repository::RemoteRefPlan::from_configuration(remote, "main")
@@ -647,7 +741,7 @@ fn insert_record(
     } else {
         "confirmed"
     };
-    tx.execute("INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,parent::now(),category,blockers]).map_err(|_|state::recovery_required())?;
+    tx.execute("INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers,integration_mode,consented_context_oid,situation,primary_branch,endpoint_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,parent::now(),category,blockers,mode.as_str(),begin.map(|b|b.consented.to_string()),begin.map(|b|b.situation.name()),begin.map(|b|b.primary_branch.as_str()),begin.map(|b|b.endpoint_digest.as_slice())]).map_err(|_|state::recovery_required())?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)
 }
 pub(in super::super) fn save_record(
@@ -688,6 +782,123 @@ pub(in super::super) fn save_record(
     validate(r)?;
     let (refusal, mask) = Refusal::encoded_columns(r.refusal.as_ref())?;
     tx.execute("UPDATE document_promotions SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12) WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now()]).map_err(|_|state::recovery_required())?;
+    Ok(())
+}
+
+/// What a finished pull-request promotion tells the link record, which the
+/// answer pairs with: a first promote gives its link, a promote again renews
+/// the row's `given_at` alone, and a document the primary holds touches
+/// nothing.
+pub(in super::super) enum LinkWrite {
+    Untouched,
+    Renew {
+        given_at: i64,
+    },
+    Give {
+        link: crate::forge::PullRequestLink,
+        given_at: i64,
+    },
+}
+/// What a pull-request promotion whose context child completed stores: its
+/// answer, the child's category and the link record's write.
+pub(in super::super) struct BranchFinish {
+    pub answer: PromotionAnswer,
+    pub category: PublicationCategory,
+    pub link: LinkWrite,
+}
+/// Whether the context child holds the record: its row is live and holds no
+/// authority, or it is retained.
+fn child_holds(tx: &Transaction<'_>, r: &PromotionRecord) -> Result<bool, RepositoryError> {
+    use crate::repository::RemoteOperationPhase as Phase;
+    Ok(match child_state(tx, r, ChildRole::Context)? {
+        ChildState::Absent | ChildState::Complete(_) => false,
+        ChildState::Retained(_) => true,
+        ChildState::Unowned(row) => !matches!(
+            row.phase,
+            Phase::Completed | Phase::Interrupted | Phase::Cancelled | Phase::Failed
+        ),
+    })
+}
+/// A pull-request promotion's completion after its context child, in the
+/// caller's transaction: the answer and the child's category stored, and the
+/// link record written as the answer says. Only a record at
+/// `context_synchronized` completes, with an answer that goes with its link
+/// write.
+pub(in super::super) fn complete_branch_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    finish: &BranchFinish,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    let paired = matches!(
+        (finish.answer, &finish.link),
+        (PromotionAnswer::Promoted, LinkWrite::Give { .. })
+            | (PromotionAnswer::AlreadyPromoted, LinkWrite::Renew { .. })
+            | (PromotionAnswer::PrimaryHolds, LinkWrite::Untouched)
+    );
+    if r.path() != RecordPath::Branch
+        || !r
+            .step
+            .permits(PromotionStep::Complete, true, r.integration_mode)
+        || !paired
+        || !matches!(
+            finish.category,
+            PublicationCategory::Published | PublicationCategory::AlreadyCurrent
+        )
+        || child_holds(tx, &r)?
+    {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE document_promotions SET step='complete',answer_code=?2,publication_category=?3,cancel_requested=0,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![op.to_string(),finish.answer.name(),finish.category.name(),parent::now()]).map_err(|_|state::recovery_required())?;
+    let item = r.item_id.to_string();
+    match &finish.link {
+        LinkWrite::Untouched => {}
+        LinkWrite::Renew { given_at } => {
+            pull_request_links::touch_link(tx, id, "document", &item, *given_at)
+                .map_err(|_| state::recovery_required())?;
+        }
+        LinkWrite::Give { link, given_at } => {
+            pull_request_links::upsert_link(tx, id, "document", &item, link, *given_at)
+                .map_err(|_| state::recovery_required())?;
+        }
+    }
+    read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+/// A pull-request promotion's end after a context child that ended, in the
+/// caller's transaction: the refusal `reconfirmation_required` and the answer,
+/// from `confirmed` only. A deleted remote branch also ends the document's
+/// link; no other answer touches it.
+pub(in super::super) fn abandon_branch_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    answer: PromotionAnswer,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    if r.path() != RecordPath::Branch
+        || !r
+            .step
+            .permits(PromotionStep::Abandoned, true, r.integration_mode)
+        || !matches!(
+            answer,
+            PromotionAnswer::PrimaryHolds
+                | PromotionAnswer::RemoteBranchDeleted
+                | PromotionAnswer::HistoryUnresolved
+                | PromotionAnswer::ContextGone
+        )
+        || child_holds(tx, &r)?
+    {
+        return Err(state::recovery_required());
+    }
+    let (category, blockers) = Refusal::encoded_columns(Some(&Refusal::ReconfirmationRequired))?;
+    tx.execute("UPDATE document_promotions SET step='abandoned',refusal_category=?2,refusal_blockers=?3,answer_code=?4,updated_at=max(updated_at,?5) WHERE operation_id=?1",params![op.to_string(),category,blockers,answer.name(),parent::now()]).map_err(|_|state::recovery_required())?;
+    if answer == PromotionAnswer::RemoteBranchDeleted {
+        pull_request_links::delete_link(tx, id, "document", &r.item_id.to_string())
+            .map_err(|_| state::recovery_required())?;
+    }
+    read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     Ok(())
 }
 
