@@ -4549,6 +4549,33 @@ pub(super) fn prepare_integration_step_in_window(
         .ok_or_else(recovery_required)
 }
 
+/// The state a child that stopped mid-integration leaves, as its own
+/// reservation layer writes it: the first integration step of the child
+/// `operation` prepared and not applied, which the parent's child state reads
+/// as retained. For the parents' record tests.
+#[cfg(test)]
+pub(in super::super) fn prepare_step_for_test(
+    tx: &Transaction<'_>,
+    id: i64,
+    operation: crate::repository::OperationId,
+    oid: Oid,
+) -> Result<(), RepositoryError> {
+    let record = read_operation(tx, id, operation)?.ok_or_else(recovery_required)?;
+    prepare_integration_step(
+        tx,
+        &record,
+        &IntegrationStepIntent {
+            ordinal: 0,
+            stage: IntegrationStage::Context,
+            local_oid: oid,
+            incoming_oid: oid,
+            baseline_tree_oid: oid,
+            baseline_index_digest: [4; 32],
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) fn begin_integration_effect(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,

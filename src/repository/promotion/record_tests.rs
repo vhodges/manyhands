@@ -2563,6 +2563,7 @@ fn pull_request_begin_and_finish_write_their_columns() {
         Absent,
         Complete,
         Live,
+        Retained,
         Ended,
     }
     let fixture = |step: PromotionStep, child: Child, row: bool| {
@@ -2622,6 +2623,12 @@ fn pull_request_begin_and_finish_write_their_columns() {
                     )
                     .map_err(|_| state::recovery_required())?;
                     Ok(())
+                })
+                .unwrap(),
+                // A child stopped mid-integration, as its reservation layer
+                // leaves it: an integration step prepared and not applied.
+                Child::Retained => state::with_transaction(&service, root.path(), |tx, id| {
+                    state::prepare_step_for_test(tx, id, child_id, oid())
                 })
                 .unwrap(),
                 Child::Absent | Child::Live => {}
@@ -2870,6 +2877,7 @@ fn pull_request_begin_and_finish_write_their_columns() {
         (Child::Complete, true),
         (Child::Absent, false),
         (Child::Live, false),
+        (Child::Retained, false),
         (Child::Ended, false),
     ] {
         let (_data, root, service, op) = fixture(ContextSynchronized, child, true);
@@ -2954,6 +2962,7 @@ fn pull_request_begin_and_finish_write_their_columns() {
         (Child::Absent, true),
         (Child::Ended, true),
         (Child::Live, false),
+        (Child::Retained, false),
     ] {
         let (_data, root, service, op) = fixture(Confirmed, child, true);
         state::with_transaction(&service, root.path(), |tx, id| {
