@@ -219,6 +219,15 @@ impl BranchPromotionOutcome {
             publication,
         }
     }
+    /// The same outcome, of the operation `operation`, for a test whose
+    /// answer reads the operation's record.
+    #[cfg(test)]
+    pub(super) fn of_operation_for_testing(self, operation: OperationId) -> Self {
+        Self {
+            operation_id: operation,
+            ..self
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocumentPromotionResult {

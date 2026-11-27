@@ -867,6 +867,74 @@ fn a_pull_request_promotion_answer_carries_its_data() {
     assert_eq!(data_of(&bare, A::Promoted, published).pull_request, None);
 }
 
+/// RR8's answer at the binding (design Part D): a `promoted` record that wrote
+/// no link row, because its context was gone when it finished, still answers
+/// with the link, which the answer's data builds from the record's own remote
+/// and primary branch. Without that, the answer would be `ok` with no link to
+/// open. Another answer of the same record gives none, and a record this build
+/// cannot find gives none.
+#[test]
+fn a_promoted_record_without_a_link_row_still_answers_with_its_link() {
+    use crate::repository::{
+        BranchPromotionOutcome,
+        promotion::{
+            PromotionExpectation,
+            record::{
+                PromotionAnswer as A, PromotionSituation, PullRequestBegin,
+                begin_pull_request_record,
+            },
+        },
+        remote::state,
+    };
+    let registered = Registered::new(false);
+    let operation = OperationId::new();
+    state::with_transaction(&registered.service, registered.root.path(), |tx, id| {
+        begin_pull_request_record(
+            tx,
+            id,
+            operation,
+            &ITEM.parse().unwrap(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+            &PullRequestBegin {
+                consented: git2::Oid::from_bytes(&[3; 20]).unwrap(),
+                situation: PromotionSituation::First,
+                primary_branch: "main".to_owned(),
+                endpoint_digest: [9; 32],
+            },
+        )
+        .map(drop)
+    })
+    .unwrap();
+    let data_of = |answer, operation| {
+        let ran = registered.binding().promotion_branch_reached(
+            &registered.service,
+            &registered.accepted(),
+            &BranchPromotionOutcome::for_testing(answer, None).of_operation_for_testing(operation),
+            false,
+        );
+        match ran.answer.data {
+            Some(MutationDataDto::PullRequestPromotion(data)) => *data,
+            other => panic!("{answer:?}: not a promotion's data: {other:?}"),
+        }
+    };
+    let link = data_of(A::Promoted, operation)
+        .pull_request
+        .expect("the built link");
+    assert_eq!(link.source, format!("manyhands/document/{ITEM}"));
+    assert_eq!(link.target, "main");
+    assert_eq!(
+        data_of(A::AlreadyPromoted, operation).pull_request,
+        None,
+        "only a promoted answer builds one"
+    );
+    assert_eq!(
+        data_of(A::Promoted, OperationId::new()).pull_request,
+        None,
+        "no record, no link"
+    );
+}
+
 /// A repository with a configured remote, and a child synchronization of the
 /// ticket whose row says its push was accepted at `pushed`.
 fn pushed_child(registered: &Registered, pushed: git2::Oid) -> OperationId {
