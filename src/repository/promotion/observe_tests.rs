@@ -1368,6 +1368,66 @@ fn files_commit(repo: &git2::Repository, files: &[(&str, &[u8])], parents: &[Oid
 #[test]
 fn primary_holds_document_by_the_content_proof() {
     let item: ItemId = ID.parse().unwrap();
+    holds_rows(|repo, tip, tracking, gone, expected, what| {
+        assert_eq!(
+            primary_holds_document(repo, tip, tracking, "main", "origin", &item, gone),
+            expected,
+            "{what}"
+        );
+    });
+    refusal_rows(|repo, tip, primary, expected, what| {
+        assert_eq!(
+            primary_holds_document(repo, tip, Some(primary), "main", "origin", &item, false),
+            expected,
+            "{what}"
+        );
+    });
+}
+
+/// R-9: the cheap check `document show` makes (`document_link_outstanding`)
+/// agrees with the proof (P3's rows, shared with the test above): the link is
+/// outstanding exactly when the proof does not hold the document. None of the
+/// table's rows is one of K-11's, where the two may differ (missing objects, a
+/// document ID at two paths, a primary copy that does not parse, a document
+/// moved on the primary), so no row is expected to differ.
+#[test]
+fn the_cheap_check_agrees_with_the_proof() {
+    let item: ItemId = ID.parse().unwrap();
+    let mut rows = 0;
+    holds_rows(|repo, tip, tracking, gone, expected, what| {
+        rows += 1;
+        assert_eq!(
+            document_link_outstanding(repo, tip, DOC, tracking, "main", "origin", &item, gone),
+            !expected,
+            "{what}"
+        );
+    });
+    refusal_rows(|repo, tip, primary, expected, what| {
+        rows += 1;
+        assert_eq!(
+            document_link_outstanding(
+                repo,
+                tip,
+                DOC,
+                Some(primary),
+                "main",
+                "origin",
+                &item,
+                false
+            ),
+            !expected,
+            "{what}"
+        );
+    });
+    // 2 documents x 4 merges x 9 scenarios x 6 states of `R`, and the five
+    // rows of the refusals.
+    assert_eq!(rows, 2 * 4 * 9 * 6 + 5);
+}
+
+/// P3's table: for each row `check` gets the repository, the branch tip, the
+/// tracking primary, whether `R` reads as absent, whether the proof can hold
+/// and a label. The local primary is set to the row's.
+fn holds_rows(mut check: impl FnMut(&git2::Repository, Oid, Option<Oid>, bool, bool, &str)) {
     let remote_ref = format!("refs/remotes/origin/manyhands/document/{ID}");
     // (the scenario, whether the proof can hold), by where the merge sits.
     let scenarios: [(&str, bool); 9] = [
@@ -1467,22 +1527,24 @@ fn primary_holds_document_by_the_content_proof() {
                     // Before the merge the primary never holds it: a new
                     // document is not on it, and an edit has older content.
                     let expected = merge != "none" && proves && allows;
-                    assert_eq!(
-                        primary_holds_document(&repo, tip, tracking, "main", "origin", &item, gone),
+                    check(
+                        &repo,
+                        tip,
+                        tracking,
+                        gone,
                         expected,
-                        "edit {edit}, merge {merge}, {name}, remote copy {remote_name}"
+                        &format!("edit {edit}, merge {merge}, {name}, remote copy {remote_name}"),
                     );
                 }
             }
         }
     }
-    proof_refusals_read_not_held();
 }
 
 /// A shallow repository, two merge bases and unrelated history read not
-/// held, whatever else holds.
-fn proof_refusals_read_not_held() {
-    let item: ItemId = ID.parse().unwrap();
+/// held, whatever else holds: the rows after the held one, each with the
+/// branch tip and the primary, and whether the proof holds.
+fn refusal_rows(mut check: impl FnMut(&git2::Repository, Oid, Oid, bool, &str)) {
     let doc = document_source("new");
     let files: Vec<(&str, &[u8])> = vec![("code", b"base"), (DOC, &doc)];
     // The same state held, then each refusal.
@@ -1496,14 +1558,11 @@ fn proof_refusals_read_not_held() {
             .unwrap();
         (dir, repo, base, tip, merged)
     };
-    let holds = |repo: &git2::Repository, tip, primary| {
-        primary_holds_document(repo, tip, Some(primary), "main", "origin", &item, false)
-    };
     let (_dir, repo, base, tip, merged) = setup();
-    assert!(holds(&repo, tip, merged));
+    check(&repo, tip, merged, true, "held");
     // A shallow repository.
     fs::write(repo.path().join("shallow"), format!("{base}\n")).unwrap();
-    assert!(!holds(&repo, tip, merged));
+    check(&repo, tip, merged, false, "a shallow repository");
     // Two merge bases: neither side descends from the other, and the
     // criss-cross has two bases.
     let (_dir, repo, base, _tip, _merged) = setup();
@@ -1512,16 +1571,22 @@ fn proof_refusals_read_not_held() {
     let tip = files_commit(&repo, &[files[0], files[1], ("c", b"c")], &[b, c]);
     let primary = files_commit(&repo, &[files[0], files[1], ("c", b"c")], &[c, b]);
     assert_eq!(repo.merge_bases(tip, primary).unwrap().len(), 2);
-    assert!(!holds(&repo, tip, primary));
+    check(&repo, tip, primary, false, "two merge bases");
     // Unrelated history.
     let unrelated = files_commit(
         &repo,
         &[("code", b"other"), (DOC, &document_source("x"))],
         &[],
     );
-    assert!(!holds(&repo, tip, unrelated));
+    check(&repo, tip, unrelated, false, "unrelated history");
     // A tip the repository lacks.
-    assert!(!holds(&repo, Oid::from_bytes(&[42; 20]).unwrap(), primary));
+    check(
+        &repo,
+        Oid::from_bytes(&[42; 20]).unwrap(),
+        primary,
+        false,
+        "a tip the repository lacks",
+    );
 }
 
 impl Fixture {

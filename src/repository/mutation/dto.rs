@@ -1817,8 +1817,11 @@ contract_enum!(
     }
 );
 
-/// What an `item sync` of a ticket whose branch holds a provisional closure
-/// adds to its answer: where to open the pull request.
+/// What an `item sync` of a ticket or a document adds to its answer: where to
+/// open the pull request. A ticket's link is given when its branch holds a
+/// provisional closure, and `item sync` records it. A document's is given
+/// while the primary does not hold the document, and `item sync` only reads
+/// it: `document promote` records it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PullRequestLinkDataDto {
     pub r#type: PullRequestLinkDataType,

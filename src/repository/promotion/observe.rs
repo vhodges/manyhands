@@ -1499,6 +1499,78 @@ pub(in super::super) fn primary_holds_document(
     remote_gone: bool,
 ) -> bool {
     use crate::repository::context_retirement::proof;
+    primary_holds_by(
+        repository,
+        tip,
+        tracking_primary,
+        primary_branch,
+        remote,
+        item,
+        remote_gone,
+        |primary| {
+            proof::preservation(repository, tip, primary, AuthoringKind::Document, item).is_ok()
+        },
+    )
+}
+
+/// R-9: whether `document show` still offers a document's link, the cheaper
+/// twin of `primary_holds_document` (decision 9): `true` while the primary
+/// does not hold the document. A primary R-3 may use holds it when it has a
+/// regular file at `document_path`, the document's path in `tip`, and no entry
+/// of `tip` is unheld by it (`unheld_entries`), and `R` stands as R-3
+/// requires. It compares entries only: it loads no blob and scans no other
+/// item. It differs from R-3 only in a repository with missing objects, a
+/// document ID held at two paths, a primary copy that does not parse, or a
+/// document moved on the primary (K-11); promote and `item sync` keep the full
+/// proof. Every refusal reads as outstanding, as the proof's reads not held.
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn document_link_outstanding(
+    repository: &git2::Repository,
+    tip: Oid,
+    document_path: &str,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+) -> bool {
+    use crate::repository::context_retirement::proof;
+    !primary_holds_by(
+        repository,
+        tip,
+        tracking_primary,
+        primary_branch,
+        remote,
+        item,
+        remote_gone,
+        |primary| {
+            let regular = repository
+                .find_commit(primary)
+                .and_then(|commit| commit.tree())
+                .and_then(|tree| tree.get_path(Path::new(document_path)))
+                .is_ok_and(|entry| {
+                    entry.kind() == Some(git2::ObjectType::Blob)
+                        && matches!(entry.filemode_raw(), 0o100644 | 0o100755)
+                });
+            regular && proof::unheld_entries(repository, tip, primary).is_ok_and(|e| e.is_empty())
+        },
+    )
+}
+
+/// R-3's choice of primaries and its rule for `R`, with `holds` judging one
+/// primary commit: the full proof for `primary_holds_document`, the cheap
+/// check for `document_link_outstanding`.
+#[allow(clippy::too_many_arguments)]
+fn primary_holds_by(
+    repository: &git2::Repository,
+    tip: Oid,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+    holds: impl Fn(Oid) -> bool,
+) -> bool {
     let Some(tracking) = tracking_primary else {
         return false;
     };
@@ -1532,9 +1604,6 @@ pub(in super::super) fn primary_holds_document(
         .ok()
         .flatten()
         .filter(|local| reaches(*local, tracking) && *local != tracking);
-    let holds = |primary: Oid| {
-        proof::preservation(repository, tip, primary, AuthoringKind::Document, item).is_ok()
-    };
     holds(tracking) || local.is_some_and(holds)
 }
 
