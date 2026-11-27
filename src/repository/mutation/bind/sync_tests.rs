@@ -804,11 +804,24 @@ fn item_sync_gives_an_outstanding_document_link() {
         assert!(ran.answer.data.is_none(), "{what}: {:?}", ran.answer.data);
         assert_eq!(row.map(|(_, given_at)| given_at), given, "{what}");
     };
+    // No row, no proof: a document that was never promoted pays nothing for
+    // the full content proof on every sync (decision 9). The count is the
+    // thread's, and each case reads it before and after.
+    let proofs = crate::repository::promotion::observe::document_proofs_run();
     anyone("no row", Documented::new(PULL_REQUEST, false, None), None);
+    assert_eq!(
+        crate::repository::promotion::observe::document_proofs_run(),
+        proofs,
+        "no row, no proof"
+    );
     anyone(
         "the primary holds the document",
         Documented::new(PULL_REQUEST, true, Some(7)),
         Some(7),
+    );
+    assert!(
+        crate::repository::promotion::observe::document_proofs_run() > proofs,
+        "a row runs the proof: the count sees it"
     );
     anyone(
         "a direct repository",

@@ -1187,6 +1187,30 @@ impl SyncBinding {
                 link
             }
             AuthoringKind::Document => {
+                // The row is read first, outside any write: a document that
+                // was never promoted has none, and gets no answer without
+                // the full content proof being run for it.
+                let scope = super::super::identity::ScopeKey::for_repository(&root)?;
+                let link = service
+                    .read_session(RepositoryOperation::Read, |db| {
+                        let repository_id: Option<i64> = db
+                            .query_row(
+                                "SELECT id FROM repositories WHERE root_path=?1",
+                                [scope.as_str()],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        let Some(repository_id) = repository_id else {
+                            return Ok(None);
+                        };
+                        Ok(crate::repository::pull_request_links::link_of(
+                            db,
+                            repository_id,
+                            authoring_kind_segment(&AuthoringKind::Document),
+                            &item_id.to_string(),
+                        )?)
+                    })
+                    .ok()??;
                 let tracking_primary = repository
                     .refname_to_id(&format!("refs/remotes/{remote}/{}", config.primary_branch))
                     .ok();
@@ -1201,20 +1225,7 @@ impl SyncBinding {
                 ) {
                     return None;
                 }
-                crate::repository::remote::state::with_transaction(
-                    service,
-                    &root,
-                    |tx, repository_id| {
-                        crate::repository::pull_request_links::link_of(
-                            tx,
-                            repository_id,
-                            authoring_kind_segment(&AuthoringKind::Document),
-                            &item_id.to_string(),
-                        )
-                        .map_err(|_| crate::repository::remote::state::recovery_required())
-                    },
-                )
-                .ok()??
+                link
             }
         };
         Some(MutationDataDto::PullRequestLink(Box::new(

@@ -1479,6 +1479,15 @@ fn pull_request_expectation(preview: &DocumentPromotionPreview) -> PromotionExpe
     PromotionExpectation::from_bytes(*hash.finalize().as_bytes())
 }
 
+#[cfg(test)]
+thread_local! { static DOCUMENT_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+/// How many times this thread ran the full document proof of
+/// `primary_holds_document`, for a test that pins when it does not run.
+#[cfg(test)]
+pub(in super::super) fn document_proofs_run() -> usize {
+    DOCUMENT_PROOFS.with(std::cell::Cell::get)
+}
+
 /// R-3: whether the primary holds the document, which only its content
 /// proves. It holds it when the content proof for `tip` passes against the
 /// tracking primary, or against the local primary when that is the tracking
@@ -1499,6 +1508,8 @@ pub(in super::super) fn primary_holds_document(
     remote_gone: bool,
 ) -> bool {
     use crate::repository::context_retirement::proof;
+    #[cfg(test)]
+    DOCUMENT_PROOFS.with(|runs| runs.set(runs.get() + 1));
     primary_holds_by(
         repository,
         tip,
