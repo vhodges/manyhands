@@ -485,6 +485,7 @@ fn first_promote_publishes_and_gives_the_link() {
 #[test]
 fn a_pull_request_promotion_whose_index_step_failed_is_branch_index_pending() {
     let f = Fixture::pull_request();
+    let primary = f.primary();
     let req = f.request();
     let failing = RepositoryService::open_at_with_failure_point_for_testing(
         f.data.path(),
@@ -514,7 +515,7 @@ fn a_pull_request_promotion_whose_index_step_failed_is_branch_index_pending() {
     let again = branch(run_at(&f, req, &mut io, clock));
     assert_eq!(again, pending.authoritative);
     assert_eq!(io.children.len(), 1);
-    assert_primary_untouched(&f, &io, f.primary(), "index pending");
+    assert_primary_untouched(&f, &io, primary, "index pending");
 }
 
 /// C4 to C7, A4: promoting again synchronizes the branch and gives the same
@@ -557,7 +558,38 @@ fn promoting_again_synchronizes_and_gives_the_same_link() {
         branch(run_at(&f, first.clone(), &mut io, clock));
         let row = f.link_row().expect("the first promote gave its link");
         let old_tip = f.tip();
+        let tracking_before = f.tracking_main();
         change(&f, &mut io);
+        // The link the re-prepared promote shows is the row's, whatever the
+        // setting says now.
+        let shown = f.preview();
+        let shown = &shown.pull_request().expect("a pull-request preview").link;
+        assert_eq!(
+            (
+                shown.source.clone(),
+                shown.target.clone(),
+                shown.forge.map(|forge| forge.as_str().to_owned()),
+                shown.url.clone()
+            ),
+            (row.0.clone(), row.1.clone(), row.2.clone(), row.3.clone()),
+            "{case}"
+        );
+        if case == "after the forge setting changed" {
+            // The setting would give another link now: the row's is kept.
+            let ConfigurationInspection::Valid(config) = read_configuration(f.root.path()).unwrap()
+            else {
+                panic!("the configuration is valid");
+            };
+            let rebuilt = crate::repository::closure::checkpoint::context_branch_link(
+                &f.repo,
+                "main",
+                config.forge().as_ref(),
+                "origin",
+                &format!("manyhands/document/{ITEM}"),
+            );
+            assert_ne!(rebuilt.url, row.3);
+            assert!(rebuilt.url.is_some());
+        }
         let second = f.request();
         assert_ne!(first.operation_id, second.operation_id);
         let outcome = branch(run_at(&f, second.clone(), &mut io, later));
@@ -623,6 +655,11 @@ fn promoting_again_synchronizes_and_gives_the_same_link() {
             );
             assert_eq!(merge.parent_id(0).unwrap(), old_tip);
             assert_eq!(merge.parent_count(), 2);
+            // The primary's commit the child's fetch brought is the merge's
+            // other parent.
+            let moved = f.tracking_main();
+            assert_ne!(moved, tracking_before);
+            assert_eq!(merge.parent_id(1).unwrap(), moved);
         }
         assert_primary_untouched(&f, &io, primary, case);
     }
@@ -771,15 +808,25 @@ fn a_declined_pull_request_answers_remote_branch_deleted() {
     assert_eq!(f.link_row(), None);
     let child = r.context_sync_id.expect("the child was minted");
     assert_eq!(f.child_phase(child).as_deref(), Some("cancelled"));
+    // The remote no longer holds the branch.
+    let tip = f.tip();
+    f.unpublish();
     // The same request answers the same, and runs nothing.
     let children = io.children.len();
     assert_eq!(branch(run_at(&f, req, &mut io, later)), outcome);
     assert_eq!(io.children.len(), children);
-    // After the republish the branch is published again: the next promote is
-    // a first one.
+    // The republish puts the branch on the remote again, as a fetch then shows
+    // it: the next promote is a first one, and finds it published.
+    f.repo
+        .reference(&tracking_context_ref(), tip, true, "republish")
+        .unwrap();
     let republished = f.request();
     let outcome = branch(run_at(&f, republished.clone(), &mut io, later));
     assert_eq!(outcome.answer(), record::PromotionAnswer::Promoted);
+    assert_eq!(
+        outcome.publication(),
+        Some(PromotionPublication::AlreadyCurrent { oid: tip })
+    );
     let r = f.stored(republished.operation_id);
     assert_eq!(r.situation, Some(record::PromotionSituation::First));
     assert_eq!(r.step, record::PromotionStep::Complete);

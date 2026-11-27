@@ -673,6 +673,40 @@ fn reached_effects(reached: &Reached) -> Effects {
     }
 }
 
+/// The answer of a finished branch record, of either lifecycle: its code,
+/// unless its index step is yet to run, which only an `ok` answer says (it is
+/// then owed, and offers the request that gave it); any other is final.
+fn branch_ran(
+    accepted: &Accepted,
+    code: ResultCode,
+    index_pending: bool,
+    effects: Effects,
+    data: Option<MutationDataDto>,
+) -> Ran {
+    let pending = index_pending && code == ResultCode::Ok;
+    Ran {
+        answer: Answer {
+            effects,
+            data,
+            recovery: if pending {
+                vec![outcome::same_request(accepted.request_id)]
+            } else {
+                Vec::new()
+            },
+            ..Answer::stopped(if pending {
+                ResultCode::DiscoveryPending
+            } else {
+                code
+            })
+        },
+        standing: if pending {
+            Standing::Owed
+        } else {
+            Standing::Final
+        },
+    }
+}
+
 impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// Learns from the record's path whether its answers name the ticket's
     /// branch (decision 17). A binding that has learned a branch record keeps
@@ -957,19 +991,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     ) -> Ran {
         self.branch_record.store(true, Ordering::Relaxed);
         let code = branch_code(outcome.answer());
-        // The index step is yet to run: only a close that answered `ok` says so.
-        let pending = index_pending && code == ResultCode::Ok;
         let wrote = outcome.checkpoint_oid().is_some();
-        // What the record's publication child pushed is its own result. A
-        // record that ran none (an abandon) still shows what its context
-        // child pushed (R-32).
-        let published = match outcome.publication() {
-            Some(PromotionPublication::Published { oid }) => Some(oid),
-            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
-            Some(PromotionPublication::Pending { reason: _ }) | None => {
-                self.context_child_push(service, accepted)
-            }
-        };
         let effects = Effects {
             write: if wrote {
                 WriteEffect::Written
@@ -981,20 +1003,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             } else {
                 CheckpointEffect::NotRequested
             },
-            discovery: if index_pending {
-                DiscoveryEffect::Pending
-            } else {
-                DiscoveryEffect::Current
-            },
-            publication: match (outcome.publication(), published) {
-                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
-                    PublicationEffect::Current
-                }
-                (_, Some(_)) => PublicationEffect::Published,
-                (_, None) => PublicationEffect::NotRequested,
-            },
-            commit_oid: published.map(|oid| oid.to_string()),
-            ..Effects::not_requested()
+            ..self.branch_published_effects(service, accepted, outcome.publication(), index_pending)
         };
         // The five answers that report what the record did; the others are
         // the consent's or the remote's, and carry nothing of it.
@@ -1010,27 +1019,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 | ResultCode::TicketClosed
         ) || outcome.answer() == BranchAnswer::RemoteChanged)
             .then(|| self.branch_data(service, &accepted.root(), outcome));
-        Ran {
-            answer: Answer {
-                effects,
-                data,
-                recovery: if pending {
-                    vec![outcome::same_request(accepted.request_id)]
-                } else {
-                    Vec::new()
-                },
-                ..Answer::stopped(if pending {
-                    ResultCode::DiscoveryPending
-                } else {
-                    code
-                })
-            },
-            standing: if pending {
-                Standing::Owed
-            } else {
-                Standing::Final
-            },
-        }
+        branch_ran(accepted, code, index_pending, effects, data)
     }
 
     /// The answer of a pull-request promote that finished, whatever way: its
@@ -1046,26 +1035,40 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         index_pending: bool,
     ) -> Ran {
         self.branch_record.store(true, Ordering::Relaxed);
-        let code = promotion_branch_code(outcome.answer());
-        // The index step is yet to run: only a promote that answered `ok`
-        // says so.
-        let pending = index_pending && code == ResultCode::Ok;
-        // What the context child pushed is its own result; a record that
-        // ended after its child still shows what that child pushed.
-        let published = match outcome.publication() {
+        branch_ran(
+            accepted,
+            promotion_branch_code(outcome.answer()),
+            index_pending,
+            self.branch_published_effects(service, accepted, outcome.publication(), index_pending),
+            None,
+        )
+    }
+
+    /// The effects every branch answer has: whether the index is current, and
+    /// what the record's context child published. What a publication child
+    /// pushed is its own result; a record that ran none (an abandon) still
+    /// shows what its context child pushed (R-32).
+    fn branch_published_effects(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        publication: Option<PromotionPublication>,
+        index_pending: bool,
+    ) -> Effects {
+        let published = match publication {
             Some(PromotionPublication::Published { oid }) => Some(oid),
             Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
             Some(PromotionPublication::Pending { reason: _ }) | None => {
                 self.context_child_push(service, accepted)
             }
         };
-        let effects = Effects {
+        Effects {
             discovery: if index_pending {
                 DiscoveryEffect::Pending
             } else {
                 DiscoveryEffect::Current
             },
-            publication: match (outcome.publication(), published) {
+            publication: match (publication, published) {
                 (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
                     PublicationEffect::Current
                 }
@@ -1074,26 +1077,6 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             },
             commit_oid: published.map(|oid| oid.to_string()),
             ..Effects::not_requested()
-        };
-        Ran {
-            answer: Answer {
-                effects,
-                recovery: if pending {
-                    vec![outcome::same_request(accepted.request_id)]
-                } else {
-                    Vec::new()
-                },
-                ..Answer::stopped(if pending {
-                    ResultCode::DiscoveryPending
-                } else {
-                    code
-                })
-            },
-            standing: if pending {
-                Standing::Owed
-            } else {
-                Standing::Final
-            },
         }
     }
 

@@ -846,7 +846,10 @@ pub(in super::super) fn complete_branch_record(
             finish.category,
             PublicationCategory::Published | PublicationCategory::AlreadyCurrent
         )
-        || child_holds(tx, &r)?
+        || !matches!(
+            child_state(tx, &r, ChildRole::Context)?,
+            ChildState::Complete(_)
+        )
     {
         return Err(state::recovery_required());
     }

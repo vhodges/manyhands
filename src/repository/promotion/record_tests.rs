@@ -2555,34 +2555,93 @@ fn pull_request_begin_and_finish_write_their_columns() {
     drop(tx);
     drop(registry);
 
-    // The finishes. A fresh registry each, with a record at `step` and the
-    // link row `row` (its `given_at` is 1).
-    let at = |tx: &rusqlite::Transaction<'_>, step: PromotionStep, row: bool| {
+    // The finishes: a service-backed registry each, with a record at `step`,
+    // its context child as `child` says, and the link row `row` (its
+    // `given_at` is 1).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Child {
+        Absent,
+        Complete,
+        Live,
+        Ended,
+    }
+    let fixture = |step: PromotionStep, child: Child, row: bool| {
+        let (data, root, service) = promotion_folder_fixture();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let op = OperationId::new();
-        let mut r = begin_pull_request_record(
-            tx,
-            1,
-            op,
-            &item(0),
-            expectation,
-            Some("origin"),
-            &begin_data(),
-        )
+        let r = state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
+            let mut r = begin_pull_request_record(
+                tx,
+                id,
+                op,
+                &item(0),
+                expectation,
+                Some("origin"),
+                &begin_data(),
+            )?;
+            if child != Child::Absent {
+                r = next_attempt(tx, id, op, ChildRole::Context)?;
+            }
+            if row {
+                upsert_link(tx, id, "document", ITEMS[0], &link("main"), 1)
+                    .map_err(|_| state::recovery_required())?;
+            }
+            Ok(r)
+        })
         .unwrap();
+        if child != Child::Absent {
+            let child_id = r.context_sync_id.unwrap();
+            let execution = child_execution(&r, ChildRole::Context).unwrap();
+            let target = RemoteOperationTarget::for_context(
+                &plan,
+                RemoteOperationAction::SynchronizeContext,
+                AuthoringKind::Document,
+                r.item_id.clone(),
+            )
+            .unwrap();
+            assert!(matches!(
+                service
+                    .reserve_promotion_child(root.path(), child_id, &target, &execution, true)
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+            match child {
+                Child::Complete => crate::repository::promotion::run_tests::complete_child_row(
+                    &service,
+                    root.path(),
+                    &execution,
+                    child_id,
+                    oid(),
+                    "published",
+                ),
+                Child::Ended => state::with_transaction(&service, root.path(), |tx, _| {
+                    tx.execute(
+                        "UPDATE remote_operation_records SET phase='cancelled',outcome='cancelled' WHERE operation_ulid=?1",
+                        [child_id.to_string()],
+                    )
+                    .map_err(|_| state::recovery_required())?;
+                    Ok(())
+                })
+                .unwrap(),
+                Child::Absent | Child::Live => {}
+            }
+        }
         if step == ContextSynchronized {
-            r.context_oid = Some(oid());
-            r.step = step;
-            save_record(tx, 1, &r).unwrap();
+            state::with_transaction(&service, root.path(), |tx, id| {
+                let mut r = read_record(tx, id, op)?.unwrap();
+                r.context_oid = Some(oid());
+                r.step = step;
+                save_record(tx, id, &r)
+            })
+            .unwrap();
         }
-        if row {
-            upsert_link(tx, 1, "document", ITEMS[0], &link("main"), 1).unwrap();
-        }
-        op
+        (data, root, service, op)
     };
-    let given_at = |tx: &rusqlite::Transaction<'_>| -> Option<i64> {
+    let given_at = |tx: &rusqlite::Transaction<'_>, id: i64| -> Option<i64> {
         tx.query_row(
-            "SELECT given_at FROM pull_request_links WHERE kind='document' AND item_ulid=?1",
-            [ITEMS[0]],
+            "SELECT given_at FROM pull_request_links WHERE repository_id=?1 AND kind='document' AND item_ulid=?2",
+            params![id, ITEMS[0]],
             |row| row.get(0),
         )
         .ok()
@@ -2778,32 +2837,79 @@ fn pull_request_begin_and_finish_write_their_columns() {
         ),
     ];
     for (label, step, row, finish, accepted, given, target) in complete {
-        let mut db = db();
-        let tx = db.transaction().unwrap();
-        let op = at(&tx, step, row);
-        let finish = finish(link("other"));
-        let result = complete_branch_record(&tx, 1, op, &finish);
-        assert_eq!(result.is_ok(), accepted, "{label}");
-        let r = read_record(&tx, 1, op).unwrap().unwrap();
-        if accepted {
-            assert_eq!(r.step, Complete, "{label}");
-            assert_eq!(r.answer_code, Some(finish.answer), "{label}");
-            assert_eq!(r.publication, Some(finish.category), "{label}");
-            assert!(!r.cancel_requested, "{label}");
-        } else {
-            assert_eq!(r.step, step, "{label}");
-            assert_eq!((r.answer_code, r.publication), (None, None), "{label}");
-        }
-        assert_eq!(given_at(&tx), given, "{label}");
-        let stored = link_of(&tx, 1, "document", ITEMS[0]).unwrap();
-        assert_eq!(
-            stored.map(|l| l.target),
-            given.map(|_| target.to_owned()),
-            "{label}"
-        );
+        let (_data, root, service, op) = fixture(step, Child::Complete, row);
+        state::with_transaction(&service, root.path(), |tx, id| {
+            let finish = finish(link("other"));
+            let result = complete_branch_record(tx, id, op, &finish);
+            assert_eq!(result.is_ok(), accepted, "{label}");
+            let r = read_record(tx, id, op)?.unwrap();
+            if accepted {
+                assert_eq!(r.step, Complete, "{label}");
+                assert_eq!(r.answer_code, Some(finish.answer), "{label}");
+                assert_eq!(r.publication, Some(finish.category), "{label}");
+                assert!(!r.cancel_requested, "{label}");
+            } else {
+                assert_eq!(r.step, step, "{label}");
+                assert_eq!((r.answer_code, r.publication), (None, None), "{label}");
+            }
+            assert_eq!(given_at(tx, id), given, "{label}");
+            let stored = link_of(tx, id, "document", ITEMS[0]).unwrap();
+            assert_eq!(
+                stored.map(|l| l.target),
+                given.map(|_| target.to_owned()),
+                "{label}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    // A record completes only over a context child that completed: none, a
+    // live one and one that ended are each refused, and leave the record and
+    // the link record as they were.
+    for (child, accepted) in [
+        (Child::Complete, true),
+        (Child::Absent, false),
+        (Child::Live, false),
+        (Child::Ended, false),
+    ] {
+        let (_data, root, service, op) = fixture(ContextSynchronized, child, true);
+        state::with_transaction(&service, root.path(), |tx, id| {
+            let result = complete_branch_record(
+                tx,
+                id,
+                op,
+                &BranchFinish {
+                    answer: Promoted,
+                    category: Category::Published,
+                    link: LinkWrite::Give {
+                        link: link("other"),
+                        given_at: 5,
+                    },
+                },
+            );
+            assert_eq!(result.is_ok(), accepted, "complete over {child:?}");
+            let r = read_record(tx, id, op)?.unwrap();
+            assert_eq!(
+                r.step,
+                if accepted {
+                    Complete
+                } else {
+                    ContextSynchronized
+                },
+                "complete over {child:?}"
+            );
+            assert_eq!(
+                given_at(tx, id),
+                Some(if accepted { 5 } else { 1 }),
+                "complete over {child:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
     }
     // The ended finish: from `confirmed` only, with the four answers an ended
-    // record has; a deleted branch takes its row, the rest keep it.
+    // record has; a deleted branch takes its row, the rest keep it. Its child
+    // may be none or ended, and is never one still live.
     let ended: [(PromotionAnswer, bool); 6] = [
         (PrimaryHolds, true),
         (RemoteBranchDeleted, true),
@@ -2813,40 +2919,68 @@ fn pull_request_begin_and_finish_write_their_columns() {
         (AlreadyPromoted, false),
     ];
     for (answer, accepted) in ended {
-        let mut db = db();
-        let tx = db.transaction().unwrap();
-        let op = at(&tx, Confirmed, true);
-        let result = abandon_branch_record(&tx, 1, op, answer);
-        assert_eq!(result.is_ok(), accepted, "{answer:?}");
-        let r = read_record(&tx, 1, op).unwrap().unwrap();
-        if accepted {
-            assert_eq!(r.step, Abandoned, "{answer:?}");
-            assert_eq!(
-                r.refusal,
-                Some(Refusal::ReconfirmationRequired),
-                "{answer:?}"
-            );
-            assert_eq!(r.answer_code, Some(answer), "{answer:?}");
-            assert_eq!(r.publication, None, "{answer:?}");
-            assert_eq!(
-                given_at(&tx),
-                if answer == RemoteBranchDeleted {
-                    None
-                } else {
-                    Some(1)
-                },
-                "{answer:?}"
-            );
-        } else {
-            assert_eq!(r.step, Confirmed, "{answer:?}");
-            assert_eq!(given_at(&tx), Some(1), "{answer:?}");
-        }
+        let (_data, root, service, op) = fixture(Confirmed, Child::Ended, true);
+        state::with_transaction(&service, root.path(), |tx, id| {
+            let result = abandon_branch_record(tx, id, op, answer);
+            assert_eq!(result.is_ok(), accepted, "{answer:?}");
+            let r = read_record(tx, id, op)?.unwrap();
+            if accepted {
+                assert_eq!(r.step, Abandoned, "{answer:?}");
+                assert_eq!(
+                    r.refusal,
+                    Some(Refusal::ReconfirmationRequired),
+                    "{answer:?}"
+                );
+                assert_eq!(r.answer_code, Some(answer), "{answer:?}");
+                assert_eq!(r.publication, None, "{answer:?}");
+                assert_eq!(
+                    given_at(tx, id),
+                    if answer == RemoteBranchDeleted {
+                        None
+                    } else {
+                        Some(1)
+                    },
+                    "{answer:?}"
+                );
+            } else {
+                assert_eq!(r.step, Confirmed, "{answer:?}");
+                assert_eq!(given_at(tx, id), Some(1), "{answer:?}");
+            }
+            Ok(())
+        })
+        .unwrap();
     }
-    let mut db = db();
-    let tx = db.transaction().unwrap();
-    let op = at(&tx, ContextSynchronized, false);
-    assert!(
-        abandon_branch_record(&tx, 1, op, ContextGone).is_err(),
-        "not from context_synchronized"
-    );
+    for (child, accepted) in [
+        (Child::Absent, true),
+        (Child::Ended, true),
+        (Child::Live, false),
+    ] {
+        let (_data, root, service, op) = fixture(Confirmed, child, true);
+        state::with_transaction(&service, root.path(), |tx, id| {
+            let result = abandon_branch_record(tx, id, op, RemoteBranchDeleted);
+            assert_eq!(result.is_ok(), accepted, "abandon over {child:?}");
+            let r = read_record(tx, id, op)?.unwrap();
+            assert_eq!(
+                r.step,
+                if accepted { Abandoned } else { Confirmed },
+                "abandon over {child:?}"
+            );
+            assert_eq!(
+                given_at(tx, id),
+                if accepted { None } else { Some(1) },
+                "abandon over {child:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    let (_data, root, service, op) = fixture(ContextSynchronized, Child::Complete, false);
+    state::with_transaction(&service, root.path(), |tx, id| {
+        assert!(
+            abandon_branch_record(tx, id, op, ContextGone).is_err(),
+            "not from context_synchronized"
+        );
+        Ok(())
+    })
+    .unwrap();
 }
