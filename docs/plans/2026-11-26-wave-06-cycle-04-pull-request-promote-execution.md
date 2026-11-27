@@ -183,6 +183,16 @@ By a read-only research agent (report in the controller's workspace, `task-0-swe
 - Not verifiable here: the `ok` and `already_applied` data over a real publication (Task 8); a stopped promote's `SynchronizationConflict` data prints generically at the CLI, as Cycle 03's close does.
 - Task 5: complete (commits `b3b17954..620b0ccf`, review clean).
 
+## Task 6: The Document's Link In Reads And `item sync`
+
+- Base `668268eb`. Implementer: Sonnet 5.5 at high effort. Commit `293753e0` feat(read): a document's outstanding link in show and item sync.
+- What it built: `document_link_outstanding` (`promotion/observe.rs`), the cheaper twin of R-3 on `proof.rs`'s entries-only `unheld_entries`, sharing R-3's choice of primaries and its rule for `R` through one helper `primary_holds_by`; `fill_complete_read` gives a document's link from its active context with a row while outstanding (`read/items.rs`); a document arm of `SyncBinding::link_given` (`bind/sync.rs`) that reads the row and never writes it; the documentation of `ItemDto.pull_request`, `PullRequestLinkDataDto`, `item.schema.json` and `pull_request_link.schema.json`.
+- Tests (each by exact name, each red first): `the_cheap_check_agrees_with_the_proof` (every row of P3's table, 437 rows, through shared helpers `holds_rows` and `refusal_rows`, which `primary_holds_document_by_the_content_proof` now also uses with every original row and assertion); `tests/read_items.rs` `document_show_gives_the_link_while_it_is_outstanding`; `item_sync_gives_an_outstanding_document_link` (`given_at` unchanged after a publication and after an already-current synchronization; no row made); E-1's `ticket_show_gives_the_link_and_the_publication` and the unchanged `item_sync_gives_the_link_of_a_closing_ticket`. Static gates clean.
+- Named edits: E-1 (the comment, the assertion untouched). E-14 needed nothing.
+- Review (Opus): spec compliant, approved, no Critical or Important; the four named risks hold (the P3 refactor faithful; the cheap check loads no blob and agrees with R-3 by construction; the ticket arm and the ticket's read unchanged). The implementer's concern that show reads a stale `R` after a deleted branch is K-15.
+- Deferred Minor findings (for the final review; the first is a cost in every pull-request `item sync` of a document and should be weighed before merge): the document arm runs the full proof before it reads the row (`bind/sync.rs:1193-1205` before 1206-1220), so a document with no row pays it, against Part F's order; show checks the worktree's path, not the document's path in `L` (`read/items.rs:1615`), a fifth difference from R-3 beyond K-11's list after an uncommitted move (on the safe side); `Documented::new` repeats about 20 lines of `Closing::new` (`bind/sync_tests.rs:630-690` against 421-463); the document arm reads inside a write transaction, as the ticket arm does, and `link_given`'s last sentence reads oddly for it; the configuration query in `read/items.rs:1588-1599` swallows a database error where `publication_of` propagates it; no republish row for the document arm (shared gate, covered by the ticket's test).
+- Task 6: complete (commits `668268eb..293753e0`, review clean).
+
 ## Appendix A: References, Task 0 Steps 2 and 3 (research agent, verbatim)
 
 ### Task 0: names check of the Cycle 04 design against HEAD aee99255 (main 8e5d9832)
