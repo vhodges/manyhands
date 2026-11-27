@@ -144,6 +144,33 @@ By a read-only research agent (report in the controller's workspace, `task-0-swe
 - Deferred Minor findings (for the final review): R-12's choice of the child's authority OID (`answer.rs:82`) and `remote_gone` (`:161`) are not pinned by a row where they differ (a row whose child brings another clone's later save over a squash of `L` would); red runs were per test, not per row (C2, C3, C5 to C7, most record mismatch rows); a redundant remote check (`lifecycle.rs:924` and `record.rs:654`); `pub(super) mod answer` is wider than needed; no runner test for the `history_unresolved` and `context_gone` ends (record and binding layers only); the `PullRequestIo` twin repeats Cycle 03's cancel-acknowledgement and reservation code; the `Child::Ended` fixture sets `phase='cancelled'` by SQL.
 - Task 3: complete (commits `6c46b35c..95c37cf0`, review clean after fix round 2).
 
+## Task 4: Re-Runs, Stops, Crashes, Holds, Consent And The Fence
+
+- Base `d2134f8b`. Phase A (Sonnet 5.5 at high effort): Steps 1 and 2, the red tests, uncommitted until the implementation: `re_run_outcomes` (43 rows), `a_finish_or_an_end_without_a_context_leaves_the_link_row_alone` (2), `stops_of_the_context_child` (12), `crash_and_replay` (4), `holds_cancellation_and_listing` (5), `consent_differences` (11), `retirement_waits_for_a_stopped_promote` (C22) and the F3 runner test, in the new `src/repository/promotion/run_pull_request_rerun_tests.rs` (child module `reruns` of Task 3's module); `the_retirement_fence` (23 cells) and `a_candidate_captured_before_the_record_began_is_refused_at_its_claim` in `src/repository/context_retirement/mutation_tests.rs` (additions only; that file already drives the poll's retirement, `context retire` and the absent-context branch through the production boundary). 103 rows: 40 red, 63 pass today (16 of them controls), none needing an interface. The fake publisher gained test-only hooks.
+- Correction to the approved design, found by phase A: the row C28 of Required Outcomes Of Part C had been replaced by a stray `\1` in revision 5's edit. Restored from revision 4 (`6ca7aa60`) as it was reviewed ("the context branch removed outside Manyhands while a stopped record waits; then the same request | RR7"), with a Review Record row; saved and published as design `d9a4b8b6`. No change of contract: RR7 already gives the outcome.
+- Ruling: the Step 3 design checkpoint is written by an Opus designer and checked by an independent Opus checker before the orchestrator approves it, as Cycle 03 did for its branch-record checkpoint; the implementer (Sonnet 5.5 high, the owner's choice) then implements it — the mechanism is the one three planning rounds could not settle in prose, and the skill gives design work to the most capable model — one more review seat.
+- Phase B (Opus designer): the checkpoint (Appendix F when approved). The mechanism: a pull-request promotion record leaves the closure's branch path at its start and is run by a re-run table, through three defaulted `Lifecycle` hooks the closure does not take (`reruns_by_table`, `rerun`, `admits_context_start`); `rerun` answers `Finish`, `Gone`, `Refuse` or `Run` in the RR order, before the child and when it stops. The child's own moves are told from other commits by a chain of heads from a new column `accepted_context_oid` through the current attempt's recorded fast-forward and applied integration steps (a new read-only accessor in `remote/reservation.rs`); "may have pushed" is the attempt's push intent through `abandon_evidence`, kept in a new column `context_pushed`; a start check at the child's `BeforeFetch` safe point cancels an attempt that did not start from the accepted head; a completed child finishes from its authority OID with no other check (RR2); no link row without a context (RR8); the remote check at `run.rs` 936 becomes RR5 for a promotion and the cancellation check at 977 is dropped for it; one fence query read at the four retirement sites, `retire_context_scoped` with its own (U-4); F3 given by `require_no_pending_local` in the child's reservation. Two points for the owner.
+- Phase C (Opus checker, `task-4-checkpoint-check.md`): sound with fixes; 1 Blocking, 1 Important, 14 Minor. B1: a save made during a merging child's fetch is merged and published (the head checks the checkpoint cited exist only on the fast-forward path, `sync.rs:7036`, 7136, 7201; the divergence path compares with a later head read, `sync.rs:6993`, 7040, 3645-3666), so the record would finish by RR2 against decision 14. I1: nine fence control cells are pull-request records and need deliberate stubs, not the direct-row exemption. The checker agrees with the designer on both owner points.
+- **Owner decisions, 2026-11-27** (asked with AskUserQuestion; to be recorded as Cycle document decisions 17 and 18): (17) C29's rename case: while a conflict holds a stopped promote's child and the configured publication remote differs from the child's, the conflict verbs refuse as for any synchronization's conflict, and the promote keeps waiting; once the remote is configured back, the conflict resolves and the promote finishes. The C29 row renames back before resolving, and K-16 says so. Chosen over changing the conflict verbs. (18) RR7 over a retained child (the branch deleted by hand while a conflict holds the promote): the promote answers `recovery_required` and waits; restoring the branch lets the conflict's way out continue. A new known limit, K-19. Chosen over releasing the held child.
+- Revision 2 of the checkpoint (designer): B1 fixed with the checker's option (a), inside the promotion's own observer: at the child's `BeforePush` safe point the observer cancels unless the push candidate is in `own_heads`; the envelope fast-forward counts only when it ends at a tip the child fetched (which also closes a revision-1 hole that would have counted a merge made on top of a save); an attempt cancelled at `BeforePush` has sent nothing, so RR3 does not read it as pushed, and a new `reservation.rs` function records its unsent push as answered. New rows T3d (a save after a merging child read its head), T3e and T3f (the child's own fast-forward and merge reach their push), through a fake option `paced`; I1's nine fence cells get stubs; all fourteen Minor findings taken.
+- The designer found that decision 17 holds only if nothing registers the remote change: any poll or synchronization registers a changed remote name, primary branch or SSH URL, which moves the configuration generation, and after that neither the child's restart nor the conflict verbs take up the older-generation child, even after changing back (`reservation.rs` 1353-1355, 2736, 3262-3266; `state.rs` 3031-3059). Read from the source, this is pre-existing for every conflicted synchronization (a plain `item sync`, a direct promote's child, a Cycle 03 close's child): the conflict then blocks every synchronization in the repository for good, `operation abandon` refuses it (`abandonable`, `reservation.rs` 807-846), and the only exit is `repo remove` and enabling again.
+- **Owner decision, 2026-11-27** (asked with AskUserQuestion; to be recorded as Cycle document decision 19, refining 17): a known limit in this Cycle, and a new defect ticket for the pre-existing stranding. Cycle 04 changes nothing in `remote/` for it; K-16 and decision 17 say the remote must be changed back before any poll or synchronization registers the change; the C29 rows run "change, change back, resolve" with no call in between. Filed as vh-zn1fd (`01M8EAKJPNER2P0G9MS8V6187N`, type `defect`, published), related to the open task `01M4H33R34Z7C7EEKTY1ZCT950` ("Let the user abandon a pending synchronization conflict").
+- Re-check of revisions 2 and 3 (checker): sound with fixes; 1 Blocking, 1 Important, 4 Minor, all new; B1 closed for new attempts, I1 closed, the earlier Minor findings taken, T4, T5 and K-19 as ruled. B2: the `BeforePush` check would cancel a held child's restart that the child publishes (a "Merge primary into document" conflict resolved through the verbs but not pushed, then a save: the restart accepts the clean descendant, `sync.rs` 3467-3517 and 7071-7077, and RR4 would refuse), against RR6, decision 15 and K-16; the fix is to admit any attempt `child()` restarted. I2: M13 is wrong for a rename: each replacement attempt is refused at reservation by the record-remote identity check (`lifecycle_record.rs:822` through `reservation.rs:1542`), the old row is fenced `interrupted` (`state.rs:2927`), so the record waits until the remote is configured back; the RR3 row at rerun 942-944 asserting "goes on, promoted" passes only because the fake hard-codes `origin`. M13 holds only for an endpoint change, which K-17 covers.
+- Ruling: a rename while an attempt of the child may have pushed (RR3) leaves the record waiting until the remote is configured back, as decision 17 rules for a held child; the RR3 rename row is rewritten so, and K-16's wording (with decisions 17 and 19) names both cases — RR3 requires only that such an attempt is never refused, and waiting refuses nothing — if the owner wants it otherwise, it is a change to the reservation, which decision 15 avoided.
+- Revision 4 (designer): B2 fixed by a `restart` field on `CancellationObserver`, set by `child()` and `acknowledge_cancellation`, so the push and start checks apply only to new attempts; new rows T6 (a conflict at the primary stage resolved through the verbs, then a save: finishes `promoted` with the save published, decision 15) and T7 (the RR3 rename wait), the fake now building its plan from the live configuration; the four Minor findings fixed, with a new clause (vi) naming a remaining window between the promotion's tip read at `BeforePush` and the child's own head check. Re-check of revision 4 (checker): sound with fixes, 0 Blocking, 1 Important, 1 Minor; the observer field leaves every RR6 case to its own end and marks no new attempt a restart, and the closure's behaviour is unchanged (one field, the two struct literals in `child()` and `acknowledge_cancellation`, one `if` gated on the defaulted `reruns_by_table`, false for the closure). I3: window (vi) can be closed inside the promotion's code: an `ExternalChange` from this call's new attempt while its row is still `push_prepared` / `before_push` with no publication attempt proves nothing was sent (`sync.rs` 516-518, 9155-9160), so the row is let go and RR4 refuses; only a process lost in that instant remains.
+- Ruling: the `restart` field is not a change to the closure's path in the plan's sense ("beyond the defaulted hook ... stops for the owner"), because the closure's behaviour is unchanged and the only new read is gated on the defaulted hook the closure does not take — the rule protects the closure's behaviour, which Task 3's closure tests and the `ticket_closure` target pin — if wrong, the owner sees one field on a shared struct.
+- Ruling: a new known limit K-20, written into the Cycle document with decisions 17 to 19: a rename while an attempt of a stopped promote's child may have pushed leaves the promote waiting until the remote is configured back (decision 17's rule); and a process lost between the promotion's last head check and the child's own push check, with a save landing in that instant, reads as an attempt that may have pushed, so the next call publishes the save — the window is two head reads in one process apart, and closing it needs a change to `remote/sync.rs` that decision 15 avoided — a save published in a crash-and-race instant.
+- Revision 5 (designer): I3 taken (`rerun_branch` notes the attempt ID before `child()` and lets a new attempt that returned `ExternalChange` go before the second table read, so RR4 refuses; the designer checked `sync.rs` 516-526 and 9154-9160); new row T3h and stub S29; K-20 cited by T7, the RR3 row and section 9 instead of K-16.
+- The design checkpoint (Step 3) is approved by the orchestrator on 2026-11-27 at revision 5 (Appendix F, verbatim, when the task completes), after one check of revision 1 and three scoped re-checks (revision 1: 1 Blocking, 1 Important, 14 Minor; revisions 2 and 3: 1 Blocking, 1 Important, 4 Minor; revision 4: 0 Blocking, 1 Important, 1 Minor; revision 5 applies the checker's own fix). Named edits E-18 to E-22 (additive edits of Tasks 1's and 3's tests, checkpoint section 7) are taken under the owner's test-edit approval; the checker found none that removes, weakens or reverses an intent. Because Task 4 adds production functions to `src/repository/remote/reservation.rs`, AGENTS.md's `src/repository/remote/` row joins Task 10's SSH tier: `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`.
+- Documents updated with the owner's decisions 17 to 19 and the known limits K-19 and K-20 (K-16 amended), saved and published on 2026-11-27: Cycle document `fa212786` (decisions 17 to 19, K-16, K-19, K-20, revision history, four Review Record rows); design `1bf3e324` (C29's row, the known-limit range, a Review Record row). Written by the orchestrator; not independently reviewed as documents.
+
+- Phase D (a fresh Sonnet 5.5 high implementer): steps A to F of the checkpoint. Commits: `97891fcd` feat(promotion): a stopped pull-request promote re-runs, ends or waits by its outcomes, and fences retirement; `74fe9bcb` fix(promotion): pin the re-run guards and share the runner's endings (fix round 1). New production code: `promotion/rerun.rs` (the table's decision and `own_heads`), the runner's `rerun_branch`, `rerun_table`, `finish_rerun`, `continue_cancellation` and `end_and_refresh` (`promotion/run.rs`), three defaulted `Lifecycle` hooks taken only by the promotion, the observer's `restart` field, the record's `accepted_context_oid` and `context_pushed` with their CHECK and writers (`promotion/record.rs`, the migration amended on the branch), RR8's withheld link write (`answer.rs`), three `remote/reservation.rs` functions (two read-only, one that records an unsent push as answered through the existing `record_refused_push`), and the fence at `context_retirement/source.rs` `capture_target`, `authority.rs` `claim_initial` and `claim_scoped`, and `execution.rs`'s absent-context branch. Test-only helpers: `state::applied_step_for_test` and the fake's hooks.
+- Tests (implementer, each by exact name; no SSH target run, no `tests/` file touched): the red tests of phase A, now green, with the checkpoint's corrections and additions (T1 to T7, T3a to T3h, an added RR2 authority-OID row and a T3c assertion where stubs S5 and S11 did not bite as written); E-18 to E-22 (additive edits of Tasks 1 and 3's record tests); `own_heads_follow_only_the_chain_from_the_accepted_head` (fix round 1, the B1 guards at the cheapest layer); the direct, closure, retirement and `recovery_foundation_gate` regressions the checkpoint names. Every stub S1 to S29 and SA run red once and reverted, and in fix round 1 the E-21, E-18, raw column-CHECK and writer-guard stubs and each `own_heads` guard. Static gates clean.
+- Review (Opus): the production code implements checkpoint revision 5 section by section, and the seven named risks hold on focused checks (the closure and the withdraw lifecycle take the hooks' defaults; direct promotion unchanged; no path that moves the primary; the reservation functions' writes; the fence at all four sites, including a retirement claimed before the record began, which cannot deadlock; the RR order and the checker's hard cases, including the in-process `ExternalChange` let-go; the migration amendment). Spec ❌ and three Important: E-21's rows and parts of Step A never ran red; the `own_heads` guards that close B1 with recorded steps were unpinned; the cancellation-continue block and the end-load-refresh triple were copied (plan-mandated by the checkpoint's "as `promote_inner` does"). Ruling on the copy: two helpers — the checkpoint copied a pattern, not a requirement to copy — the direct and closure tests guard the refactor. Fix round 1/5 (3 addressed, 0 open; `97891fcd..74fe9bcb`). Re-review (Sonnet): addressed, the helpers behaviour-preserving at all six sites, no new Critical or Important.
+- Deferred Minor findings (for the final review): the row "RR2 table 1 is judged on the child's authority OID, not the consented tip" (`run_pull_request_rerun_tests.rs` about 908-927) passes under S5 and its comment is false (the added row pins it); C21's `operation show` is claimed in a doc comment (about 1724) but untested; `the_retirement_fence`'s absent-context controls accept any "not held" code (`mutation_tests.rs` about 4160-4171); duplicated test setup (the C21 request SQL, the fake's `fetch_prepared` UPDATE, the cancel-then-release block in `rerun_branch`); the fake's drive `AfterFetch` reserves without asserting `Reserved`; `run_pull_request_rerun_tests.rs` is about 2450 lines; `own_heads` widened to `pub(super)` for its test.
+- Not verifiable in the library (for Task 8's SSH case and the final review): a live `sync.rs` child calling `admits_point` at its safe points; the real drive's applied steps starting at a save; the row state `acknowledge_refused_push` leaves for C12's push rejection; `TicketWithdrawLifecycle` on the changed runner (it takes no hook; no withdraw test was run).
+- Task 4: complete (commits `d2134f8b..74fe9bcb`, review clean after fix round 1).
+
 ## Appendix A: References, Task 0 Steps 2 and 3 (research agent, verbatim)
 
 ### Task 0: names check of the Cycle 04 design against HEAD aee99255 (main 8e5d9832)
@@ -1011,3 +1038,996 @@ No other. In particular none of Cycle 03's closure tests, none of `bind/lifecycl
 6. **The re-run rows are Task 4's and stay as they are**: after the child, `promote_branch` still runs the cancellation check (`run.rs:977`) and, before it, the "remote is the one configured while `base_oid` is unset" check (`run.rs:936`), which a promotion's record (it never has a base) fails on every call after the configured remote changes; RR2 (no checks after the child), RR4, RR5 and the crash boundaries around the completion are not added here.
 7. **`TicketClosed` as an ended child** answers `recovery_required` from `end` (a document's context cannot answer it).
 8. **The twin fake, not a lift** (section 10), with the reasons.
+
+## Appendix F: Task 4 design checkpoint, approved at revision 5 (verbatim; the checks are in the controller's workspace, `task-4-checkpoint-check.md`, and summarised in Task 4's section)
+
+### Task 4 design checkpoint (Step 3): the re-run table, the start and push checks, and the retirement fence
+
+Revision 5. Written against the worktree at HEAD `d2134f8b` with phase A's red tests uncommitted (`git status`: `promotion/run_pull_request_rerun_tests.rs` new; `promotion/run_pull_request_tests.rs` and `context_retirement/mutation_tests.rs` modified). No code and no test was changed for this checkpoint, and nothing was built. Line numbers are at that HEAD.
+
+### Revision 5 changes
+
+The input was the checker's re-check of revision 4 ("Re-check of revision 4": no Blocking, one Important I3, one Minor), with the coordinator's direction on both.
+
+- **I3: window (vi) is closed in the promotion's own code.**
+  - Section 1.3 (c): `rerun_branch` notes the attempt before `child()`. When the call's new attempt returns `ExternalChange`, it lets that attempt go before the second table read. The table then settles the intent as unsent and RR4 refuses.
+  - Why that is sound: once `pushing = true` is set, `ExternalChange` becomes `RecoveryRequired` (`unverified_push_error`, `sync.rs` 516-526, applied at 9154-9160; I checked both). So that error proves nothing was sent.
+  - Section 3: RR4's clause (vi) is restated. Its only residual is a process lost in the window with a save landing in the same instant, which reads as RR3 (known limit K-20).
+  - Section 10: corrected; closing the in-process case needs no `remote/sync.rs` change.
+  - Section 7: new row T3h, and the `paced` hook's step 7a for it. The hook now also records `completed_step='before_push'` when `BeforePush` continues.
+  - Section 8: new stub S29.
+  - Sections 7 and 11: T1's counts and Step E list T3h.
+- **The Minor: T7 and the RR3 row cited K-16.** K-16 is about a held child. T7, the RR3 row and section 9's M13 text now cite the new known limit K-20, which the coordinator writes into the Cycle document.
+
+### Revision 4 changes
+
+The inputs were the checker's re-check of revisions 2 and 3 (`task-4-checkpoint-check.md`, "Re-check of revisions 2 and 3": one Blocking B2, one Important I2, four Minor m1 to m4), and the owner's ruling on I2.
+
+- **B2: a held restart was cancelled at `BeforePush`.** The fix: `CancellationObserver` gains a `restart` field, set by `child()` and `acknowledge_cancellation`, and the observer asks the hook only for a new attempt. A restarted attempt is a held child (RR6) and goes on unchecked.
+  - Changed: sections 0, 1.2 and 1.3 (d); 1.4, which now names this one field as the only shared change on the closure's path, with no change of behaviour; `admits_point`'s doc comment; and section 3's "Held restarts" paragraph, whose false claim is corrected.
+  - New: row T6 (a conflict at the primary stage, resolved, then a save: finishes with the save published) and stub S27.
+- **I2: M13 was wrong for a rename.** A replacement attempt is refused at its reservation (`lifecycle_record.rs` 822 via `reservation.rs` 1542), so the record waits until the remote is configured back. That is decision 17's case, which K-16 with decisions 17 and 19 names.
+  - Changed: the RR3 row now says so. The RR3 rename row is rewritten as T7: while renamed the record waits; configured back, it goes on with no call in between.
+  - The fake now builds its plan from the live configuration, so the identity check refuses as it does in real use.
+  - M13 stands only for an endpoint change, which K-17 covers, so it is dropped as an owner point (section 9).
+- **m1:** S13 could not turn its row red, so it is removed, along with the RR6 retained row's `paced` restart and `Kept::Retained`'s recorded start. A restart is no longer checked, so none of them pins anything. S27 replaces S13.
+- **m2:** the drive fallback is stated as valid for T3d alone. T3f lets the drive reserve its own row and has no fallback.
+- **m3:** `admits_point` at `BeforePush` also requires the candidate to be the branch tip, which covers RR4's clause (v). New row T3g and stub S28. The window left after the push check's read, before the child's own head check, is stated: it ends in RR3 (RR4 clause vi, and section 10).
+- **m4:** section 1.4 now counts three new `reservation.rs` functions: two read-only, one write.
+- **Section 11:** Steps D and E list T6, T7 and T3g, and the observer field. Nothing waits.
+
+### Revision 3 changes
+
+The owner ruled on Stop 1 on 2026-11-27, to be recorded as Cycle document decision 19, refining decision 17:
+
+- The stranding of a held child, once a poll or a synchronization registers a changed remote or endpoint, is a known limit in this Cycle.
+- The stranding itself is pre-existing, and goes to a separate defect ticket: vh-zn1fd (`01M8EAKJPNER2P0G9MS8V6187N`).
+- Cycle 04 changes nothing in `remote/` for it.
+- K-16 and decision 17 will say that the remote must be changed back before any poll or synchronization registers the change.
+
+This revision makes exactly these edits:
+
+- **Section 0:** the "stops for the owner" paragraph now says that the three rulings (decisions 17, 18 and 19) settle every stop, and that nothing stops.
+- **Section 3, the RR6 row:** the outcome cell cites decision 19 and vh-zn1fd in place of "see Stop 1".
+- **Section 7, T4:** the C29 rename row is now "a conflict; the remote renamed and renamed back, with no call in between; resolved: finishes". It no longer waits on anything.
+- **Section 7, T5 (new entry):** the C29 endpoint row is rewritten the same way: "a conflict; the endpoint changed and changed back, with no call in between; resolved: finishes".
+- **Section 7, the RR6 retained, save and rename row:** a note that in real use its middle call would strand the child (vh-zn1fd). The row asserts only the table's answer to that call.
+- **Section 7:** a statement that any call between the change and the change back would strand the child (vh-zn1fd), and why the library rows do not show it.
+- **Section 8:** both rewritten C29 rows pass on today's code, so they are moved from S8 to S16 and run red against it. The bookkeeping changes accordingly.
+- **Section 9:** the stops are marked as ruled (decisions 17, 18 and 19). K-19's wording is taken: the failed-acknowledgement case as a transient clause, and "restore the branch and its worktree".
+- **Section 11:** Step D's exception for the two C29 rows is removed. Step F's wait on Stop 1 is removed. The steps and the commit wait on nothing.
+
+### Revision 2 changes
+
+The inputs were the owner's rulings of 2026-11-27, to be recorded as Cycle decisions 17 and 18, and the independent check (`task-4-checkpoint-check.md`): verdict "sound with fixes", one Blocking finding (B1), one Important (I1) and 14 Minor (M1 to M14).
+
+**B1, a save during a merging child's fetch.** Fixed by the checker's option (a), made sound with three additions, all within the approved contract. Details in sections 1.3 (d), 3 and 7.
+
+- **The check.** The start check becomes a check at two safe points, `BeforeFetch` and `BeforePush`, through one hook, `admits_context_point`. At `BeforePush` it cancels the attempt unless the candidate it is about to push is in `own_heads(accepted, current row)`.
+- **Addition 1, the envelope rule.** The envelope pair counts only when its `local_oid` is a tip the child fetched (`tracking_oid` or `primary_tracking_oid`), at any checkpoint from `local_prepared` on. This also closes a hole in revision 1. `checkpoint_synchronization_merge_applied` writes `local_fast_forwarded` with the merge as `local_oid` (`reservation.rs` 3070-3071). Revision 1 counted that pair, so it would have treated a merge built on a save as the child's own.
+- **Addition 2, RR3.** RR3 does not read as "may have pushed" an attempt whose cancellation was acknowledged at `BeforePush` before its push: phase `cancelled`, `completed_step` `before_push`, checkpoint `push_prepared`, no publication attempt.
+- **Addition 3, settling the unsent intent.** A new reservation-layer function, `settle_unsent_promotion_push`, records that unsent intent as answered (`protocol_rejected`, as `record_refused_push` records a refused or abandoned push). Without it, every later synchronization of the context would count the intent as an unanswered push (`push_absence`, `sync.rs` 8105-8248). A never-published document could then never be published.
+- **Correction.** The RR4 row's claim that the child refuses every save after its head read is corrected.
+- **New rows.** T3d (a save between `BeforeFetch` and a merging child's merge), plus T3e and T3f, which pin that the push check admits the child's own fast-forward and merge.
+
+**Owner rulings recorded (section 9).**
+
+- **Decision 17.** C29's rename row is amended: the remote is renamed back before resolving. **Re-checking it against the source, I found my recommendation that led to 17 holds only when no operation ran under the changed configuration.** The request's own re-run does run one. This goes back to the owner, with the endpoint row too (Stop 1).
+- **Decision 18, K-19.** Recorded. My answer on the acknowledgement-failure case: name it in K-19 as a transient clause.
+
+**I1.** The nine fence control cells on pull-request records get stubs S21 and S22. Only seven cells stay exempt.
+
+**The 14 Minor findings,** each taken:
+
+| Finding | Where it went |
+| --- | --- |
+| M1 | the `paced` fake option on T3b's last call and on the RR6 retained, save and rename row; `Kept::Retained` records its starting head; stubs S12 and S13 |
+| M2 | stub S16 |
+| M3 | two `consent_differences` controls moved under S3 |
+| M4 | E-22's format rows |
+| M5 | `promotion_child_moves`' doc comment |
+| M6 | the RR6 row's sentence about `let_go` |
+| M7 | "three hooks", stated once |
+| M8 | section 10, as Task 5's obligation for the ledger |
+| M9 | the integration-steps sentence, in section 3 |
+| M10 | `execution.rs` 361 and 366 |
+| M11 | an `attempts()` helper for every count passed to `refuses` |
+| M12 | F3's race, in section 5 |
+| M13 | sent to the owner with section 9 |
+| M14 | the bookkeeping, in section 8 |
+
+### 0. The mechanism in one paragraph, and what stops
+
+**The path.** A pull-request promotion record leaves the runner's branch-record path at its first statement and is run by a re-run table instead.
+
+**The hooks.** There are three defaulted lifecycle hooks, and the closure takes none of them. `reruns_by_table` diverts the record. `rerun` answers `Finish`, `Gone`, `Refuse` or `Run` in the table's order (RR2, RR7, RR3, RR6, RR5, RR4, RR1), before the context child and again when the child stops. `admits_context_point` is asked by the child's observer at a new attempt's `BeforeFetch` and `BeforePush` safe points. The runner acts on the table's answer with its own helpers. The observer gains one field, `restart` (section 1.4).
+
+**The child's own moves (RR1, RR4).** The table tells the child's own moves from a commit it did not make by a chain of heads:
+- The chain starts at a new column, `accepted_context_oid` (null means the consented tip).
+- It goes on through the current attempt's own recorded moves, counted only when that attempt began at the accepted head: a fast-forward to a tip the child fetched, recorded in its envelope, and each integration step it applied, from the head before the step to the head after it (a merge, or a resolution through the conflict verbs).
+- The branch tip must be in the chain, or the record is refused (RR4).
+- When the next attempt will start from a head the child made, that head becomes the accepted one (RR1).
+
+**May have pushed (RR3).** A second new column, `context_pushed`, records once that an attempt may have pushed. After that, no tip, remote or endpoint check refuses the record.
+
+**What the child does between the runner's check and its push.** A new attempt (one `child()` minted, not one it restarted) is checked at its two safe points:
+- `BeforeFetch` cancels a new attempt that did not start from the accepted head.
+- `BeforePush` cancels a new attempt whose candidate is not in the chain, or is not the branch tip. That covers a save made while a merging child fetched. The intent the cancelled attempt recorded is settled as answered, so it reads as nothing pushed.
+- An attempt `child()` restarted is a held child (RR6), so neither point checks it (decision 15, K-16).
+
+**Finishing (RR2, RR8).** A completed child finishes the record from its authority OID, with no configuration, remote, tip or cancellation check. When the context branch is gone at finish, no link row is written.
+
+**The fence.** A fence query holds off all four retirement sites while a pull-request promotion of the document is unfinished.
+
+**Stops for the owner (section 9): none.** The owner ruled on all of them: decisions 17, 18 and 19.
+
+- A held child can continue only if a changed remote or endpoint is changed back before any poll or synchronization registers the change. Otherwise the child is stranded, which is the known limit of decision 19, ticket vh-zn1fd.
+- B1 and B2 did not stop.
+- **No change to the closure's behaviour is needed.** The only shared runner code that changes is one observer field, read only for a record its lifecycle re-runs by its table (section 1.4).
+
+### 1. Part G item 6: the three hooks
+
+#### 1.1 The type
+
+In `promotion/lifecycle.rs`, beside `BranchStep` and `BranchEnd` (lines 183-203):
+
+```rust
+/// What a branch record's re-run table (Cycle 04 decision 14, the design's
+/// table RR) gives a call of its request, before its context child and
+/// again when the child stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchRerun {
+    /// RR2: the context child completed: the record finishes by
+    /// `branch_step`, with no remote, endpoint, tip or cancellation check.
+    Finish,
+    /// RR7: the context branch is gone and the child did not complete: the
+    /// child is let go and the record ends as `BranchEnd::ContextGone`.
+    Gone,
+    /// RR5, RR4: the record ends refused (`external_change`) once its child
+    /// is let go, before the child runs again.
+    Refuse,
+    /// RR3, RR6, RR1: the child runs, or continues, under `child()`.
+    Run,
+}
+```
+
+#### 1.2 The hooks, their defaults and where the runner calls them
+
+There are three hooks, all added to `trait Lifecycle` in its branch-record section (`lifecycle.rs` 608-650):
+
+| Hook | Signature | Default | Promotion's | Called at |
+| --- | --- | --- | --- | --- |
+| `reruns_by_table` | `fn reruns_by_table(_r: &Self::Record) -> bool` | `false` | `r.path() == RecordPath::Branch` | `promote_inner` after the superseded check (`run.rs` after 495); `promote_branch` first (after 933); `CancellationObserver::safe_point` (after 1292) |
+| `rerun` | `fn rerun(_service: &RepositoryService, _root: &Path, _r: &Self::Record) -> Result<BranchRerun, RepositoryError>` | `Err(state::recovery_required())`, never called for a lifecycle whose `reruns_by_table` is false | `rerun::decide(service, root, r)` | `rerun_table` in `run.rs` (new), from `rerun_branch` before the child and after a child stop |
+| `admits_context_point` | `fn admits_context_point(_service: &RepositoryService, _root: &Path, _r: &Self::Record, _point: RemoteOperationSafePoint) -> Result<bool, RepositoryError>` | `Ok(true)` | `rerun::admits_point(service, root, r, point)` | `CancellationObserver::safe_point` at `BeforeFetch` and `BeforePush`, only for a new attempt (`!restart`, 1.3 d) when `reruns_by_table` |
+
+`DocumentPromotionLifecycle` implements all three (`lifecycle.rs` impl at 880-1240). `TicketClosureLifecycle` implements none.
+
+#### 1.3 The runner (`promotion/run.rs`)
+
+**(a) `promote_inner`, existing record, after line 495.** This is after the `Superseded` check, before `configured` at 499 and before the configuration read at 525:
+
+```rust
+        // A record its lifecycle re-runs by a table (a pull-request
+        // promotion, Cycle 04 decision 14) is run by that table from here:
+        // a completed child finishes, and a gone branch ends, with no live
+        // configuration (RR2, RR7, R-27), so none is read first.
+        if L::reruns_by_table(&validated) {
+            return rerun_branch::<L>(lifecycle, service, &request, &mut validated, true, io, progress);
+        }
+```
+
+**(b) `promote_branch`, after line 933.** This is after the publication-child check and before the remote check at 936. Only a new pull-request record reaches it, because (a) diverts every existing one:
+
+```rust
+    // A record its lifecycle re-runs by a table: the table, not the two
+    // checks below, decides each call (Cycle 04 decision 14).
+    if L::reruns_by_table(r) {
+        return rerun_branch::<L>(lifecycle, service, request, r, existing, io, progress);
+    }
+```
+
+**(c) New `rerun_branch`, `rerun_table` and `finish_rerun`.** `rerun_branch` takes 7 arguments, within clippy's limit. These functions are reached only through (a) and (b). They are unchanged from revision 1:
+
+```rust
+/// A branch record its lifecycle re-runs by a table (the design's RR). The
+/// table is asked on every call, the first included, once before the
+/// context child and again when it stops. It, and not the checks of a
+/// closure's branch record (the remote configured while no base is
+/// recorded, a cancellation after the child), decides the call's way. A
+/// child that completed finishes the record with no further check (RR2,
+/// R-26).
+fn rerun_branch<L: Lifecycle>(lifecycle: &L, service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>, r: &mut L::Record, existing: bool,
+    io: &mut impl PromotionIo, progress: &mut dyn RunObserver) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    // As `promote_inner` does at 632-638: a second call explicitly
+    // continues an inter-step cancellation (C17).
+    if existing && r.cancel_requested() {
+        state::with_transaction(service, root, |tx, id| L::clear_cancellation(tx, id, r.operation_id()))
+            .map_err(mapped::<L::Error>)?;
+        r.set_cancel_requested(false);
+    }
+    if !existing {
+        boundary(service, root, FailurePoint::AfterConfirmed)?;   // as 939-941
+    }
+    let mut rerun = rerun_table::<L>(service, root, r)?;
+    if rerun == BranchRerun::Run {
+        if cancelled::<L>(service, request, r)? {                  // as 942-947 (C17 before)
+            release_child::<L>(service, request, r, ChildRole::Context);
+            return Err(L::Error::interrupted());
+        }
+        // The attempt this call runs: a new one when `child()` minted it.
+        let before = child_id(r, ChildRole::Context);
+        rerun = match child::<L>(service, request, r, ChildRole::Context, io, progress) {
+            Ok(_) => BranchRerun::Finish,
+            Err(error) => {
+                if cancelled::<L>(service, request, r)? {          // as context_step 1173-1176 (C17 during)
+                    release_child::<L>(service, request, r, ChildRole::Context);
+                    return Err(L::Error::interrupted());
+                }
+                // Task 3's end, as promote_branch 959-967.
+                if ends_context_child(&error) && let_go::<L>(service, request, r, ChildRole::Context, io)? {
+                    L::end_branch(service, root, r, BranchEnd::ContextChild(&error)).map_err(mapped::<L::Error>)?;
+                    *r = load::<L>(service, root, r.operation_id())?;
+                    return Ok(refresh::<L>(service, root, r, false));
+                }
+                // A new attempt that refused its own push with `ExternalChange`
+                // sent nothing: once `pushing` is set, that error becomes
+                // `RecoveryRequired` (`unverified_push_error`, `sync.rs`
+                // 516-526, 9154-9160). So it is let go, and the table below
+                // settles its intent as unsent and refuses (RR4 clause vi).
+                if child_id(r, ChildRole::Context) != before
+                    && matches!(*error, SynchronizationError::ExternalChange)
+                {
+                    let_go::<L>(service, request, r, ChildRole::Context, io)?;
+                }
+                // What the child left: RR4 after the start or push check
+                // cancelled it, or after the child refused its push; RR7
+                // after its branch went. Otherwise its own stop stands.
+                match rerun_table::<L>(service, root, r)? {
+                    BranchRerun::Run => return Err(L::Error::context_synchronization(Box::new(error))),
+                    ended => ended,
+                }
+            }
+        };
+    }
+    match rerun {
+        BranchRerun::Finish => finish_rerun::<L>(lifecycle, service, request, r),
+        BranchRerun::Gone | BranchRerun::Refuse => {
+            // A retained child cannot be let go (K-19); nor, until a later
+            // call, can one whose acknowledgement left it live.
+            if !let_go::<L>(service, request, r, ChildRole::Context, io)? {
+                return Err(L::Error::recovery_required());
+            }
+            if rerun == BranchRerun::Refuse {
+                return Err(abandon::<L>(service, root, r, L::Refusal::external_change()));
+            }
+            L::end_branch(service, root, r, BranchEnd::ContextGone).map_err(mapped::<L::Error>)?;
+            *r = load::<L>(service, root, r.operation_id())?;
+            Ok(refresh::<L>(service, root, r, false))
+        }
+        BranchRerun::Run => Err(L::Error::recovery_required()), // cannot arise: a run answers above
+    }
+}
+
+/// The table's answer for `r`, which it may have recorded on the record
+/// (its accepted head, that an attempt may have pushed): `r` is read again.
+fn rerun_table<L: Lifecycle>(service: &RepositoryService, root: &Path, r: &mut L::Record)
+    -> Result<BranchRerun, L::Error> {
+    let rerun = L::rerun(service, root, r).map_err(mapped::<L::Error>)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    Ok(rerun)
+}
+
+/// RR2: a record whose context child completed, in this call or an earlier
+/// one, finishes by `branch_step`. The context it holds is the one the
+/// child published or found current (its authority), whether or not the
+/// branch is still there.
+fn finish_rerun<L: Lifecycle>(lifecycle: &L, service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>, r: &mut L::Record) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    if r.step() == Step::Confirmed {
+        let authority = match state::with_transaction(service, root, |tx, _| L::child_state(tx, r, ChildRole::Context))
+            .map_err(mapped::<L::Error>)? {
+            ChildState::Complete(stored) => stored.authority.ok_or_else(L::Error::recovery_required)?,
+            _ => return Err(L::Error::recovery_required()),
+        };
+        r.set_context_oid(Some(authority.oid()));
+        r.set_step(Step::ContextSynchronized);
+        save::<L>(service, root, r)?;
+        boundary(service, root, FailurePoint::AfterContextSync)?;   // as context_step 1193 (C14, C26)
+    }
+    let step = lifecycle.branch_step(service, request, r)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    match step {
+        BranchStep::Finished => Ok(refresh::<L>(service, root, r, false)),
+        BranchStep::Closing => Err(L::Error::recovery_required()),
+    }
+}
+```
+
+`remote_context_oid` stays null on a pull-request record. Nothing reads it for one: `answer.rs` does not, and the cleanup rules that do are direct-only (`lifecycle.rs` 255-265). No pull-request test asserts it.
+
+**(d) `CancellationObserver`: a new field and the check in `safe_point`.**
+
+`CancellationObserver` (`run.rs` 1280-1287) gains one field:
+
+```rust
+    /// Whether `child()` restarted the attempt this observer watches (a held
+    /// child, RR6) rather than minting a new one. The acknowledgement of a
+    /// cancelled row is a restart too.
+    restart: bool,
+```
+
+It is set at its two construction sites: `child()` passes its own `restart` (`run.rs` 1493-1498, the value it sends in the request at 1508), and `acknowledge_cancellation` passes `true` (1379-1384). `safe_point` (`run.rs` 1289-1298) checks, after the progress event (1290-1292):
+
+```rust
+        // A record its lifecycle re-runs by a table takes a new attempt of its
+        // context child only from the head the table accepted, and lets it
+        // push only what its own moves made from there: a save between the
+        // table and the child's read of its head ends the attempt before its
+        // fetch, and one that a merging child took in during its fetch ends it
+        // before its push (RR4). An attempt `child()` restarted is a held
+        // child, which goes on to its own end unchecked (RR6, decision 15).
+        if !self.restart
+            && matches!(point, RemoteOperationSafePoint::BeforeFetch | RemoteOperationSafePoint::BeforePush)
+            && L::reruns_by_table(self.record)
+        {
+            match L::admits_context_point(self.service, &self.request.root, self.record, point) {
+                Ok(true) => {}
+                Ok(false) => return SafePointRequest::Cancel,
+                Err(_) => return SafePointRequest::Stop,
+            }
+        }
+```
+
+**Why a restart is admitted by the flag, not by a held arm in the hook (B2).** A held restart can take in a save made after its conflict was resolved:
+
+- A conflict at the "Merge primary into document" stage is resolved through the verbs. The resolution is released and not yet pushed (`LocalCheckpointComplete`).
+- The person then saves.
+- The restart's `reconcile_pending_candidate` accepts a clean descendant of the released resolution (`sync.rs` 3467-3517: "a later clean descendant is new pass input", 3493-3495).
+- The window path then runs a new pass from the save (7071-7077, "a released descendant get[s] a new immutable pass").
+- That pass's steps start at the save, so its candidate is not in `own_heads`.
+- A hook arm keyed on the row's resolution would not see it. `promotion_child_has_resolution` reads only the latest window (`reservation.rs` 625-639), and the new pass has just made that window its own.
+
+`child()`'s `restart` flag is set exactly when it restarts rather than replaces: for `Retained` or an unowned live row with a resolution (`run.rs` 1425, 1442, 1480). That is RR6's held set (`held`, section 3). After a replacement, `restart` is `false` (1486-1491). So the flag checks exactly the attempts decision 15 lets the checks apply to, the replaced ones.
+
+How the child takes `Cancel` at each point (source):
+
+- **The observer runs first.** It is asked before `remote_safe_point` (`sync.rs` 4461-4468). `Cancel` records the attempt's own cancellation, and that same safe point then acknowledges it.
+- **The row it leaves.** `acknowledge` writes `phase='cancelled'`, `completed_step=<the point>`, `outcome='cancelled'` (`reservation.rs` 673-704). The exception is a row with a pending conflict or an owned resolution, which is left `interrupted` (665-671); such a row is retained, so it is never a new attempt.
+- **At `BeforeFetch`,** nothing has been fetched, merged or recorded as a push.
+- **At `BeforePush` with a `Checkpoint` intent,** the attempt has recorded `push_prepared` with `push_oid` = the candidate (`sync.rs` 9093-9101). `remote_safe_point` requires exactly that checkpoint (`validate_sync_point`, `reservation.rs` 509-511). `push_exact` comes only after `ready` succeeds: a cancelled safe point returns an error first, before `pushing = true` (`sync.rs` 9110-9134). So nothing was sent.
+- **The `Attempt` intent** (a publication attempt at `prepared`, 9103-9107; `remote_safe_point` 1952-1953) arises only when an earlier intent is reconciled into an open attempt, which needs `prior.is_some()` (`sync.rs` 6818-6827, 6962-6967). That is a restart, which the flag admits before the hook is asked. `admits_point` also admits an `Attempt`-kind row (section 3).
+- **What the call answers.** The child answers `Interrupted`. The parent is not cancelled, so `child()` returns that error (1518-1525). `rerun_branch`'s second table read then refuses the record (section 3, RR4).
+
+#### 1.4 Why the closure's behaviour does not change
+
+The closure takes none of the hooks, and the one shared change is plumbing:
+
+- `TicketClosureLifecycle` takes none of the three hooks, so `reruns_by_table` is `false` for every closure record.
+- Insertions (a) and (b) are therefore never taken for a closure.
+- `rerun_branch`, `rerun_table` and `finish_rerun` are reachable only through (a) and (b).
+- **The one change to shared runner code on the closure's path is insertion (d).**
+  - `CancellationObserver` gains the field `restart`, set at its two construction sites in `child()` and `acknowledge_cancellation`.
+  - `safe_point` gains a condition, `!self.restart && matches!(point, …) && L::reruns_by_table(self.record)`. For a closure child it is `false`, so the call goes on to the unchanged `cancelled` check.
+  - The field is read nowhere else. The closure's behaviour does not change, and no closure test needs to change.
+  - The coordinator directed this fix (the checker's B2). It is plumbing for a defaulted hook the closure does not take.
+- No other existing line of `promote_inner`, `promote_branch`, `context_step`, `child`, `let_go`, `finish_branch` or `refresh` changes. The closure keeps its checks at 936 and 977.
+- The other shared code Task 4 touches serves only the promotion:
+  - `answer.rs`, `record.rs` and the new `rerun.rs`;
+  - **three** new functions in `remote/reservation.rs` (section 3): two read-only, `promotion_child_moves` and `promotion_child_push_candidate`, and one write, `settle_unsent_promotion_push`, which only the promotion's table calls;
+  - the retirement call sites (section 5), where the closure's own fence calls stay.
+
+### 2. The two columns (Task 1's migration, amended on the branch)
+
+**The migration.** It has never run on a real registry (Global Constraints), so `SCHEMA` (`promotion/record.rs` 228-270) is amended in place under the same marker, `wave_06_promotion_modes_v1`, as Task 3 amended it for the answered-abandoned CHECK. `SCHEMA_V2`, `V2_COLUMNS` and `migrate` (277-336) do not change. The rebuild copies the 21 v2 columns, so the two new columns take their defaults (null, 0). The create path writes `SCHEMA`.
+
+After line 255 (`endpoint_digest …`):
+
+```sql
+    accepted_context_oid TEXT CHECK(length(accepted_context_oid)=40 AND accepted_context_oid NOT GLOB '*[^0-9a-f]*' AND accepted_context_oid!='0000000000000000000000000000000000000000'),
+    context_pushed INTEGER NOT NULL DEFAULT 0 CHECK(context_pushed IN (0,1)),
+```
+
+After the last CHECK (line 269), with a comma before it:
+
+```sql
+    CHECK(consented_context_oid IS NOT NULL OR (accepted_context_oid IS NULL AND context_pushed=0))
+```
+
+Line 263 already gives a direct row a null `consented_context_oid`, so this CHECK also keeps both new columns empty in direct rows and in refused rows written at confirm.
+
+| Column | Meaning | Written by | Read by |
+| --- | --- | --- | --- |
+| `accepted_context_oid` | The head the record's next attempt of its context child may start from. Null means the consented tip. It is set when the table finds the branch moved only by the record's child, to a head the column did not hold before (RR1). | `record::accept_context_head` (new) | `rerun::decide` (RR4, RR1), `rerun::admits_point` |
+| `context_pushed` | An attempt of the context child may have pushed (RR3). Once set it stays set. | `record::note_context_pushed` (new) | `rerun::decide`, `rerun::admits_point` |
+
+**Why each is needed and cannot be derived.**
+
+- **The record keeps only the latest attempt.** `child()` replaces every attempt that is not held: an absent one, a terminal one, or an unowned live row without a resolution, which it cancels first (`run.rs` 1421-1491). The record keeps only the latest attempt's ID (`mint_attempt`, `lifecycle_record.rs` 713-734). Once an attempt is replaced, its moves and its push intent are out of reach.
+- **A row-less stop leaves nothing to read.** A replacement can stop before it writes a row (Busy, PollYielding, any error before its reservation; `run.rs` 1426-1428). The record is then left with nothing to read.
+- **What `accepted_context_oid` prevents.** Attempt k moves the branch; attempt k+1 then stops with no row. Without the column, the branch reads as a commit the child did not make, and an RR1 case is refused. Row T3a pins it.
+- **What `context_pushed` prevents.** Attempt k may have pushed; attempt k+1 then stops with no row; then the person saves. Without the flag, that reads as RR4 and answers "nothing published" after a possible push, which breaks RR3. Row T3b pins it.
+
+**The struct and its checks.** `PromotionRecord` (125-161) gains `pub accepted_context_oid: Option<Oid>` and `pub context_pushed: bool`.
+
+- `decode` (341-378) reads them with `row.oid("accepted_context_oid")?` and `row.flag("context_pushed")?`.
+- `validate` adds `r.accepted_context_oid` to its zero-OID list (397-406).
+- `validate_direct` refuses `accepted_context_oid.is_some() || context_pushed`.
+- `validate_pull_request` refuses `!begun && (accepted_context_oid.is_some() || context_pushed)`.
+- `Debug` adds `context_pushed`.
+- **`save_record` (747-786) neither writes nor compares them.** Its UPDATE lists its columns explicitly, and the two columns belong to their writers. So a runner snapshot taken before the table wrote one can neither overwrite it nor be refused because of it. The checker confirmed that no other UPDATE of the table touches them.
+- `insert_record` (723-746) does not change: a begun record's accepted head is null, which means the consented tip.
+
+The writers, in `record.rs` after `abandon_branch_record` (876-906):
+
+```rust
+/// Moves a pull-request record's accepted context head from `from` to `to`
+/// (RR1), in the caller's transaction: only an unfinished pull-request record
+/// at `confirmed` none of whose attempts may have pushed, and only from the
+/// head it holds (its consented tip until the first move).
+pub(in super::super) fn accept_context_head(tx: &Transaction<'_>, id: i64, op: OperationId, from: Oid, to: Oid)
+    -> Result<(), RepositoryError>
+// UPDATE document_promotions SET accepted_context_oid=?3,updated_at=max(updated_at,?4)
+//  WHERE repository_id=?5 AND operation_id=?1 AND integration_mode='pull_request' AND step='confirmed'
+//    AND context_pushed=0 AND coalesce(accepted_context_oid,consented_context_oid)=?2
+// exactly one row, else recovery_required; then read_record (validate).
+
+/// Records that an attempt of a pull-request record's context child may have
+/// pushed (RR3): from then on the re-run table checks no tip, remote or
+/// endpoint. Setting it again changes nothing.
+pub(in super::super) fn note_context_pushed(tx: &Transaction<'_>, id: i64, op: OperationId) -> Result<(), RepositoryError>
+// UPDATE document_promotions SET context_pushed=1,updated_at=max(updated_at,?2)
+//  WHERE repository_id=?3 AND operation_id=?1 AND integration_mode='pull_request'
+//    AND step IN ('confirmed','context_synchronized') AND consented_context_oid IS NOT NULL
+// exactly one row, else recovery_required.
+```
+
+### 3. The re-run table: the mechanism of every RR row
+
+There is a new module, `promotion/rerun.rs` (declared `mod rerun;` in `promotion/mod.rs`, private to `promotion`), and three new functions in `remote/reservation.rs` (m4): two read-only, `promotion_child_moves` and `promotion_child_push_candidate`, and one write, `settle_unsent_promotion_push`.
+
+```rust
+/// The design's table RR in its order: RR2, RR7, RR3, RR6, RR5, RR4, RR1.
+pub(super) fn decide(service: &RepositoryService, root: &Path, r: &PromotionRecord)
+    -> Result<BranchRerun, RepositoryError> {
+    let (repository, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    // Git and the configuration are read before the registry's write lock.
+    let tip = observe::reference_oid(&repository, &LifecycleKind::DocumentPromotion.context_ref(&r.item_id), root)?;
+    let configured = match read_configuration(root) {
+        Ok(ConfigurationInspection::Valid(config)) => Some(config.publication_remote),
+        _ => None,
+    };
+    let endpoint = r.remote_name.as_deref().map(|remote| endpoint_digest_of(&repository, remote));
+    state::with_transaction(service, root, |tx, id| {
+        let r = record::read_record(tx, id, r.operation_id)?.ok_or_else(state::recovery_required)?;
+        let child = record::child_state(tx, &r, ChildRole::Context)?;
+        // RR2
+        if r.step == PromotionStep::ContextSynchronized || matches!(child, ChildState::Complete(_)) {
+            return Ok(BranchRerun::Finish);
+        }
+        if r.step != PromotionStep::Confirmed { return Err(state::recovery_required()); }
+        // RR7
+        let Some(tip) = tip else { return Ok(BranchRerun::Gone) };
+        let row = match &child { ChildState::Unowned(row) | ChildState::Retained(row) => Some(row), _ => None };
+        // RR3. The flag first: a row it was noted for is never settled.
+        if r.context_pushed { return Ok(BranchRerun::Run); }
+        if let Some(row) = row
+            && !reservation::settle_unsent_promotion_push(tx, row)?
+            && reservation::abandon_evidence(tx, row)?.push_oid.is_some()
+        {
+            record::note_context_pushed(tx, id, r.operation_id)?;
+            return Ok(BranchRerun::Run);
+        }
+        // RR6
+        if held(tx, &child)? { return Ok(BranchRerun::Run); }
+        // RR5
+        let Some(configured) = configured else { return Err(state::recovery_required()) };
+        if configured.as_deref() != r.remote_name.as_deref() || endpoint != r.endpoint_digest {
+            return Ok(BranchRerun::Refuse);
+        }
+        // RR4
+        let accepted = accepted(&r)?;
+        if !own_heads(tx, accepted, row)?.contains(&tip) { return Ok(BranchRerun::Refuse); }
+        // RR1
+        if tip != accepted { record::accept_context_head(tx, id, r.operation_id, accepted, tip)?; }
+        Ok(BranchRerun::Run)
+    })
+}
+fn accepted(r: &PromotionRecord) -> Result<Oid, RepositoryError> {
+    r.accepted_context_oid.or(r.consented_context_oid).ok_or_else(state::recovery_required)
+}
+/// RR6: a child `child()` restarts rather than replaces (run.rs 1425, 1429-1442).
+fn held(db: &Connection, child: &ChildState) -> Result<bool, RepositoryError> {
+    Ok(match child {
+        ChildState::Retained(_) => true,
+        ChildState::Unowned(row) => !matches!(row.phase, Phase::Cancelled | Phase::Failed | Phase::Completed)
+            && reservation::promotion_child_has_resolution(db, row)?,
+        ChildState::Absent | ChildState::Complete(_) => false,
+    })
+}
+/// The heads only the record's child moved the branch to: the accepted head,
+/// then each move of the current attempt, counted only when that attempt
+/// began there and only from a head already counted.
+fn own_heads(db: &Connection, accepted: Oid, row: Option<&StoredRemoteOperation>) -> Result<Vec<Oid>, RepositoryError> {
+    let mut own = vec![accepted];
+    if let Some(row) = row && row.sync_evidence.expected_oid == Some(accepted) {
+        for (from, to) in reservation::promotion_child_moves(db, row)? {
+            if own.contains(&from) && !own.contains(&to) { own.push(to); }
+        }
+    }
+    Ok(own)
+}
+/// The checks at a new attempt's safe points (1.3 d). The observer asks
+/// only for an attempt `child()` minted: a restarted one is a held child
+/// (RR6) and goes on unchecked (decision 15).
+pub(super) fn admits_point(service: &RepositoryService, root: &Path, r: &PromotionRecord,
+    point: RemoteOperationSafePoint) -> Result<bool, RepositoryError> {
+    // The branch tip as Git holds it now, read before the registry's lock.
+    let (repository, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let tip = observe::reference_oid(&repository, &LifecycleKind::DocumentPromotion.context_ref(&r.item_id), root)?;
+    state::with_transaction(service, root, |tx, id| {
+        let r = record::read_record(tx, id, r.operation_id)?.ok_or_else(state::recovery_required)?;
+        if r.context_pushed { return Ok(true); }
+        let accepted = accepted(&r)?;
+        let row = match record::child_state(tx, &r, ChildRole::Context)? {
+            ChildState::Unowned(row) | ChildState::Retained(row) => row,
+            ChildState::Absent | ChildState::Complete(_) => return Ok(true),
+        };
+        Ok(match point {
+            // The head the attempt began at, as it recorded it before this point.
+            RemoteOperationSafePoint::BeforeFetch => row.sync_evidence.expected_oid.is_none_or(|start| start == accepted),
+            // What it is about to push: a `Checkpoint` intent's candidate,
+            // which must be in the chain and still be the branch tip (m3).
+            // An `Attempt` intent belongs to a restart and is admitted.
+            RemoteOperationSafePoint::BeforePush => match reservation::promotion_child_push_candidate(tx, &row)? {
+                Some(candidate) => tip == Some(candidate) && own_heads(tx, accepted, Some(&row))?.contains(&candidate),
+                None => true,
+            },
+            _ => true,
+        })
+    })
+}
+```
+
+**The three reservation-layer functions** go in `remote/reservation.rs`, after `promotion_child_has_resolution` (625-639), beside the two probes the parent already reads. The promotion could read the integration steps itself with raw SQL, as `lifecycle_record.rs` 666 reads `remote_operation_records`. Their shape, though, is the remote layer's (`state.rs` 3355, 3381; the accessors are `pub(super)`), so the accessor sits with it (M9). This adds no SSH runs: Task 3's `remote/state.rs` change already makes the six remote targets due (section 10).
+
+```rust
+/// The local moves the context child's operation `record` made, in the
+/// order it made them. First its envelope's fast-forward: from the head it
+/// began at (`expected_oid`) to `local_oid`, counted only when `local_oid`
+/// is a tip it fetched (`tracking_oid` or `primary_tracking_oid`), which a
+/// clean plan's fast-forward always ends at (`refs.rs` 256-285). A merge is
+/// never such a tip, though `checkpoint_synchronization_merge_applied`
+/// records it as `local_oid` at `local_fast_forwarded` (3070-3071). It is
+/// counted from `local_prepared` on: a process lost between `fast_forward`
+/// and `local_fast_forwarded` leaves `local_prepared` with the move made,
+/// and the only head the pair can add is the tip the child planned (M5).
+/// Then each integration step it applied (a fast-forward, a merge, a
+/// resolution through the conflict verbs), from the head before it to the
+/// head it left. For a parent that tells its child's own moves from a commit
+/// the child did not make (Cycle 04 RR1, RR4).
+pub(in super::super) fn promotion_child_moves(db: &rusqlite::Connection, record: &state::StoredRemoteOperation)
+    -> Result<Vec<(git2::Oid, git2::Oid)>, RepositoryError>
+// 1. if expected_oid and local_oid are Some, differ, local_oid ∈ {tracking_oid, primary_tracking_oid},
+//    and sync_checkpoint is Some(LocalPrepared | LocalFastForwarded | PushPrepared | PushReturned | PushVerified):
+//    push (expected_oid, local_oid).
+// 2. SELECT local_oid,result_oid FROM remote_integration_steps
+//      WHERE operation_record_id=?1 AND phase='applied' ORDER BY window_number,ordinal
+//    (an applied step always has result_oid: state.rs 1194), each pushed in order.
+
+/// The commit a context child's operation `record` is about to push at its
+/// `BeforePush` safe point: its push intent (`push_oid` at `push_prepared`),
+/// when it has no publication attempt; `None` otherwise.
+pub(in super::super) fn promotion_child_push_candidate(db: &rusqlite::Connection, record: &state::StoredRemoteOperation)
+    -> Result<Option<git2::Oid>, RepositoryError>
+// state::latest_publication_attempt(db, record)?.is_none() && sync_checkpoint == Some(PushPrepared)
+//   then sync_evidence.push_oid, else None.
+
+/// Whether the context child's operation `record` ended before its push:
+/// its cancellation was acknowledged at `BeforePush` (phase `cancelled`,
+/// `completed_step` `before_push`), with its intent at `push_prepared`, no
+/// publication attempt and no authority. `push_exact` comes only after that
+/// safe point lets the call go on (`sync.rs` 9110-9134), so nothing of the
+/// intent is on the remote. When the outcome is still `cancelled`, the
+/// intent is recorded answered, as a refused or an abandoned push is
+/// (`record_refused_push`, 760-770). Then no later synchronization of the
+/// context counts it unanswered (`push_absence`, `sync.rs` 8187-8203).
+pub(in super::super) fn settle_unsent_promotion_push(tx: &Transaction<'_>, record: &state::StoredRemoteOperation)
+    -> Result<bool, RepositoryError>
+// phase == Cancelled && completed_step == Some(BeforePush) && sync_checkpoint == Some(PushPrepared)
+//   && sync_evidence.push_oid.is_some() && authority.is_none()
+//   && state::latest_publication_attempt(tx, record)?.is_none()
+//   && outcome ∈ {Some(Cancelled), Some(ProtocolRejected)}
+// → if outcome == Some(Cancelled) { record_refused_push(tx, record.id)? }; Ok(true). Else Ok(false).
+```
+
+**Why settling is safe.** It marks a push answered only for a row that is cancelled at `before_push` and that the table has never seen as having possibly pushed. The two ways a row reaches that state:
+
+- **Cancelled at its own `BeforePush` in a live run.** This happens by the push check, or by the parent's cancellation honoured there. Nothing was sent.
+- **Lost after `push_exact` with the step still `before_push`, and acknowledged later.** Every acknowledgement of a promotion child's row runs after the same call's table read. `child()` acknowledges inside the call (1453-1460, after `rerun_branch`'s table read). `let_go` acknowledges after the table decided Refuse or Gone. `release_child` acknowledges after the table. So the table first sees that row active, with its intent, and notes `context_pushed`. `decide` reads the flag before settling, so a row whose push may have landed is never settled.
+- **Nothing else acknowledges such a row.** `operation abandon` refuses a promotion's child (`abandonable`, `reservation.rs` 826-838). `release_promotion_child` refuses a row with a push intent (1851). The configuration fence leaves rows `interrupted`, not `cancelled` (`state.rs` 2927).
+
+The remote's own refusal leaves the same settled state (`acknowledge_refused_push`, 2293-2326): nothing landed, so the table reads it the same way, and C12 "push rejected" continues by RR1 (the child's own head).
+
+**Held restarts and the push check (decision 15).** Revision 3 was wrong here. It claimed that a held restart refuses itself wherever the head moved, so that the push check never cancels one the child would publish. That is false for a resolved conflict followed by a save (B2, section 1.3 d): the restart takes the save in as a new pass and publishes it, as K-16 says it does. So a held restart is not checked at all. The observer asks the hook only for an attempt `child()` minted (`restart == false`). Row T6 (section 7) pins it.
+
+#### Each row, in the table's order
+
+| Row | What decides it (source) | Part A columns read | Outcome mechanism |
+| --- | --- | --- | --- |
+| **RR2** | `child_state` is `Complete` (`lifecycle_record.rs` 681-682), or the record is at `context_synchronized`, which a pull-request record reaches only after a completed child. Tried first, so no other check runs. An existing record reaches it through 1.3 (a), before `run.rs` 525, so no live configuration is read. `finish_rerun` sets `context_oid` to `stored.authority.oid()` (`state.rs` 2113) with no branch read. `answer::finish` judges R-3 on that OID, with the record's own `remote_name` and `primary_branch` (`answer.rs` 25-37, 61-88). The forge comes from the configuration when it can be read, otherwise none (104-107). There is no cancellation check after the child, and `complete_branch_record` clears `cancel_requested` (`record.rs` 856). | `step`, `context_sync_id` (through `child_state`), `remote_name`, `primary_branch`, `situation`; writes `context_oid`, `answer_code`, `publication_category` | finishes `complete` by the first table (C14, C26, C27) |
+| **RR7** | `observe::reference_oid` of `refs/heads/manyhands/document/<ULID>` is `None`, and RR2 did not match. Reached before the configuration is read. `let_go` (`run.rs` 1323-1357) releases a child that has nothing to lose (`reservation.rs` 1848-1861, no I/O), or cancels and acknowledges one that has something to lose. Then `end_branch(ContextGone)`, and `answer::end` judges R-3 on `consented_context_oid` (`answer.rs` 139-166). | `consented_context_oid`, `remote_name`, `primary_branch` | ended record: `primary_holds` or `context_gone`; the link row untouched. A retained child answers `recovery_required` (K-19) |
+| **RR3** | `context_pushed`, read first. Otherwise the current attempt's push intent (`abandon_evidence(tx, row)?.push_oid`, `reservation.rs` 918-954), unless `settle_unsent_promotion_push` shows the intent was never sent. The child records the intent at `push_prepared`, before `BeforePush` and before the push (`sync.rs` 9093-9134). A process lost after that may have pushed, so such a row counts; one cancelled at `BeforePush` does not. The flag is noted in the same transaction, so a later replacement of that attempt keeps it (section 2). | `context_pushed`; the child row's push intent, phase, `completed_step` and outcome | `Run`: `child()` restarts or replaces the attempt, and the record is never refused. **While the configured remote is renamed**, a replacement attempt is refused at its reservation: the record-remote identity check `remote_identity_of` (`lifecycle_record.rs` 822), reached through `reserve_remote_operation_kind` (`reservation.rs` 1542), `validate_poll_identity` and `validate_remote_identity` (`lifecycle_record.rs` 798, 768). So the record waits, refusing nothing, and goes on once the remote is configured back. That is decision 17's case for a held child, which the new known limit K-20 names for this one (I2, as revision 5 corrects). Not stranded: the attempt registers the rename itself before it reserves (`sync.rs` 6493), so the old row is fenced `interrupted` (`state.rs` 2927), and `child()` replaces it at the current generation |
+| **RR6** | `held`: `ChildState::Retained` (an integration step not applied, or applied with an unreleased resolution: `reservation.rs` 604-620, which covers a conflict, a clean candidate, an identity window and an owned resolution), or an unowned live row with a released resolution (`promotion_child_has_resolution`, 625-639). This is exactly the set `child()` restarts rather than replaces (`run.rs` 1425, 1434-1442). `let_go` returns false for a retained child (1354). An unowned live child with a released resolution it would acknowledge and end (1343-1350), losing the resolution's publication, so RR6 answers `Run` before any `let_go` is reached (M6). No other check is made (decision 15, K-16). When the child completes, RR2 finishes the record. | the child row | `Run`; the record waits for the child's own way out. After a change of the remote or its endpoint, that way out exists only if the change is undone before any poll or synchronization registers it; otherwise the child is stranded (decision 19, vh-zn1fd) |
+| **RR5** | The configured `publication_remote` differs from `remote_name`, or `endpoint_digest_of(&repository, remote_name)` (`observation.rs` 125-140: the fetch and push endpoints from Git configuration, no network) differs from `endpoint_digest` (written at begin, `lifecycle.rs` 1245-1262). Reached only when RR3 and RR6 did not match, so before any push and with a child that can be let go. An unreadable configuration here answers `recovery_required`, as `run.rs` 525 does today. | `remote_name`, `endpoint_digest` | `let_go`, then `abandon(external_change)` (`run.rs` 262-275): a refused record that keeps its begin-time columns; nothing published |
+| **RR4** | The tip is not in `own_heads(accepted, row)`. Moves count only from an attempt whose `expected_oid` is the accepted head; the child writes it at `fetch_prepared`, before `BeforeFetch` (`sync.rs` 6674-6717, 8915). A save, a commit with Git, or a poll's fast-forward is neither a fetched-tip fast-forward of the attempt nor an applied step of it, so it is refused. **Where a save lands, and what refuses it:** (i) before the table: the table. (ii) After the table, before the child read its head: the start check (`expected_oid` is the save), then the table. (iii) After the head read, on the fast-forward path, before its push intent: the child itself (`sync.rs` 7136-7147, 7201-7203). (iv) After the head read, on the merging path: **the push check**, since nothing in the child compares the head with its start there. The child reads the head again at 6993 and 7040 and merges onto it. `recheck_divergence_inputs` (3645-3666) compares with that later read. The push check at 9116-9123 compares with the candidate built on the save (B1). The merge's steps start at the save, which is not in the chain, so the candidate is not either. The attempt is cancelled at `BeforePush`, its intent is settled, and the table refuses. (v) After the candidate is built (`push_prepared`, 9093-9101) and before the push check reads the branch tip: the push check, whose candidate is no longer the tip (m3). It cancels, settles, and the table refuses. (vi) **After the push check's tip read and before the child's own head check (9116-9123): closed in-process (I3).** The child refuses with `ExternalChange` and leaves its row at `push_prepared` and `before_push`, with no publication attempt. That is the state a process lost after `push_exact` leaves too. But here `rerun_branch` holds the error, and an `ExternalChange` from a new attempt proves nothing was sent: once `pushing = true` is set, `ExternalChange` becomes `RecoveryRequired` (`unverified_push_error`, `sync.rs` 516-526, applied at 9154-9160). So `rerun_branch` lets the row go first (1.3 c), which leaves it `cancelled` at `before_push`. The second table read then settles the intent as unsent, and RR4 refuses. **The only residual (K-20):** a process lost in that window, before the runner lets the row go, with a save landing in the same instant. That row is indistinguishable from one lost after `push_exact`, so it reads as an attempt that may have pushed (RR3), and the next call publishes the save. (iii)'s refusals at 7136-7147 and 7201-7203 come before any push intent, so they end in RR4. | `accepted_context_oid` (null means `consented_context_oid`); the child row's `expected_oid`, `local_oid`, `tracking_oid`, `primary_tracking_oid`, `sync_checkpoint` and applied steps | `let_go`, then `abandon(external_change)`; nothing published (C25). The child's merge onto the save stays on the local branch, as a cancelled operation keeps what it did |
+| **RR1** | The tip is in the chain: the child's fast-forward to `R` or to the primary (the envelope pair to a fetched tip, or an applied step), its "Merge remote context" or "Merge primary into document" (an applied step, `sync.rs` 3768-3900), or a resolution through the conflict verbs (the step's `result_oid` is the resolution commit, `state.rs` 4304), pushed or not. When the tip differs from the accepted head, `accept_context_head(accepted, tip)` records it: `child()` will replace this attempt, and the new one starts there. The push check admits the same chain, so the child's own moves always reach the push (T3e, T3f). | as RR4; writes `accepted_context_oid` | `Run`; the same request goes on (C12, C13) |
+| **RR8** | In `answer::finish`, `present = observe::reference_oid(&repository, &context_ref(item), root)?.is_some()`. When the branch is absent, the `again` and `first` rows take a new `LinkWrite::Withheld` instead of `Renew` or `Give`. `complete_branch_record`'s pairing (`record.rs` 834-839) accepts `(Promoted, Give \| Withheld)`, `(AlreadyPromoted, Renew \| Withheld)` and `(PrimaryHolds, Untouched)`, and its write match treats `Withheld` as `Untouched`. `answer::end` never writes a row (`remote_branch_deleted` deletes one, `record.rs` 900-903). | the branch ref | no link row written or renewed; the answer otherwise as its row says |
+
+**Where two rows could both match,** checked against the code above:
+
+- RR2 is tried before RR7, RR4 and RR5: RR2 returns first.
+- RR7 is tried before RR5: `Gone` is decided before the configuration is read.
+- RR3 is tried before RR5 and RR4: RR3 returns `Run` before RR5 is reached.
+- RR6 is tried before RR5 and RR4.
+- RR4 is tried before RR1: the chain does not contain a save made on top of the child's merge.
+
+### 4. The two runner checks Task 3 left
+
+- **`run.rs` 936** checks that the record's remote is the configured one while `base_oid` is unset, and answers `interrupted` otherwise. For a pull-request promotion it becomes RR5. A name or endpoint-digest difference refuses (`external_change`) instead of interrupting, and only before any push (RR3) and with a child that can be let go (RR6). A completed child is never checked (RR2). A pull-request record never reaches line 936: 1.3 (b) diverts a new record before it, and 1.3 (a) diverts an existing one before `promote_branch`.
+- **`run.rs` 977** is the cancellation check after the child. For a pull-request promotion it becomes nothing: `finish_rerun` goes straight to `branch_step` (RR2, R-26, C26). `rerun_branch` keeps the cancellation check before the child (942) and the one after a child that stopped (`context_step` 1173-1176).
+- **The closure** keeps both checks, unchanged (1.4).
+
+### 5. Part G item 14: the fence
+
+The query goes in `promotion/record.rs`. It is a twin of `closure/record.rs` 1625-1666 and needs `use rusqlite::OptionalExtension`:
+
+```rust
+/// The pull-request promotion record that holds the document `item`'s
+/// context until it finishes (Cycle 04 decision 13, the design's table F):
+/// an unfinished pull-request record, at any step. Retirement skips or
+/// refuses a document it holds, as it does a ticket the closure's fence holds.
+pub(in super::super) fn pull_request_promotion_holder(db: &Connection, id: i64, item: &ItemId)
+    -> Result<Option<OperationId>, RepositoryError>
+// if !recovery::has_table(db, TABLE) -> Ok(None)
+// SELECT operation_id FROM document_promotions WHERE repository_id=?1 AND item_id=?2
+//   AND integration_mode='pull_request' AND step NOT IN ('complete','abandoned','superseded') LIMIT 1
+```
+
+What the query holds:
+
+- The unique unfinished index (`record.rs` 271) allows at most one such record per document.
+- A refused record is `abandoned`, and an unfinished direct record has mode `direct`, so neither is held.
+- Item IDs are unique across kinds, so a ticket is never held (the closure's query is kind-free too).
+
+| Site | Where | Change | Answer |
+| --- | --- | --- | --- |
+| F1 `capture_target` | `context_retirement/source.rs` 204-206 | `held = written_closure_unfinished(tx, id, item)? \|\| pull_request_promotion_holder(tx, id, item)?.is_some()` | candidate refused `recovery_required`; context kept |
+| F1 backstop `claim_initial` | `context_retirement/authority.rs` 433-436 | the same `\|\|` | `Err(recovery_required())`; the pass reports the retirement refused |
+| F2 `claim_scoped` (`context retire`, and the desktop's retirement) | `authority.rs` after 327-331 | `if let Some(holder) = pull_request_promotion_holder(tx, id, &request.item_id)? { return Err(closure::record::hold_refusal(holder)); }` | `recovery_required`, with `data.blocker.operation_id` the record's request, as `hold_refusal` gives it (`closure/record.rs` 1688-1691) |
+| F2 absent context (`retire_context_scoped`'s fresh branch) | `context_retirement/execution.rs` after 330 (`require_no_pending_local`), before its INSERTs at 361 and 366 (M10) | the same `if let … return Err(hold_refusal(holder))`; the immediate transaction is dropped uncommitted, as the other early returns there are | as `claim_scoped` |
+
+**U-4.** `retire_context_scoped` needs its own fence.
+
+- `context retire` reaches it for an absent context (`run.rs` 362-365, `initial_inventory != PresentOrBranchOnly`) and for a re-entry (349-351).
+- Its fresh branch writes its own rows (`execution.rs` 361, 366) and never reaches `claim_scoped` or `claim_initial`.
+- A re-entry of an existing retirement is not fenced: it is that retirement's own continuation (F3).
+- `refuse_fresh_scoped` (`authority.rs` 530-) retires nothing and is not fenced (design revision 5).
+
+**F3.** The existing check is the child's reservation.
+
+- **The check.** `reserve_remote_operation_kind` calls `recovery::require_no_pending_local(tx, repository_id, &CallScope::of_remote(target))` (`remote/reservation.rs` 1641-1642). The claimed retirement's pending local row holds it off, and the refusal names that retirement.
+- **What is left.** The record is begun, its child is never reserved, and nothing is published.
+- **How the call answers.** The second table read gives `Run`, so the stop is answered as the child's own, which is one of the F3 row's accepted shapes. Once the retirement finishes, the record's next call is RR7.
+- **A narrow race (M12).** The claimed retirement might remove the branch between `begin_record` and the first table read. RR7 would then end the record (`context_gone` or `primary_holds`) instead of answering the stop that names the retirement. Either way nothing is published and the record does not wait. No row covers it, and none is needed.
+
+**F4.** The query leaves out `complete`, `abandoned` and `superseded`, so every site retires as today once the record finishes.
+
+**Part G item 8** holds: the poll's own fast-forward and materialization of a context (`poll.rs` 389, 668) are not fenced for a promotion, and RR4 refuses after such a fast-forward instead.
+
+### 6. The concerns in the red tests' report
+
+1. **C21 `operation resume`.** The row answers `internal_error` because of its fixture, not because of Task 4's or Task 5's code.
+   - **The cause.** The fixture inserts `request_records.scope_key = 'scope'`. Resume looks up the holder by the repository's scope key, the canonical root path (`mutation/identity.rs` 84-87; `bind/resume.rs` 341-354; `records::operation_holder`, `records.rs` 971-998). So no request holds the record. Resume takes it up and continues it, and the stored answer of the child's stop has no `from_stored` arm.
+   - **Who owns what.** The missing `from_stored` arm is Task 5's (R-25). **The row stays in Task 4, with its fixture corrected (T2).** It then answers `original_request_required` through existing code (`resume.rs` 994-999). Task 5 owns a row for resume taking up an unheld pull-request promotion.
+2. **The save that cannot be made while a conflict holds the child.** The substitute is right. RR6's set includes a clean candidate and an identity window, whose worktree is clean, so a save can land; `Kept::Retained` is a prepared, unapplied step. With a conflict installed, the save verb refuses `context_conflicted`.
+3. **The crash rows' in-process loss.** This is adequate. What a lost process leaves behind is durable state, and `finish_rerun` keeps `AfterContextSync` at the same place. The unwinding drops every in-memory value, and the next call uses a fresh publisher.
+4. **The `push_returned` UPDATE.** RR3 reads `abandon_evidence(..).push_oid`, which here is `sync_evidence.push_oid`, and that row is not settled (its phase is `push_returned`).
+5. **F3 passing today.** See section 5. Section 8 gives its stub.
+
+### 7. Test corrections and additions (this task's own red tests, uncommitted)
+
+These are corrections to phase A's new tests, not edits of pre-existing ones. None removes or weakens an asserted outcome. Each is logged in the ledger.
+
+- **T1: `refuses` counts only new attempts (M11).** Add a helper `attempts(io) = io.children.iter().filter(|(_, _, restart)| !restart).count()`. Use it for every count passed to `refuses`: `rerun()`'s `children`, the counts in "RR4 over RR1" and in T3c, T3d, T3g and T3h, and both counts inside `refuses`.
+  - Why: "RR4 over RR1" lets go a live row with an applied merge. Nothing lets such a child go without acknowledging it (`reservation.rs` 1848-1868; `let_go` 1343-1350). That acknowledgement is an `io.synchronize` call with `restart: true` that ends the cancelled row. It synchronizes nothing, but the fake counts it.
+- **T2: C21's fixture.** The two C21 rows (rerun file 1490-1499 and 1555-1564) set `scope_key` to `f.root.path().to_str()`, in place of `'scope'`. The fixture root is canonical (`run_tests.rs` 173).
+- **T3a, a new `re_run_outcomes` row: "RR1 across attempts: the child's merge and a stop, a stop with no row, then the same request goes on".**
+  - Setup: `fetched: primary_moves_on`, `drive: tip`, `stop_after_drive: transport`.
+  - Then `io.stop = (Busy, false)` and the same request: the child's stop.
+  - Then the same request again finishes `promoted`, with the merge published.
+  - Pins `accepted_context_oid`.
+- **T3b, a new row: "RR3 across attempts: an attempt may have pushed, a stop with no row, then a save: goes on".**
+  - Setup: `stopped(Kept::MayHavePushed)`; `io.stop = (Busy, false)` and the same request; then `save`.
+  - Then the same request, with `paced` set (below), finishes `promoted` (`goes_on`).
+  - Pins `context_pushed`, and through `paced` the start check's `context_pushed` short-circuit (M1).
+- **The fake option `paced` (`run_pull_request_tests.rs`).** It replaces revision 1's `save_before_first_safe_point`, and the `observer` argument at 241 gets a name. With it, the fake tells the runner's observer of its first safe point and of its push's safe point, as a real child does. It works on three paths.
+  - **The plain publication path, a new row:**
+    1. Reserve the row.
+    2. If `paced.save == Some(BeforeStart)`, commit a save. (`paced.save == Some(BeforePush)` commits one between steps 6 and 7 instead; T3g.)
+    3. UPDATE the row to `phase='fetch_prepared', sync_checkpoint='fetch_prepared', expected_oid=local_oid=<the branch tip>`.
+    4. Call `observer.safe_point(BeforeFetch)`. On anything but `Continue`, UPDATE `phase='cancelled', completed_step='before_fetch', outcome='cancelled', cancel_requested=0` and return `Interrupted`.
+    5. If `paced.fast_forward_to == Some(d)`, set the tracking context ref to `d` and reset the context to `d`.
+    6. UPDATE to `phase='push_prepared', sync_checkpoint='push_prepared', local_oid=push_oid=<the tip>, tracking_oid=<the tracking context>, primary_tracking_oid=<the tracking primary>`, as the `PushPrepared` checkpoint records them.
+    7. Call `observer.safe_point(BeforePush)`. On anything but `Continue`, UPDATE `phase='cancelled', completed_step='before_push', outcome='cancelled', cancel_requested=0` (as `acknowledge` leaves it, `reservation.rs` 703-704) and return `Interrupted`. On `Continue`, UPDATE `completed_step='before_push'`, as `acknowledge` records the point it continued at (703-704).
+    7a. If `paced.save == Some(AfterPushCheck)` (T3h), commit a save, then act as the child's own head check does (`sync.rs` 9116-9123): the tip is not the candidate, so return `ExternalChange` and leave the row as it stands (`push_prepared`, `before_push`).
+    8. Otherwise complete and publish, as today.
+  - **A restart on the publication path** (the row exists and no stop is scripted; T6):
+    1. Call `observer.safe_point(BeforeFetch)` without rewriting the row's evidence.
+    2. UPDATE to `push_prepared` evidence with `local_oid=push_oid=<the tip>`.
+    3. Call `observer.safe_point(BeforePush)`. On anything but `Continue`, act as in step 7 of the path above.
+    4. Otherwise publish.
+    - The runner's observer admits a restart without asking the hook (1.3 d), so both calls answer `Continue` unless the restart flag is ignored.
+  - **The `drive` (merging) path, with a save after the head read (T3d):**
+    1. Reserve the row.
+    2. Write the same `fetch_prepared` evidence.
+    3. Call `BeforeFetch`, as above.
+    4. Commit a save (`paced.save == Some(AfterFetch)`).
+    5. `merged = promotion_test_drive_local_bound(..)`. It takes up the existing row through `synchronization_restart_owned` (`sync.rs` 4021-4022) and merges onto the head as it then is (3685).
+    6. Write `push_prepared` evidence with `local_oid=push_oid=merged`.
+    7. Call `BeforePush`, as above.
+    8. Otherwise complete with `merged` and publish.
+    - **Fallback, for T3d only (m2):** if the drive refuses to take up the row the fake reserved, make the merge with plain `git2` (a merge commit of the head and the fetched primary on the context branch) and record no steps. T3d's verdict is the same, because neither the envelope nor a step chains to that merge.
+  - **The `drive` path with no save (T3f):**
+    1. The fake does not reserve. The drive reserves the new row itself, records its `fetch_prepared` evidence and records its applied steps (`sync.rs` 4021-4058).
+    2. The fake then writes `push_prepared` evidence with `local_oid=push_oid=merged`.
+    3. It calls `BeforePush` and publishes.
+    - T3f has no fallback. It pins that the push check admits the child's own recorded steps, so a merge with no steps would wrongly be cancelled, under S1's T3f cell too.
+  - Revision 3's restart-with-a-scripted-stop path and `Kept::Retained`'s recorded start are dropped. A restart is no longer checked, so they pin nothing (m1).
+- **The fake's plan follows the live configuration (I2).** Today `PullRequestIo` builds its plan from `"origin"` (`run_pull_request_tests.rs` 275). It builds it instead from the configuration's `publication_remote`, falling back to `"origin"` when the configuration cannot be read.
+  - Effect: after a rename, a new attempt's reservation carries the renamed remote, and the record-remote identity check refuses it (`lifecycle_record.rs` 822), as it does in real use.
+  - Rows touched: only T7 runs a child while the remote is renamed. The RR2, RR5, RR7 and RR4 rename rows end before any child runs. T4 renames back before its call. The RR6 retained row's scripted stop returns before its reservation. So no other row changes.
+- **T3c, a new row: "RR4 a save after the table, before the child read its head".** Uses `paced` with `save: BeforeStart`. Expected: `refuses(.., 1, ..)` (one new attempt), nothing published. Pins the start check.
+- **T3d, a new row: "RR4 a save after a merging child read its head, before its merge" (B1).** Uses `fetched: primary_moves_on`, `drive: Some(tip)`, and `paced` with `save: AfterFetch`. Expected:
+  - `refuses(.., 1, ..)`;
+  - the tracking context unchanged (nothing published) and no link;
+  - the child row `phase='cancelled'`, `completed_step='before_push'`, `outcome='protocol_rejected'` (settled);
+  - the context's tip is the child's merge onto the save, kept locally.
+  - Pins the push check, the fetched-tip envelope rule (revision 1's rule would count the merge), and the settling.
+- **T3g, a new row (m3): "RR4 a save after a new attempt recorded its push intent, before its push check".** On the plain new-row path, `paced.save == Some(BeforePush)` commits a save after step 6 (`push_prepared` written) and before step 7. Expected: `refuses(.., 1, ..)`, nothing published, and the child row settled (`protocol_rejected`). Pins the push check's tip condition (RR4 clause v).
+- **T3h, a new row (I3): "RR4 a save after the push check, before the child's own head check: refused".** On the plain new-row path, with `paced.save == Some(AfterPushCheck)` (step 7a). Expected: `refuses(.., 1, ..)`. The fake's acknowledgement in `let_go` is `restart: true`, so it is not counted. Also: nothing published, the child row `cancelled` at `before_push` and settled (`protocol_rejected`), `context_pushed` not set. Pins clause (vi)'s in-process let-go.
+- **T3e, a new row: "RR1 the child's fast-forward to another clone's publication reaches its push".** Uses `paced` with `fast_forward_to: Some(D)`, where `D` is a commit on the tip. Expected: `promoted`, with `D` published. Pins that the push check admits the envelope's fast-forward.
+- **T3f, a new row: "RR1 the child's merge reaches its push".** Uses `fetched: primary_moves_on`, `drive: Some(tip)`, `paced` with no save. Expected: `promoted`, with the merge published. Pins that the push check admits the child's own steps.
+- **The RR6 row "a retained child, then a save and a remote change: the stop stands"** stays as phase A wrote it, without `paced` (m1).
+  - **In real use, its middle call (the same request, run while the remote is renamed) would strand the child (vh-zn1fd).** The real child's restart registers the renamed configuration (`sync.rs` 6489-6494), which moves the generation. The row asserts only the table's answer to that call: the child's own stop stands and the record is not refused. That answer holds in real use too, so the row stays as it is.
+- **T6, a new row (B2): "RR6 a conflict at the primary stage, resolved through the verbs, then a save: the same request publishes the save (K-16)".**
+  - Setup, so that the conflict is a content conflict the verbs can resolve, as `conflicted()`'s is at the context stage:
+    - `m = f.merge_commit(tip)`, the forge merged the branch, so the document is at the merge base;
+    - `p2` = a commit on `m` that appends a line to the document;
+    - the branch: `f.edit("a local line")`, appending a different line;
+    - `io.fetched = Some(p2)`, `io.drive = Some(tip)`. The context stage is then already integrated, and the primary stage conflicts.
+  - Steps: the first run answers `ConflictPending`. Then `resolve` (`LocalCheckpointComplete`: released, nothing pushed). Then `save`. Then the same request, with `paced` on the restart's publication path.
+  - Expected: finishes `promoted` with the same child, the save published (the tracking context is the branch tip), the record not refused.
+  - It passes on today's code, since Task 3's path has no push check. It is red against S27, and against revision 3's rule.
+- **T7, the RR3 rename row, rewritten (I2, decisions 17 and 19).**
+  - The row: "RR3 may have pushed, then the remote renamed: the record waits; configured back: goes on". It replaces rerun file 942-944.
+  - Steps: `stopped(Kept::MayHavePushed)`; then `rename_remote`; then the same request.
+  - Expected while renamed: the replacement attempt is refused at its reservation by the record-remote identity check, through the fake's live plan. The call answers the child's own stop (`ContextSynchronization`). The record stays `confirmed`, with no refusal and `context_pushed` set. Nothing is published.
+  - Then: rename back (the configuration restored to `origin`, the extra remote removed). The very next call of the same request finishes `promoted` with a new attempt; no poll or other call is needed in between.
+  - The call while renamed strands nothing, because no child is held: the old row is replaced, and the refused attempt has no row.
+  - It is red today: Task 3's runner answers `Interrupted` at `run.rs` 936.
+  - K-20 names this waiting, as decision 17 rules it for a held child: while the configured remote is not the record's, the record waits and refuses nothing (RR3 holds), and it goes on once the remote is configured back.
+- **T4, the C29 rename row, rewritten (decisions 17 and 19).**
+  - The row: "RR6 a conflict, the remote renamed and renamed back with no call in between; resolved: finishes (C29)". It replaces the old row at rerun file 955-983.
+  - Steps: `conflicted`; `rename_remote`; then rename back (the configuration restored to `origin`, the extra remote `other` removed); `resolve`; then the same request finishes `promoted`, with the same child.
+  - There is no call of the request, and no poll, between the rename and the rename back.
+- **T5, the C29 endpoint row, rewritten (decision 19).**
+  - The row: "RR6 a conflict, the endpoint changed and changed back with no call in between; resolved: finishes". It replaces the row at rerun file 984-996.
+  - Steps: `conflicted`; `move_endpoint`; then the URL set back to `ssh://fixture@127.0.0.1:1/repository`; `resolve`; then the same request finishes `promoted`.
+- **Why no call goes between the change and the change back (decision 19, vh-zn1fd).** Any call there would strand the child in real use:
+  - A call of the request, a poll or another synchronization registers the changed configuration (`sync.rs` 6493, `poll.rs` 1703), and that moves the configuration generation (`state.rs` 3031-3059, 2906-).
+  - After that, neither the child's restart (`reservation.rs` 3262-3266, 1353-1355) nor `conflict resolve` (2736) takes up the child, and changing back moves the generation again.
+  - The library fake never registers configuration, so a row with such a call would pass in the library while failing in use. These rows therefore leave no call there; the "Stop 1: facts for the owner" section gives the full source.
+
+**Edits of pre-existing tests of this Cycle (Tasks 1 and 3).** All additive, under the owner's test-edit approval:
+
+- **E-18** `promotion/record_tests.rs` `privacy_column_inventory_for_both_new_tables` (670-703): the list gains `accepted_context_oid` and `context_pushed`.
+- **E-19** `record_tests.rs` helpers: `pull_request()` (1780-1814) gains `accepted_context_oid: None, context_pushed: false`; `insert_row` (1744-1778) appends the two columns.
+- **E-20** `promotion/lifecycle_tests.rs` `promotion_steps_map_to_the_shared_step_view`: its `PromotionRecord` literal (90-117) gains the two fields.
+- **E-21** `record_tests.rs` `pull_request_begin_and_finish_write_their_columns`: `promoted` + `Withheld` and `already_promoted` + `Withheld` finish and write or renew no row; `primary_holds` + `Withheld` is refused.
+- **E-22** `record_tests.rs` `pull_request_promotion_steps_and_checks` (1834-): new rows, each `Expect::Both` and each on a row where only one CHECK can refuse it:
+  - `accepted_context_oid` on a refused record with no begin-time columns;
+  - `context_pushed=1` on the same record;
+  - `accepted_context_oid` on a direct row;
+  - the zero OID;
+  - an `accepted_context_oid` of 39 characters (M4);
+  - one with a non-hex character (M4);
+  - `context_pushed=2`.
+  - Plus one `Expect::Ok` row with both columns set on a begun `confirmed` record.
+
+**A new record test, `rerun_columns_are_moved_only_by_their_writers`** (in `record_tests.rs`, in-memory registry). Rows:
+
+- `accept_context_head` from the consented tip moves the head, then moves it again from that head.
+- From any other head it is refused, and the row is unchanged.
+- After `note_context_pushed`, it is refused.
+- At `context_synchronized`, it is refused.
+- `note_context_pushed` sets the flag once; a second call keeps it.
+- Both writers refuse a direct row and a refused pull-request row.
+- `save_record` of a snapshot read before a move leaves both columns as their writers left them.
+
+### 8. Rows that pass today: their stubs, or why they are exempt
+
+Each stub is a temporary edit of the new code, made after the step that adds that code. The named rows are run once, by their test's exact name, the red result is recorded, and the stub is undone. A table test reports every failing row together, so one run per stub suffices.
+
+| Stub | Edit | Rows it turns red |
+| --- | --- | --- |
+| S1 | `own_heads` returns `vec![accepted]` (the child's moves not read) | RR1 fast-forward, RR1 Merge remote context, RR1 Merge primary into document; C12 transport, push rejected and identity "after the child's own merge"; T3f |
+| S2 | `decide`'s RR2 `Complete(_)` arm moved after RR4 | RR2 a save after the child completed; RR2 fetch endpoint changed after; RR2 push endpoint changed after |
+| S3 | `finish_rerun` leaves a `confirmed` record at `confirmed` | RR2 completed before `context_synchronized` was saved; C14 first promote lost before saved; C14 promote again lost before saved; C12 transport, key, host, push rejected, busy, poll yielding, identity required; C12 kept child; C13; the two `consent_differences` controls "not a difference: a poll creating R …" and "not a difference: again, a change of the forge setting" (M3) |
+| S4 | `finish_rerun` answers `recovery_required` at `context_synchronized` | RR2 completed and `context_synchronized` saved; C14 first promote lost after saved |
+| S5 | `answer::finish` judges R-3 on `consented_context_oid` | RR2 table 1 on the child's authority OID |
+| S6 | `answer::end` passes `remote_gone = false` | RR2 table 2 reads `R` as absent after `remote_branch_deleted` |
+| S7 | `decide`'s RR3 arm removed | RR3 then the endpoint changed; RR3 then a save; RR3 then a poll's fast-forward |
+| S8 | `decide`'s RR6 arm removed | RR6 retained child and a poll's fast-forward |
+| S12 | `admits_point` without its `context_pushed` short-circuit | T3b (the last call is cancelled at `BeforeFetch`) |
+| S27 | the observer asks the hook for a restarted attempt too (the `restart` flag ignored; B2). Replaces revision 3's S13, which could not turn its row red (m1) | T6 (the restart is cancelled at `BeforePush`, and RR4 refuses) |
+| S28 | `admits_point` at `BeforePush` without its `tip == candidate` condition (m3) | T3g |
+| S29 | `rerun_branch` without its let-go of a new attempt's `ExternalChange` (I3) | T3h: the table reads the live `push_prepared` row as may-have-pushed and notes `context_pushed`, and the call answers the child's stop instead of a refused record |
+| S14 | `rerun_branch`'s cancellation check before the child removed | C17 cancelled before the child |
+| S15 | `rerun_branch`'s cancellation check after a child stop removed | C17 cancelled during the child |
+| S16 | the second table read in `rerun_branch` maps `Run` to `Refuse` (M2) | C12 plain stops and kept child; C13; C21 operations list (the record is no longer `confirmed`); T4 and T5, the rewritten C29 rows, whose first conflict answer becomes a refusal. Both pass on today's code: with the change undone, RR6 has nothing to hold them against, so S8 does not turn them red |
+| S20 | `require_no_pending_local` skipped in `reserve_remote_operation_kind` (`reservation.rs` 1641-1642) | F3. It pins an existing check, but this checkpoint names that check, so it is run red once anyway |
+| S21 | `pull_request_promotion_holder` without its `step NOT IN (…)` filter (I1) | `the_retirement_fence`: "an ended record" at F1, F2 and the absent-context branch; "a refused record" at F1 and F2 |
+| S22 | `pull_request_promotion_holder` without `item_id=?2` (I1) | `the_retirement_fence`: "the record another document's" at F1 and F2; "a ticket, a record of a document" at F1 and F2 |
+
+The new rows' stubs are: S11 (`admits_point` admits at `BeforeFetch`) for T3c; S23 (`admits_point` admits at `BeforePush`) and S24 (`settle_unsent_promotion_push` not called) for T3d; S25 (the envelope pair counted only at `local_prepared` and `local_fast_forwarded`, revision 1's checkpoints) for T3e; S26 (the envelope pair counted whatever its `local_oid`, revision 1's flaw) for T3d; S27 for T6; S28 for T3g; S29 for T3h. T3a to T3h and T6 are new rows; T7 replaces a row that is red today and stays red until Step D. T3a and T3b are red before their code with today's fake, and T3c to T3h are red once the `paced` option exists. T6 passes on today's code and is run red against S27. Each is also run against its stub.
+
+**Exempt as unchanged behaviour, recorded as such:**
+
+- Nine `consent_differences` rows: the confirm's revalidation and boundary (`run.rs` 542-616) refuse them before `begin_record`. The other two are under S3.
+- C15: the answered re-entry at `run.rs` 484, before the new jump.
+- C16: the binding's hold and `begin_pull_request_record`'s `busy`.
+- C21 abandon, as part of the C21 list row whose list half S16 covers: `abandonable`.
+- C21 resume, after T2: `bind/resume.rs`'s holder lookup.
+- The seven `the_retirement_fence` cells with no pull-request record: no record (F1, F2, absent), a direct record (F1, F2), a ticket with no record (F1, F2). These are P13's direct rows. The C22 control is exempt too.
+
+**Bookkeeping (M14).** Of the 40 rows red today, 38 turn green through Task 4's code. C21 resume is red because of its fixture; after T2 it passes on existing code and is exempt. The old C29 rename row is replaced by T4, which passes on today's code and is run red against S16. The old RR3 rename row is replaced by T7, which is red today too.
+
+### 9. Owner rulings (decisions 17, 18 and 19): nothing stops
+
+**Decision 18 (K-19), ruled.** RR7 over a retained child answers `recovery_required`, and the record waits. The K-19 wording proposed here is taken:
+
+- **"Restore the branch and its worktree":** the conflict verbs need the conflict as the child left it, in its worktree (`inspect_synchronization_recovery` reads that worktree's index conflicts, `sync.rs` 4825-). So K-19 says "restoring the context (its branch and its worktree as the conflict left it) lets the conflict's way out continue".
+- **The failed-acknowledgement case, as a transient clause.** The same `recovery_required` comes from RR7, RR5 or RR4 while a child that is not retained cannot yet be acknowledged. This is `let_go`'s `Err` at `run.rs` 1355: the acknowledgement left the child live, for example because the configuration cannot be read (the child's restart reads it first, `sync.rs` 6441-6443), or because another process still works under the child. A later call acknowledges the child and ends or refuses the record. K-19's clause: "The same answer comes, until a later call, while a child that is not retained cannot yet be acknowledged."
+
+**Decision 17, ruled, as refined by decision 19.** While a conflict holds the child and the configured remote differs from the child's, the conflict verbs refuse, as they do for any synchronization's conflict, and the record keeps waiting (RR6). Once the remote is configured back, the conflict resolves and the record finishes (RR2).
+
+**Decision 19 (ruled 2026-11-27): Stop 1 settled.**
+
+- **K-16 and decision 17** say that the remote, or its endpoint, must be changed back before any poll or synchronization registers the change.
+- **A registered change strands the held child.** It moves the configuration generation (`state.rs` 3031-3059, 2906-). After that, neither the child's restart (`reservation.rs` 3262-3266, 1353-1355) nor `conflict resolve` (2736) takes up the child, and the record waits for good. That is the known limit of this Cycle.
+- **The stranding is pre-existing,** for every synchronization held by a conflict (the facts are in the last section). It is tracked as the defect vh-zn1fd (`01M8EAKJPNER2P0G9MS8V6187N`).
+- **Cycle 04 changes nothing in `remote/` for it.**
+- **The C29 rows are T4 and T5** (section 7): change, change back, resolve, with no call in between.
+
+**M13, corrected (I2, the owner's ruling): no longer an owner point.**
+
+- **Rename.** Revision 3 said that after a rename, RR3's new attempt publishes to the configured remote. That was wrong. The attempt is refused at its reservation by the record-remote identity check (`lifecycle_record.rs` 822, through `reservation.rs` 1542). The record waits, refusing nothing, until the remote is configured back. That is decision 17's case, as K-20 names it. T7 pins it.
+- **Endpoint change under the same name.** M13 stands only here: the replacement attempt runs and publishes to the configured endpoint. K-17 already covers it, since the link is built from the remote as it is when the record finishes. So it is dropped as an owner point.
+
+### 10. Points for the approver (not stops)
+
+- **The settling write.** `settle_unsent_promotion_push` is a new write in `remote/reservation.rs`. Only the promotion's table calls it, and it changes no existing path. It is within the contract: decision 15 excluded touching the conflict verbs and the reservation for a held child's continuation, which this is not. After it, the child row lists with the outcome `protocol_rejected` ("rejected"), as an abandoned push does under `close_abandoned`. The listing then says "rejected" for a push the parent stopped before sending, which is slightly inexact. The alternative, a separate outcome category, would change `push_absence` in `sync.rs`, which is the owner's option (b) of B1.
+- **RR4's residual window (I3; known limit K-20).** A save that lands after the push check reads the branch tip, and before the child's own head check (`sync.rs` 9116-9123), is closed in the promotion's own code: the in-process `ExternalChange` of a new attempt proves nothing was sent, so `rerun_branch` lets the row go and RR4 refuses (clause vi). Revision 4 said closing it needed a `remote/sync.rs` change. That was wrong. What remains is a process lost in that same window, before the runner lets the row go, with a save landing in that instant. The row it leaves cannot be told from one lost after `push_exact`, so it reads as an attempt that may have pushed (RR3), and the next call publishes the save. K-20 names it.
+- **A branch whose worktree is gone** (not the branch itself) is not RR7. The child answers `TargetNotMaterialized`, which `ends_context_child` does not name, so the record waits until the worktree is back. The fence keeps retirement from causing this; only removing the worktree by hand does.
+- **RR8's link is an obligation for Task 5 (M8), to be recorded in the ledger.** The design says RR2 "still gives ok with the link". A withheld finish writes no link row, and the record keeps no URL (R-30). Task 5's data reads the link row (Part G item 4), so Task 5 must build the link at answer time for a withheld finish, or the answer's link is null.
+- **SSH tier.** Task 4 adds production functions to `src/repository/remote/reservation.rs`. Task 3's `remote/state.rs` change (`95c37cf0`) already makes AGENTS.md's `src/repository/remote/` row due at review-ready: `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`. The fence makes `remote_polling` due in any case.
+- **`context_synchronized → abandoned`** (Task 1's ruling) is not needed: RR2 is tried before every row that ends the record.
+
+### 11. Implementation steps
+
+Each step compiles on its own and keeps the direct tests and Task 3's tests green. Tests run by exact name (`--lib repository::promotion::run_tests::pull_request::reruns::<t>`, `--lib repository::promotion::record::tests::<t>`, `--lib repository::context_retirement::execution_tests::mutation_tests::<t>`, and so on), one cargo command at a time, through Devenv, with `--locked`.
+
+**Step A. The two columns.**
+
+- **Code:** `record.rs`: `SCHEMA`, the struct, `decode`, the `validate*` functions, `Debug`, `accept_context_head` and `note_context_pushed`.
+- **Tests:** E-18, E-19, E-20 and E-22, and the new `rerun_columns_are_moved_only_by_their_writers`, written first and run red.
+- **Run:**
+  - The new and edited tests: `rerun_columns_are_moved_only_by_their_writers`, `pull_request_promotion_steps_and_checks`, `privacy_column_inventory_for_both_new_tables`.
+  - Unchanged, which should still pass: `promotion_modes_migration_rebuilds_a_v2_table_once`, `migration_preserves_legacy_rows_is_idempotent_and_audited`, `half_created_migration_and_missing_marked_table_fail_closed`, `pull_request_begin_and_finish_write_their_columns`, `repository::promotion::lifecycle::tests::promotion_steps_map_to_the_shared_step_view`, `--test recovery_foundation_gate failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly`, and `...::pull_request::first_promote_publishes_and_gives_the_link`.
+
+**Step B. The fence.**
+
+- **Code:** `record.rs` `pull_request_promotion_holder`; `source.rs` 204-206; `authority.rs` 433-436 and 327-331; `execution.rs` 330.
+- **Turns green:** `the_retirement_fence`, `a_candidate_captured_before_the_record_began_is_refused_at_its_claim`, and `...::reruns::retirement_waits_for_a_stopped_promote`.
+- **Then S21 and S22,** each once, red.
+- **Regressions:**
+  - `repository::closure::run_tests::a_poll_does_not_retire_a_context_a_direct_closure_holds`;
+  - `repository::closure::run_tests::pull_request::a_poll_does_not_retire_a_context_a_branch_record_holds`;
+  - `...::pull_request::d16_the_hold_refuses_every_writer_but_its_own_publication_child`;
+  - `repository::context_retirement::execution_tests::table_b_the_retirement_of_an_absent_context_behind_each_pending_row` and `..._behind_each_synchronization_s_hand_off`;
+  - `...::mutation_tests::table_b_a_poll_retirement_pass_behind_each_pending_row` and `..._behind_each_synchronization_s_hand_off`;
+  - `...::mutation_tests::ordinary_retirement_final_and_lost_result_replay_preserve_new_context_and_mismatches`;
+  - `repository::context_retirement::execution_tests::a_finalized_retirement_deletes_the_link`.
+
+**Step C. RR8.**
+
+- **Code:** `answer.rs` `finish`; `record.rs` `LinkWrite::Withheld` and the pairing.
+- **Tests:** E-21.
+- **Turns green:** the `re_run_outcomes` row "RR2 completed, the context branch gone after it was saved", through Task 3's path, which is still in place.
+- **Run:** `pull_request_begin_and_finish_write_their_columns` and the five Task 3 `pull_request` tests.
+
+**Step D. The table and the runner.**
+
+- **Code:** `reservation.rs` `promotion_child_moves` (fetched-tip rule) and `settle_unsent_promotion_push`; `lifecycle.rs` `BranchRerun`, `reruns_by_table` and `rerun`, with the promotion impls; `promotion/rerun.rs` `decide`, `held`, `own_heads`, `accepted`; `run.rs` 1.3 (a), (b) and (c).
+- **Tests:** T1 and T2; T4 and T5 (the rewritten C29 rows, run red against S16 once their code exists); T7 with the fake's live plan (I2); T3a and T3b, written first and run red.
+- **Turns green:**
+  - every `re_run_outcomes` row except the `paced` rows of Step E (T4 and T5 included);
+  - `a_finish_or_an_end_without_a_context_leaves_the_link_row_alone`;
+  - `holds_cancellation_and_listing`.
+- **Stays green, now through the new path:** `stops_of_the_context_child`, `crash_and_replay`, `consent_differences`, `a_retirement_claimed_before_the_record_began_holds_the_promotion_off`.
+- **Then Task 3's tests:** `first_promote_publishes_and_gives_the_link`, `promoting_again_synchronizes_and_gives_the_same_link`, `a_held_document_gives_no_link`, `a_declined_pull_request_answers_remote_branch_deleted`, `a_pull_request_promotion_whose_index_step_failed_is_branch_index_pending`, and `repository::mutation::bind::lifecycle::tests::a_pull_request_promotion_answers_by_its_answer`.
+- **Then C24's direct tests:** `cache_loss_contained_context_cleans_without_another_merge_or_child`, `already_current_publication_is_stored_and_replayed_without_children_or_deletion`, `contained_cleanup_needs_no_identity_or_new_merge`, `local_full_lifecycle_and_exact_replay`.
+- **Then the closure's runner:** `repository::closure::run_tests::pull_request::d1_records_publishes_and_completes_without_touching_the_primary`, `...::d2_an_existing_closure_publishes_pending_work_and_is_already_closing`, `...::d15_a_cancelled_publication_child_is_replaced_by_the_same_request`, `repository::closure::run_tests::cancellation_before_integration_is_interrupted_and_the_same_id_continues`.
+
+**Step E. The start and push checks.**
+
+- **Code:** `lifecycle.rs` `admits_context_point` and its promotion impl; `rerun.rs` `admits_point` (with the tip condition at `BeforePush`); `reservation.rs` `promotion_child_push_candidate`; `run.rs` 1.3 (d): the observer's `restart` field and the gated check.
+- **Fake:** the `paced` option, including its restart publication path.
+- **Rows:** T3c, T3d, T3e, T3f, T3g and T3h, and T3b's `paced` last call, all written first and run red. T6 passes on today's code and is run red against S27. T3h is red until `rerun_branch`'s let-go (Step D's code) and the `paced` hook both exist, and is run red against S29.
+- **Run:** those rows through `re_run_outcomes`, then d15 and `repository::closure::run_tests::completed_child_authority_is_consumed_before_the_cancellation`, which run a closure child through the changed observer (its new field included).
+
+**Step F. Stubs, gates and commit.**
+
+- Run the stubs of section 8, each once, red, recorded.
+- Run all the new tests by exact name once more.
+- Run the static gates: `cargo check --all-features --locked`, `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+- Commit as the brief says. Nothing waits: decisions 17, 18 and 19 settle every stop.
+
+### Stop 1: facts for the owner
+
+All four answers come from reading the source at `d2134f8b`; none was run.
+
+**1. Which children are stranded, and how.** The stranding exists today, and the same way, for every synchronization held by a conflict: a direct promote's child, a Cycle 03 pull-request close's child (context or publication) and a plain `item sync` conflict.
+
+- **The restart refuses.** All of them restart through `restart_synchronization_guarded` (`remote/reservation.rs` 3186-3205: item sync and lifecycle children alike). It refuses when `record.generation != state::generation` (3262-3266). `restart_remote_lifecycle` has the same check (1353-1355).
+- **The conflict verbs refuse.** `reacquire_synchronization_conflict_in_window` refuses on the generation too (2736). After a rename it also refuses on the remote name (2730, with the target built from the live remote at `sync.rs` 5464-5472).
+- **Nothing brings the row back.** No code moves a row to a newer generation. The only writes of `configuration_generation` go to `remote_polling_state` (`state.rs` 2986).
+
+**2. What moves the configuration generation.** Only a registration that sees a different plan (the remote's name or the primary branch) or a different endpoint digest (the fetch or push SSH URL); an unreadable or absent configuration also counts (`Unavailable`).
+
+- **Where it is decided.** `configure_endpoints` (`state.rs` 3031-3059) and `configure_known`, which returns early with no change (2915-2917). The endpoint digest is `observation.rs` 141-158. The `Unavailable` registrations are at `poll.rs` 1656 and `observation.rs` 286 and 430.
+- **What does not move it.** A forge-setting change is in neither the plan nor the digest. An unchanged poll or synchronization moves nothing.
+- **Who registers.** Every synchronization (`sync.rs` 6493, before its reservation), every poll (`poll.rs` 1703, before its conflict check at 1706-1707), a retirement claim (`authority.rs` 339), a republish (`sync.rs` 8526), a direct promote's delete (`promotion/run.rs` 1800) and a closure's new branch (`closure/new_branch.rs` 534).
+- **Changing back.** Yes, once the change has been registered: the registered plan is then the changed one, so changing back and polling moves the generation again, and the old-generation child stays stranded. If nothing registered the change before it was undone, nothing moves and the child goes on.
+
+**3. What a stranded pull-request promote holds, and for how long.** For good, since nothing ends the record (answer 4). Its unfinished record holds:
+
+- the document's prepare: the binding's hold (`bind/lifecycle.rs` 755);
+- a new confirm, which answers `busy` (`promotion/record.rs` 650-652);
+- the document's retirement, by Task 4's fence;
+- a change of the repository's setting made in this clone (`setup/change.rs` 457-481);
+- `context sync-local` of every item (`local_sync/record.rs` 1174);
+- `context release` of its context (`context_release.rs` 216-227).
+
+Its child's step stays `conflict_pending`, and that holds the whole repository:
+
+- every new synchronization of any item answers `busy` (`reservation.rs` 1664-1668, `has_pending_conflict` at `state.rs` 5372-5381);
+- every updating poll answers `ConflictPending` (`reservation.rs` 1659-1663, `poll.rs` 1706-1707);
+- every restart of another synchronization answers `recovery_required` (`reservation.rs` 3250-3256).
+
+The repository-wide part is pre-existing for any pending conflict. Stranding makes it permanent.
+
+**4. The ways out today.** Within the normal verbs there is none, in any of the cases in answer 1.
+
+- **`operation abandon` of the child:** refused. It is bound to a parent (`reservation.rs` 826-838), and it is retained (844). A plain `item sync` conflict is refused on the second reason alone.
+- **The parent:** cannot be abandoned (design Baseline Fact 23).
+- **`request cancel`:** cannot release a retained child (`reservation.rs` 1856-1857), and the record stays unfinished.
+- **`conflict resolve`** (the only conflict verb, `mutation/command.rs` 71): refused on the generation (2736).
+- **The same request, or `operation resume`:** each restart is refused (3262-3266), so the call answers `recovery_required`.
+- **A new `item sync` or `repo sync`:** `busy`.
+- **The repair verbs** (`document repair`, `ticket repair`): repair item files only, not remote rows.
+- **The only path the source allows** is `repo remove` followed by enabling the repository again. Removal deletes the registration (`registration_removal.rs` 376-381), and the foreign keys cascade to every parent and remote row (`state.rs` 1116, `promotion/record.rs` 229-230). Its only refusals I found are a changed lease, directory or registration (333-351); this is unverified by any test. It drops all of the repository's Manyhands registry state and leaves Git as it is, the conflicted worktree included.
