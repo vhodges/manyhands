@@ -122,6 +122,28 @@ By a read-only research agent (report in the controller's workspace, `task-0-swe
 - Deferred Minor findings (for the final review): the digest test's "domain" row passes vacuously (it compares with the direct digest over other fields, so dropping the pull-request domain still passes; `observe_tests.rs:1802-1806`); the digest test lacks the remote-`None` row the checkpoint listed (`:1821`); the "no identity" dropped row never removes the identity (`:1632`); `runs_context_child`'s override copies the trait default verbatim (`promotion/lifecycle.rs:871-875` against `:316-319`); comments: `observe_tests.rs:1748` attributes the root-merge blocker to Git, `observe.rs:1548` says the root's state does not matter, `bind/lifecycle.rs:640`'s `note_observed` doc is stale; the report's mutation table skips M6; `Confirmed::preview` calls `unoffered_answer(..).expect(..)` on states its arm already narrows, and `unoffered_answer`'s `PublicationRemoteRequired` arm duplicates the early return.
 - Task 2: complete (commits `034f4346..177be9ec`, review clean after fix round 1).
 
+## Task 3: Confirm, The Answer Tables
+
+- Base `6c46b35c`. Implementer: Sonnet 5.5 at high effort. Step 1: `origin/main` `8e5d9832` is an ancestor of HEAD; no merge.
+- Design checkpoint (Step 2), written by the implementer against the source (Appendix E, verbatim), approved by the orchestrator on 2026-11-26 with one correction (below). `branch_step` and `end_branch` call a new `promotion/answer.rs` (`finish`: the first table, judged on the child's authority OID read through `child_state`, with the tracking primary as it is and the record's own `primary_branch` and remote; `end`: the second table, judged on the consented tip, `R` read as absent after `remote_branch_deleted`); the record layer's `begin_pull_request_record`, `refuse_record_on` (the confirm's mode; `refuse_record` delegates with `Direct`, so its callers do not change), `complete_branch_record` (holds the answer and link-write pairing) and `abandon_branch_record`; `pull_request_links::touch_link` renews `given_at` alone; `Outcome` is `PromotionOutcome { Direct, Branch }`, `DocumentPromotionResult` gains `Branch` and `BranchIndexPending`; the binding's `Called::Branch` holds `Branched::{Closure, Promotion}`, and `promotion_branch_code` maps `promoted` → `ok`, `already_promoted` and `primary_holds` → `already_applied`, `remote_branch_deleted` → itself, `history_unresolved` → `recovery_required`, `context_gone` → `external_change` (as Cycle 03's `ContextGone`); `RunEvent::Recording` is gated to the ticket closure on the branch path; the interim guard and its test go.
+- Correction: C9's squash and C10's merge are scripted as moves of the tracking primary made by the child's own fetch (the fake's `fetched`), not before the confirm — a tracking primary that already holds the document at the runner's revalidation is C19's refused record, not C9 or C10 — the checkpoint's wording ("then a squash on the tracking primary") left it open.
+- Ruling: U-2 is a promotion twin of `PullRequestIo` in `promotion/run_pull_request_tests.rs` (module `run_tests::pull_request`), not a lift — Cycle 03's is built on the ticket fixture with about 100 call sites, and a lift would change two Cycle 03 test files — Task 7 may lift the bare-repository `Forge` if both users need it.
+- Ruling: Part G item 9 is met by a document twin (the design allows one): the record layer writes the document's row through `pull_request_links::upsert_link` with kind `document` and renews it through `touch_link`; `closure/record.rs` and `closure/checkpoint.rs` do not change — `give_link` is a four-line wrapper that writes kind `ticket` — none.
+- Ruling: `BranchPromotionOutcome` carries `operation_id` beside `answer` and `publication`, whose OID is the record's `context_oid` — both direct and branch closure outcomes carry one — none.
+- Ruling: an `again` record whose link row is gone when it finishes answers `already_promoted` and renews nothing — the first table keys the answer on the consented situation, and the row can only go by a retirement, which Task 4's fence holds — a null link in that answer.
+- Ruling: no extra guards on `parent::complete_record` and `supersede` — the first refuses unless `branch_deleted`, which a pull-request row can never reach, and the second is reached only for a supersedable cleanup, which a pull-request row never has — a guard no test could show red.
+- Ruling: resume's `DocumentPromote` scope arm, `settled`, `branch_record_of`, `replay.rs` `result_commit_held`, the CLI retry guard and `continued_a_lifecycle` are Task 5's, as the plan's Self-Review maps Part G item 4's replay, resume and retry-guard parts — they key on Task 5's data — none.
+- Ruling: Part G item 7 needs no code (the second slot's readers already answer for an empty second slot); its runner tests assert `record::audit` after each finish or stop, assertions that pin unchanged behaviour and so are exempt from the red run (Global Constraints) — none.
+- Ruling: the answered-`abandoned` invariant (Task 1's deferred Minor) is added here: `CHECK(answer_code IS NULL OR consented_context_oid IS NOT NULL)` and the same rule in `validate`, one row in `pull_request_promotion_steps_and_checks`, run red once — the migration has never run on a real registry — none.
+- Pointer for Task 4: after the child, `promote_branch` still runs the cancellation check (`run.rs:977`) and, before it, the check that the record's remote is the configured one while `base_oid` is unset (`run.rs:936`), which a pull-request record (never with a base) fails on every call once the configured remote changes; RR2, RR4, RR5, RR8 and the crash boundaries are Task 4's.
+
+- Commits: `faced22a` feat(promotion): promote in a pull-request repository publishes and gives the link; `390b54bb` fix(promotion): the record holds a completed child, and the answers share their helpers (fix round 1); `95c37cf0` test(promotion): a retained child holds the record (fix round 2).
+- Tests (implementer, each by exact name, `repository::promotion::run_tests::pull_request::`): `first_promote_publishes_and_gives_the_link` (C1 to C3), `promoting_again_synchronizes_and_gives_the_same_link` (C4 to C7), `a_held_document_gives_no_link` (C8's prepare half, C9, C10), `a_declined_pull_request_answers_remote_branch_deleted` (C11, with the republish), `a_pull_request_promotion_whose_index_step_failed_is_branch_index_pending`; `repository::promotion::record::tests::pull_request_begin_and_finish_write_their_columns` (service-backed, real child rows: complete over a completed child only; abandon refused over a live or retained child) and the added invariant row of `pull_request_promotion_steps_and_checks`; `repository::mutation::bind::lifecycle::tests::a_pull_request_promotion_answers_by_its_answer` (the binding's codes and effects; the checkpoint named it `promotion_branch_answers_map_to_codes_and_effects`) and the five `branch_reached` tests, unchanged; the unchanged `cache_loss_contained_context_cleans_without_another_merge_or_child`, `already_current_publication_is_stored_and_replayed_without_children_or_deletion`, `contained_cleanup_needs_no_identity_or_new_merge`, `d1_records_publishes_and_completes_without_touching_the_primary`, `d2_an_existing_closure_publishes_pending_work_and_is_already_closing`, `promotion_modes_migration_rebuilds_a_v2_table_once`; E-5's `local_full_lifecycle_and_exact_replay`. The three E-5 arms in the SSH target `document_promotion` were compiled through clippy, not run. Static gates clean. Red: the compile failure, deliberate stubs (a) to (i), the invariant's two halves, and in the fix rounds the record's completed-child check, `child_holds` (both arms) and the primary assertion.
+- Named edits applied: E-5 (`run_tests.rs:5069-5074`, `tests/document_promotion.rs:314-320`, `tests/document_promotion/journeys.rs:257-261`, `tests/document_promotion/quality.rs:130-134`, arms only). Removed this Cycle's own interim-guard test `a_pull_request_confirm_stops_before_any_direct_record`. A test-only wrapper `remote/state.rs` `prepare_step_for_test` builds a retained child through the real `prepare_integration_step`.
+- Review (Opus): the tables in row order, the link writes, no path in a pull-request repository that reaches the primary or `finish_branch`, the direct path unchanged; spec ❌ and two Important: the record layer had dropped the approved completed-child check (an implementer departure after approval), and `promotion_branch_reached` copied three blocks of `branch_reached`; plus test rows the checkpoint named (C6's other parent, C7's prepared link, C11's republish) and a vacuous primary assertion. Ruling on the copy (partly plan-mandated, "twins"): factored into `branch_published_effects` and `branch_ran`, which both call — the design's twin need not be a copy, and the R-32 and owed-index rules must not drift — the closure's tests guard the refactor. Fix round 1/5 (3 addressed, 1 open: no retained-child row; `faced22a..390b54bb`); fix round 2/5 (1 addressed, 0 open; `390b54bb..95c37cf0`). Re-reviews (Sonnet): the `branch_reached` refactor is behaviour-preserving; addressed, no new Critical or Important.
+- Deferred Minor findings (for the final review): R-12's choice of the child's authority OID (`answer.rs:82`) and `remote_gone` (`:161`) are not pinned by a row where they differ (a row whose child brings another clone's later save over a squash of `L` would); red runs were per test, not per row (C2, C3, C5 to C7, most record mismatch rows); a redundant remote check (`lifecycle.rs:924` and `record.rs:654`); `pub(super) mod answer` is wider than needed; no runner test for the `history_unresolved` and `context_gone` ends (record and binding layers only); the `PullRequestIo` twin repeats Cycle 03's cancel-acknowledgement and reservation code; the `Child::Ended` fixture sets `phase='cancelled'` by SQL.
+- Task 3: complete (commits `6c46b35c..95c37cf0`, review clean after fix round 2).
+
 ## Appendix A: References, Task 0 Steps 2 and 3 (research agent, verbatim)
 
 ### Task 0: names check of the Cycle 04 design against HEAD aee99255 (main 8e5d9832)
@@ -752,3 +774,240 @@ Only E-12 (`tests/document_promotion.rs:301`), E-16 (`bind/lifecycle_tests.rs:11
 - `primary_oid` for a pull-request preview is the tracking primary's, not "optional or absent" as Part G item 12 words it; I kept the type to avoid editing `observe_tests.rs:82/899`. Say if you prefer `Option` and the two edits.
 - The endpoint digest is Task 3's (no reader here).
 - The document twin of `branch_link` lives in `observe.rs`; Task 3's item 9 can fold it into `branch_link(kind)`.
+
+## Appendix E: Task 3 design checkpoint, approved with a correction (verbatim; the correction and rulings are in Task 3's section)
+
+### Task 3 design checkpoint (Step 2): confirm of a pull-request promote, the two answer tables
+
+Written against the source at HEAD `6c46b35c` (Task 3 base). No code or test has been written.
+
+Step 1: `git fetch origin` ran; `git merge-base --is-ancestor origin/main HEAD` holds (`origin/main` is `8e5d9832`, an ancestor of HEAD `6c46b35c`), so the merge is a no-op.
+
+Two things before the detail. The task is large because the runner, the record, the outcome types and the binding all change, but nothing in it needs a new mechanism: Cycle 03's branch path (`promote_branch`, `context_step`, `ends_context_child`, `let_go`, `refresh`) already runs a promotion record up to the two hooks that are stubs today (`branch_step`, `end_branch`). The departures from the brief are listed in section 16; the decisions that need the approver are marked **(approve)** where they arise.
+
+### 1. What changes, by file
+
+| File | Change |
+| --- | --- |
+| `promotion/record.rs` | the answered-`abandoned` invariant (SQL CHECK and `validate_pull_request`); `PullRequestBegin`, `begin_pull_request_record`; `refuse_record_on(..., mode)` (`refuse_record` keeps its signature and calls it with `Direct`); `BranchFinish`, `LinkWrite`, `complete_branch_record`, `abandon_branch_record` |
+| `promotion/answer.rs` (new) | the two answer tables: `finish` (first table, called by `branch_step`) and `end` (second table, called by `end_branch`) |
+| `promotion/lifecycle.rs` | the interim guard removed; `begin_record` dispatches on the observed preview; `refuse_record` passes the confirm's mode; `type Outcome = PromotionOutcome`; `branch_step`, `end_branch`, `branch_outcome`, `outcome`, `complete`, `index_pending` implemented; `begin_publication`, `branch_answer`, `complete_branch` stay as they are (`BranchFinish = Infallible`) |
+| `promotion/mod.rs` | `BranchPromotionOutcome`, `PromotionOutcome`, `DocumentPromotionResult::Branch` and `::BranchIndexPending`; `mod answer` |
+| `promotion/run.rs` | `RunEvent::Recording` only for a ticket closure (line 980) |
+| `pull_request_links.rs` | `touch_link`: updates `given_at` alone (item 9) |
+| `mutation/bind/lifecycle_verb.rs` | `Called::Branch` holds `Branched::{Closure, Promotion}`; `Promote::call` builds it; `called_of` wraps the closure's; `promotion_branch_code` |
+| `mutation/bind/lifecycle.rs` | `call` matches the two; `promotion_branch_reached` (code, effects; no data until Task 5) |
+
+Not touched: `closure/record.rs` and `closure/checkpoint.rs` (see item 9), `lifecycle_record.rs`, `read/*`, the CLI and the desktop (no match over the changed types exists there; I grepped `DocumentPromotionResult` over `src/` and `tests/`).
+
+### 2. Part G item 2: `branch_step` and `end_branch`
+
+`DocumentPromotionLifecycle::branch_step(&self, service, request, r)` calls `answer::finish(service, request, r)` and returns `BranchStep::Finished`; the runner then reloads the record and calls `refresh` (`promote_branch`, `run.rs:983-989`), which marks the item's context dirty, indexes it and builds the outcome. `BranchStep::Closing` is never returned, so `finish_branch` is never reached for a promotion (R-1), and `begin_publication`, `branch_answer` and `complete_branch` stay the `recovery_required` stubs.
+
+`DocumentPromotionLifecycle::end_branch(service, root, r, end)` calls `answer::end`.
+
+#### `answer::finish`: the first table, after a child that completed (R-12)
+
+1. Read the context child through `record::child_state(tx, r, ChildRole::Context)`. Anything but `ChildState::Complete(stored)` is `recovery_required`; `stored.authority` is `Published(oid)` or `AlreadyCurrent(oid)` (`None` is `recovery_required`). `oid` is the child's authority OID, and the category (`published` or `already_current`) is what the record stores.
+2. Judge R-3 on that OID with the tracking primary as it is now: the tracking primary is read from the plan's tracking ref (`RemoteRefPlan::from_configuration(remote, primary_branch).primary().tracking_ref()`, through `observe::reference_oid`) after the child's fetch moved it; then `observe::primary_holds_document(&repo, oid, tracking, r.primary_branch, r.remote_name, item, false)`. The record's own `primary_branch` and remote are used, not the live configuration (R-27).
+3. The first row that matches:
+
+   | Row | `answer_code` | `LinkWrite` |
+   | --- | --- | --- |
+   | R-3 holds | `primary_holds` | `Untouched` |
+   | `situation == again` | `already_promoted` | `Renew { given_at }` |
+   | otherwise | `promoted` | `Give { link, given_at }` |
+
+   `given_at` is `(request.clock)().unix_timestamp()` (R-16; no real wait).
+4. One `state::with_transaction` calls `record::complete_branch_record(tx, id, op, &BranchFinish { answer, category, link })`, which stores `answer_code` and `publication_category`, sets `step='complete'`, clears `cancel_requested`, writes the link as `link` says, and reads the row back through `validate`.
+
+`complete_branch_record` checks, before the UPDATE: `path() == Branch`; `step.permits(Complete, ..)` (only `context_synchronized` passes: `Complete` is terminal, `Confirmed → Complete` is refused); the category is `Published` or `AlreadyCurrent`; the context child is `ChildState::Complete`; and the answer and the link write are paired (`promoted`↔`Give`, `already_promoted`↔`Renew`, `primary_holds`↔`Untouched`). Any other combination is `recovery_required`, so the table's pairing is held by the record layer and not only by `answer::finish`.
+
+#### `answer::end`: the second table, after a child that ended
+
+`BranchEnd::ContextGone` and `BranchEnd::ContextChild(SynchronizationError::RemoteContextDeleted | HistoryUnresolved)` are what the runner calls it with (`ends_context_child` also names `TicketClosed`, which only a ticket's context answers; for it `end` answers `Err(recovery_required)` as the closure does for an unnamed stop, and the record stays `confirmed`).
+
+1. R-3 on the consented tip (`r.consented_context_oid`) with the tracking primary as it is: `primary_holds_document(.., consented, tracking, r.primary_branch, remote, item, remote_gone)`, where `remote_gone` is true only for `RemoteContextDeleted` (the fetch does not prune `R`).
+2. The first row that matches: held → `primary_holds` (link untouched); `RemoteContextDeleted` → `remote_branch_deleted` (link row deleted); `HistoryUnresolved` → `history_unresolved` (untouched); `ContextGone` → `context_gone` (untouched).
+3. `record::abandon_branch_record(tx, id, op, answer)`: `path() == Branch`, `permits(Abandoned)` (only from `confirmed`), the answer is one of the four allowed at `abandoned`, and the child is not retained or live without authority (the same test `let_go` uses: `Retained`, or `Unowned` whose phase is not `Cancelled | Interrupted | Failed | Completed`, refuses). It stores `step='abandoned'`, the refusal `reconfirmation_required` (through `Refusal::encoded_columns`), the answer; `remote_branch_deleted` also deletes the link row (kind `document`).
+
+Departures from Cycle 03's shape, deliberately: `abandon_branch_record` takes no refusal (a promotion's ended record is always `reconfirmation_required`, R-13) and no link/`given_at` (an ended record never writes a link).
+
+### 3. Part G item 3: the outcome types and every exhaustive match
+
+```rust
+// promotion/mod.rs
+pub struct BranchPromotionOutcome { operation_id: OperationId, answer: PromotionAnswer, publication: Option<PromotionPublication> }
+pub(in super::super) enum PromotionOutcome { Direct(DocumentPromotionOutcome), Branch(BranchPromotionOutcome) }
+pub enum DocumentPromotionResult { Complete(..), IndexPending(..), Branch(BranchPromotionOutcome), BranchIndexPending(IndexPending<BranchPromotionOutcome>) }
+```
+
+`BranchPromotionOutcome` derives `Clone, Debug, PartialEq, Eq`; `operation_id()` and `publication()` are `pub`, `answer()` is `pub(in super::super)` (`PromotionAnswer` is a `categories!` type, visible to `crate::repository` only; the binding is inside it). **Addition to the brief's `{answer, publication}`: `operation_id`**, because `DocumentPromotionOutcome` and `BranchClosureOutcome` both carry one.
+
+`type Outcome = PromotionOutcome`; `outcome()` returns `Direct`; `branch_outcome(r, _)` returns `Branch` built from the record: `answer = r.answer_code.expect(..)` (a finished branch record has one, as the closure's does), and `publication` from the record's `publication_category` and `context_oid` (design item 3 reads the category from the record): `published` → `Published { oid: context_oid }`, `already_current` → `AlreadyCurrent { oid: context_oid }`, `None` otherwise (an abandoned record has none). The runner's `make_outcome` passes the second slot's authority, which a promotion has none of, so it is ignored. **(approve)** The OID is the context tip `context_step` stored right after the child completed, which is the tip the child published or found current (nothing else may move the branch in between; Task 4's RR rows judge the cases that do). The binding reads only the category, so no data reads it.
+
+`complete` and `index_pending` map `Direct` to `Complete`/`IndexPending` and `Branch` to `Branch`/`BranchIndexPending`.
+
+Exhaustive matches the new variants change (found by reading every `DocumentPromotionResult` use in `src/` and `tests/`):
+
+| Where | What |
+| --- | --- |
+| **production** `mutation/bind/lifecycle_verb.rs:468-474` (`Promote::call`) | gains `Branch` and `BranchIndexPending` arms producing `Called::Branch` |
+| `promotion/lifecycle.rs` `complete`, `index_pending` (production) | as above |
+| E-5, test: `src/repository/promotion/run_tests.rs:5069-5074` (`authoritative`) | gains `Branch(_) \| BranchIndexPending(_) => unreachable!("a direct fixture never answers as a pull-request promotion")`; `outcome()` just above it (5063-5067) has a wildcard and needs nothing |
+| E-5, test: `tests/document_promotion.rs:314-320` (`promote`) | gains `Branch(_) \| BranchIndexPending(_) => Err(FixtureError)` |
+| E-5, test: `tests/document_promotion/journeys.rs:257-261` (`authoritative`) | gains the same `unreachable!` arm |
+| E-5, test: `tests/document_promotion/quality.rs:130-134` (`promotion_category`) | gains `Branch(_) => 3` and `BranchIndexPending(_) => 4` (the values 3 to 9 are unused) |
+
+The last three are in the SSH target `document_promotion`: compiled through clippy only, not run. Every other use (`matches!`, `let ... else`, `match` with a wildcard: `run_tests.rs:1365, 1445, 1586, 2760, 5285, 5393, 5708-5709, 6018, 6038, 6279, 6409-6410, 6465, 6561, 6620, 6658, 7080, 7264`; `tests/document_promotion/advanced.rs:131`, `identity.rs:144, 153`) compiles unchanged, and each is a direct-mode assertion whose meaning does not change. The three `bind/*_tests.rs` hits (`lifecycle_tests.rs:1745`, `poll_tests.rs:225`, `repo_tests.rs:205`) only name the type in a fake's return.
+
+### 4. Part G item 4: the binding
+
+- `Called::Branch { outcome: Branched, index_pending }` with `enum Branched { Closure(BranchClosureOutcome), Promotion(BranchPromotionOutcome) }` (both in `lifecycle_verb.rs`). `called_of` wraps the closure's outcome in `Closure`; `Promote::call` wraps the promotion's in `Promotion`. No test constructs `Called::Branch` (grep), so no test edit; the closure's `branch_reached(&service, &accepted, &BranchClosureOutcome, bool)` keeps its signature, so its tests (`lifecycle_tests.rs:331-1188`) are untouched.
+- `LifecycleBinding::call` (`lifecycle.rs:1380-1383`) matches `Branched::Closure(o) => self.branch_reached(..)` and `Branched::Promotion(o) => self.promotion_branch_reached(..)`.
+- `promotion_branch_code(answer) -> ResultCode`, beside `branch_code`:
+
+  | `PromotionAnswer` | Code |
+  | --- | --- |
+  | `promoted` | `ok` |
+  | `already_promoted`, `primary_holds` | `already_applied` |
+  | `remote_branch_deleted` | `remote_branch_deleted` |
+  | `history_unresolved` | `recovery_required` (the blocker rides on Task 5's data) |
+  | `context_gone` | `external_change` (as Cycle 03: `ContextGone` ends as `ReconfirmationRequired`, which `branch_code` maps to `ExternalChange`) |
+
+- `promotion_branch_reached` is the twin of `branch_reached` (`lifecycle.rs:949-1032`): it stores `branch_record = true` (so the answer names `manyhands/document/<ULID>` and its worktree, decision 17), maps the code, and `index_pending && code == Ok` answers `DiscoveryPending` with the same-request recovery, as the closure does. Its `Effects`: `discovery` current or pending; `publication` from `outcome.publication()` (`Published` / `Current`), and when it is `None` from `context_child_push` (what the context child's row says landed, as the closure's R-32 does); `commit_oid` the pushed OID; `write`, `checkpoint`, `integration` and `cleanup` `NotRequested` (nothing reached the primary). **No data**: the answer's `MutationDataDto::PullRequestPromotion` and the link read with the document kind are Task 5's, as the task statement says ("until Task 5 a pull-request promote may answer without data"). `reached_code`, `reached_effects` and `Reached` are the direct path's and are not touched.
+- The generic pieces serve as they are (Part G item 4): `parent_effects` (the context child's landed push and merge, nothing of a checkpoint), `parent_integrated` (false for a branch record), `branch_scope`, `branch_stopped`, `ended_answer` (an answered record returns `None`). Resume's `DocumentPromote` scope arm, its `settled` and `branch_record_of` (which reads `Close::parent` only), `replay.rs` `result_commit_held`, the CLI retry guard and `continued_a_lifecycle` need the new data tag, so they are Task 5's or Task 4's; **(approve)** I leave them, and say so in the report.
+
+### 5. The pull-request begin (signature, caller, what it writes, `refuse_record`'s mode)
+
+Caller: `DocumentPromotionLifecycle::begin_record(tx, id, op, item, expectation, remote, observed)`, which `promote_inner` calls with the revalidated preview inside the preflight lease (`run.rs:604-612`). The guard goes; the method becomes
+
+```rust
+match observed.and_then(|p| p.pull_request().map(|facts| (p, facts))) {
+    Some((preview, facts)) => {
+        let remote = remote.ok_or_else(state::recovery_required)?;
+        record::begin_pull_request_record(tx, id, op, item, expectation, Some(remote), &record::PullRequestBegin {
+            consented: preview.context_oid(),
+            situation: facts.situation,
+            primary_branch: preview.primary_branch().to_owned(),
+            endpoint_digest: endpoint_digest_at_begin(tx, id, remote)?,
+        })
+    }
+    None => record::begin_record(tx, id, op, item, expectation, remote),   // direct, or an existing record of either mode
+}
+```
+
+`endpoint_digest_at_begin` reads the registration's `root_path` in the same transaction, opens the Git repository and returns `observation::endpoint_digest_of(&repository, remote)` ("read at begin", under the lease the revalidation held). `begin_pull_request_record` takes the digest as a plain argument, so the record layer is testable without Git.
+
+`record::begin_pull_request_record(tx, id, op, item, expectation, remote, begin)`: returns the existing record of the operation first (`parent::existing_record`, as `begin_record` does, so a same-request re-entry continues the record in its own mode); any other unfinished record of the document is `busy` (a pull-request record supersedes nothing: its `cleanup` is never set, so no row is supersedable); otherwise it inserts `step='confirmed'`, `integration_mode='pull_request'` and the four begin-time columns (`consented_context_oid`, `situation`, `primary_branch`, `endpoint_digest`) in one INSERT, and reads the row back through `validate`. `insert_record` gains the mode and an optional `PullRequestBegin`.
+
+`refuse_record`: `Lifecycle::refuse_record` passes `config.integration()` (the live configuration the confirm's `prepare` read, the same one that chose its observation) to the new `record::refuse_record_on(tx, id, op, item, expectation, remote, refusal, mode)`; the existing `record::refuse_record` delegates with `Integration::Direct`, so its seven callers (`record_tests.rs:1464, 1627, 1640`, `lifecycle.rs:943`) are unchanged. A pull-request refusal leaves the four columns null (`validate_pull_request` allows that only at `abandoned`, and the SQL CHECK already ties the four together).
+
+### 6. `branch_step` reads the child's category; `end_branch` judges on the consented tip (R-3, R-12)
+
+Covered in section 2. The two rules that are easy to get wrong, stated once: after a child that **completed**, R-3 is judged on the child's **authority OID** (the OID `child_state` returns), not on `context_oid` and not on the consented tip; after one that **ended**, on the **consented tip**, and the tracking primary is read at the moment the record answers (the child's fetch moved it before it stopped, `FetchTracking`, Baseline Fact 24). Neither call fetches.
+
+### 7. The link: `first` built at finish (R-30), stored; `again`'s `given_at` renewal (item 9)
+
+- **Built when the record finishes**, in `answer::finish`, outside the transaction: `canonical_repository_root(&request.root)` gives the repository; `read_configuration(&root)`: `Valid(config)` → `config.forge()`, otherwise `None`; `closure::checkpoint::context_branch_link(&repo, r.primary_branch, forge.as_ref(), remote, &LifecycleKind::DocumentPromotion.context_branch(item))`. That function (Task 2's correction: one helper taking the branch name) reads the remote's URL as `git2` reports it and builds the link through `forge::recognise` and `forge::pull_request_link`. A missing URL or unreadable configuration builds a link with a null URL and never fails the promote. The record stores no URL (R-30).
+- **Stored** by `complete_branch_record`: `pull_request_links::upsert_link(tx, id, "document", item, &link, given_at)`. It writes the document's row with kind `document`.
+- **`again`**: the row's link is returned (the binding reads it in Task 5); `pull_request_links::touch_link(tx, id, "document", item, given_at) -> rusqlite::Result<usize>` is `UPDATE pull_request_links SET given_at = ?4 WHERE repository_id = ?1 AND kind = ?2 AND item_ulid = ?3`, so the row's other columns are unchanged. If the row is gone (the update touches 0 rows) the record still finishes `already_promoted` and the answer's link reads null, as C15 says for a rebuilt answer. **(approve)** I do not fall back to `promoted`: the table keys the answer on the record's situation, not on what the row holds later.
+- **Item 9 and the files the brief names.** `give_link` (`closure/record.rs:1461`) is private and writes the kind `"ticket"`; `branch_link` already calls `context_branch_link`. A promotion writes through `pull_request_links` directly with `"document"`, so there is no change to `closure/record.rs` or `closure/checkpoint.rs`: the design allows "a document twin beside them", and the twin here is three lines in the record layer plus `touch_link`, which the closure does not need. This also leaves Cycle 03's code and tests byte-for-byte as they are.
+- RR8 (no link row written when the context does not exist at finish) is a re-run row for Task 4; in this task the branch exists whenever `branch_step` runs (`context_step` ends the record `ContextGone` when it does not).
+
+### 8. Part G item 7: the second slot's readers
+
+`remote_identity_of` (`lifecycle_record.rs:803-830`), `children_contexts` (`run.rs:2291-2308`) and `audit` (`lifecycle_record.rs:923-969`) already answer for a pull-request record with an empty second slot: `remote_identity_of` handles an `op` equal to `context_sync_id` (the record has no `primary_sync_id`, `validate_pull_request` refuses one) and a branch record's second slot; `children_contexts` returns the item's context for a branch record with a context child; `audit` reads `second_role(Branch)` = `Publication`, whose `attempt_of` is the empty primary slot (`ChildState::Absent`). So **item 7 needs no code**. It is pinned by running the real runner over a pull-request record: every runner test below runs `record::audit(&db)` after the record finishes or stops (it fails on any non-empty or mismatched second slot), and the stop-path through `index_children_owed` is run by the index-pending test. These are assertions that pass without new code, so I do not claim they were run red.
+
+### 9. Part G item 11: no `RunEvent::Recording` for a promotion
+
+`promote_branch` emits `Recording` when `!r.effect_written() || step == ContextSynchronized` (`run.rs:980-982`); `PromotionRecord::effect_written()` is always false, so a promotion would announce "Marking it closed…". The direct path already gates the same event on `L::KIND == TicketClosure` (`run.rs:807`); the branch path gets the same gate. Pinned by the first test (the observer is told `[ChildStarting(Context)]` and nothing else), run red by removing the gate.
+
+### 10. Part G item 13 and U-2: the fake publisher
+
+**Choice: a promotion twin, not a lift.** Reasons, from the source:
+
+- Cycle 03's `PullRequestIo` (`closure/run_pull_request_tests.rs:618-788`) is built on the closure fixture: its `tracking_context` writes `tracking_context_ref()` (a ticket ref), its `decide_push` calls `lacks_primary_closure` with the ticket path, and it delegates to the closure module's re-export of `FakeIo`, whose publish path needs the tracking context ref to exist already (`oid = refname_to_id(tracking ref)`), which is false for the first publication of a new document (C1).
+- It has about 100 `PullRequestIo::default()` / struct-update call sites in two closure test files; lifting it means changing every one or inventing a constructor that carries the ref names. That is a change of two Cycle 03 test files with a risk to `ticket_closure` and no gain for the four tests of this task.
+- The test-local `Forge` (a bare repository) is needed only by P5 (Task 7: the poll and the retirement). The four tests here script a merge as closure's D4/D11 do (plain local commits and tracking refs: `forge_merge`, `fetched`). If Task 7 finds the lift worthwhile it can do it then, with both users in view.
+
+The twin lives in a new `src/repository/promotion/run_pull_request_tests.rs`, included from `run_tests.rs` as `#[path = "run_pull_request_tests.rs"] mod pull_request;` (the closure's own arrangement), so the test path is `repository::promotion::run_tests::pull_request::<test>` and Tasks 4 and 7 extend the same module. It holds:
+
+- `PullRequestIo` (implements `PromotionIo`): records `children: Vec<(SynchronizationTarget, OperationId, bool)>`; a **primary target is refused** (`primary_calls += 1`, `Err(RecoveryRequired)`) and `delete` is counted and asserted zero; for the context role it reserves the child as `FakeIo` does (`reserve_promotion_child`, `restart_promotion_child` on replay), and then, in order: a scripted `fetched` tracking-primary move (written to `refs/remotes/origin/main` before any stop, as a child's fetch is), a scripted stop (`kept` reserves the child and leaves its row active, as closure's; a `restart` acknowledgement of a cancelled row ends it), a scripted `drive` (a real local update through `sync::promotion_test_drive_local_bound`, the "Merge primary into document" stage), else a plain publication of the branch's tip. A publication completes the child row with `complete_child_row` (`published`, or `already_current` when the tracking context already equals the tip), writes the tracking context ref, and returns the matching `SynchronizationOutcome`.
+- The fixture additions on `Fixture`: `pull_request()` (the PR configuration written uncommitted in the primary's worktree, as `a_pull_request_confirm_stops_before_any_direct_record` does today, so the local primary never moves), `unpublish()` (deletes the tracking context ref: a new document), `merge_into_primary()` (a forge squash or merge: a commit on the primary with the document's content, tracking primary moved to it), `edit()` (a save: a commit in the context), `link()` and `refs()`.
+- Every test asserts that the local primary did not move, that `io.primary_calls == 0` and `io.deletes == 0`, that the table has no `integrating`-or-later row and no `Promote document <ULID>` commit exists (`promotion_commits == 0`), and that `record::audit` accepts the registry.
+
+### 11. The guard's removal
+
+The interim guard in `DocumentPromotionLifecycle::begin_record` (`lifecycle.rs:918-923`) is removed. Its test `a_pull_request_confirm_stops_before_any_direct_record` (`run_tests.rs:7305-7332`, this Cycle's own) is **deleted**, not replaced: its two claims (no direct record is begun, nothing merges into or publishes the primary) are now asserted by every test of the new module, and its third (`recovery_required`) is no longer true.
+
+### 12. The answered-`abandoned` invariant (deferred review point)
+
+Amend `SCHEMA` in `promotion/record.rs` with `CHECK(answer_code IS NULL OR consented_context_oid IS NOT NULL)`, next to the other mode checks (`record.rs:262-267`), and the same rule in `validate_pull_request`: `r.answer_code.is_some() && !begun` refuses. The migration has never run on a real registry, so the amended DDL is the one the rebuild and the create path both write (`SCHEMA` is the single source; `SCHEMA_V2` and `V2_COLUMNS` do not change). Test: one row in `pull_request_promotion_steps_and_checks`, "an answer with no begin-time columns" (`Abandoned`, `bundle(r, false)` keeping the default `ContextGone` answer and its `reconfirmation_required` refusal), `Expect::Both`, run red once by removing the SQL CHECK and the Rust rule (today both accept it, so the row fails on `validate` and on `inserted.is_err()`). It passes through Task 1's table with its existing rows unchanged; `promotion_modes_migration_rebuilds_a_v2_table_once` compares to `SCHEMA` and needs no edit (I will confirm by running it).
+
+### 13. Guards on `parent::complete_record` and `supersede`
+
+Task 1's implementer asked for them. **(approve) I add none**: `parent::complete_record` already refuses unless `r.step() == BranchDeleted`, which `validate_pull_request` and the SQL CHECK forbid for a pull-request row (Task 1's table has `branch_deleted` as `Expect::Both`); `parent::supersede` is reached only from `record::begin_record` after `old.cleanup.is_some_and(supersedable)`, and a pull-request row never has a `cleanup`; `begin_pull_request_record` refuses any unfinished record as `busy`. An explicit mode check would be a second refusal of what two checks already refuse, which no test could show red. If the approver wants it, it is two lines and one row.
+
+### 14. Tests, with exact names and rows
+
+All run by `--lib repository::promotion::run_tests::pull_request::<name> -- --exact` unless a path is given. Each starts from the same pull-request fixture and asserts the common invariants of section 10.
+
+**`first_promote_publishes_and_gives_the_link`** (C1, C2, C3; the answer is `Branch(promoted)` and `outcome.publication()` is `Published{oid: tip}` or `AlreadyCurrent{oid: tip}`; the record is `complete`, mode `pull_request`, `answer_code promoted`, `situation first`, `consented_context_oid == L`, `primary_branch == "main"`, `endpoint_digest == endpoint_digest_of(repo, "origin")`, `context_oid == tip`, no `base_oid`/`integration_*`/`cleanup`/primary child; the link row has source `manyhands/document/<ULID>`, target `main`, kind `document`, `given_at == CLOCK` and is the only row; the observer is told exactly `[ChildStarting(Context)]`, so no `Recording`; the same request again answers equal and runs no child):
+
+| Row | Setup | Publication | `publication_category` |
+| --- | --- | --- | --- |
+| a new document (C1) | `unpublish()`: no tracking context | `Published` | `published` |
+| an edit of a merged document (C2) | `merge_into_primary()`, then `edit()` | `Published` | `published` |
+| a branch already published by `item sync` (C3) | the fixture's tracking context equals the tip | `AlreadyCurrent` | `already_current` |
+
+**`promoting_again_synchronizes_and_gives_the_same_link`** (C4 to C7, A4): each row first runs a first promote, reads the link row `A`, then a second request on a later clock (`CLOCK + 86_400`). Common assertions: answer `already_promoted`; `situation again`; the row has `A`'s source, target, forge and URL and `given_at == later`; still one row; the first record's answer is unchanged.
+
+| Row | Change before the second prepare | Child | Publication | Also asserts |
+| --- | --- | --- | --- | --- |
+| nothing new (C4) | none | `already_current` | `AlreadyCurrent` | |
+| after a save (C5) | `edit()` | publishes | `Published{tip}` | tip is the edited commit |
+| after the remote's primary moved (C6) | tracking primary moved to a newer commit; `drive` merges it | publishes the merge | `Published{merge}` | the branch tip is a commit `Merge primary into document` with the old tip as a parent; the primary's commit is its other parent |
+| after the forge setting changed (C7) | `[forge] pull_request_url` written into the configuration | `already_current` | `AlreadyCurrent` | the row's URL is still `A`'s (null), not the template's; the prepared link equals the row's |
+
+**`a_held_document_gives_no_link`** (C8 to C10):
+
+| Row | Situation | Result | Record | Link row |
+| --- | --- | --- | --- | --- |
+| prepare, held (C8) | forge squash fetched before the prepare | `preview_document_promotion` is `PrimaryHolds`; a confirm with the earlier consent is `ExternalChange`; no row in `document_promotions` | none | none |
+| squash between prepare and confirm, branch kept (C9) | prepared (`first`), then a squash on the tracking primary; `drive` merges it into the branch | `Branch(primary_holds)`, `Published{merge}` | `complete`, `primary_holds`, category `published` | none (`first`); in a second row the same with a row from an earlier promote: untouched, `given_at` not renewed |
+| merge with the branch deleted (C10) | prepared, then a merge commit on the tracking primary moved by the child's fetch; the child stops `RemoteContextDeleted` | `Branch(primary_holds)`, `publication None` | `abandoned`, refusal `reconfirmation_required`, `primary_holds`, no category | untouched |
+
+C10's row also asserts the child's row ended (`cancelled`) and nothing holds the context.
+
+**`a_declined_pull_request_answers_remote_branch_deleted`** (C11): a first promote, then a second request (`again`); the branch is deleted without a merge (the child stops `RemoteContextDeleted`, no fetch): answer `Branch(remote_branch_deleted)`, record `abandoned` with `reconfirmation_required` and `remote_branch_deleted`, the link row deleted (no row), child ended. Then a "republish" (the fixture's tracking context restored to the tip) and a new request: the prepare is `first` (row gone), the answer is `Branch(promoted)`, the row exists again with a fresh `given_at`.
+
+Additional tests (each is a layer a named test cannot reach):
+
+- **`a_pull_request_promotion_whose_index_step_failed_is_branch_index_pending`** (the twin): a service opened with `FailurePoint::RefreshFailure` finishes the record and answers `BranchIndexPending` whose `authoritative` outcome equals the later `Branch` answer of the same request; the record is `complete`.
+- **`pull_request_begin_and_finish_write_their_columns`** (`promotion::record_tests`, the layer that has no runner): `begin_pull_request_record` writes the four columns and the mode and returns the same record for the same operation; a second operation for the document is `busy`; `refuse_record_on(PullRequest)` writes the mode and no column; `complete_branch_record` and `abandon_branch_record` rows: every valid pair (`promoted`+`Give` stores the link row with kind `document`; `already_promoted`+`Renew` changes `given_at` alone; `primary_holds`+`Untouched` writes nothing), each mismatch refused (`promoted`+`Renew`, `primary_holds`+`Give`), a category other than `published`/`already_current`, a record at `confirmed` for `complete`, a retained child for `abandon`, an answer outside `abandoned`'s four, and `remote_branch_deleted` deleting the row while the others keep it.
+- **`pull_request_promotion_steps_and_checks`** (existing, Task 1's): the one added row of section 12.
+- **`promotion_branch_answers_map_to_codes_and_effects`** (`mutation::bind::lifecycle_tests`): `promotion_branch_code` for the six answers, `promotion_branch_reached` for `promoted` (`Ok`, effects `Published`), the same with `index_pending` (`DiscoveryPending`, `Standing::Owed`), `already_promoted` over `AlreadyCurrent` (`Current`), `primary_holds` (`AlreadyApplied`), `remote_branch_deleted`, `history_unresolved` (`RecoveryRequired`), `context_gone` (`ExternalChange`); the binding names the branch afterwards (`names_branch()`).
+
+Red runs (Step 4): the new runner tests fail first for the missing types (compile), then, for each row that would pass at once, against a deliberate stub: (a) the pull-request begin stubbed to a direct begin (the columns test and `first_…` fail), (b) the tracking primary not read (C10's row fails), (c) `touch_link` stubbed to a full upsert (the `again` rows fail on the columns), (d) `Recording` gate removed (the observer assertion fails), (e) R-3 stubbed to false (C8 and C9 fail), (f) the link delete removed (C11 fails). The invariant row of section 12 runs red by removing the CHECK and the rule.
+
+Unchanged tests Step 6 names, run after: `cache_loss_contained_context_cleans_without_another_merge_or_child`, `already_current_publication_is_stored_and_replayed_without_children_or_deletion`, `contained_cleanup_needs_no_identity_or_new_merge` (promotion `run_tests`), `d1_records_publishes_and_completes_without_touching_the_primary` and `d2_an_existing_closure_publishes_pending_work_and_is_already_closing` (`closure::run_tests::pull_request`), `promotion_modes_migration_rebuilds_a_v2_table_once`, and the E-5 test in `run_tests.rs` (`local_full_lifecycle_and_exact_replay` uses `authoritative`).
+
+### 15. Existing tests I expect to edit
+
+1. E-5, four sites (section 3), additive arms only; three are in the SSH target `document_promotion` (compiled through clippy only).
+2. `a_pull_request_confirm_stops_before_any_direct_record` (`run_tests.rs:7305-7332`): deleted (section 11).
+3. `pull_request_promotion_steps_and_checks` (`record_tests.rs:1833`): one added row (section 12).
+
+No other. In particular none of Cycle 03's closure tests, none of `bind/lifecycle_tests.rs` (the new binding test is added, the old ones keep their signatures), and none of Task 1's or Task 2's other tests.
+
+### 16. Departures from the brief, and points for the approver
+
+1. **No edit to `closure/record.rs` or `closure/checkpoint.rs`** (the brief lists them for item 9): the link row is written and renewed from `promotion/record.rs` and `pull_request_links.rs` (section 7).
+2. **`BranchPromotionOutcome` carries `operation_id`** besides `answer` and `publication`; the publication's OID is the record's `context_oid` (section 3) **(approve)**.
+3. **`again` with its row gone** finishes `already_promoted` and renews nothing (section 7) **(approve)**.
+4. **No guards on `parent::complete_record` and `supersede`** (section 13) **(approve)**.
+5. **Resume's `DocumentPromote` scope arm, `settled`, `branch_record_of`, `replay.rs` and the CLI retry guard** are not in this task: they key on the new data tag (Task 5/8) or on the re-run (Task 4) **(approve)**.
+6. **The re-run rows are Task 4's and stay as they are**: after the child, `promote_branch` still runs the cancellation check (`run.rs:977`) and, before it, the "remote is the one configured while `base_oid` is unset" check (`run.rs:936`), which a promotion's record (it never has a base) fails on every call after the configured remote changes; RR2 (no checks after the child), RR4, RR5 and the crash boundaries around the completion are not added here.
+7. **`TicketClosed` as an ended child** answers `recovery_required` from `end` (a document's context cannot answer it).
+8. **The twin fake, not a lift** (section 10), with the reasons.
