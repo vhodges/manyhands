@@ -219,6 +219,10 @@ struct PullRequestIo {
     /// Makes the fake tell the runner's observer of its safe points (a real
     /// child does), and optionally a commit that lands between two of them.
     paced: Option<Paced>,
+    /// A forge (a repository's address, bare) the context child's
+    /// publication pushes the branch to, as the real child's push leaves it
+    /// there; only ever the context's ref, never the primary.
+    forge: Option<String>,
     primary_calls: usize,
     deletes: usize,
 }
@@ -589,6 +593,12 @@ impl run::PromotionIo for PullRequestIo {
         complete_child_row(service, &root, execution, req.operation_id, oid, kind);
         repo.reference(&tracking_context_ref(), oid, true, "fixture publication")
             .unwrap();
+        if let Some(forge) = &self.forge {
+            repo.remote_anonymous(forge)
+                .unwrap()
+                .push(&[format!("{0}:{0}", context_ref())], None)
+                .unwrap();
+        }
         if self.crash_after_completion {
             std::panic::resume_unwind(Box::new(Crash));
         }
@@ -1132,3 +1142,8 @@ fn a_declined_pull_request_answers_remote_branch_deleted() {
 // before the behaviour.
 #[path = "run_pull_request_rerun_tests.rs"]
 mod reruns;
+
+// The owner's lifecycles (Task 7), end to end with a bare repository as the
+// forge.
+#[path = "run_pull_request_lifecycle_tests.rs"]
+mod lifecycles;
