@@ -2329,7 +2329,8 @@ fn a_resume_of_an_unheld_branch_record_another_process_works_under_is_busy() {
 
 /// A pull-request promotion's preview always lists the three effects the RFC
 /// names (the synchronization may merge the primary in and publish even when
-/// the branch is current), its prepare names the document's branch as a
+/// the branch is current), its prepare answers `already_applied` with no data
+/// for a document the primary holds, names the document's branch as a
 /// branch record's does, and a document the primary holds is a state of its
 /// own that no consent was given for: its digest equals no ready digest, nor
 /// a withdraw's, so a confirm that finds it is an external change at the
@@ -2370,12 +2371,27 @@ fn a_pull_request_promotion_previews_its_three_effects_always() {
             ),
         ),
     };
+    // The effects a ready pull-request preview lists, by the selection the
+    // preview makes: the same three in each situation, and never a promise
+    // to integrate into or publish the primary, which a direct one's plan
+    // (the same `Publish`, here) would make.
+    let three = vec![
+        E::ContextSynchronized,
+        E::ContextPublished,
+        E::PullRequestLink,
+    ];
+    for situation in [PromotionSituation::First, PromotionSituation::Again] {
+        assert_eq!(ready_effects(&ready(situation)), three, "{situation:?}");
+    }
+    let mut direct = ready(PromotionSituation::First);
+    direct.pull_request = None;
+    direct.integration = PlannedIntegration::MergeCommit;
     assert_eq!(
-        pull_request_promotion_effects(),
+        ready_effects(&direct),
         vec![
             E::ContextSynchronized,
-            E::ContextPublished,
-            E::PullRequestLink
+            E::PrimaryIntegrated,
+            E::PrimaryPublished
         ]
     );
     // Its prepare learns that its answers name the document's branch.
@@ -2405,4 +2421,23 @@ fn a_pull_request_promotion_previews_its_three_effects_always() {
         assert_ne!(held, digest_of(command, &other));
     }
     assert_eq!(held, digest_of(command, &Observed::PrimaryHoldsDocument));
+    // Its prepare answers `already_applied` with nothing to confirm: no data,
+    // no recovery, no effect, as a withdraw with nothing to withdraw does.
+    for observed in [Observed::PrimaryHoldsDocument, Observed::NothingToWithdraw] {
+        let answer = unoffered_answer(&observed).expect("nothing to offer");
+        assert_eq!(answer.code, ResultCode::AlreadyApplied);
+        assert!(answer.data.is_none());
+        assert!(answer.recovery.is_empty());
+        assert!(answer.lifecycle_blocked.is_none());
+        assert!(!answer.local_change);
+        assert_eq!(answer.effects, Effects::not_requested());
+    }
+    assert_eq!(
+        unoffered_answer(&Observed::PublicationRemoteRequired).map(|answer| answer.code),
+        Some(ResultCode::PublicationRemoteRequired)
+    );
+    assert!(unoffered_answer(&Observed::Blocked(Vec::new())).is_none());
+    assert!(
+        unoffered_answer(&Observed::Ready(Box::new(ready(PromotionSituation::First)))).is_none()
+    );
 }

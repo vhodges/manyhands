@@ -359,14 +359,58 @@ fn branch_effects(
     effects
 }
 
-/// What a pull-request promotion's preview lists, in the order it makes
-/// them, whatever its situation.
-fn pull_request_promotion_effects() -> Vec<PreviewEffect> {
-    vec![
-        PreviewEffect::ContextSynchronized,
-        PreviewEffect::ContextPublished,
-        PreviewEffect::PullRequestLink,
-    ]
+/// The effects a ready preview lists, in the order the run makes them. A
+/// pull-request promotion integrates and cleans up nothing: it synchronizes
+/// the branch, publishes it and gives the link, whatever its situation (R-24:
+/// the synchronization may merge the primary in and publish even when `L`
+/// equals `R`), and never promises to publish the primary.
+fn ready_effects(ready: &Ready) -> Vec<PreviewEffect> {
+    if ready.pull_request.is_some() {
+        return vec![
+            PreviewEffect::ContextSynchronized,
+            PreviewEffect::ContextPublished,
+            PreviewEffect::PullRequestLink,
+        ];
+    }
+    let mut effects = Vec::new();
+    if ready.context_child {
+        effects.push(PreviewEffect::ContextSynchronized);
+    }
+    if matches!(ready.closure, Some(PlannedClosure::Record { .. })) {
+        effects.push(PreviewEffect::ClosureRecorded);
+    }
+    if ready.integration == PlannedIntegration::MergeCommit {
+        effects.push(PreviewEffect::PrimaryIntegrated);
+    }
+    if ready.publication == PlannedPublication::Publish {
+        effects.push(PreviewEffect::PrimaryPublished);
+    }
+    if ready.cleanup.remote_branch {
+        effects.push(PreviewEffect::RemoteBranchDeleted);
+    }
+    if ready.cleanup.worktree {
+        effects.push(PreviewEffect::WorktreeRemoved);
+    }
+    if ready.cleanup.local_branch {
+        effects.push(PreviewEffect::BranchDeleted);
+    }
+    effects
+}
+
+/// The answer of an observed state that offers nothing to confirm, when it
+/// is one: a withdraw of a ticket with no closure and a promote of a
+/// document the primary already holds (R-4) are `already_applied`, with no
+/// data; a repository with no publication remote is its own code.
+fn unoffered_answer(observed: &Observed) -> Option<Answer> {
+    match observed {
+        Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
+            Some(Answer::stopped(ResultCode::AlreadyApplied))
+        }
+        Observed::PublicationRemoteRequired => {
+            Some(Answer::stopped(ResultCode::PublicationRemoteRequired))
+        }
+        Observed::Ready(_) | Observed::Blocked(_) => None,
+    }
 }
 
 fn closure_action(action: ClosureAction) -> PullRequestClosureAction {
@@ -1563,11 +1607,10 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
-            Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
-                return Err(Answer::stopped(ResultCode::AlreadyApplied));
-            }
-            Observed::PublicationRemoteRequired => {
-                return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+            unoffered @ (Observed::NothingToWithdraw
+            | Observed::PrimaryHoldsDocument
+            | Observed::PublicationRemoteRequired) => {
+                return Err(unoffered_answer(&unoffered).expect("a state with nothing to offer"));
             }
             Observed::Blocked(blockers) => {
                 if names_no_item(call.service, &root, &self.id, &blockers) {
@@ -1600,18 +1643,11 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 ))),
             });
         }
-        let mut effects = Vec::new();
-        if ready.context_child {
-            effects.push(PreviewEffect::ContextSynchronized);
-        }
         let closure = ready.closure.as_ref().map(|closure| match closure {
-            PlannedClosure::Record { closed_by } => {
-                effects.push(PreviewEffect::ClosureRecorded);
-                LifecyclePlannedClosureDto {
-                    recording: LifecycleRecording::Record,
-                    closed_by: closed_by.clone(),
-                }
-            }
+            PlannedClosure::Record { closed_by } => LifecyclePlannedClosureDto {
+                recording: LifecycleRecording::Record,
+                closed_by: closed_by.clone(),
+            },
             PlannedClosure::Existing {
                 closed_at: _,
                 closed_by,
@@ -1620,31 +1656,9 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 closed_by: closed_by.clone(),
             },
         });
-        if ready.integration == PlannedIntegration::MergeCommit {
-            effects.push(PreviewEffect::PrimaryIntegrated);
-        }
-        if ready.publication == PlannedPublication::Publish {
-            effects.push(PreviewEffect::PrimaryPublished);
-        }
-        if ready.cleanup.remote_branch {
-            effects.push(PreviewEffect::RemoteBranchDeleted);
-        }
-        if ready.cleanup.worktree {
-            effects.push(PreviewEffect::WorktreeRemoved);
-        }
-        if ready.cleanup.local_branch {
-            effects.push(PreviewEffect::BranchDeleted);
-        }
-        // A pull-request promotion integrates and cleans up nothing: it
-        // synchronizes the branch, publishes it and gives the link, always
-        // (R-24, the synchronization may merge the primary in and publish
-        // even when `L` equals `R`). Its details are the direct preview's,
-        // with no changes and no cleanup, until its own preview lands.
-        let effects = if ready.pull_request.is_some() {
-            pull_request_promotion_effects()
-        } else {
-            effects
-        };
+        // A pull-request promotion's details are the direct preview's, with
+        // no changes and no cleanup, until its own preview lands.
+        let effects = ready_effects(&ready);
         let slug = self.slug_of(call.service, &root);
         Ok(Previewed {
             observation: digest.to_stored(),
