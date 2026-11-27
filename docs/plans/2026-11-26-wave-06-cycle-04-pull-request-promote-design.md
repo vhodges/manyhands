@@ -200,7 +200,7 @@ Built test-first in Task 4.
 | C26 | `request cancel` after the child completed and before the record finished; then the same request | no `cancelled`: RR2 |
 | C27 | the publication remote changed, or the configuration became unreadable, after the child completed; then the same request | RR2: the record finishes; the link is built as Part C says (K-17) |
 | C28 | the context branch removed outside Manyhands while a stopped record waits; then the same request | RR7 |
-| C29 | while a conflict holds the child, the publication remote changes or the person saves; then the conflict is resolved and the same request runs | RR6: the resolution is published as any conflict's is, and the record finishes by RR2 (decision 15) |
+| C29 | while a conflict holds the child, the publication remote changes or the person saves; then the conflict is resolved and the same request runs | RR6: the resolution is published as any conflict's is, and the record finishes by RR2 (decision 15); while the configured remote differs from the child's the record waits, and finishes once it is configured back with no poll or synchronization in between (decisions 17 and 19, K-16) |
 
 ## Part D: The Data, The Preview And The Contract
 
@@ -350,7 +350,7 @@ Each: decision — why — cost if wrong.
 
 ## Known Limits
 
-The Cycle document's K-1 to K-18.
+The Cycle document's K-1 to K-20.
 
 ## Unverified
 
@@ -402,3 +402,4 @@ Task 1 writes down Part A's columns against the RR and F tables. Task 2 writes d
 | Re-grounding, revision 6 | Two read-only research agents at main `8e5d9832` after Cycle 03 merged | — | — | — | Not a review round: Baseline Facts 1, 9, 13, 14, 16 and 25 rewritten, line numbers moved, and the design aligned with Cycle 03 as landed: a held document at confirm answers `external_change`, as withdraw's `NothingToWithdraw` (R-29, Part G item 15); `item sync`'s document arm beside the ticket-only `link_given` (Part F); `from_stored`, `way_out.rs`, replay (`result_commit_held`, K-18) and resume (decision 17's scope) for the promote (Part D, Part G item 4); no contract-table row or second SSH golden for the recoverable answers, as Cycle 03 (R-23, E-10); the SSH case's "only the ticket branch" assertions (E-13); the fakes (Part G item 13); the rowid-order copy (Part A); the skills' sentences (D-4). Not independently reviewed |
 | 5, revision 6 (`e22f88ea`) | Scoped re-review | 0 | 4 | 11 | Resolved in revision 7: `operation resume`'s `from_stored` arm for the new data (Part D); D-1's stale way-out clause; the mutation schema and its registrations moved to Task 8 with its first golden (Part D, E-2, E-8); the cause of confirm's `external_change` (the held shape's own digest, Baseline Fact 14, Part B, Part C, Part G item 15, R-29); the Minor points (test locations and the replay table, resume's `settled` and `note_observed`, `blockers` in the data, E-6, E-7, the File Map, Fact 9's `V2_COLUMNS`, the Testing clause, Task 0's `Forge`, Task 5's fixture check, the Self-Review, Contract 4) |
 | Execution, Task 4 (2026-11-26) | The Task 4 implementer | — | — | — | Correction of an editing error, not a review round: the row C28 of the Required Outcomes Of Part C had been replaced by a stray `\1` in revision 5's edit; restored from revision 4 (`6ca7aa60`) as it was reviewed. No change of contract: RR7 already gives its outcome. |
+| Execution, Task 4 checkpoint (2026-11-27) | Opus designer, Opus checker (four checks) | — | — | — | Not a review of this document: the checkpoint chose the RR and F mechanism (execution ledger, Task 4). The owner's decisions 17 to 19 and the known limits K-19 and K-20 follow from it; C29's row and the known-limit range updated here. |
