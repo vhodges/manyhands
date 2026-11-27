@@ -61,6 +61,7 @@ pub const CASES: &[&str] = &[
     "document_promote_local_only",
     "document_promote_ok",
     "document_promote_preview",
+    "document_promote_pull_request_primary_holds",
     "document_promote_push_rejected",
     "document_promote_superseded",
     "document_save",

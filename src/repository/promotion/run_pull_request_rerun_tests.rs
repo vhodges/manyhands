@@ -1573,6 +1573,79 @@ fn a_finish_or_an_end_without_a_context_leaves_the_link_row_alone() {
     ]);
 }
 
+/// RR8's answer (design Part D): a `promoted` record that wrote no link row,
+/// because its context was gone when it finished, still gives the link, which
+/// its answer's data builds at answer time from the record's own remote and
+/// primary branch as the record builds the one it writes: the same link, with
+/// the context there and with it gone, and none for a record this build
+/// cannot find.
+#[test]
+fn a_promote_without_a_link_row_still_gives_its_link() {
+    fn built(
+        f: &Fixture,
+        req: &PromoteDocumentRequest,
+    ) -> Option<(String, String, Option<String>, Option<String>)> {
+        let repository_id = f.stored(req.operation_id).repository_id;
+        answer::withheld_link(&f.db(), repository_id, f.root.path(), req.operation_id).map(|link| {
+            (
+                link.source,
+                link.target,
+                link.forge.map(|forge| forge.as_str().to_owned()),
+                link.url,
+            )
+        })
+    }
+    rows(&[
+        ("the context there: the link the record wrote", |f| {
+            let mut io = PullRequestIo::default();
+            let req = f.request();
+            let result = go(f, &req, &mut io);
+            finishes(f, &req, result, PromotionAnswer::Promoted)?;
+            let (source, target, forge, url, _) =
+                f.link_row().ok_or("no link row after the first promote")?;
+            need!(
+                built(f, &req) == Some((source, target, forge, url)),
+                "the link built at answer time is not the one written: {:?}",
+                built(f, &req)
+            );
+            Ok(())
+        }),
+        ("the context gone: no row, and the same link", |f| {
+            let written = {
+                // What a record with its context writes, on a fixture of its
+                // own: the link carries the document's branch and primary.
+                let mut io = PullRequestIo::default();
+                let req = f.request();
+                lost(f, &req, &mut io, clock)?;
+                remove_context(f);
+                let result = run_at(f, req.clone(), &mut io, later);
+                finishes(f, &req, result, PromotionAnswer::Promoted)?;
+                need!(f.link_row().is_none(), "a link row was written");
+                built(f, &req)
+            };
+            let (source, target, ..) = written.ok_or("no link was built")?;
+            need!(
+                source == format!("manyhands/document/{ITEM}") && target == "main",
+                "the link is {source} into {target}"
+            );
+            Ok(())
+        }),
+        ("a record this build cannot find builds none", |f| {
+            let mut io = PullRequestIo::default();
+            let req = f.request();
+            let result = go(f, &req, &mut io);
+            finishes(f, &req, result, PromotionAnswer::Promoted)?;
+            let repository_id = f.stored(req.operation_id).repository_id;
+            need!(
+                answer::withheld_link(&f.db(), repository_id, f.root.path(), OperationId::new())
+                    .is_none(),
+                "a link was built for no record"
+            );
+            Ok(())
+        }),
+    ]);
+}
+
 /// C12: a context child that stops (transport, key, host, push rejected,
 /// busy, poll yielding, identity) answers as `item sync` answers the stop;
 /// the record stays `confirmed`, a new request is `busy` and writes nothing,

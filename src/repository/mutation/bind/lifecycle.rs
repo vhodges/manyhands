@@ -44,6 +44,12 @@
 //! `item sync` answers that stop. Its effects have no integration or cleanup,
 //! and it reports no tickets made ready, since a closing ticket makes none.
 //!
+//! **A pull-request promote** is a branch record of its own (design Part D):
+//! its preview is `PullRequestPromotionPreviewDto`, and every finished answer
+//! of it carries `PullRequestPromotionMutationDto`, with the link record's link
+//! of the document's kind. A child of it that stops answers as `item sync`
+//! answers that stop.
+//!
 //! **Identity.** A promotion's preview has no blocker for it, so a ready
 //! preview that plans a merge commit is answered as blocked here, last, with
 //! nothing else in the way. A closure's preview names it itself.
@@ -78,7 +84,9 @@ use super::{
                 ParentView,
                 lifecycle::{ParentStep, RecordPath},
                 lifecycle_record::{ChildRole, Refusal},
-                record::{IntegrationKind, PublicationCategory},
+                record::{
+                    IntegrationKind, PromotionAnswer, PromotionSituation, PublicationCategory,
+                },
                 run::{RunEvent, RunObserver},
             },
             recovery::JournalRow,
@@ -96,6 +104,9 @@ use super::{
             PullRequestClosureMutationDto, PullRequestClosureMutationType,
             PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
             PullRequestClosurePublication, PullRequestClosureRecording,
+            PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
+            PullRequestPromotionPreviewDto, PullRequestPromotionPreviewType,
+            PullRequestPromotionPublication, PullRequestPromotionSituation,
             SynchronizationConflictMutationDto, SynchronizationConflictType,
         },
         evidence::{self, Position},
@@ -213,18 +224,26 @@ pub(super) fn branch_scope(
     }
 }
 
-/// The ticket whose branch record the operation `operation` is, when its
-/// parent record is one.
+/// The item, and its kind, whose branch record the operation `operation` is,
+/// when its parent record is one: a ticket's closure, or a document's
+/// pull-request promotion. An operation ID is in one of the two tables.
 pub(super) fn branch_record_of(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-) -> Option<ItemId> {
-    Close::parent(service, root, operation)
+) -> Option<(AuthoringKind, ItemId)> {
+    let ticket = Close::parent(service, root, operation)
         .ok()
         .flatten()
         .filter(|parent| parent.path == RecordPath::Branch)
-        .map(|parent| parent.item_id)
+        .map(|parent| (AuthoringKind::Ticket, parent.item_id));
+    ticket.or_else(|| {
+        Promote::parent(service, root, operation)
+            .ok()
+            .flatten()
+            .filter(|parent| parent.path == RecordPath::Branch)
+            .map(|parent| (AuthoringKind::Document, parent.item_id))
+    })
 }
 
 /// Whether `observed` is ready with a closure the ticket already holds (R-15).
@@ -470,6 +489,35 @@ fn branch_preview(
             .filter(|_| record.action != ClosureAction::Withdraw)
             .as_ref()
             .map(crate::repository::PullRequestDto::from),
+    }
+}
+
+/// What a pull-request promote's preview shows: the names, commits and path
+/// of `ready`, and the link its pull request opens by (design Part B): the
+/// row's for `again`, the one built now for `first`.
+fn promotion_preview(
+    item: &ItemId,
+    ready: &Ready,
+    facts: &crate::repository::promotion::PullRequestPromotion,
+) -> PullRequestPromotionPreviewDto {
+    PullRequestPromotionPreviewDto {
+        r#type: PullRequestPromotionPreviewType::PullRequestPromotionPreview,
+        item_id: item.to_string(),
+        path: facts.document_path().to_string_lossy().replace('\\', "/"),
+        branch: ready
+            .branch
+            .strip_prefix("refs/heads/")
+            .unwrap_or(&ready.branch)
+            .to_owned(),
+        primary_branch: ready.primary_branch.clone(),
+        remote: ready.remote.clone(),
+        context_oid: ready.context_oid.to_string(),
+        remote_context_oid: facts.unmerged_remote().map(|oid| oid.to_string()),
+        situation: match facts.situation() {
+            PromotionSituation::First => PullRequestPromotionSituation::First,
+            PromotionSituation::Again => PullRequestPromotionSituation::Again,
+        },
+        pull_request: crate::repository::PullRequestDto::from(facts.link()),
     }
 }
 
@@ -1025,8 +1073,8 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// The answer of a pull-request promote that finished, whatever way: its
     /// code is the answer's, and it names what its context child published.
     /// Nothing reached primary. A promote whose index step is yet to run is
-    /// owed, and the request that gave the answer continues it. The answer's
-    /// data is its own shape, which the answer's reader builds.
+    /// owed, and the request that gave the answer continues it. Every such
+    /// answer carries the promote's own data (design Part D).
     fn promotion_branch_reached(
         &self,
         service: &RepositoryService,
@@ -1040,8 +1088,77 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             promotion_branch_code(outcome.answer()),
             index_pending,
             self.branch_published_effects(service, accepted, outcome.publication(), index_pending),
-            None,
+            Some(self.promotion_data(service, &accepted.root(), outcome)),
         )
+    }
+
+    /// What a finished pull-request promote did, as its answer's data: what
+    /// its child published, whether the primary holds the document, and the
+    /// link record's link as it stands. A document the primary holds is given
+    /// no link. A `promoted` answer whose record wrote no row, because the
+    /// document's context was gone when it finished (RR8), still gives the
+    /// link, built at answer time from the record's own remote and primary
+    /// branch, as the record built the one it would have written; that is
+    /// the one choice here that reads anything but the row, and a replay
+    /// answers with the envelope stored, so it never builds again.
+    fn promotion_data(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        outcome: &BranchPromotionOutcome,
+    ) -> MutationDataDto {
+        let answer = outcome.answer();
+        let primary_holds = answer == PromotionAnswer::PrimaryHolds;
+        let link = if primary_holds {
+            None
+        } else {
+            resolve_root(service, root).ok().and_then(|repository| {
+                service
+                    .read_session(RepositoryOperation::Read, |connection| {
+                        let id = self.id.to_string();
+                        let row = crate::repository::pull_request_links::link_of(
+                            connection,
+                            repository.registration_id(),
+                            crate::repository::authoring_kind_segment(&AuthoringKind::Document),
+                            &id,
+                        )?;
+                        Ok(row.or_else(|| {
+                            (answer == PromotionAnswer::Promoted)
+                                .then(|| {
+                                    crate::repository::promotion::answer::withheld_link(
+                                        connection,
+                                        repository.registration_id(),
+                                        repository.root(),
+                                        outcome.operation_id(),
+                                    )
+                                })
+                                .flatten()
+                        }))
+                    })
+                    .ok()
+                    .flatten()
+            })
+        };
+        MutationDataDto::PullRequestPromotion(Box::new(PullRequestPromotionMutationDto {
+            r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+            item_id: self.id.to_string(),
+            publication: match outcome.publication() {
+                Some(PromotionPublication::Published { oid: _ }) => {
+                    Some(PullRequestPromotionPublication::Published)
+                }
+                Some(PromotionPublication::AlreadyCurrent { oid: _ }) => {
+                    Some(PullRequestPromotionPublication::Current)
+                }
+                Some(PromotionPublication::Pending { reason: _ }) | None => None,
+            },
+            primary_holds,
+            pull_request: link.as_ref().map(crate::repository::PullRequestDto::from),
+            blockers: if answer == PromotionAnswer::HistoryUnresolved {
+                vec![LifecycleBlocker::HistoryUnresolved]
+            } else {
+                Vec::new()
+            },
+        }))
     }
 
     /// The effects every branch answer has: whether the index is current, and
@@ -1696,6 +1813,15 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 ))),
             });
         }
+        if let Some(facts) = &ready.pull_request {
+            return Ok(Previewed {
+                observation: digest.to_stored(),
+                effects: ready_effects(&ready),
+                details: PreviewDetailsDto::PullRequestPromotion(Box::new(promotion_preview(
+                    &self.id, &ready, facts,
+                ))),
+            });
+        }
         let closure = ready.closure.as_ref().map(|closure| match closure {
             PlannedClosure::Record { closed_by } => LifecyclePlannedClosureDto {
                 recording: LifecycleRecording::Record,
@@ -1709,8 +1835,6 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 closed_by: closed_by.clone(),
             },
         });
-        // A pull-request promotion's details are the direct preview's, with
-        // no changes and no cleanup, until its own preview lands.
         let effects = ready_effects(&ready);
         let slug = self.slug_of(call.service, &root);
         Ok(Previewed {

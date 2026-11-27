@@ -336,6 +336,24 @@ pub(super) struct PullRequestPromotion {
     /// itself then, and one state for an `R` that is absent, equal to `L` or
     /// behind it, since a push of `L` moves `R` to it.
     unmerged_remote: Option<Oid>,
+    /// The document's path on its editing branch, which the preview shows.
+    document_path: PathBuf,
+}
+
+impl PullRequestPromotion {
+    pub(in super::super) fn situation(&self) -> record::PromotionSituation {
+        self.situation
+    }
+    pub(in super::super) fn link(&self) -> &crate::forge::PullRequestLink {
+        &self.link
+    }
+    /// `R`, when it is ahead of or beside `L`.
+    pub(in super::super) fn unmerged_remote(&self) -> Option<Oid> {
+        self.unmerged_remote
+    }
+    pub(in super::super) fn document_path(&self) -> &Path {
+        &self.document_path
+    }
 }
 
 #[cfg(test)]
@@ -349,6 +367,7 @@ impl PullRequestPromotion {
             situation,
             link,
             unmerged_remote: None,
+            document_path: PathBuf::from("docs/fixture.md"),
         }
     }
 }

@@ -429,6 +429,8 @@ pub const CLI_CASES: &[&str] = &[
     "ticket_close_checkpoint_merge_refused",
     "ticket_close_prepare_held",
     "ticket_close_pull_request_preview",
+    "document_promote_pull_request_preview",
+    "document_promote_pull_request_blocked",
     "ticket_withdraw_closure_ticket_closed",
     "ticket_withdraw_closure_publication_remote_required",
 ];
@@ -507,6 +509,8 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "poll_configure_out_of_range_text",
     "document_promote_preview_text",
     "ticket_close_preview_text",
+    "document_promote_pull_request_preview_text",
+    "document_promote_pull_request_blocked_text",
     "document_promote_local_only_text",
     "ticket_close_local_only_text",
     "ticket_close_made_ready_text",

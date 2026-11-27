@@ -106,6 +106,8 @@ pub fn should_retry(envelope: &Envelope<MutationDataDto>, request_id: RequestId)
         // A branch record's data names what stands in the way as a
         // lifecycle's does.
         Some(MutationDataDto::PullRequestClosure(data)) => !data.blockers.is_empty(),
+        // So does a pull-request promote's.
+        Some(MutationDataDto::PullRequestPromotion(data)) => !data.blockers.is_empty(),
         _ => false,
     };
     if names_blockers {

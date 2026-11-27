@@ -12,6 +12,7 @@ use super::{
         PromotionSituation, PublicationCategory,
     },
 };
+use crate::forge::PullRequestLink;
 use crate::repository::{
     ConfigurationInspection, RemoteRefPlan, RepositoryError, RepositoryOperation,
     RepositoryService, SynchronizationError, canonical_repository_root, read_configuration,
@@ -46,6 +47,52 @@ fn tracking_primary(
     let plan = RemoteRefPlan::from_configuration(remote, primary)
         .map_err(|_| observe::unavailable(root))?;
     observe::reference_oid(repository, plan.primary().tracking_ref(), root)
+}
+
+/// The link as the remote's address and the configuration read now give it:
+/// the record holds no URL (R-30), and a configuration or an address that
+/// cannot be read never fails the promote.
+fn link_built_now(
+    repository: &git2::Repository,
+    root: &Path,
+    remote: &str,
+    primary: &str,
+    item: &crate::canonical::ItemId,
+) -> PullRequestLink {
+    let forge = match read_configuration(root) {
+        Ok(ConfigurationInspection::Valid(config)) => config.forge(),
+        _ => None,
+    };
+    crate::repository::closure::checkpoint::context_branch_link(
+        repository,
+        primary,
+        forge.as_ref(),
+        remote,
+        &LifecycleKind::DocumentPromotion.context_branch(item),
+    )
+}
+
+/// The link a finished `promoted` record of `operation` gives, which wrote no
+/// row because its context was gone when it finished (RR8): built as the
+/// record built it, from its own remote and primary branch. `None` for a
+/// record this build cannot read, or one that began with neither.
+pub(in super::super) fn withheld_link(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    root: &Path,
+    operation: crate::repository::OperationId,
+) -> Option<PullRequestLink> {
+    let record = record::read_record(db, repository_id, operation).ok()??;
+    let (remote, primary, _, _) = begun(&record).ok()?;
+    let (repository, _) =
+        canonical_repository_root(root, RepositoryOperation::RepositorySnapshot).ok()?;
+    Some(link_built_now(
+        &repository,
+        root,
+        remote,
+        primary,
+        &record.item_id,
+    ))
 }
 
 /// The first table, after a context child that completed: R-3 judged on the
@@ -118,24 +165,11 @@ pub(super) fn finish(
             link: LinkWrite::Withheld,
         }
     } else {
-        // The link as the remote's address and the configuration read now
-        // give it: the record holds no URL (R-30), and a configuration or an
-        // address that cannot be read never fails the promote.
-        let forge = match read_configuration(root) {
-            Ok(ConfigurationInspection::Valid(config)) => config.forge(),
-            _ => None,
-        };
         BranchFinish {
             answer: PromotionAnswer::Promoted,
             category,
             link: LinkWrite::Give {
-                link: crate::repository::closure::checkpoint::context_branch_link(
-                    &repository,
-                    primary,
-                    forge.as_ref(),
-                    remote,
-                    &LifecycleKind::DocumentPromotion.context_branch(&r.item_id),
-                ),
+                link: link_built_now(&repository, root, remote, primary, &r.item_id),
                 given_at,
             },
         }

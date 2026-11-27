@@ -1637,7 +1637,7 @@ fn observe_pull_request(
     };
     let mut preview = DocumentPromotionPreview {
         item_id: item.clone(),
-        document_path,
+        document_path: document_path.clone(),
         context_branch: kind.context_branch(item),
         context_oid,
         primary_branch: config.primary_branch.clone(),
@@ -1659,6 +1659,7 @@ fn observe_pull_request(
             situation,
             link,
             unmerged_remote,
+            document_path,
         }),
     };
     preview.expectation = pull_request_expectation(&preview);

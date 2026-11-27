@@ -732,6 +732,141 @@ fn a_branch_record_answers_its_own_shape() {
     assert_eq!(data_of(&ran).unwrap().pull_request, None);
 }
 
+/// Every finished pull-request promote answers with its own data (design Part
+/// D): the publication its context child came to, whether the primary holds the
+/// document, the link record's link of the document's kind, and what stands in
+/// the way. A document the primary holds is given no link, whatever the record
+/// holds; a ticket's link row is never a document's.
+#[test]
+fn a_pull_request_promotion_answer_carries_its_data() {
+    use crate::repository::{
+        BranchPromotionOutcome, PullRequestDto, PullRequestPromotionPublication as P,
+        promotion::record::PromotionAnswer as A,
+    };
+    let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+    let published = Some(PromotionPublication::Published { oid });
+    let current = Some(PromotionPublication::AlreadyCurrent { oid });
+    let link = PullRequestDto {
+        source: format!("manyhands/document/{ITEM}"),
+        target: "main".to_owned(),
+        forge: Some("github".to_owned()),
+        url: Some("https://forge.example/document".to_owned()),
+    };
+    // A repository whose ticket of the same ID holds a link row of its own, and
+    // whose document holds another.
+    let registered = Registered::new(true);
+    {
+        let db = rusqlite::Connection::open(
+            registered
+                ._data
+                .path()
+                .join(crate::repository::REGISTRY_FILE),
+        )
+        .unwrap();
+        let id: i64 = db
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap();
+        crate::repository::pull_request_links::upsert_link(
+            &db,
+            id,
+            "document",
+            ITEM,
+            &crate::forge::PullRequestLink {
+                source: link.source.clone(),
+                target: link.target.clone(),
+                forge: Some(crate::canonical::ForgeKind::Github),
+                url: link.url.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    }
+    let bare = Registered::new(false);
+    let data_of = |registered: &Registered, answer, publication| {
+        let binding = registered.binding();
+        let ran = binding.promotion_branch_reached(
+            &registered.service,
+            &registered.accepted(),
+            &BranchPromotionOutcome::for_testing(answer, publication),
+            false,
+        );
+        match ran.answer.data {
+            Some(MutationDataDto::PullRequestPromotion(data)) => *data,
+            other => panic!("{answer:?}: not a promotion's data: {other:?}"),
+        }
+    };
+    // (the answer, what it published, the data's publication and primary_holds,
+    // its link, its blockers): the first four read the document's row.
+    for (answer, publication, expected, primary_holds, linked, blockers) in [
+        (
+            A::Promoted,
+            published,
+            Some(P::Published),
+            false,
+            true,
+            vec![],
+        ),
+        (
+            A::AlreadyPromoted,
+            current,
+            Some(P::Current),
+            false,
+            true,
+            vec![],
+        ),
+        // The primary holds it: no link, whatever the row says.
+        (
+            A::PrimaryHolds,
+            published,
+            Some(P::Published),
+            true,
+            false,
+            vec![],
+        ),
+        (A::PrimaryHolds, None, None, true, false, vec![]),
+        (A::RemoteBranchDeleted, None, None, false, true, vec![]),
+        (
+            A::HistoryUnresolved,
+            None,
+            None,
+            false,
+            true,
+            vec![LifecycleBlocker::HistoryUnresolved],
+        ),
+        (A::ContextGone, None, None, false, true, vec![]),
+    ] {
+        let data = data_of(&registered, answer, publication);
+        assert_eq!(
+            data.r#type,
+            crate::repository::PullRequestPromotionMutationType::PullRequestPromotion
+        );
+        assert_eq!(data.item_id, ITEM, "{answer:?}");
+        assert_eq!(data.publication, expected, "{answer:?}");
+        assert_eq!(data.primary_holds, primary_holds, "{answer:?}");
+        assert_eq!(
+            data.pull_request,
+            linked.then(|| link.clone()),
+            "{answer:?}"
+        );
+        assert_eq!(data.blockers, blockers, "{answer:?}");
+    }
+    // A document with no link row of its own has none to give: another kind's
+    // is not read, and a record this build cannot read builds none.
+    for answer in [A::AlreadyPromoted, A::RemoteBranchDeleted, A::ContextGone] {
+        assert_eq!(
+            data_of(&Registered::new(true), answer, None).pull_request,
+            None,
+            "{answer:?}: a ticket's row"
+        );
+        assert_eq!(
+            data_of(&bare, answer, None).pull_request,
+            None,
+            "{answer:?}: no row"
+        );
+    }
+    assert_eq!(data_of(&bare, A::Promoted, published).pull_request, None);
+}
+
 /// A repository with a configured remote, and a child synchronization of the
 /// ticket whose row says its push was accepted at `pushed`.
 fn pushed_child(registered: &Registered, pushed: git2::Oid) -> OperationId {

@@ -268,6 +268,7 @@ const DATA: &[(&str, &[&str])] = &[
         "document promote",
         &[
             "lifecycle_preview",
+            "pull_request_promotion_preview",
             "lifecycle_blocked",
             "lifecycle_mutation",
         ],

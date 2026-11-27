@@ -329,6 +329,7 @@ pub enum PreviewDetailsDto {
     ResolveCacheLoss(RemoteResolveHistoryPreviewDto),
     Lifecycle(Box<LifecyclePreviewDto>),
     PullRequestClosure(Box<PullRequestClosurePreviewDto>),
+    PullRequestPromotion(Box<PullRequestPromotionPreviewDto>),
 }
 
 contract_enum!(
@@ -1091,6 +1092,8 @@ pub enum MutationDataDto {
     /// Of a branch record that finished: a pull-request close, or a
     /// withdraw (design Part H).
     PullRequestClosure(Box<PullRequestClosureMutationDto>),
+    /// Of a pull-request promote that finished, whatever way (design Part D).
+    PullRequestPromotion(Box<PullRequestPromotionMutationDto>),
     /// Of an `item sync` that published, or found current, a branch whose
     /// ticket holds a provisional closure: where to open the pull request.
     PullRequestLink(Box<PullRequestLinkDataDto>),
@@ -1896,6 +1899,142 @@ pub struct PullRequestClosurePreviewDto {
     pub unheld: Vec<LifecyclePathChangeDto>,
     /// Where to open the pull request. Null for a withdraw.
     pub pull_request: Option<crate::repository::PullRequestDto>,
+}
+
+contract_enum!(
+    /// The tag of `PullRequestPromotionMutationDto`: one value, so that the
+    /// data of a pull-request promote's record is told apart by it alone.
+    PullRequestPromotionMutationType {
+        PullRequestPromotion => "pull_request_promotion",
+    }
+);
+
+contract_enum!(
+    /// How the document's branch reached the remote: this record's context
+    /// child pushed it, or found the remote holding it already. Null when
+    /// no child completed.
+    PullRequestPromotionPublication {
+        Published => "published",
+        Current => "current",
+    }
+);
+
+/// What a pull-request promote reports: a record that finished, whatever
+/// way. Nothing reached the primary, so it has no integration, cleanup or
+/// made-ready report. It holds IDs and fixed categories: no title or body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestPromotionMutationDto {
+    pub r#type: PullRequestPromotionMutationType,
+    pub item_id: String,
+    /// How the document's branch reached the remote. Null when the record's
+    /// context child did not complete.
+    pub publication: Option<PullRequestPromotionPublication>,
+    /// Whether the primary already holds the document, so that there is
+    /// nothing to open a pull request for.
+    pub primary_holds: bool,
+    /// Where to open the pull request, from the link record. Null when the
+    /// document has none.
+    pub pull_request: Option<crate::repository::PullRequestDto>,
+    /// What stands in the way, as a blocked prepare names it. Empty
+    /// otherwise; `history_unresolved` for a record whose child ended on it.
+    pub blockers: Vec<LifecycleBlocker>,
+}
+
+impl PullRequestPromotionMutationDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        if stored.as_object()?.len() != 6 {
+            return None;
+        }
+        Some(Self {
+            r#type: known(
+                &PullRequestPromotionMutationType::ALL,
+                PullRequestPromotionMutationType::as_str,
+                stored.get("type")?.as_str()?,
+            )?,
+            item_id: stored.get("item_id")?.as_str()?.to_owned(),
+            publication: match stored.get("publication")? {
+                serde_json::Value::Null => None,
+                publication => Some(known(
+                    &PullRequestPromotionPublication::ALL,
+                    PullRequestPromotionPublication::as_str,
+                    publication.as_str()?,
+                )?),
+            },
+            primary_holds: stored.get("primary_holds")?.as_bool()?,
+            pull_request: match stored.get("pull_request")? {
+                serde_json::Value::Null => None,
+                link => Some(crate::repository::PullRequestDto::from_stored(link)?),
+            },
+            blockers: stored
+                .get("blockers")?
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    known(
+                        &LifecycleBlocker::ALL,
+                        LifecycleBlocker::as_str,
+                        value.as_str()?,
+                    )
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `PullRequestPromotionPreviewDto`: one value, so that the
+    /// details of a pull-request promote's preview are told apart by it
+    /// alone.
+    PullRequestPromotionPreviewType {
+        PullRequestPromotionPreview => "pull_request_promotion_preview",
+    }
+);
+
+contract_enum!(
+    /// Whether the document already has a link: `first` promotes it and
+    /// builds the link now, `again` publishes what it holds since and gives
+    /// the link it has.
+    PullRequestPromotionSituation {
+        First => "first",
+        Again => "again",
+    }
+);
+
+/// What a preview of a pull-request promote shows (design Part B). It holds
+/// names, commits and a path, and no title, body or content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestPromotionPreviewDto {
+    pub r#type: PullRequestPromotionPreviewType,
+    pub item_id: String,
+    /// The document's path on its editing branch, relative to the
+    /// repository with forward slashes.
+    pub path: String,
+    /// The document's editing branch, as its short name.
+    pub branch: String,
+    pub primary_branch: String,
+    /// The publication remote, by its name.
+    pub remote: Option<String>,
+    /// The editing branch's head: what the promote publishes.
+    pub context_oid: String,
+    /// The remote's copy of the branch, when it holds work this clone has
+    /// not merged (ahead of the editing branch or beside it). Null when the
+    /// remote has none, or what the branch holds or less: a push moves it.
+    pub remote_context_oid: Option<String>,
+    pub situation: PullRequestPromotionSituation,
+    /// Where to open the pull request: the link the document holds for
+    /// `again`, the one that would be built now for `first`.
+    pub pull_request: crate::repository::PullRequestDto,
 }
 
 contract_enum!(
@@ -3038,6 +3177,7 @@ impl MutationDataDto {
             | Self::Lifecycle(_)
             // Nor does a branch record's, or the link an `item sync` gives.
             | Self::PullRequestClosure(_)
+            | Self::PullRequestPromotion(_)
             | Self::PullRequestLink(_)
             | Self::PollPolicy(_)
             // A poll's report names no host; a host it stopped for is reported
@@ -3099,6 +3239,14 @@ impl MutationDataDto {
                 PullRequestClosureMutationDto::from_stored(stored)
                     .map(|data| Self::PullRequestClosure(Box::new(data)))
             }
+            // So does one that continued a pull-request promote to its end.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestPromotionMutationType::PullRequestPromotion.as_str()) =>
+            {
+                PullRequestPromotionMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestPromotion(Box::new(data)))
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }
@@ -3152,6 +3300,7 @@ impl MutationDataDto {
             | Command::OperationResume
             | Command::TicketClose
             | Command::TicketWithdrawClosure
+            | Command::DocumentPromote
                 if stored.get("type").and_then(|t| t.as_str())
                     == Some(SynchronizationConflictType::SynchronizationConflict.as_str()) =>
             {
@@ -3170,8 +3319,23 @@ impl MutationDataDto {
                 ContextRetirementMutationDto::from_stored(stored).map(Self::ContextRetirement)
             }
             Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
-            Command::DocumentPromote => LifecycleMutationDto::from_stored(stored)
-                .map(|data| Self::Lifecycle(Box::new(data))),
+            // A direct promote's data, and a blocked or a refused one's of
+            // either mode, is the lifecycle's, told apart by its tag.
+            Command::DocumentPromote
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(LifecycleMutationType::Lifecycle.as_str()) =>
+            {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
+            // A pull-request promote's, which finished.
+            Command::DocumentPromote
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestPromotionMutationType::PullRequestPromotion.as_str()) =>
+            {
+                PullRequestPromotionMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestPromotion(Box::new(data)))
+            }
             // A direct close's data, and a blocked or a refused one's of
             // either mode, is the lifecycle's, told apart by its tag.
             Command::TicketClose | Command::TicketWithdrawClosure
@@ -3226,7 +3390,8 @@ impl MutationDataDto {
             | Command::OperationResume
             | Command::ItemRepublish
             | Command::TicketClose
-            | Command::TicketWithdrawClosure => {
+            | Command::TicketWithdrawClosure
+            | Command::DocumentPromote => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
             // A cancellation of a setup stores what became of it.
@@ -3576,6 +3741,167 @@ mod pull_request_closure_tests {
                 changed[key] = bad;
                 assert_eq!(MutationDataDto::from_stored(verb, &changed), None, "{key}");
             }
+        }
+    }
+
+    /// R-25: what a finished pull-request promote stored is read back as the
+    /// same data for `document promote` and for the `operation resume` that
+    /// continued it, by its tag; a promote's own conflict and host data are
+    /// read back as a synchronization's, and its direct data as the
+    /// lifecycle's, each by its tag. A closure's data is no promote's.
+    #[test]
+    fn pull_request_promotion_data_reads_back() {
+        let promotion =
+            |publication, primary_holds, link: bool, blockers| PullRequestPromotionMutationDto {
+                r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+                item_id: ITEM.to_owned(),
+                publication,
+                primary_holds,
+                pull_request: link.then(|| crate::repository::PullRequestDto {
+                    source: format!("manyhands/document/{ITEM}"),
+                    ..pull_request()
+                }),
+                blockers,
+            };
+        use PullRequestPromotionPublication as Publication;
+        let answers = [
+            promotion(Some(Publication::Published), false, true, Vec::new()),
+            promotion(Some(Publication::Current), false, true, Vec::new()),
+            promotion(None, true, false, Vec::new()),
+            promotion(
+                None,
+                false,
+                false,
+                vec![LifecycleBlocker::HistoryUnresolved],
+            ),
+        ];
+        for answer in answers {
+            let stored = serde_json::to_value(&answer).unwrap();
+            assert_eq!(stored["type"], "pull_request_promotion");
+            for command in [Command::DocumentPromote, Command::OperationResume] {
+                assert_eq!(
+                    MutationDataDto::from_stored(command, &stored),
+                    Some(MutationDataDto::PullRequestPromotion(Box::new(
+                        answer.clone()
+                    ))),
+                    "{command:?}: {stored}"
+                );
+            }
+            assert_eq!(
+                PullRequestPromotionMutationDto::from_stored(&stored),
+                Some(answer.clone())
+            );
+            // No other command reports it.
+            for other in [
+                Command::TicketClose,
+                Command::TicketWithdrawClosure,
+                Command::ItemSync,
+                Command::RepoSync,
+            ] {
+                assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+            }
+        }
+        // A closure's data is not a promote's.
+        let closure = serde_json::to_value(data(
+            PullRequestClosureAction::Close,
+            PullRequestClosureRecording::Recorded,
+        ))
+        .unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &closure),
+            None
+        );
+
+        // A stopped promote's child answers as `item sync` does, and a direct
+        // promote's data is still the lifecycle's.
+        let conflict = SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: ITEM.to_owned(),
+                next_action: ConflictNextAction::Resolve,
+            },
+        };
+        let stored = serde_json::to_value(&conflict).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::SynchronizationConflict(conflict))
+        );
+        let host = SynchronizationMutationDto {
+            host: "git.example".to_owned(),
+            port: 22,
+            presented_algorithm: "ssh-ed25519".to_owned(),
+            presented_fingerprint: "SHA256:abc".to_owned(),
+            pinned_algorithm: None,
+            pinned_fingerprint: None,
+        };
+        let stored = serde_json::to_value(&host).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::Synchronization(host))
+        );
+        let lifecycle = LifecycleMutationDto {
+            r#type: LifecycleMutationType::Lifecycle,
+            kind: ItemDtoKind::Document,
+            item_id: ITEM.to_owned(),
+            recording: None,
+            checkpoint_oid: None,
+            integration: None,
+            integration_oid: None,
+            publication: None,
+            publication_oid: None,
+            publication_pending: None,
+            cleanup: None,
+            cleanup_pending: None,
+            blockers: vec![LifecycleBlocker::ContextDirty],
+            made_ready: None,
+            made_ready_state: None,
+        };
+        let stored = serde_json::to_value(&lifecycle).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::Lifecycle(Box::new(lifecycle)))
+        );
+
+        // A tag with a malformed body is not read as another shape.
+        let valid = serde_json::to_value(promotion(
+            Some(Publication::Published),
+            false,
+            true,
+            Vec::new(),
+        ))
+        .unwrap();
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert_eq!(
+                MutationDataDto::from_stored(Command::DocumentPromote, &missing),
+                None,
+                "without {key}"
+            );
+        }
+        let mut extra = valid.clone();
+        extra["url"] = "private".into();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &extra),
+            None
+        );
+        for (key, bad) in [
+            ("publication", serde_json::json!("pending")),
+            ("primary_holds", serde_json::json!("yes")),
+            ("blockers", serde_json::json!(["not_a_blocker"])),
+            ("item_id", serde_json::json!(7)),
+            (
+                "pull_request",
+                serde_json::json!({"source": "a", "target": "b", "forge": "svn", "url": null}),
+            ),
+        ] {
+            let mut changed = valid.clone();
+            changed[key] = bad;
+            assert_eq!(
+                MutationDataDto::from_stored(Command::DocumentPromote, &changed),
+                None,
+                "{key}"
+            );
         }
     }
 

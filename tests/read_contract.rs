@@ -734,7 +734,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
         PullRequestClosureMutationType, PullRequestClosurePreviewType,
         PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
-        RemoteBranch, SetupCancelType, SetupPollOutcome, SetupPollType,
+        PullRequestPromotionPreviewType, PullRequestPromotionSituation, RemoteBranch,
+        SetupCancelType, SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
         (
@@ -938,6 +939,20 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "details.unheld.items.change",
             LifecyclePathChangeKind::ALL
                 .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_preview.schema.json",
+            "details.type",
+            PullRequestPromotionPreviewType::ALL
+                .map(PullRequestPromotionPreviewType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_preview.schema.json",
+            "details.situation",
+            PullRequestPromotionSituation::ALL
+                .map(PullRequestPromotionSituation::as_str)
                 .to_vec(),
         ),
         (
