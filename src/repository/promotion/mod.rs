@@ -278,6 +278,35 @@ impl fmt::Debug for PromotionExpectation {
     }
 }
 
+/// What a pull-request promotion's preview adds to the common facts: whether
+/// the document already has a link row (the situation), the link the preview
+/// shows, and `R` when it is another clone's work this clone has not merged.
+/// `L` is the preview's `context_oid`, `R` its `tracking_context`.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PullRequestPromotion {
+    situation: record::PromotionSituation,
+    link: crate::forge::PullRequestLink,
+    /// `R`, only when it is ahead of or beside `L`: the digest binds `R`
+    /// itself then, and one state for an `R` that is absent, equal to `L` or
+    /// behind it, since a push of `L` moves `R` to it.
+    unmerged_remote: Option<Oid>,
+}
+
+#[cfg(test)]
+impl PullRequestPromotion {
+    /// Facts the binding's tests consent to without observing a repository.
+    pub(super) fn for_testing(
+        situation: record::PromotionSituation,
+        link: crate::forge::PullRequestLink,
+    ) -> Self {
+        Self {
+            situation,
+            link,
+            unmerged_remote: None,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct DocumentPromotionPreview {
     item_id: ItemId,
@@ -285,6 +314,9 @@ pub struct DocumentPromotionPreview {
     context_branch: String,
     context_oid: Oid,
     primary_branch: String,
+    /// The primary the observation judged against: the local primary's tip in
+    /// a direct preview; in a pull-request preview, the tracking primary's tip
+    /// (the local primary is only an input to the content proof there).
     primary_oid: Oid,
     publication_remote: Option<String>,
     tracking_primary: Option<Oid>,
@@ -294,8 +326,14 @@ pub struct DocumentPromotionPreview {
     publication: PlannedPublication,
     cleanup: PlannedCleanup,
     expectation: PromotionExpectation,
+    /// Set for a pull-request promotion, which integrates nothing: its
+    /// `integration` is `AlreadyContained`, its `changes` and `cleanup` empty.
+    pull_request: Option<PullRequestPromotion>,
 }
 impl DocumentPromotionPreview {
+    pub(super) fn pull_request(&self) -> Option<&PullRequestPromotion> {
+        self.pull_request.as_ref()
+    }
     pub fn item_id(&self) -> &ItemId {
         &self.item_id
     }
@@ -356,7 +394,12 @@ impl fmt::Debug for DocumentPromotionPreview {
 #[allow(clippy::large_enum_variant)] // The approved preflight API returns the ready preview by value.
 pub enum DocumentPromotionPreflight {
     Ready(DocumentPromotionPreview),
-    Blocked { blockers: Vec<PromotionBlocker> },
+    Blocked {
+        blockers: Vec<PromotionBlocker>,
+    },
+    /// In a pull-request repository: the primary already holds the document
+    /// (R-3), so there is nothing to confirm.
+    PrimaryHolds,
 }
 
 /// What the mutation boundary reads of a parent record: a lifecycle parent

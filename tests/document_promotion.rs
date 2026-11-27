@@ -305,6 +305,7 @@ impl Pair {
                 }
                 Err(FixtureError)
             }
+            DocumentPromotionPreflight::PrimaryHolds => Err(FixtureError),
         }
     }
     fn promote(&self) -> Result<DocumentPromotionOutcome, FixtureError> {

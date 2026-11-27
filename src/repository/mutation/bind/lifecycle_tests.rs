@@ -1132,6 +1132,7 @@ fn a_branch_record_s_answers_name_the_ticket_s_branch_and_a_direct_one_s_name_pr
         },
         closure: None,
         record,
+        pull_request: None,
     };
     let branch_ready = || BranchReady {
         action: ClosureAction::Close,
@@ -1281,6 +1282,7 @@ fn a_branch_record_previews_its_own_effects_and_details() {
             retired_oid: retired,
             unheld,
         }),
+        pull_request: None,
     };
     for (action, closure, context_child, cleanup, expected) in [
         (
@@ -2323,4 +2325,84 @@ fn a_resume_of_an_unheld_branch_record_another_process_works_under_is_busy() {
         let free = resume(&registered.service);
         assert_ne!(free.code, ResultCode::Busy, "{action}: {free:?}");
     }
+}
+
+/// A pull-request promotion's preview always lists the three effects the RFC
+/// names (the synchronization may merge the primary in and publish even when
+/// the branch is current), its prepare names the document's branch as a
+/// branch record's does, and a document the primary holds is a state of its
+/// own that no consent was given for: its digest equals no ready digest, nor
+/// a withdraw's, so a confirm that finds it is an external change at the
+/// boundary.
+#[test]
+fn a_pull_request_promotion_previews_its_three_effects_always() {
+    use crate::repository::{
+        PlannedCleanup, PreviewEffect as E, promotion::record::PromotionSituation,
+    };
+    let link = crate::forge::PullRequestLink {
+        source: format!("manyhands/document/{ITEM}"),
+        target: "main".to_owned(),
+        forge: None,
+        url: None,
+    };
+    let ready = |situation| Ready {
+        expected: [3; 32],
+        branch: format!("refs/heads/manyhands/document/{ITEM}"),
+        primary_branch: "main".to_owned(),
+        remote: Some("origin".to_owned()),
+        context_oid: git2::Oid::zero(),
+        primary_oid: git2::Oid::zero(),
+        context_child: true,
+        changes: Vec::new(),
+        integration: PlannedIntegration::AlreadyContained,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        },
+        closure: None,
+        record: None,
+        pull_request: Some(
+            crate::repository::promotion::PullRequestPromotion::for_testing(
+                situation,
+                link.clone(),
+            ),
+        ),
+    };
+    assert_eq!(
+        pull_request_promotion_effects(),
+        vec![
+            E::ContextSynchronized,
+            E::ContextPublished,
+            E::PullRequestLink
+        ]
+    );
+    // Its prepare learns that its answers name the document's branch.
+    let data = tempfile::tempdir().unwrap();
+    let _service = RepositoryService::open_at(data.path()).unwrap();
+    for situation in [PromotionSituation::First, PromotionSituation::Again] {
+        let binding = LifecycleBinding::<Fixed> {
+            root: PathBuf::from("/repository"),
+            id: ITEM.parse().unwrap(),
+            expected: None,
+            closure_exists: false,
+            branch_record: AtomicBool::new(false),
+            verb: PhantomData,
+        };
+        binding.note_observed(&Observed::Ready(Box::new(ready(situation))));
+        assert!(binding.names_branch());
+    }
+    // The held document's digest is its own.
+    let command = Command::DocumentPromote;
+    let held = digest_of(command, &Observed::PrimaryHoldsDocument);
+    for other in [
+        Observed::Ready(Box::new(ready(PromotionSituation::First))),
+        Observed::NothingToWithdraw,
+        Observed::PublicationRemoteRequired,
+        Observed::Blocked(Vec::new()),
+    ] {
+        assert_ne!(held, digest_of(command, &other));
+    }
+    assert_eq!(held, digest_of(command, &Observed::PrimaryHoldsDocument));
 }

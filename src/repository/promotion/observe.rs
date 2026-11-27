@@ -1,7 +1,8 @@
 use super::lifecycle::LifecycleKind;
+use super::record::PromotionSituation;
 use super::*;
 use crate::{
-    canonical,
+    canonical::{self, Integration},
     repository::{
         remote::{state, sync},
         *,
@@ -14,20 +15,34 @@ use std::collections::BTreeSet;
 pub(super) struct PromotionObservation {
     blockers: BTreeSet<PromotionBlocker>,
     preview: Option<DocumentPromotionPreview>,
+    /// A pull-request repository's primary already holds the document, and
+    /// nothing blocks: there is no preview to consent to (R-4).
+    held: bool,
 }
 
 impl PromotionObservation {
     pub(super) fn into_preflight(self) -> DocumentPromotionPreflight {
-        if self.blockers.is_empty() {
-            DocumentPromotionPreflight::Ready(
-                self.preview.expect("unblocked observation has a preview"),
-            )
-        } else {
+        if !self.blockers.is_empty() {
             DocumentPromotionPreflight::Blocked {
                 blockers: self.blockers.into_iter().collect(),
             }
+        } else if self.held {
+            DocumentPromotionPreflight::PrimaryHolds
+        } else {
+            DocumentPromotionPreflight::Ready(
+                self.preview.expect("unblocked observation has a preview"),
+            )
         }
     }
+}
+
+/// What one registry read gives an observation: the remote snapshot, the
+/// pending-conflict flag and, in a pull-request repository, the document's
+/// link row.
+struct StoredView {
+    snapshot: RemoteSnapshot,
+    pending: bool,
+    link: Option<crate::forge::PullRequestLink>,
 }
 
 pub(in super::super) fn unavailable(root: &Path) -> RepositoryError {
@@ -68,7 +83,12 @@ impl PreparedObservation {
         repository: &git2::Repository,
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         let fresh = self.seal.reopen(repository, &self.configuration)?;
-        let (id, snapshot, pending) = read_view(service, &self.seal.root)?;
+        let (id, view) = read_view(
+            service,
+            &self.seal.root,
+            &self.seal.item,
+            self.configuration.integration() == Integration::PullRequest,
+        )?;
         if id != self.repository_id {
             return Err(changed());
         }
@@ -77,8 +97,7 @@ impl PreparedObservation {
             &self.seal.root,
             &self.configuration,
             &self.seal.item,
-            &snapshot,
-            pending,
+            &view,
             &self.facts,
         )?
         .into_preflight())
@@ -356,7 +375,12 @@ pub(super) fn prepare_for(
     let (repository, root, config) = open_observation(kind, service, &request.root)?;
     // A read-only SQLite transaction provides one coherent history/conflict view.
     // No repository lease, reservation, refresh, migration or transport is used.
-    let (repository_id, snapshot, pending) = read_view(service, &root)?;
+    let (repository_id, view) = read_view(
+        service,
+        &root,
+        &request.item_id,
+        config.integration() == Integration::PullRequest,
+    )?;
     let (facts, seal) =
         ObservationSeal::discover(kind, &repository, &root, &config, &request.item_id, || {
             item_preview_facts(kind, service, &root, &request.item_id)
@@ -370,16 +394,8 @@ pub(super) fn prepare_for(
         not_document: kind_mismatch,
         document_path: item_path,
     };
-    let preflight = observe_git(
-        &repository,
-        &root,
-        &config,
-        &request.item_id,
-        &snapshot,
-        pending,
-        &facts,
-    )?
-    .into_preflight();
+    let preflight =
+        observe_git(&repository, &root, &config, &request.item_id, &view, &facts)?.into_preflight();
     let prepared = PreparedObservation {
         preflight,
         configuration: config,
@@ -394,9 +410,26 @@ pub(super) fn prepare_for(
 fn read_view(
     service: &RepositoryService,
     root: &Path,
-) -> Result<(i64, RemoteSnapshot, bool), RepositoryError> {
-    read_view_with(service, root, |_, _| Ok(()))
-        .map(|(id, snapshot, pending, ())| (id, snapshot, pending))
+    item: &ItemId,
+    pull_request: bool,
+) -> Result<(i64, StoredView), RepositoryError> {
+    read_view_with(service, root, |tx, id| {
+        if !pull_request {
+            return Ok(None);
+        }
+        crate::repository::pull_request_links::link_of(tx, id, "document", &item.to_string())
+            .map_err(RepositoryError::sqlite)
+    })
+    .map(|(id, snapshot, pending, link)| {
+        (
+            id,
+            StoredView {
+                snapshot,
+                pending,
+                link,
+            },
+        )
+    })
 }
 /// One read-only SQLite transaction: the registration, the remote snapshot,
 /// the pending-conflict flag and whatever else `extra` reads in the same view.
@@ -942,29 +975,21 @@ pub(in super::super) fn planned_result(
     }
 }
 
-/// Observe actual Git afresh. The caller supplies a coherently read remote
-/// snapshot and pending-conflict flag; the same function can run after sync or
-/// while the caller already holds the integration lease.
-fn observe_git(
+/// The item's context as the observation sees it: its tip and the document's
+/// path on it, with the blockers a context that is missing, nonconforming,
+/// dirty or conflicted adds (both modes read it the same way).
+fn observe_context(
     repository: &git2::Repository,
     root: &Path,
     config: &canonical::RepositoryConfig,
     item: &ItemId,
-    snapshot: &RemoteSnapshot,
-    pending: bool,
     facts: &DiscoveryFacts,
-) -> Result<PromotionObservation, RepositoryError> {
-    let mut observation = PromotionObservation {
-        blockers: BTreeSet::new(),
-        preview: None,
-    };
+    blockers: &mut BTreeSet<PromotionBlocker>,
+) -> Result<(Option<Oid>, Option<PathBuf>), RepositoryError> {
     let kind = facts.kind;
-    let blockers = &mut observation.blockers;
-    let context_branch = kind.context_branch(item);
-    let not_document = facts.not_document;
     let mut context_oid = None;
     let mut context_document_path = None;
-    if not_document {
+    if facts.not_document {
         blockers.insert(PromotionBlocker::NotADocument);
     } else {
         match context_presence(kind, repository, root, config, item)? {
@@ -998,6 +1023,37 @@ fn observe_git(
             }
         }
     }
+    Ok((context_oid, context_document_path))
+}
+
+/// Observe actual Git afresh. The caller supplies a coherently read remote
+/// snapshot and pending-conflict flag; the same function can run after sync or
+/// while the caller already holds the integration lease. A pull-request
+/// repository's observation is its own (`observe_pull_request`).
+fn observe_git(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    view: &StoredView,
+    facts: &DiscoveryFacts,
+) -> Result<PromotionObservation, RepositoryError> {
+    if config.integration() == Integration::PullRequest {
+        return observe_pull_request(repository, root, config, item, view, facts);
+    }
+    let snapshot = &view.snapshot;
+    let pending = view.pending;
+    let mut observation = PromotionObservation {
+        blockers: BTreeSet::new(),
+        preview: None,
+        held: false,
+    };
+    let kind = facts.kind;
+    let blockers = &mut observation.blockers;
+    let context_branch = kind.context_branch(item);
+    let not_document = facts.not_document;
+    let (context_oid, context_document_path) =
+        observe_context(repository, root, config, item, facts, blockers)?;
     if pending {
         blockers.insert(PromotionBlocker::ConflictPending);
     }
@@ -1131,6 +1187,7 @@ fn observe_git(
                 },
                 cleanup,
                 expectation: PromotionExpectation::from_bytes([0; 32]),
+                pull_request: None,
             };
             preview.expectation = expectation(&preview, &new_entries);
             observation.preview = Some(preview);
@@ -1362,6 +1419,251 @@ pub(in super::super) mod digest {
             hash.update(context.as_bytes());
         }
     }
+}
+
+const PULL_REQUEST_PROMOTION_DIGEST_DOMAIN: &[u8] = b"manyhands pull request promotion v1";
+
+/// `blake3("manyhands pull request promotion v1" ‖ fields)`, framed as the
+/// direct digest is: the item, the document's path, the branch, the primary
+/// branch, the remote, `L`, `R` when it is ahead of or beside `L` (none
+/// otherwise: an `R` that is absent, equal or behind is one state, which a
+/// push of `L` settles), the situation (`first` 0, `again` 1) and the
+/// previewed link. Not the tracking primary nor the local one, which move.
+fn pull_request_expectation(preview: &DocumentPromotionPreview) -> PromotionExpectation {
+    let facts = preview
+        .pull_request
+        .as_ref()
+        .expect("a pull-request preview");
+    fn optional(hash: &mut blake3::Hasher, text: Option<&str>) {
+        match text {
+            Some(text) => {
+                hash.update(&[1]);
+                digest::field(hash, text.as_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
+    let mut hash = blake3::Hasher::new();
+    hash.update(PULL_REQUEST_PROMOTION_DIGEST_DOMAIN);
+    digest::field(&mut hash, preview.item_id.to_string().as_bytes());
+    digest::field(
+        &mut hash,
+        preview.document_path.as_os_str().as_encoded_bytes(),
+    );
+    digest::field(&mut hash, preview.context_branch.as_bytes());
+    digest::field(&mut hash, preview.primary_branch.as_bytes());
+    digest::remote(&mut hash, preview.publication_remote.as_deref());
+    hash.update(preview.context_oid.as_bytes());
+    match facts.unmerged_remote {
+        Some(oid) => {
+            hash.update(&[1]);
+            hash.update(oid.as_bytes());
+        }
+        None => {
+            hash.update(&[0]);
+        }
+    }
+    hash.update(&[match facts.situation {
+        PromotionSituation::First => 0,
+        PromotionSituation::Again => 1,
+    }]);
+    digest::field(&mut hash, facts.link.source.as_bytes());
+    digest::field(&mut hash, facts.link.target.as_bytes());
+    optional(
+        &mut hash,
+        facts.link.forge.map(canonical::ForgeKind::as_str),
+    );
+    optional(&mut hash, facts.link.url.as_deref());
+    PromotionExpectation::from_bytes(*hash.finalize().as_bytes())
+}
+
+/// R-3: whether the primary holds the document, which only its content
+/// proves. It holds it when the content proof for `tip` passes against the
+/// tracking primary, or against the local primary when that is the tracking
+/// primary or behind it (in this mode Manyhands never commits to the primary,
+/// so a local primary ahead or beside holds commits no one else has), and
+/// `R`, the remote copy of the branch, is absent, equal to `tip` or behind it
+/// (ahead or beside is another clone's work this clone has not merged).
+/// `remote_gone` reads `R` as absent: a fetch does not prune it after the
+/// branch was deleted. Reads refs and objects only, so it never fetches, and
+/// every refusal of the proof reads not held.
+pub(in super::super) fn primary_holds_document(
+    repository: &git2::Repository,
+    tip: Oid,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+) -> bool {
+    use crate::repository::context_retirement::proof;
+    let Some(tracking) = tracking_primary else {
+        return false;
+    };
+    // A ref's commit: none when it is absent, `Err` when it cannot be read.
+    let read = |name: &str| match repository
+        .find_reference(name)
+        .and_then(|reference| reference.peel_to_commit())
+    {
+        Ok(commit) => Ok(Some(commit.id())),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(_) => Err(()),
+    };
+    let reaches = |older: Oid, newer: Oid| {
+        older == newer
+            || repository
+                .graph_descendant_of(newer, older)
+                .unwrap_or(false)
+    };
+    if !remote_gone {
+        let Ok(plan) = RemoteRefPlan::from_configuration(remote, primary_branch) else {
+            return false;
+        };
+        let name = plan.context(AuthoringKind::Document, item);
+        match read(name.tracking_ref()) {
+            Ok(None) => {}
+            Ok(Some(copy)) if reaches(copy, tip) => {}
+            _ => return false,
+        }
+    }
+    let local = read(&format!("refs/heads/{primary_branch}"))
+        .ok()
+        .flatten()
+        .filter(|local| reaches(*local, tracking) && *local != tracking);
+    let holds = |primary: Oid| {
+        proof::preservation(repository, tip, primary, AuthoringKind::Document, item).is_ok()
+    };
+    holds(tracking) || local.is_some_and(holds)
+}
+
+/// The pull-request repository's observation (Part B), from local state only:
+/// no network, lease or write. It decides in this order: the item is a
+/// document with a context; the blockers (the context's, a pending
+/// conflict, an unresolved history, no tracking primary, a merge in
+/// progress at the root); the primary holds the document (`already_applied`,
+/// no record); the branch's history is `Deleted`; a link row, `again`;
+/// otherwise `first`. Nothing touches the primary, so the root's state, the
+/// local primary, an integration and the identity do not matter.
+fn observe_pull_request(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    view: &StoredView,
+    facts: &DiscoveryFacts,
+) -> Result<PromotionObservation, RepositoryError> {
+    let kind = facts.kind;
+    let mut observation = PromotionObservation {
+        blockers: BTreeSet::new(),
+        preview: None,
+        held: false,
+    };
+    // A pull-request configuration always has a publication remote.
+    let Some(remote) = config.publication_remote.as_deref() else {
+        return Err(unavailable(root));
+    };
+    let blockers = &mut observation.blockers;
+    let (context_oid, document_path) =
+        observe_context(repository, root, config, item, facts, blockers)?;
+    if view.pending {
+        blockers.insert(PromotionBlocker::ConflictPending);
+    }
+    // A merge, rebase or cherry-pick in progress at the root, whichever
+    // branch it is on, is what refuses a synchronization.
+    if repository.state() != git2::RepositoryState::Clean {
+        blockers.insert(PromotionBlocker::PrimaryConflicted);
+    }
+    let (mut tracking_primary, mut tracking_context) = (None, None);
+    if let Some(remote_facts) = remote_facts(kind, repository, root, config, item, None, None)? {
+        tracking_primary = remote_facts.tracking_primary;
+        tracking_context = remote_facts.tracking_context;
+        if tracking_primary.is_none() {
+            blockers.insert(PromotionBlocker::PrimaryMissing);
+        }
+    }
+    let mut history_deleted = false;
+    if tracking_context.is_none() && !facts.not_document {
+        match remote_context_history(&view.snapshot, kind, item) {
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(PromotionBlocker::HistoryUnresolved);
+            }
+            RemoteContextHistory::Deleted => history_deleted = true,
+            // The context child's fetch settles an unknown history.
+            RemoteContextHistory::Unknown | RemoteContextHistory::NeverPublished => {}
+        }
+    }
+    if !observation.blockers.is_empty() {
+        return Ok(observation);
+    }
+    let (Some(context_oid), Some(document_path)) = (context_oid, document_path) else {
+        return Err(unavailable(root));
+    };
+    if primary_holds_document(
+        repository,
+        context_oid,
+        tracking_primary,
+        &config.primary_branch,
+        remote,
+        item,
+        false,
+    ) {
+        observation.held = true;
+        return Ok(observation);
+    }
+    if history_deleted {
+        observation
+            .blockers
+            .insert(PromotionBlocker::RemoteContextDeleted);
+        return Ok(observation);
+    }
+    let (situation, link) = match &view.link {
+        Some(link) => (PromotionSituation::Again, link.clone()),
+        None => (
+            PromotionSituation::First,
+            crate::repository::closure::checkpoint::context_branch_link(
+                repository,
+                &config.primary_branch,
+                config.forge().as_ref(),
+                remote,
+                &kind.context_branch(item),
+            ),
+        ),
+    };
+    let unmerged_remote = match tracking_context {
+        Some(copy) if !ancestor(repository, copy, context_oid, root)? => Some(copy),
+        _ => None,
+    };
+    let mut preview = DocumentPromotionPreview {
+        item_id: item.clone(),
+        document_path,
+        context_branch: kind.context_branch(item),
+        context_oid,
+        primary_branch: config.primary_branch.clone(),
+        primary_oid: tracking_primary.expect("a tracking primary does not block"),
+        publication_remote: Some(remote.to_owned()),
+        tracking_primary,
+        tracking_context,
+        changes: Vec::new(),
+        // Nothing integrates: the branch is published, not merged.
+        integration: PlannedIntegration::AlreadyContained,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            remote_branch: false,
+            worktree: false,
+            local_branch: false,
+        },
+        expectation: PromotionExpectation::from_bytes([0; 32]),
+        pull_request: Some(PullRequestPromotion {
+            situation,
+            link,
+            unmerged_remote,
+        }),
+    };
+    preview.expectation = pull_request_expectation(&preview);
+    observation.preview = Some(preview);
+    Ok(observation)
 }
 
 fn expectation(

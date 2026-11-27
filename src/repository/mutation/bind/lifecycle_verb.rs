@@ -90,6 +90,9 @@ pub(in super::super::super) struct Ready {
     pub(super) closure: Option<PlannedClosure>,
     /// Set for a branch record's preview, which is shown as its own.
     pub(super) record: Option<BranchReady>,
+    /// Set for a pull-request promotion's preview: the situation, the link
+    /// and `R` it consents to, which integrates nothing.
+    pub(super) pull_request: Option<promotion::PullRequestPromotion>,
 }
 
 pub(in super::super::super) enum Observed {
@@ -98,6 +101,9 @@ pub(in super::super::super) enum Observed {
     /// A withdraw of a ticket whose branch holds no closure: `already_applied`
     /// with nothing to confirm (decision 11).
     NothingToWithdraw,
+    /// A promote in a pull-request repository whose document the primary
+    /// already holds: `already_applied` with nothing to confirm (R-4).
+    PrimaryHoldsDocument,
     /// A withdraw in a repository with no publication remote: its children
     /// publish, so there is nowhere to (R-33).
     PublicationRemoteRequired,
@@ -278,6 +284,7 @@ fn ready_of_promotion(preview: &DocumentPromotionPreview) -> Ready {
         cleanup: preview.cleanup(),
         closure: None,
         record: None,
+        pull_request: preview.pull_request().cloned(),
     }
 }
 
@@ -334,6 +341,7 @@ fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
         cleanup: preview.cleanup(),
         closure: Some(preview.closure().clone()),
         record,
+        pull_request: None,
     }
 }
 
@@ -417,7 +425,8 @@ impl LifecycleVerb for Promote {
                 item_id: id.clone(),
             })? {
                 DocumentPromotionPreflight::Ready(preview)
-                    if preview.integration() == PlannedIntegration::MergeCommit
+                    if preview.pull_request().is_none()
+                        && preview.integration() == PlannedIntegration::MergeCommit
                         && identity_missing(root)? =>
                 {
                     Observed::Blocked(vec![LifecycleBlocker::IdentityRequired])
@@ -428,6 +437,7 @@ impl LifecycleVerb for Promote {
                 DocumentPromotionPreflight::Blocked { blockers } => {
                     Observed::Blocked(blockers.into_iter().map(promotion_blocker).collect())
                 }
+                DocumentPromotionPreflight::PrimaryHolds => Observed::PrimaryHoldsDocument,
             },
         )
     }

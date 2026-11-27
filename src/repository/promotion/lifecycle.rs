@@ -865,6 +865,14 @@ impl LifecyclePreview for DocumentPromotionPreview {
     fn tracking_primary(&self) -> Option<Oid> {
         DocumentPromotionPreview::tracking_primary(self)
     }
+    /// A pull-request promotion always runs its context child: it
+    /// synchronizes the branch with its remote copy and the remote's primary
+    /// and publishes it (R-19), contained or not.
+    fn runs_context_child(&self) -> bool {
+        self.pull_request().is_some()
+            || !(self.integration() == PlannedIntegration::AlreadyContained
+                && self.tracking_context().is_none())
+    }
 }
 
 pub(in super::super) struct DocumentPromotionLifecycle;
@@ -905,8 +913,14 @@ impl Lifecycle for DocumentPromotionLifecycle {
         item: &ItemId,
         expectation: PromotionExpectation,
         remote: Option<&str>,
-        _observed: Option<&DocumentPromotionPreview>,
+        observed: Option<&DocumentPromotionPreview>,
     ) -> Result<PromotionRecord, RepositoryError> {
+        // Interim, until the pull-request begin lands with its runner: no
+        // record is begun for a pull-request promotion, so the direct runner
+        // never merges into or publishes the primary of such a repository.
+        if observed.is_some_and(|preview| preview.pull_request().is_some()) {
+            return Err(state::recovery_required());
+        }
         record::begin_record(tx, id, op, item, expectation, remote)
     }
     fn replacement_guard(
@@ -1025,7 +1039,11 @@ impl Lifecycle for DocumentPromotionLifecycle {
         repository: &git2::Repository,
         confirmation: Option<&ConfirmedCommitIdentity>,
     ) -> Result<(), DocumentPromotionError> {
-        if preview.integration() == PlannedIntegration::AlreadyContained {
+        // A pull-request promotion commits nothing of its own: its child's
+        // own identity stop answers as `item sync`'s does.
+        if preview.pull_request().is_some()
+            || preview.integration() == PlannedIntegration::AlreadyContained
+        {
             return Ok(());
         }
         sync::select_committing_identity(repository, confirmation, &SynchronizationTarget::Primary)
@@ -1052,6 +1070,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
             DocumentPromotionPreflight::Blocked { blockers } => {
                 Err(record::Refusal::Blocked(blockers))
             }
+            DocumentPromotionPreflight::PrimaryHolds => Err(record::Refusal::ExternalChange),
         }
     }
     fn refusal_error(refusal: &record::Refusal) -> DocumentPromotionError {

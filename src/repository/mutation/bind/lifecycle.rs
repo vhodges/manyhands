@@ -359,6 +359,16 @@ fn branch_effects(
     effects
 }
 
+/// What a pull-request promotion's preview lists, in the order it makes
+/// them, whatever its situation.
+fn pull_request_promotion_effects() -> Vec<PreviewEffect> {
+    vec![
+        PreviewEffect::ContextSynchronized,
+        PreviewEffect::ContextPublished,
+        PreviewEffect::PullRequestLink,
+    ]
+}
+
 fn closure_action(action: ClosureAction) -> PullRequestClosureAction {
     match action {
         ClosureAction::Close => PullRequestClosureAction::Close,
@@ -438,6 +448,12 @@ fn digest_of(command: Command, observed: &Observed) -> ObservationDigest {
         // preview's consent was given for (Part E, Obligation 10).
         Observed::NothingToWithdraw => {
             Observation::of(name).text("unoffered", "nothing_to_withdraw")
+        }
+        // What a promote has nothing to offer for, as a withdraw's: a state of
+        // its own, which no ready digest equals, so a confirm that finds the
+        // document held is an external change at the boundary (R-29).
+        Observed::PrimaryHoldsDocument => {
+            Observation::of(name).text("unoffered", "primary_holds_document")
         }
         Observed::PublicationRemoteRequired => {
             Observation::of(name).text("unoffered", "publication_remote_required")
@@ -625,7 +641,10 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// its path. A blocked state, or one that answers before any record
     /// exists, names none, and keeps the scope a direct request has.
     fn note_observed(&self, observed: &Observed) {
-        if matches!(observed, Observed::Ready(ready) if ready.record.is_some()) {
+        if matches!(
+            observed,
+            Observed::Ready(ready) if ready.record.is_some() || ready.pull_request.is_some()
+        ) {
             self.branch_record.store(true, Ordering::Relaxed);
         }
     }
@@ -1250,6 +1269,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 Ok(
                     Observed::Ready(_)
                     | Observed::NothingToWithdraw
+                    | Observed::PrimaryHoldsDocument
                     | Observed::PublicationRemoteRequired,
                 )
                 | Err(_) => None,
@@ -1496,6 +1516,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             Observed::Ready(ready) => Some(ready.expected),
             Observed::Blocked(_)
             | Observed::NothingToWithdraw
+            | Observed::PrimaryHoldsDocument
             | Observed::PublicationRemoteRequired => None,
         };
         self.closure_exists = closure_exists(&observed);
@@ -1542,7 +1563,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
-            Observed::NothingToWithdraw => {
+            Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
                 return Err(Answer::stopped(ResultCode::AlreadyApplied));
             }
             Observed::PublicationRemoteRequired => {
@@ -1614,6 +1635,16 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         if ready.cleanup.local_branch {
             effects.push(PreviewEffect::BranchDeleted);
         }
+        // A pull-request promotion integrates and cleans up nothing: it
+        // synchronizes the branch, publishes it and gives the link, always
+        // (R-24, the synchronization may merge the primary in and publish
+        // even when `L` equals `R`). Its details are the direct preview's,
+        // with no changes and no cleanup, until its own preview lands.
+        let effects = if ready.pull_request.is_some() {
+            pull_request_promotion_effects()
+        } else {
+            effects
+        };
         let slug = self.slug_of(call.service, &root);
         Ok(Previewed {
             observation: digest.to_stored(),
@@ -1703,7 +1734,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
             }
             // A withdraw that has nothing left to withdraw is a state the
             // consent was not given for.
-            Observed::NothingToWithdraw => {
+            Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
                 self.expected = None;
                 Ok(Seen::State { found, own: None })
             }
