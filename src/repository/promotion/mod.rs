@@ -19,6 +19,7 @@ pub(super) mod lifecycle;
 pub(super) mod lifecycle_record;
 pub(super) mod observe;
 pub(super) mod record;
+mod rerun;
 pub(super) mod run;
 
 #[cfg(test)]

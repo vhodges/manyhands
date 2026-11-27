@@ -77,6 +77,16 @@ pub(super) fn finish(
     let (repository, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
     let tracking = tracking_primary(&repository, root, remote, primary)?;
     let given_at = (request.clock)().unix_timestamp();
+    // RR8: the context branch may be gone by now (a retirement, a removed
+    // worktree, a poll). The child published what it did, so the record still
+    // finishes on its authority, but no link row is written or renewed for a
+    // branch that is not there.
+    let present = observe::reference_oid(
+        &repository,
+        &LifecycleKind::DocumentPromotion.context_ref(&r.item_id),
+        root,
+    )?
+    .is_some();
     let finish = if observe::primary_holds_document(
         &repository,
         authority,
@@ -95,7 +105,17 @@ pub(super) fn finish(
         BranchFinish {
             answer: PromotionAnswer::AlreadyPromoted,
             category,
-            link: LinkWrite::Renew { given_at },
+            link: if present {
+                LinkWrite::Renew { given_at }
+            } else {
+                LinkWrite::Withheld
+            },
+        }
+    } else if !present {
+        BranchFinish {
+            answer: PromotionAnswer::Promoted,
+            category,
+            link: LinkWrite::Withheld,
         }
     } else {
         // The link as the remote's address and the configuration read now

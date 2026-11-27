@@ -197,20 +197,173 @@ struct PullRequestIo {
     /// `refs/remotes/origin/main` as the child's fetch leaves it, written
     /// first, before any stop or publication.
     fetched: Option<Oid>,
-    /// A scripted stop; `kept` reserves the child and leaves its row active.
+    /// A scripted stop; `kept` reserves the child and leaves its row active,
+    /// as `kept_as` says.
     stop: Option<(SynchronizationError, bool)>,
+    /// What a kept stop leaves of the child's row.
+    kept_as: Kept,
     /// One real local update (the stage that merges the fetched primary
     /// into the branch), with the incoming copy of the branch.
     drive: Option<Oid>,
+    /// A stop after the driven update, before anything is pushed: the child
+    /// moved the branch itself and its row stays reserved, as a process lost
+    /// there leaves it.
+    stop_after_drive: Option<SynchronizationError>,
+    /// A process lost once the child's row completed and its tracking ref
+    /// moved, before the child returns to the runner: the unwinding is
+    /// `Crash`, which `lost` catches.
+    crash_after_completion: bool,
+    /// The parent to cancel, once, when the child reserves its row (a
+    /// `request cancel` that arrives while the child runs).
+    cancel_in_child: Option<OperationId>,
+    /// Makes the fake tell the runner's observer of its safe points (a real
+    /// child does), and optionally a commit that lands between two of them.
+    paced: Option<Paced>,
     primary_calls: usize,
     deletes: usize,
 }
+/// What a kept stop leaves of the child's row (test-only hook of the fake).
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+enum Kept {
+    /// Reserved, nothing written: the child has nothing to lose.
+    #[default]
+    Reserved,
+    /// An attempt that may have pushed: the row is past `push_prepared`.
+    MayHavePushed,
+    /// A child stopped mid-integration, as the reservation layer leaves it:
+    /// an integration step prepared and not applied, which reads as retained.
+    Retained,
+}
+/// Where a save lands while a paced child runs, in the order its safe
+/// points come (test-only hook of the fake).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SaveAt {
+    /// After the runner's table, before the child read its head.
+    BeforeStart,
+    /// After a merging child's fetch, before its merge.
+    AfterFetch,
+    /// After the child recorded its push intent, before its push check.
+    BeforePush,
+    /// After the push check, before the child's own head check.
+    AfterPushCheck,
+}
+/// How a paced child runs (see `PullRequestIo::paced`).
+#[derive(Clone, Copy, Default, Debug)]
+struct Paced {
+    save: Option<SaveAt>,
+    /// The tip another clone published, which the child fast-forwards to.
+    fast_forward_to: Option<Oid>,
+}
+impl Paced {
+    fn saving(save: SaveAt) -> Self {
+        Self {
+            save: Some(save),
+            ..Self::default()
+        }
+    }
+}
+/// A save: one more line in the document, committed on the context, as a
+/// person's save would between two safe points of a child.
+fn save_in_context(root: &std::path::Path) {
+    let repo = git2::Repository::open(root).unwrap();
+    let worktree = repo.find_worktree(ITEM).unwrap();
+    let context = git2::Repository::open(worktree.path()).unwrap();
+    let path = worktree.path().join(DOC);
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("a save between two safe points\n");
+    fs::write(path, text).unwrap();
+    commit(&context);
+}
+/// The merge of the fetched primary into the context branch, as a child makes
+/// it: a commit with the branch head and the tracking primary as parents, the
+/// working tree brought to it.
+fn merge_fetched_primary(root: &std::path::Path) -> Oid {
+    let repo = git2::Repository::open(root).unwrap();
+    let worktree = repo.find_worktree(ITEM).unwrap();
+    let context = git2::Repository::open(worktree.path()).unwrap();
+    let head = context.head().unwrap().peel_to_commit().unwrap();
+    let primary = context
+        .find_commit(repo.refname_to_id("refs/remotes/origin/main").unwrap())
+        .unwrap();
+    let mut merged = context.merge_commits(&head, &primary, None).unwrap();
+    assert!(!merged.has_conflicts());
+    let tree = context
+        .find_tree(merged.write_tree_to(&context).unwrap())
+        .unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let merge = context
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &format!("Merge primary into document {ITEM}"),
+            &tree,
+            &[&head, &primary],
+        )
+        .unwrap();
+    context
+        .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    merge
+}
+/// The child's row as the layer records it, by `UPDATE`.
+fn write_row(service: &RepositoryService, root: &std::path::Path, op: OperationId, set: &str) {
+    state::with_transaction(service, root, |tx, _| {
+        tx.execute(
+            &format!("UPDATE remote_operation_records SET {set} WHERE operation_ulid=?1"),
+            [op.to_string()],
+        )
+        .map_err(|_| state::recovery_required())?;
+        Ok(())
+    })
+    .unwrap();
+}
+/// A cancellation acknowledged at `step`, as `acknowledge` leaves the row.
+fn cancel_row(service: &RepositoryService, root: &std::path::Path, op: OperationId, step: &str) {
+    write_row(
+        service,
+        root,
+        op,
+        &format!(
+            "phase='cancelled',completed_step='{step}',outcome='cancelled',cancel_requested=0"
+        ),
+    );
+}
+/// The runner's observer is told of `point`, as a real child tells it.
+fn continues(observer: &mut dyn SynchronizationObserver, point: RemoteOperationSafePoint) -> bool {
+    matches!(observer.safe_point(point), SafePointRequest::Continue)
+}
+/// The row written as a child records its push intent: the candidate and the
+/// tips it fetched.
+fn push_intent(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    op: OperationId,
+    candidate: Oid,
+    tracking: bool,
+) {
+    let repo = git2::Repository::open(root).unwrap();
+    let mut set = format!(
+        "phase='push_prepared',sync_checkpoint='push_prepared',local_oid='{candidate}',push_oid='{candidate}'"
+    );
+    if tracking {
+        if let Ok(oid) = repo.refname_to_id(&tracking_context_ref()) {
+            set.push_str(&format!(",tracking_oid='{oid}'"));
+        }
+        if let Ok(oid) = repo.refname_to_id("refs/remotes/origin/main") {
+            set.push_str(&format!(",primary_tracking_oid='{oid}'"));
+        }
+    }
+    write_row(service, root, op, &set);
+}
+/// The unwinding of a process lost inside a child (`lost` catches it).
+struct Crash;
 impl run::PromotionIo for PullRequestIo {
     fn synchronize(
         &mut self,
         service: &RepositoryService,
         req: SynchronizeRemoteRequest,
-        _: &mut dyn SynchronizationObserver,
+        observer: &mut dyn SynchronizationObserver,
         execution: &record::ChildExecution,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         self.children
@@ -244,7 +397,17 @@ impl run::PromotionIo for PullRequestIo {
             repo.reference("refs/remotes/origin/main", oid, true, "fixture fetch")
                 .unwrap();
         }
-        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        // The plan as the live configuration gives it, as a real child's is:
+        // after a rename a new attempt's reservation carries the renamed
+        // remote, and the record-remote identity check refuses it.
+        let plan = match crate::repository::read_configuration(&root) {
+            Ok(crate::repository::ConfigurationInspection::Valid(config)) => config
+                .publication_remote
+                .as_deref()
+                .and_then(|remote| RemoteRefPlan::from_configuration(remote, "main").ok()),
+            _ => None,
+        }
+        .unwrap_or_else(|| RemoteRefPlan::from_configuration("origin", "main").unwrap());
         let target = req.target.operation_target(&plan);
         if let Some((error, kept)) = self.stop.take() {
             if kept {
@@ -258,18 +421,98 @@ impl run::PromotionIo for PullRequestIo {
                         .unwrap(),
                     RemoteReservationOutcome::Reserved(_)
                 ));
+                let tip = repo.refname_to_id(&context_ref()).unwrap();
+                match self.kept_as {
+                    Kept::Reserved => {}
+                    Kept::MayHavePushed => {
+                        state::with_transaction(service, &root, |tx, _| {
+                            tx.execute(
+                                "UPDATE remote_operation_records SET phase='push_returned',sync_checkpoint='push_returned',expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,push_advertised_oid=?2 WHERE operation_ulid=?1",
+                                [req.operation_id.to_string(), tip.to_string()],
+                            )
+                            .map_err(|_| state::recovery_required())?;
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                    Kept::Retained => {
+                        state::with_transaction(service, &root, |tx, id| {
+                            state::prepare_step_for_test(tx, id, req.operation_id, tip)
+                        })
+                        .unwrap();
+                    }
+                }
             }
             return Err(error);
         }
         let (oid, kind) = if let Some(incoming) = self.drive.take() {
-            let merged =
-                sync::promotion_test_drive_local_bound(service, &req, incoming, execution)?;
+            let paced = self.paced;
+            if paced.is_some_and(|p| p.save == Some(SaveAt::AfterFetch)) {
+                // The fake reserves the row and records the head the child
+                // read, then a save lands before the child merges.
+                let new = state::with_transaction(service, &root, |tx, id| {
+                    Ok(state::read_operation(tx, id, req.operation_id)?.is_none())
+                })
+                .unwrap();
+                service.reserve_promotion_child(
+                    &root,
+                    req.operation_id,
+                    &target,
+                    execution,
+                    new,
+                )?;
+                let start = repo.refname_to_id(&context_ref()).unwrap();
+                write_row(
+                    service,
+                    &root,
+                    req.operation_id,
+                    &format!(
+                        "phase='fetch_prepared',sync_checkpoint='fetch_prepared',expected_oid='{start}',local_oid='{start}'"
+                    ),
+                );
+                if !continues(observer, RemoteOperationSafePoint::BeforeFetch) {
+                    cancel_row(service, &root, req.operation_id, "before_fetch");
+                    return Err(SynchronizationError::Interrupted);
+                }
+                save_in_context(&root);
+            }
+            let merged = if paced.is_some_and(|p| p.save == Some(SaveAt::AfterFetch)) {
+                // The drive does not take up a row the fake reserved, so the
+                // merge is made with plain Git, as the child makes it onto the
+                // head it then reads, and records no integration step: neither
+                // the envelope nor a step chains to it (the design's fallback).
+                merge_fetched_primary(&root)
+            } else {
+                sync::promotion_test_drive_local_bound(service, &req, incoming, execution)?
+            };
+            if let Some(error) = self.stop_after_drive.take() {
+                return Err(error);
+            }
+            if paced.is_some() {
+                // A row the drive did not write has no tips of its own yet.
+                let fetched = paced.is_some_and(|p| p.save == Some(SaveAt::AfterFetch));
+                push_intent(service, &root, req.operation_id, merged, fetched);
+                if !continues(observer, RemoteOperationSafePoint::BeforePush) {
+                    cancel_row(service, &root, req.operation_id, "before_push");
+                    return Err(SynchronizationError::Interrupted);
+                }
+                write_row(
+                    service,
+                    &root,
+                    req.operation_id,
+                    "completed_step='before_push'",
+                );
+            }
             (merged, "published")
         } else {
             let new = state::with_transaction(service, &root, |tx, id| {
                 Ok(state::read_operation(tx, id, req.operation_id)?.is_none())
             })
             .unwrap();
+            // A context branch that is gone is the child's own stop.
+            let Ok(tip) = repo.refname_to_id(&context_ref()) else {
+                return Err(SynchronizationError::TargetNotMaterialized);
+            };
             let reservation = service.reserve_promotion_child(
                 &root,
                 req.operation_id,
@@ -284,7 +527,55 @@ impl run::PromotionIo for PullRequestIo {
             } else {
                 assert!(matches!(reservation, RemoteReservationOutcome::Reserved(_)));
             }
-            let tip = repo.refname_to_id(&context_ref()).unwrap();
+            if let Some(parent) = self.cancel_in_child.take() {
+                assert!(service.cancel_document_promotion(&root, parent).unwrap());
+                return Err(SynchronizationError::Interrupted);
+            }
+            let mut tip = tip;
+            if let Some(paced) = self.paced {
+                let op = req.operation_id;
+                if new {
+                    if paced.save == Some(SaveAt::BeforeStart) {
+                        save_in_context(&root);
+                    }
+                    let start = repo.refname_to_id(&context_ref()).unwrap();
+                    write_row(
+                        service,
+                        &root,
+                        op,
+                        &format!(
+                            "phase='fetch_prepared',sync_checkpoint='fetch_prepared',expected_oid='{start}',local_oid='{start}'"
+                        ),
+                    );
+                }
+                if !continues(observer, RemoteOperationSafePoint::BeforeFetch) {
+                    cancel_row(service, &root, op, "before_fetch");
+                    return Err(SynchronizationError::Interrupted);
+                }
+                if let Some(ahead) = paced.fast_forward_to {
+                    repo.reference(&tracking_context_ref(), ahead, true, "fixture fetch")
+                        .unwrap();
+                    let worktree = repo.find_worktree(ITEM).unwrap();
+                    checkout(&git2::Repository::open(worktree.path()).unwrap(), ahead);
+                }
+                tip = repo.refname_to_id(&context_ref()).unwrap();
+                push_intent(service, &root, op, tip, new);
+                if paced.save == Some(SaveAt::BeforePush) {
+                    save_in_context(&root);
+                }
+                if !continues(observer, RemoteOperationSafePoint::BeforePush) {
+                    cancel_row(service, &root, op, "before_push");
+                    return Err(SynchronizationError::Interrupted);
+                }
+                write_row(service, &root, op, "completed_step='before_push'");
+                if paced.save == Some(SaveAt::AfterPushCheck) {
+                    // The child's own head check: the branch is not the
+                    // candidate, so it refuses and leaves its row as it stands.
+                    save_in_context(&root);
+                    return Err(SynchronizationError::ExternalChange);
+                }
+                tip = repo.refname_to_id(&context_ref()).unwrap();
+            }
             let current = repo.refname_to_id(&tracking_context_ref()).ok() == Some(tip);
             (
                 tip,
@@ -298,6 +589,9 @@ impl run::PromotionIo for PullRequestIo {
         complete_child_row(service, &root, execution, req.operation_id, oid, kind);
         repo.reference(&tracking_context_ref(), oid, true, "fixture publication")
             .unwrap();
+        if self.crash_after_completion {
+            std::panic::resume_unwind(Box::new(Crash));
+        }
         Ok(SynchronizationResult::Complete(if kind == "published" {
             SynchronizationOutcome::Published {
                 target: req.target,
@@ -833,3 +1127,8 @@ fn a_declined_pull_request_answers_remote_branch_deleted() {
     assert_eq!(f.link_row().map(|row| row.4), Some(CLOCK + 86_400));
     assert_primary_untouched(&f, &io, primary, "declined");
 }
+
+// The re-run, stop, crash, hold, consent and fence rows (Task 4), written
+// before the behaviour.
+#[path = "run_pull_request_rerun_tests.rs"]
+mod reruns;

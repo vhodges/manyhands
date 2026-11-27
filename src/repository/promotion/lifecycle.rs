@@ -17,8 +17,9 @@ use crate::{
     canonical::{ItemId, RepositoryConfig},
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
-        IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError, SynchronizationOutcome, SynchronizationTarget,
+        IndexPending, OperationId, RemoteOperationAction, RemoteOperationSafePoint,
+        RepositoryError, RepositoryService, SynchronizationError, SynchronizationOutcome,
+        SynchronizationTarget,
         cleanup::RetirementEvidence,
         mutation::{CancellationToken, RequestId},
         remote::{reservation::RemoteReservation, state, sync},
@@ -200,6 +201,24 @@ pub(in super::super) enum BranchEnd<'a> {
     /// The context child stopped with an end it cannot get past, with
     /// nothing written: its own error says which.
     ContextChild(&'a SynchronizationError),
+}
+
+/// What a branch record's re-run table (Cycle 04 decision 14, the design's
+/// table RR) gives a call of its request, before its context child and
+/// again when the child stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchRerun {
+    /// RR2: the context child completed: the record finishes by
+    /// `branch_step`, with no remote, endpoint, tip or cancellation check.
+    Finish,
+    /// RR7: the context branch is gone and the child did not complete: the
+    /// child is let go and the record ends as `BranchEnd::ContextGone`.
+    Gone,
+    /// RR5, RR4: the record ends refused (`external_change`) once its child
+    /// is let go, before the child runs again.
+    Refuse,
+    /// RR3, RR6, RR1: the child runs, or continues, under `child()`.
+    Run,
 }
 
 /// Exactly the parent fields the runner reads and writes.
@@ -621,6 +640,34 @@ pub(in super::super) trait Lifecycle {
         r: &Self::Record,
         end: BranchEnd<'_>,
     ) -> Result<(), RepositoryError>;
+    /// Whether the record's branch run is decided by a re-run table
+    /// (`rerun`), not by the checks of a closure's branch record. Only a
+    /// pull-request promotion's is.
+    fn reruns_by_table(_r: &Self::Record) -> bool {
+        false
+    }
+    /// The re-run table's answer for a record `reruns_by_table`, which it
+    /// may record on the record (its accepted head, that an attempt may have
+    /// pushed). Never called for a lifecycle whose `reruns_by_table` is false.
+    fn rerun(
+        _service: &RepositoryService,
+        _root: &Path,
+        _r: &Self::Record,
+    ) -> Result<BranchRerun, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    /// Whether a new attempt of the context child of a record that re-runs
+    /// by a table may go on at its `BeforeFetch` or `BeforePush` safe point:
+    /// it began at the head the table accepted, and pushes only what its own
+    /// moves made from there (RR4).
+    fn admits_context_point(
+        _service: &RepositoryService,
+        _root: &Path,
+        _r: &Self::Record,
+        _point: RemoteOperationSafePoint,
+    ) -> Result<bool, RepositoryError> {
+        Ok(true)
+    }
     /// Mints the publication child and moves the record to `publication_pending`,
     /// in one transaction.
     fn begin_publication(
@@ -1151,6 +1198,25 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<BranchStep, DocumentPromotionError> {
         answer::finish(service, request, r)?;
         Ok(BranchStep::Finished)
+    }
+    /// A pull-request record is run by its re-run table.
+    fn reruns_by_table(r: &PromotionRecord) -> bool {
+        r.path() == RecordPath::Branch
+    }
+    fn rerun(
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+    ) -> Result<BranchRerun, RepositoryError> {
+        super::rerun::decide(service, root, r)
+    }
+    fn admits_context_point(
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+        point: RemoteOperationSafePoint,
+    ) -> Result<bool, RepositoryError> {
+        super::rerun::admits_point(service, root, r, point)
     }
     /// The second answer table, for a context child that ended.
     fn end_branch(

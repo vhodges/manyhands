@@ -10,7 +10,7 @@ use crate::repository::{
     *,
 };
 use lifecycle::{
-    BranchEnd, BranchStep, CancellationProbe, DocumentPromotionLifecycle, Lifecycle,
+    BranchEnd, BranchRerun, BranchStep, CancellationProbe, DocumentPromotionLifecycle, Lifecycle,
     LifecycleError, LifecycleKind, LifecyclePreview, LifecycleRecord, LifecycleRefusal,
     LifecycleRequest, ParentStep as Step, RecordPath,
 };
@@ -493,6 +493,21 @@ fn promote_inner<L: Lifecycle>(
         if validated.step() == Step::Superseded {
             return Err(L::Error::operation_mismatch());
         }
+        // A record its lifecycle re-runs by a table (a pull-request promotion,
+        // Cycle 04 decision 14) is run by that table from here: a completed
+        // child finishes, and a gone branch ends, with no live configuration
+        // (RR2, RR7, R-27), so none is read first.
+        if L::reruns_by_table(&validated) {
+            return rerun_branch::<L>(
+                lifecycle,
+                service,
+                &request,
+                &mut validated,
+                true,
+                io,
+                progress,
+            );
+        }
         // Live configuration is not a prerequisite for reporting an existing
         // primary effect. Invalid/unreadable configuration stops unfinished work
         // as an Ok recovery outcome, and cannot turn integration into an Err.
@@ -931,6 +946,11 @@ fn promote_branch<L: Lifecycle>(
     if r.primary_sync_id().is_some() {
         return finish_branch::<L>(service, request, Some(config), primary, r, io, progress);
     }
+    // A record its lifecycle re-runs by a table: the table, not the two
+    // checks below, decides each call (Cycle 04 decision 14).
+    if L::reruns_by_table(r) {
+        return rerun_branch::<L>(lifecycle, service, request, r, existing, io, progress);
+    }
     // Before `closing` (it records a base) the remote the record was made
     // for is the one configured; after it, the answer says.
     if r.base_oid().is_none() && r.remote_name() != config.publication_remote.as_deref() {
@@ -990,6 +1010,150 @@ fn promote_branch<L: Lifecycle>(
             finish_branch::<L>(service, request, Some(config), primary, r, io, progress)
         }
         BranchStep::Finished => Ok(refresh::<L>(service, root, r, false)),
+    }
+}
+
+/// A branch record its lifecycle re-runs by a table (the design's RR). The
+/// table is asked on every call, the first included, once before the context
+/// child and again when it stops. It, and not the checks of a closure's
+/// branch record (the remote configured while no base is recorded, a
+/// cancellation after the child), decides the call's way. A child that
+/// completed finishes the record with no further check (RR2, R-26).
+fn rerun_branch<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &mut L::Record,
+    existing: bool,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    // As `promote_inner` does for an existing record: a second call
+    // explicitly continues an inter-step cancellation (C17).
+    if existing && r.cancel_requested() {
+        state::with_transaction(service, root, |tx, id| {
+            L::clear_cancellation(tx, id, r.operation_id())
+        })
+        .map_err(mapped::<L::Error>)?;
+        r.set_cancel_requested(false);
+    }
+    if !existing {
+        boundary(service, root, FailurePoint::AfterConfirmed)?;
+    }
+    let mut rerun = rerun_table::<L>(service, root, r)?;
+    if rerun == BranchRerun::Run {
+        if cancelled::<L>(service, request, r)? {
+            release_child::<L>(service, request, r, ChildRole::Context);
+            return Err(L::Error::interrupted());
+        }
+        // The attempt this call runs: a new one when `child()` minted it.
+        let before = child_id(r, ChildRole::Context);
+        rerun = match child::<L>(service, request, r, ChildRole::Context, io, progress) {
+            Ok(_) => BranchRerun::Finish,
+            Err(error) => {
+                if cancelled::<L>(service, request, r)? {
+                    release_child::<L>(service, request, r, ChildRole::Context);
+                    return Err(L::Error::interrupted());
+                }
+                if ends_context_child(&error)
+                    && let_go::<L>(service, request, r, ChildRole::Context, io)?
+                {
+                    L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
+                        .map_err(mapped::<L::Error>)?;
+                    *r = load::<L>(service, root, r.operation_id())?;
+                    return Ok(refresh::<L>(service, root, r, false));
+                }
+                // A new attempt that refused its own push with `ExternalChange`
+                // sent nothing: once `pushing` is set, that error becomes
+                // `RecoveryRequired` (`unverified_push_error`). So it is let
+                // go, and the table below settles its intent as unsent and
+                // refuses (RR4).
+                if child_id(r, ChildRole::Context) != before
+                    && matches!(error, SynchronizationError::ExternalChange)
+                {
+                    let_go::<L>(service, request, r, ChildRole::Context, io)?;
+                }
+                // What the child left: RR4 after the start or push check
+                // cancelled it, or after the child refused its push; RR7
+                // after its branch went. Otherwise its own stop stands.
+                match rerun_table::<L>(service, root, r)? {
+                    BranchRerun::Run => {
+                        return Err(L::Error::context_synchronization(Box::new(error)));
+                    }
+                    ended => ended,
+                }
+            }
+        };
+    }
+    match rerun {
+        BranchRerun::Finish => finish_rerun::<L>(lifecycle, service, request, r),
+        BranchRerun::Gone | BranchRerun::Refuse => {
+            // A retained child cannot be let go (K-19); nor, until a later
+            // call, can one whose acknowledgement left it live.
+            if !let_go::<L>(service, request, r, ChildRole::Context, io)? {
+                return Err(L::Error::recovery_required());
+            }
+            if rerun == BranchRerun::Refuse {
+                return Err(abandon::<L>(
+                    service,
+                    root,
+                    r,
+                    L::Refusal::external_change(),
+                ));
+            }
+            L::end_branch(service, root, r, BranchEnd::ContextGone).map_err(mapped::<L::Error>)?;
+            *r = load::<L>(service, root, r.operation_id())?;
+            Ok(refresh::<L>(service, root, r, false))
+        }
+        BranchRerun::Run => Err(L::Error::recovery_required()), // cannot arise: a run answers above
+    }
+}
+
+/// The table's answer for `r`, which it may have recorded on the record (its
+/// accepted head, that an attempt may have pushed): `r` is read again.
+fn rerun_table<L: Lifecycle>(
+    service: &RepositoryService,
+    root: &Path,
+    r: &mut L::Record,
+) -> Result<BranchRerun, L::Error> {
+    let rerun = L::rerun(service, root, r).map_err(mapped::<L::Error>)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    Ok(rerun)
+}
+
+/// RR2: a record whose context child completed, in this call or an earlier
+/// one, finishes by `branch_step`. The context it holds is the one the child
+/// published or found current (its authority), whether or not the branch is
+/// still there.
+fn finish_rerun<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &mut L::Record,
+) -> Result<L::Output, L::Error> {
+    let root = &request.root;
+    if r.step() == Step::Confirmed {
+        let authority = match state::with_transaction(service, root, |tx, _| {
+            L::child_state(tx, r, ChildRole::Context)
+        })
+        .map_err(mapped::<L::Error>)?
+        {
+            ChildState::Complete(stored) => {
+                stored.authority.ok_or_else(L::Error::recovery_required)?
+            }
+            _ => return Err(L::Error::recovery_required()),
+        };
+        r.set_context_oid(Some(authority.oid()));
+        r.set_step(Step::ContextSynchronized);
+        save::<L>(service, root, r)?;
+        boundary(service, root, FailurePoint::AfterContextSync)?;
+    }
+    let step = lifecycle.branch_step(service, request, r)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    match step {
+        BranchStep::Finished => Ok(refresh::<L>(service, root, r, false)),
+        BranchStep::Closing => Err(L::Error::recovery_required()),
     }
 }
 
@@ -1284,11 +1448,35 @@ struct CancellationObserver<'a, L: Lifecycle> {
     /// Where a started child's safe points are told, by its role. An
     /// acknowledgement's are not.
     progress: Option<(&'a mut dyn RunObserver, ChildRole)>,
+    /// Whether `child()` restarted the attempt this observer watches (a held
+    /// child, RR6) rather than minting a new one. The acknowledgement of a
+    /// cancelled row is a restart too.
+    restart: bool,
 }
 impl<L: Lifecycle> SynchronizationObserver for CancellationObserver<'_, L> {
     fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest {
         if let Some((progress, role)) = &mut self.progress {
             progress.event(RunEvent::ChildSafePoint(*role, point));
+        }
+        // A record its lifecycle re-runs by a table takes a new attempt of its
+        // context child only from the head the table accepted, and lets it
+        // push only what its own moves made from there: a save between the
+        // table and the child's read of its head ends the attempt before its
+        // fetch, and one that a merging child took in during its fetch ends it
+        // before its push (RR4). An attempt `child()` restarted is a held
+        // child, which goes on to its own end unchecked (RR6, decision 15).
+        if !self.restart
+            && matches!(
+                point,
+                RemoteOperationSafePoint::BeforeFetch | RemoteOperationSafePoint::BeforePush
+            )
+            && L::reruns_by_table(self.record)
+        {
+            match L::admits_context_point(self.service, &self.request.root, self.record, point) {
+                Ok(true) => {}
+                Ok(false) => return SafePointRequest::Cancel,
+                Err(_) => return SafePointRequest::Stop,
+            }
         }
         match cancelled::<L>(self.service, self.request, self.record) {
             Ok(true) => SafePointRequest::Cancel,
@@ -1381,6 +1569,7 @@ fn acknowledge_cancellation<L: Lifecycle>(
         request,
         record: r,
         progress: None,
+        restart: true,
     };
     let execution = L::child_execution(r, role)?;
     let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
@@ -1495,6 +1684,7 @@ fn child<L: Lifecycle>(
         request,
         record: &*r,
         progress: Some((progress, role)),
+        restart,
     };
     let execution = L::child_execution(r, role)?;
     let result = io.synchronize(

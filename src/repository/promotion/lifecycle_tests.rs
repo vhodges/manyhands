@@ -114,6 +114,8 @@ fn promotion_steps_map_to_the_shared_step_view() {
         situation: None,
         primary_branch: None,
         endpoint_digest: None,
+        accepted_context_oid: None,
+        context_pushed: false,
     };
     let all = [
         (P::Confirmed, "confirmed"),

@@ -700,6 +700,8 @@ fn privacy_column_inventory_for_both_new_tables() {
                 "situation",
                 "primary_branch",
                 "endpoint_digest",
+                "accepted_context_oid",
+                "context_pushed",
             ],
         ),
         (
@@ -1744,7 +1746,7 @@ fn promotion_modes_migration_rebuilds_a_v2_table_once() {
 fn insert_row(db: &Connection, r: &PromotionRecord) -> rusqlite::Result<usize> {
     let (category, mask) = Refusal::encoded_columns(r.refusal.as_ref()).unwrap();
     db.execute(
-        "INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,integration_mode,answer_code,consented_context_oid,situation,primary_branch,endpoint_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)",
+        "INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,integration_mode,answer_code,consented_context_oid,situation,primary_branch,endpoint_digest,accepted_context_oid,context_pushed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29)",
         params![
             r.repository_id,
             r.operation_id.to_string(),
@@ -1773,6 +1775,8 @@ fn insert_row(db: &Connection, r: &PromotionRecord) -> rusqlite::Result<usize> {
             r.situation.map(PromotionSituation::name),
             r.primary_branch,
             r.endpoint_digest.as_ref().map(|d| d.as_slice()),
+            r.accepted_context_oid.map(|o| o.to_string()),
+            r.context_pushed,
         ],
     )
 }
@@ -1810,6 +1814,8 @@ fn pull_request(step: PromotionStep, item: &str) -> PromotionRecord {
         situation: Some(PromotionSituation::First),
         primary_branch: Some("main".into()),
         endpoint_digest: Some([9; 32]),
+        accepted_context_oid: None,
+        context_pushed: false,
     }
 }
 
@@ -2218,6 +2224,66 @@ fn pull_request_promotion_steps_and_checks() {
             |r| r.remote_name = None,
             Expect::Rust,
         ),
+        // The re-run table's two columns (Cycle 04, RR1 and RR3). Each row
+        // is one where only one CHECK can refuse it.
+        (
+            "an accepted head on a refused record with no begin-time columns",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::ExternalChange);
+                r.answer_code = None;
+                bundle(r, false);
+                r.accepted_context_oid = Some(oid());
+            },
+            Expect::Both,
+        ),
+        (
+            "context_pushed on a refused record with no begin-time columns",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::ExternalChange);
+                r.answer_code = None;
+                bundle(r, false);
+                r.context_pushed = true;
+            },
+            Expect::Both,
+        ),
+        (
+            "an accepted head on a direct row",
+            Confirmed,
+            |r| {
+                r.integration_mode = Integration::Direct;
+                bundle(r, false);
+                r.accepted_context_oid = Some(oid());
+            },
+            Expect::Both,
+        ),
+        (
+            "context_pushed on a direct row",
+            Confirmed,
+            |r| {
+                r.integration_mode = Integration::Direct;
+                bundle(r, false);
+                r.context_pushed = true;
+            },
+            Expect::Both,
+        ),
+        (
+            "a zero accepted head",
+            Confirmed,
+            |r| r.accepted_context_oid = git2::Oid::from_bytes(&[0; 20]).ok(),
+            Expect::Both,
+        ),
+        (
+            "both columns on a begun confirmed record",
+            Confirmed,
+            |r| {
+                r.accepted_context_oid =
+                    Some(git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap());
+                r.context_pushed = true;
+            },
+            Expect::Ok,
+        ),
         // A direct row holds none of the six.
         (
             "direct, the four",
@@ -2288,6 +2354,38 @@ fn pull_request_promotion_steps_and_checks() {
             }
         }
     }
+    // The two columns' own CHECKs, which a typed value cannot reach (M4): a
+    // head of 39 characters, one with a non-hex character, and a flag of 2.
+    let begun = pull_request(Confirmed, ITEMS[4]);
+    tx.execute_batch("SAVEPOINT raw_columns").unwrap();
+    insert_row(&tx, &begun).unwrap();
+    for (assignment, accepted) in [
+        (
+            "accepted_context_oid='111111111111111111111111111111111111111'",
+            false,
+        ),
+        (
+            "accepted_context_oid='111111111111111111111111111111111111111g'",
+            false,
+        ),
+        (
+            "accepted_context_oid='1111111111111111111111111111111111111111'",
+            true,
+        ),
+        ("context_pushed=2", false),
+        ("context_pushed=1", true),
+    ] {
+        tx.execute_batch("SAVEPOINT raw_column").unwrap();
+        let result = tx.execute(
+            &format!("UPDATE document_promotions SET {assignment} WHERE operation_id=?1"),
+            [begun.operation_id.to_string()],
+        );
+        tx.execute_batch("ROLLBACK TO raw_column; RELEASE raw_column")
+            .unwrap();
+        assert_eq!(result.is_ok(), accepted, "{assignment}");
+    }
+    tx.execute_batch("ROLLBACK TO raw_columns; RELEASE raw_columns")
+        .unwrap();
     for answer in [
         PromotionAnswer::Promoted,
         PromotionAnswer::AlreadyPromoted,
@@ -2430,6 +2528,112 @@ fn pull_request_promotion_steps_and_checks() {
     let mut filled = refused.clone();
     bundle(&mut filled, true);
     assert!(save_record(&tx, 1, &filled).is_err());
+}
+
+/// The re-run table's two columns are moved only by their writers (Cycle 04
+/// RR1, RR3): the head only from the head the record holds, and never once an
+/// attempt may have pushed; the flag once, on a record that began and is not
+/// finished; and a record snapshot taken before either move overwrites
+/// neither.
+#[test]
+fn rerun_columns_are_moved_only_by_their_writers() {
+    use PromotionStep::*;
+    let expectation = PromotionExpectation::from_bytes([7; 32]);
+    let item = |n: usize| -> ItemId { ITEMS[n].parse().unwrap() };
+    let head = |digit: char| git2::Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+    let begin_data = || PullRequestBegin {
+        consented: oid(),
+        situation: PromotionSituation::Again,
+        primary_branch: "main".into(),
+        endpoint_digest: [9; 32],
+    };
+    let mut registry = db();
+    let tx = registry.transaction().unwrap();
+    let read =
+        |tx: &rusqlite::Transaction<'_>, op: OperationId| read_record(tx, 1, op).unwrap().unwrap();
+    let begun = |tx: &rusqlite::Transaction<'_>, n: usize| {
+        let op = OperationId::new();
+        begin_pull_request_record(
+            tx,
+            1,
+            op,
+            &item(n),
+            expectation,
+            Some("origin"),
+            &begin_data(),
+        )
+        .unwrap();
+        op
+    };
+
+    // The head moves from the consented tip, then from that head, in order.
+    let op = begun(&tx, 0);
+    let before_any_move = read(&tx, op);
+    assert_eq!(before_any_move.accepted_context_oid, None);
+    accept_context_head(&tx, 1, op, oid(), head('2')).unwrap();
+    assert_eq!(read(&tx, op).accepted_context_oid, Some(head('2')));
+    accept_context_head(&tx, 1, op, head('2'), head('3')).unwrap();
+    assert_eq!(read(&tx, op).accepted_context_oid, Some(head('3')));
+    // From any other head it is refused, and the row is unchanged: the
+    // consented tip no longer is the head it holds.
+    let held = read(&tx, op);
+    for from in [oid(), head('2'), head('4')] {
+        assert_eq!(
+            accept_context_head(&tx, 1, op, from, head('5'))
+                .unwrap_err()
+                .kind,
+            RepositoryErrorKind::RecoveryRequired
+        );
+        assert_eq!(read(&tx, op), held);
+    }
+    // A snapshot read before the moves saves with neither column touched.
+    save_record(&tx, 1, &before_any_move).unwrap();
+    assert_eq!(read(&tx, op).accepted_context_oid, Some(head('3')));
+    note_context_pushed(&tx, 1, op).unwrap();
+    assert!(read(&tx, op).context_pushed);
+    save_record(&tx, 1, &before_any_move).unwrap();
+    let after = read(&tx, op);
+    assert_eq!(
+        (after.accepted_context_oid, after.context_pushed),
+        (Some(head('3')), true)
+    );
+    // After the flag the head no longer moves; the flag stays on a second call.
+    assert!(accept_context_head(&tx, 1, op, head('3'), head('6')).is_err());
+    assert_eq!(read(&tx, op).accepted_context_oid, Some(head('3')));
+    note_context_pushed(&tx, 1, op).unwrap();
+    assert!(read(&tx, op).context_pushed);
+
+    // At context_synchronized the head is refused; the flag is still noted.
+    let synchronized = pull_request(ContextSynchronized, ITEMS[1]);
+    insert_row(&tx, &synchronized).unwrap();
+    assert!(accept_context_head(&tx, 1, synchronized.operation_id, oid(), head('2')).is_err());
+    note_context_pushed(&tx, 1, synchronized.operation_id).unwrap();
+    assert!(read(&tx, synchronized.operation_id).context_pushed);
+    // At complete the flag is refused too.
+    let complete = pull_request(Complete, ITEMS[2]);
+    insert_row(&tx, &complete).unwrap();
+    assert!(note_context_pushed(&tx, 1, complete.operation_id).is_err());
+    assert!(!read(&tx, complete.operation_id).context_pushed);
+
+    // Both writers refuse a direct row and a refused pull-request row.
+    let direct = begin_record(&tx, 1, OperationId::new(), &item(4), expectation, None).unwrap();
+    let refused = refuse_record_on(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(3),
+        expectation,
+        Some("origin"),
+        &Refusal::ExternalChange,
+        Integration::PullRequest,
+    )
+    .unwrap();
+    for other in [direct.operation_id, refused.operation_id] {
+        let stored = read(&tx, other);
+        assert!(accept_context_head(&tx, 1, other, oid(), head('2')).is_err());
+        assert!(note_context_pushed(&tx, 1, other).is_err());
+        assert_eq!(read(&tx, other), stored);
+    }
 }
 
 /// The pull-request begin writes the mode and the four begin-time columns, a
@@ -2750,6 +2954,59 @@ fn pull_request_begin_and_finish_write_their_columns() {
             },
             true,
             None,
+            "main",
+        ),
+        // RR8: a finish whose context branch is gone writes or renews no row.
+        (
+            "promoted withheld over a row leaves it",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: Promoted,
+                category: Category::Published,
+                link: LinkWrite::Withheld,
+            },
+            true,
+            Some(1),
+            "main",
+        ),
+        (
+            "promoted withheld writes none",
+            ContextSynchronized,
+            false,
+            |_| BranchFinish {
+                answer: Promoted,
+                category: Category::Published,
+                link: LinkWrite::Withheld,
+            },
+            true,
+            None,
+            "main",
+        ),
+        (
+            "already_promoted withheld leaves given_at",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: AlreadyPromoted,
+                category: Category::AlreadyCurrent,
+                link: LinkWrite::Withheld,
+            },
+            true,
+            Some(1),
+            "main",
+        ),
+        (
+            "primary_holds withheld",
+            ContextSynchronized,
+            true,
+            |_| BranchFinish {
+                answer: PrimaryHolds,
+                category: Category::Published,
+                link: LinkWrite::Withheld,
+            },
+            false,
+            Some(1),
             "main",
         ),
         (

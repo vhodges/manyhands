@@ -158,6 +158,13 @@ pub(in super::super) struct PromotionRecord {
     pub primary_branch: Option<String>,
     /// `endpoint_digest_of` the publication remote at begin.
     pub endpoint_digest: Option<[u8; 32]>,
+    /// The head the record's next attempt of its context child may start
+    /// from, once the re-run table found the branch moved only by the
+    /// record's own child (RR1). Null means the consented tip.
+    pub accepted_context_oid: Option<Oid>,
+    /// An attempt of the context child may have pushed (RR3). Once set, it
+    /// stays set.
+    pub context_pushed: bool,
 }
 impl PromotionRecord {
     /// A pull-request record takes the branch path: it publishes its context
@@ -189,6 +196,7 @@ impl std::fmt::Debug for PromotionRecord {
             .field("integration_mode", &self.integration_mode)
             .field("answer_code", &self.answer_code)
             .field("situation", &self.situation)
+            .field("context_pushed", &self.context_pushed)
             .finish()
     }
 }
@@ -253,6 +261,8 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     situation TEXT CHECK(situation IN ('first','again')),
     primary_branch TEXT CHECK(primary_branch IS NULL OR (typeof(primary_branch)='text' AND length(primary_branch) BETWEEN 1 AND 255)),
     endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
+    accepted_context_oid TEXT CHECK(length(accepted_context_oid)=40 AND accepted_context_oid NOT GLOB '*[^0-9a-f]*' AND accepted_context_oid!='0000000000000000000000000000000000000000'),
+    context_pushed INTEGER NOT NULL DEFAULT 0 CHECK(context_pushed IN (0,1)),
     CHECK((context_attempt=0)=(context_sync_id IS NULL)),
     CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
     CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
@@ -266,7 +276,8 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
     CHECK(answer_code IS NULL OR step='complete' OR refusal_category='reconfirmation_required'),
     CHECK(answer_code IS NULL OR consented_context_oid IS NOT NULL),
-    CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current')))
+    CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current'))),
+    CHECK(consented_context_oid IS NOT NULL OR (accepted_context_oid IS NULL AND context_pushed=0))
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const BLOCKERS_MARKER: &str = "promotion_refusal_blockers_v2";
@@ -372,6 +383,8 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<PromotionRecord, RepositoryError> {
             .map_err(|_| state::recovery_required())?
             .map(|digest| digest.try_into().map_err(|_| state::recovery_required()))
             .transpose()?,
+        accepted_context_oid: row.oid("accepted_context_oid")?,
+        context_pushed: row.flag("context_pushed")?,
     };
     validate(&r)?;
     Ok(r)
@@ -400,6 +413,7 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
             r.integration_oid,
             r.remote_context_oid,
             r.consented_context_oid,
+            r.accepted_context_oid,
         ]
         .into_iter()
         .flatten()
@@ -443,6 +457,8 @@ fn validate_direct(r: &PromotionRecord) -> Result<(), RepositoryError> {
         || r.situation.is_some()
         || r.primary_branch.is_some()
         || r.endpoint_digest.is_some()
+        || r.accepted_context_oid.is_some()
+        || r.context_pushed
         || matches!(
             r.step,
             Integrating
@@ -524,6 +540,8 @@ fn validate_pull_request(r: &PromotionRecord) -> Result<(), RepositoryError> {
         .into_iter()
         .any(|set| set != begun)
         || !begun && r.step != Abandoned
+        // The re-run table's two columns belong to a record that began.
+        || !begun && (r.accepted_context_oid.is_some() || r.context_pushed)
         // An answer is given by a record that began.
         || !begun && r.answer_code.is_some()
         // A record that began has the publication remote it began with.
@@ -791,6 +809,9 @@ pub(in super::super) fn save_record(
 /// nothing.
 pub(in super::super) enum LinkWrite {
     Untouched,
+    /// A finish whose context branch is gone (RR8): the answer is given and
+    /// no link row is written or renewed. The record keeps no URL (R-30).
+    Withheld,
     Renew {
         given_at: i64,
     },
@@ -833,9 +854,13 @@ pub(in super::super) fn complete_branch_record(
     let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     let paired = matches!(
         (finish.answer, &finish.link),
-        (PromotionAnswer::Promoted, LinkWrite::Give { .. })
-            | (PromotionAnswer::AlreadyPromoted, LinkWrite::Renew { .. })
-            | (PromotionAnswer::PrimaryHolds, LinkWrite::Untouched)
+        (
+            PromotionAnswer::Promoted,
+            LinkWrite::Give { .. } | LinkWrite::Withheld
+        ) | (
+            PromotionAnswer::AlreadyPromoted,
+            LinkWrite::Renew { .. } | LinkWrite::Withheld
+        ) | (PromotionAnswer::PrimaryHolds, LinkWrite::Untouched)
     );
     if r.path() != RecordPath::Branch
         || !r
@@ -856,7 +881,7 @@ pub(in super::super) fn complete_branch_record(
     tx.execute("UPDATE document_promotions SET step='complete',answer_code=?2,publication_category=?3,cancel_requested=0,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![op.to_string(),finish.answer.name(),finish.category.name(),parent::now()]).map_err(|_|state::recovery_required())?;
     let item = r.item_id.to_string();
     match &finish.link {
-        LinkWrite::Untouched => {}
+        LinkWrite::Untouched | LinkWrite::Withheld => {}
         LinkWrite::Renew { given_at } => {
             pull_request_links::touch_link(tx, id, "document", &item, *given_at)
                 .map_err(|_| state::recovery_required())?;
@@ -900,6 +925,61 @@ pub(in super::super) fn abandon_branch_record(
     if answer == PromotionAnswer::RemoteBranchDeleted {
         pull_request_links::delete_link(tx, id, "document", &r.item_id.to_string())
             .map_err(|_| state::recovery_required())?;
+    }
+    read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
+/// The pull-request promotion record that holds the document `item`'s
+/// context until it finishes (Cycle 04 decision 13, the design's table F):
+/// an unfinished pull-request record, at any step. Retirement skips or
+/// refuses a document it holds, as it does a ticket the closure's fence holds.
+/// A direct record is not a hold here, and neither is a refused or a finished
+/// one.
+pub(in super::super) fn pull_request_promotion_holder(
+    db: &Connection,
+    id: i64,
+    item: &ItemId,
+) -> Result<Option<OperationId>, RepositoryError> {
+    use rusqlite::OptionalExtension;
+    if !crate::repository::recovery::has_table(db, TABLE).map_err(|_| state::recovery_required())? {
+        return Ok(None);
+    }
+    let held: Option<String> = db.query_row("SELECT operation_id FROM document_promotions WHERE repository_id=?1 AND item_id=?2 AND integration_mode='pull_request' AND step NOT IN ('complete','abandoned','superseded') LIMIT 1",params![id,item.to_string()],|r|r.get(0)).optional().map_err(|_|state::recovery_required())?;
+    held.map(|operation| OperationId::parse(&operation).map_err(|_| state::recovery_required()))
+        .transpose()
+}
+
+/// Moves a pull-request record's accepted context head from `from` to `to`
+/// (RR1), in the caller's transaction: only an unfinished pull-request record
+/// at `confirmed` none of whose attempts may have pushed, and only from the
+/// head it holds (its consented tip until the first move).
+pub(in super::super) fn accept_context_head(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    from: Oid,
+    to: Oid,
+) -> Result<(), RepositoryError> {
+    let changed = tx.execute("UPDATE document_promotions SET accepted_context_oid=?3,updated_at=max(updated_at,?4) WHERE repository_id=?5 AND operation_id=?1 AND integration_mode='pull_request' AND step='confirmed' AND context_pushed=0 AND coalesce(accepted_context_oid,consented_context_oid)=?2",params![op.to_string(),from.to_string(),to.to_string(),parent::now(),id]).map_err(|_|state::recovery_required())?;
+    if changed != 1 {
+        return Err(state::recovery_required());
+    }
+    read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
+    Ok(())
+}
+
+/// Records that an attempt of a pull-request record's context child may have
+/// pushed (RR3): from then on the re-run table checks no tip, remote or
+/// endpoint. Setting it again changes nothing.
+pub(in super::super) fn note_context_pushed(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+) -> Result<(), RepositoryError> {
+    let changed = tx.execute("UPDATE document_promotions SET context_pushed=1,updated_at=max(updated_at,?2) WHERE repository_id=?3 AND operation_id=?1 AND integration_mode='pull_request' AND step IN ('confirmed','context_synchronized') AND consented_context_oid IS NOT NULL",params![op.to_string(),parent::now(),id]).map_err(|_|state::recovery_required())?;
+    if changed != 1 {
+        return Err(state::recovery_required());
     }
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     Ok(())
