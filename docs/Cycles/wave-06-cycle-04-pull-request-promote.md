@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-rphcs (`01M87684C9GM9BJP5QQ429KMAK`), branch `manyhands/ticket/01M87684C9GM9BJP5QQ429KMAK`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 04 design](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md). Plan: [Cycle 04 implementation plan](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-implementation.md).
 
-Status: **approved** by the owner on 2026-11-26, at revision 7 (decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
+Status: **approved** by the owner on 2026-11-26, at revision 7 (decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer. Implementation: **review-ready** on 2026-11-27, awaiting the owner's review.
 
 Revision history:
 
@@ -23,6 +23,7 @@ Revision history:
 - Revision 7: that review's corrections. Revisions 5 and 7 have not been independently reviewed.
 - Revision 7 (Cycle document `ca1a483f`, design `725a1a01`, plan `e57f0117`) was approved by the owner on 2026-11-26, without a further round (decision 16). This approval edit changes only the status lines, this history, decision 16, the notes and the Review Record.
 - Execution, 2026-11-27: the owner's decisions 17 to 19 and the known limits K-19 and K-20, from Task 4's design checkpoint, with K-16 amended; and the design's row C28 restored after an editing error. Not independently reviewed as documents; the checkpoint they come from was checked four times (execution ledger, Task 4).
+- Review-ready, 2026-11-27: the status line and the Acceptance statuses, from the execution ledger. No other change.
 
 ## Purpose And Authority
 
@@ -96,22 +97,22 @@ Authorities, in order:
 
 | # | Contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | 1, 3, 5 | The owner's case for a new document: promote gives the link, promote again gives the same link, a forge merge commit with the branch deleted, then the poll reports it promoted, retirement succeeds and the link row is gone | planned (Task 7) |
-| A2 | 1, 4 | The same with a squash, and with a fast-forward | planned (Task 7) |
-| A3 | 4, 5 | The ticket's case: an edit of a merged document reads as not promoted (promote, the poll and `document show`) until its own pull request merges, for each merge style, and as promoted after | planned (Task 7) |
-| A4 | 3 | Promoting again after a save publishes it, after the remote's primary moved merges it in, and after a forge-setting change gives the first link | planned (Task 3) |
-| A5 | 2, 7, 8, 10 | The required outcomes C1 to C29, both answer tables and the re-run table RR1 to RR8, C24 being direct mode unchanged | planned (Tasks 3, 4) |
-| A6 | 4 | The content-proof rule: a table over document kind, merge style, local and tracking primary, the remote tracking tip and the proof's refusals | planned (Task 2) |
-| A7 | 2, 8 | The observation: dispatch per mode, the situations in order, the effects, the blockers kept and dropped, each digest field | planned (Task 2) |
-| A8 | 5 | `document show`'s link, and the cheap check agreeing with the proof | planned (Task 6) |
-| A9 | 6 | `item sync`'s link for a document | planned (Task 6) |
-| A10 | 1 | No primary write: every runner test asserts the local primary unchanged and that no synchronization targeted the primary; the SSH case shows the server's primary unchanged across promote and promote again | planned (Tasks 3, 4, 7, 8) |
-| A11 | 8, 9 | Every registration, the way out, the human lines, the CLI goldens with no network (the preview and a blocked prepare), and the prepare's `already_applied` golden written through `tests/mutation_confirmation/conformance.rs` | planned (Tasks 5, 8) |
-| A12 | 10 | The amended contracts, audit and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | planned (Task 9) |
-| A13 | 10 | The fast tier and the SSH targets AGENTS.md's table selects, once at review-ready | planned (Task 10) |
-| A14 | 7 | The retirement fence, F1 to F4: the poll's retirement, `context retire`, the desktop's retirement and their backstops skip or refuse a document with an unfinished pull-request promotion, and retire it once the record finishes | planned (Task 4) |
+| A1 | 1, 3, 5 | The owner's case for a new document: promote gives the link, promote again gives the same link, a forge merge commit with the branch deleted, then the poll reports it promoted, retirement succeeds and the link row is gone | met (Task 7): `repository::promotion::run_tests::pull_request::lifecycles::pull_request_promote_lifecycles`, the new document with a merge commit: the link, the same link again with `given_at` renewed, a save published, the forge's merge and deleted branch, the poll's `promoted`, `PrimaryHolds`, `document show` null, retirement and the row gone; red against a stub proof, no real wait |
+| A2 | 1, 4 | The same with a squash, and with a fast-forward | met (Task 7): the same table's new-document rows with a squash and with a fast-forward |
+| A3 | 4, 5 | The ticket's case: an edit of a merged document reads as not promoted (promote, the poll and `document show`) until its own pull request merges, for each merge style, and as promoted after | met (Task 7): the same table's edit rows, one per merge style: not promoted (promote, the poll and `document show`) until the merge, promoted after; the first edit row red against a stub that answers presence |
+| A4 | 3 | Promoting again after a save publishes it, after the remote's primary moved merges it in, and after a forge-setting change gives the first link | met (Task 3): `repository::promotion::run_tests::pull_request::promoting_again_synchronizes_and_gives_the_same_link` (C4 to C7: nothing new, after a save, after the remote's primary moved, after the forge setting changed) |
+| A5 | 2, 7, 8, 10 | The required outcomes C1 to C29, both answer tables and the re-run table RR1 to RR8, C24 being direct mode unchanged | met (Tasks 3, 4): Task 3's runner tests for C1 to C11 and the binding's `a_pull_request_promotion_answers_by_its_answer`; Task 4's `re_run_outcomes`, `stops_of_the_context_child`, `crash_and_replay`, `holds_cancellation_and_listing`, `consent_differences` and `retirement_waits_for_a_stopped_promote` (103 rows, every stub S1 to S29 run red once); RR8 at the binding from the final review's fix wave (`3ff8e31c`); C24 by every direct test and golden, unchanged, in the fast tier and `document_promotion` |
+| A6 | 4 | The content-proof rule: a table over document kind, merge style, local and tracking primary, the remote tracking tip and the proof's refusals | met (Task 2): `primary_holds_document_by_the_content_proof` (2 documents × 4 merges × 9 scenarios × 6 states of `R`, a shallow repository, two merge bases and an unrelated tip) |
+| A7 | 2, 8 | The observation: dispatch per mode, the situations in order, the effects, the blockers kept and dropped, each digest field | met (Task 2): `pull_request_promotion_observation`, `pull_request_promotion_digest_binds_each_field` and `a_pull_request_promotion_previews_its_three_effects_always`; the direct observation tests unchanged |
+| A8 | 5 | `document show`'s link, and the cheap check agreeing with the proof | met (Task 6): `the_cheap_check_agrees_with_the_proof` (all 437 rows of the proof's table) and `tests/read_items.rs` `document_show_gives_the_link_while_it_is_outstanding` |
+| A9 | 6 | `item sync`'s link for a document | met (Task 6, and the final review's fix wave): `item_sync_gives_an_outstanding_document_link`; the row is read before the proof, so a document with no row pays no proof, pinned by a test-only counter (`5bc766bd`) |
+| A10 | 1 | No primary write: every runner test asserts the local primary unchanged and that no synchronization targeted the primary; the SSH case shows the server's primary unchanged across promote and promote again | met (Tasks 3, 4, 7, 8): every runner test asserts the local primary unchanged and no synchronization of the primary; the SSH case's document steps (`tests/mutation_remote/c5_lifecycle.rs`) show the server's primary, the ticket branch and the local primary unchanged across promote and promote again, with only the document's branch pushed; the final review found no pull-request path that reaches the primary |
+| A11 | 8, 9 | Every registration, the way out, the human lines, the CLI goldens with no network (the preview and a blocked prepare), and the prepare's `already_applied` golden written through `tests/mutation_confirmation/conformance.rs` | met (Tasks 5, 8): the goldens `cli_v1` `document_promote_pull_request_preview` and `document_promote_pull_request_blocked` (JSON and text, no network), `mutation_v1` `document_promote_pull_request_primary_holds` through `tests/mutation_confirmation/conformance.rs` and `document_promote_pull_request_ok` from the SSH case; the two schemas, the registrations, the way out and the human lines |
+| A12 | 10 | The amended contracts, audit and skills; `tests/cli/skills.rs`, `recovery_tables`, `collaboration_exits` and `inventory` pass | met (Task 9, and the final review's fix wave): the contract, the two RFCs, the audit and both skill trees amended; the `skills`, `recovery_tables`, `collaboration_exits` and `inventory` tests pass; four statements corrected after the final review (`90415778`) |
+| A13 | 10 | The fast tier and the SSH targets AGENTS.md's table selects, once at review-ready | met (Task 10): on `df5cdc96`, 2026-11-27. The fast tier took 97 min and was green except three known desktop-scheduler load flakes; each passed when rerun alone. The nine SSH targets were all green, in 92 min. The static gates were clean |
+| A14 | 7 | The retirement fence, F1 to F4: the poll's retirement, `context retire`, the desktop's retirement and their backstops skip or refuse a document with an unfinished pull-request promotion, and retire it once the record finishes | met (Task 4): `the_retirement_fence` (23 cells) and `a_candidate_captured_before_the_record_began_is_refused_at_its_claim` in `context_retirement/mutation_tests.rs`, and the runner's C22 and F3 tests: each retirement path skips or refuses while the record is unfinished, and retires once it finishes |
 
-Nothing has been run. Every status above is planned.
+Statuses set at review-ready, 2026-11-27, from the execution ledger on the ticket branch (Task 10 and each task's section). Every named test ran by exact name when written, and again in the tiers. Native CI has not run: it runs after merge, on main, only when the owner dispatches it.
 
 ## Product-Owner Decisions (2026-11-26)
 
