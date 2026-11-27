@@ -202,6 +202,16 @@ By a read-only research agent (report in the controller's workspace, `task-0-swe
 - Deferred Minor findings (for the final review): the merge styles' shapes are by construction only (no parent-count or ancestry assertion after the forge's merge, about line 390); `assert!(polled["data"]["retirements"].is_null())` (about 402) cannot fail, since a plain poll's data has no such key; `assert_never_pushed_or_merged` (about 277) omits `record::audit`; the edit rows' poll and show assertions before the merge were not shown red one by one.
 - Task 7: complete (commits `70300eb7..fd03a199`, review clean).
 
+## Task 8: The SSH Steps And The Golden
+
+- Base `819c0532`. Implementer: Sonnet 5.5 at high effort. Commit `74242070` test(promotion): the pull-request promote over SSH and its golden.
+- `tests/mutation_remote/c5_lifecycle.rs` `a_pull_request_close_publishes_only_the_ticket_branch` gains the document steps after its own (decision 6): a document created and saved; the prepare (situation `first`) and confirm answer `ok` with `publication` `published`, `primary_holds` false, the link and no blockers; promote again answers `already_applied` with `publication` `current` and the same link; after each step the server's primary, the ticket branch and the local primary are unchanged and only the document's branch was pushed. E-13: the case's `only_the_ticket_branch(since)` became `only_pushed(branch, since)`, every ticket call site passing its own branch and keeping its assertions. The real `remote/sync.rs` child ran under Task 4's start and push checks and passed first time.
+- The golden `mutation_v1` `document_promote_pull_request_ok`; `schemas/v1/pull_request_promotion_mutation.schema.json` (six required keys, as strict as the DTO, after `pull_request_closure_mutation.schema.json`); E-2 (`DATA_ROOTS`, 79), E-8 (`document promote`'s inventory row gains the mutation schema, `synchronization_mutation`, `synchronization_conflict_mutation` and `blocked`), E-9 (`CASES`), and E-11's three enums in `tests/read_contract.rs` (the dispatch had omitted E-11; it is an approved named edit: "any enum the two new schemas declare").
+- Red: against a stub promote that answers `ok` without publishing, the case failed at the server check of the document's branch (three earlier stubs failed for other reasons and were discarded); green in 18.8 s, by exact name. `the_fixture_directories_are_exactly_the_registered_cases`, `every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root`, `inventory::every_verb_s_data_has_an_output_schema_and_its_goldens_match_it` and `published_enumerations_list_exactly_the_registered_values` green. Static gates clean.
+- Review (Sonnet): spec compliant, approved, no Critical or Important.
+- Deferred Minor findings: the golden's `effects.commit_oid` placeholder reads `<integration>` (the shared `golden_at` has only that label) though it holds the published tip, and the case does not assert its value; the case's name no longer describes it (the plan fixes it).
+- Task 8: complete (commits `819c0532..74242070`, review clean).
+
 ## Appendix A: References, Task 0 Steps 2 and 3 (research agent, verbatim)
 
 ### Task 0: names check of the Cycle 04 design against HEAD aee99255 (main 8e5d9832)
