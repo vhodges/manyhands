@@ -1422,6 +1422,114 @@ fn re_run_outcomes() {
     ]);
 }
 
+/// The heads the record's child counts as its own (`own_heads`), for an
+/// attempt that began at `began` and applied `steps`, each from one head to
+/// another. The heads are named: `T` the accepted head (the consented tip),
+/// `a` and `b` commits the child made, `s` a save, `x` a head nobody made.
+/// The row and its steps are the reservation layer's own (`prepare`, `begin`
+/// and `observe` of each step); the answer is mapped back to the names.
+fn own_heads_of(f: &Fixture, began: char, steps: &[(char, char)]) -> Result<String, String> {
+    let tip = f.tip();
+    let a = f.commit_tree(tip, &[(EXTRA, b"a\n")], &[tip]);
+    let b = f.commit_tree(a, &[(EXTRA, b"b\n")], &[a]);
+    let save = f.commit_tree(tip, &[(EXTRA, b"save\n")], &[tip]);
+    let nobody = f.commit_tree(tip, &[(EXTRA, b"nobody\n")], &[tip]);
+    let named = [('T', tip), ('a', a), ('b', b), ('s', save), ('x', nobody)];
+    let oid = |name: char| named.iter().find(|(n, _)| *n == name).unwrap().1;
+    let mut io = PullRequestIo::default();
+    let req = stopped(f, &mut io, Some(Kept::Reserved))?;
+    let record = f.stored(req.operation_id);
+    let child = record.context_sync_id.ok_or("no child was minted")?;
+    let heads = state::with_transaction(&f.service, f.root.path(), |tx, id| {
+        tx.execute(
+            "UPDATE remote_operation_records SET phase='fetch_prepared',sync_checkpoint='fetch_prepared',expected_oid=?2,local_oid=?2 WHERE operation_ulid=?1",
+            [child.to_string(), oid(began).to_string()],
+        )
+        .map_err(|_| state::recovery_required())?;
+        for (ordinal, (from, to)) in steps.iter().enumerate() {
+            state::applied_step_for_test(tx, id, child, ordinal as u8, oid(*from), oid(*to))?;
+        }
+        let row = match record::child_state(tx, &record, record::ChildRole::Context)? {
+            record::ChildState::Unowned(row) | record::ChildState::Retained(row) => row,
+            _ => return Err(state::recovery_required()),
+        };
+        // `promotion_child_moves` is what the chain is built from.
+        let moves = crate::repository::remote::reservation::promotion_child_moves(tx, &row)?;
+        assert_eq!(
+            moves,
+            steps
+                .iter()
+                .map(|(from, to)| (oid(*from), oid(*to)))
+                .collect::<Vec<_>>(),
+            "the steps the layer recorded"
+        );
+        crate::repository::promotion::rerun::own_heads(tx, record.consented_context_oid.unwrap(), Some(&row))
+    })
+    .map_err(|e| format!("{e:?}"))?;
+    Ok(heads
+        .iter()
+        .map(|head| named.iter().find(|(_, o)| o == head).unwrap().0)
+        .collect())
+}
+
+/// A chain of heads the child made counts, and nothing else does: a step
+/// that starts at a save (a merge built on a save, B1) leaves it out, and so
+/// does every step of an attempt that did not begin at the accepted head.
+#[test]
+fn own_heads_follow_only_the_chain_from_the_accepted_head() {
+    type Case = (&'static str, char, &'static [(char, char)], &'static str);
+    let table: &[Case] = &[
+        ("no step", 'T', &[], "T"),
+        ("one step from the accepted head", 'T', &[('T', 'a')], "Ta"),
+        (
+            "two steps, each from the head before it",
+            'T',
+            &[('T', 'a'), ('a', 'b')],
+            "Tab",
+        ),
+        // The step guard: a step counts only from a head already counted.
+        (
+            "a step from a save is not the child's own",
+            'T',
+            &[('s', 'b')],
+            "T",
+        ),
+        (
+            "a chain broken by a save: the step after it is not counted",
+            'T',
+            &[('T', 'a'), ('s', 'b')],
+            "Ta",
+        ),
+        ("a step from a head nobody made", 'T', &[('x', 'a')], "T"),
+        // The start guard: an attempt that began off the accepted head
+        // counts nothing, whatever its steps say.
+        ("an attempt that began at a save", 's', &[('T', 'a')], "T"),
+        (
+            "an attempt that began at a save, with a chain on it",
+            's',
+            &[('s', 'b')],
+            "T",
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (name, began, steps, want) in table {
+        match catch_unwind(AssertUnwindSafe(|| {
+            own_heads_of(&Fixture::pull_request(), *began, steps)
+        })) {
+            Ok(Ok(heads)) if heads == *want => {}
+            Ok(Ok(heads)) => wrong.push(format!("{name}: counted {heads}, not {want}")),
+            Ok(Err(mismatch)) => wrong.push(format!("{name}: {mismatch}")),
+            Err(_) => wrong.push(format!("{name}: panicked")),
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} rows:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
 /// A new document, run again after a stop with its first answer: the table
 /// rows above start from a published document; this one has no remote copy.
 /// The branch gone before the child (RR7) of a promote that was `again`

@@ -128,7 +128,7 @@ fn held(db: &Connection, child: &ChildState) -> Result<bool, RepositoryError> {
 /// The heads only the record's child moved the branch to: the accepted head,
 /// then each move of the current attempt, counted only when that attempt
 /// began there and only from a head already counted.
-fn own_heads(
+pub(super) fn own_heads(
     db: &Connection,
     accepted: Oid,
     row: Option<&StoredRemoteOperation>,

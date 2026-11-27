@@ -644,12 +644,8 @@ fn promote_inner<L: Lifecycle>(
     }
     // A second call explicitly continues an inter-step cancellation. Child
     // ownership/cancel acknowledgement is reconciled separately below.
-    if existing && r.cancel_requested() {
-        state::with_transaction(service, &root, |tx, id| {
-            L::clear_cancellation(tx, id, r.operation_id())
-        })
-        .map_err(mapped::<L::Error>)?;
-        r.set_cancel_requested(false);
+    if existing {
+        continue_cancellation::<L>(service, &root, &mut r)?;
     }
     // Before integration the digest binds the branch name. Afterwards use its
     // immutable base commit's configuration, never a newly edited live setting,
@@ -969,10 +965,7 @@ fn promote_branch<L: Lifecycle>(
         match context_step::<L>(service, request, primary, r, observed, io, progress) {
             Ok(ContextStep::Synchronized) => (),
             Ok(ContextStep::Gone) => {
-                L::end_branch(service, root, r, BranchEnd::ContextGone)
-                    .map_err(mapped::<L::Error>)?;
-                *r = load::<L>(service, root, r.operation_id())?;
-                return Ok(refresh::<L>(service, root, r, false));
+                return end_and_refresh::<L>(service, root, r, BranchEnd::ContextGone);
             }
             // A stop with nothing written that only a new prepare gets past
             // (D6): the child is let go and the record ends with its code.
@@ -980,10 +973,7 @@ fn promote_branch<L: Lifecycle>(
                 if ends_context_child(&error)
                     && let_go::<L>(service, request, r, ChildRole::Context, io)? =>
             {
-                L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
-                    .map_err(mapped::<L::Error>)?;
-                *r = load::<L>(service, root, r.operation_id())?;
-                return Ok(refresh::<L>(service, root, r, false));
+                return end_and_refresh::<L>(service, root, r, BranchEnd::ContextChild(&error));
             }
             // Any other stop, or an end whose child is retained (a conflict
             // is the user's): the child is left as it stands, kept or not,
@@ -1031,12 +1021,8 @@ fn rerun_branch<L: Lifecycle>(
     let root = &request.root;
     // As `promote_inner` does for an existing record: a second call
     // explicitly continues an inter-step cancellation (C17).
-    if existing && r.cancel_requested() {
-        state::with_transaction(service, root, |tx, id| {
-            L::clear_cancellation(tx, id, r.operation_id())
-        })
-        .map_err(mapped::<L::Error>)?;
-        r.set_cancel_requested(false);
+    if existing {
+        continue_cancellation::<L>(service, root, r)?;
     }
     if !existing {
         boundary(service, root, FailurePoint::AfterConfirmed)?;
@@ -1059,10 +1045,7 @@ fn rerun_branch<L: Lifecycle>(
                 if ends_context_child(&error)
                     && let_go::<L>(service, request, r, ChildRole::Context, io)?
                 {
-                    L::end_branch(service, root, r, BranchEnd::ContextChild(&error))
-                        .map_err(mapped::<L::Error>)?;
-                    *r = load::<L>(service, root, r.operation_id())?;
-                    return Ok(refresh::<L>(service, root, r, false));
+                    return end_and_refresh::<L>(service, root, r, BranchEnd::ContextChild(&error));
                 }
                 // A new attempt that refused its own push with `ExternalChange`
                 // sent nothing: once `pushing` is set, that error becomes
@@ -1102,12 +1085,41 @@ fn rerun_branch<L: Lifecycle>(
                     L::Refusal::external_change(),
                 ));
             }
-            L::end_branch(service, root, r, BranchEnd::ContextGone).map_err(mapped::<L::Error>)?;
-            *r = load::<L>(service, root, r.operation_id())?;
-            Ok(refresh::<L>(service, root, r, false))
+            end_and_refresh::<L>(service, root, r, BranchEnd::ContextGone)
         }
         BranchRerun::Run => Err(L::Error::recovery_required()), // cannot arise: a run answers above
     }
+}
+
+/// A second call of a request explicitly continues an inter-step
+/// cancellation: the record's request is cleared, and the record in hand
+/// says so. Child ownership and its acknowledgement are reconciled apart.
+fn continue_cancellation<L: Lifecycle>(
+    service: &RepositoryService,
+    root: &Path,
+    r: &mut L::Record,
+) -> Result<(), L::Error> {
+    if r.cancel_requested() {
+        state::with_transaction(service, root, |tx, id| {
+            L::clear_cancellation(tx, id, r.operation_id())
+        })
+        .map_err(mapped::<L::Error>)?;
+        r.set_cancel_requested(false);
+    }
+    Ok(())
+}
+
+/// A branch record's end after its context child (the second answer table):
+/// the record ends with `end`'s answer, and what it now says is reported.
+fn end_and_refresh<L: Lifecycle>(
+    service: &RepositoryService,
+    root: &Path,
+    r: &mut L::Record,
+    end: BranchEnd<'_>,
+) -> Result<L::Output, L::Error> {
+    L::end_branch(service, root, r, end).map_err(mapped::<L::Error>)?;
+    *r = load::<L>(service, root, r.operation_id())?;
+    Ok(refresh::<L>(service, root, r, false))
 }
 
 /// The table's answer for `r`, which it may have recorded on the record (its
