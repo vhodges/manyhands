@@ -581,6 +581,90 @@ fn schema_rejects_free_text_categories_steps_and_refusal_payloads() {
             "{assignment}"
         );
     }
+    // Each new column's own CHECK, on a row where nothing else can refuse the
+    // value: a pull-request `complete` row, and a refused direct row that
+    // holds none of the six. The value that fits is accepted on the same row.
+    let complete = pull_request(PromotionStep::Complete, ITEMS[1]);
+    insert_row(&tx, &complete).unwrap();
+    let mut direct = pull_request(PromotionStep::Abandoned, ITEMS[2]);
+    direct.integration_mode = Integration::Direct;
+    direct.answer_code = None;
+    direct.refusal = Some(Refusal::Blocked(vec![PromotionBlocker::ContextDirty]));
+    bundle(&mut direct, false);
+    insert_row(&tx, &direct).unwrap();
+    let zero = "0".repeat(40);
+    let not_hex = "g".repeat(40);
+    for (row, bad, good) in [
+        (
+            &complete,
+            "answer_code='path sentinel'",
+            "answer_code='already_promoted'",
+        ),
+        (
+            &complete,
+            "answer_code='merged'",
+            "answer_code='primary_holds'",
+        ),
+        (
+            &complete,
+            "answer_code='Promoted'",
+            "answer_code='primary_holds'",
+        ),
+        (&complete, "situation='title sentinel'", "situation='again'"),
+        (
+            &complete,
+            "endpoint_digest=x'01'",
+            "endpoint_digest=randomblob(32)",
+        ),
+        (
+            &complete,
+            "endpoint_digest='text sentinel'",
+            "endpoint_digest=randomblob(32)",
+        ),
+        (&complete, "primary_branch=''", "primary_branch='trunk'"),
+        (
+            &complete,
+            &format!("primary_branch='{}'", "a".repeat(256)),
+            "primary_branch='trunk'",
+        ),
+        (
+            &complete,
+            &format!("consented_context_oid='{zero}'"),
+            "consented_context_oid='2222222222222222222222222222222222222222'",
+        ),
+        (
+            &complete,
+            &format!("consented_context_oid='{not_hex}'"),
+            "consented_context_oid='2222222222222222222222222222222222222222'",
+        ),
+        (
+            &complete,
+            "consented_context_oid='1111'",
+            "consented_context_oid='2222222222222222222222222222222222222222'",
+        ),
+        (
+            &direct,
+            "integration_mode='body sentinel'",
+            "integration_mode='direct'",
+        ),
+        (
+            &direct,
+            "integration_mode='Pull_Request'",
+            "integration_mode='direct'",
+        ),
+    ] {
+        let id = row.operation_id.to_string();
+        for (assignment, accepted) in [(bad, false), (good, true)] {
+            tx.execute_batch("SAVEPOINT column_check").unwrap();
+            let result = tx.execute(
+                &format!("UPDATE document_promotions SET {assignment} WHERE operation_id=?1"),
+                [&id],
+            );
+            tx.execute_batch("ROLLBACK TO column_check; RELEASE column_check")
+                .unwrap();
+            assert_eq!(result.is_ok(), accepted, "{assignment}");
+        }
+    }
 }
 #[test]
 fn privacy_column_inventory_for_both_new_tables() {
