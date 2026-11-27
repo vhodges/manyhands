@@ -86,6 +86,24 @@ By a read-only research agent (report in the controller's workspace, `task-0-swe
 
 - Task 0: complete. Steps 1 to 5 above; Step 6 commits this ledger, publishes the branch and adds the start comment (recorded under Task 1).
 
+## Task 1: The Record's Mode
+
+- Base `679b2661`. Implementer: Sonnet 5.5 at high effort.
+- Design checkpoint (Step 0), written by the implementer against the source (Appendix C, verbatim), approved by the orchestrator on 2026-11-26 as written. All six of Part A's columns stay, each tied to the RR, F or C row that reads it. Nothing reaches `begin_record` in this task: its signature and its 32 callers stay, so no E-18 onwards; Task 3 adds the pull-request begin with its caller and tests that it writes the four begin-time columns. Task 1 tests pull-request rows through a test-only insert helper read back by `read_record` and saved by `save_record`.
+- Ruling: `answer_code` is a closed list in SQL, not Cycle 03's GLOB form — this table's other categories are closed lists — a seventh answer needs the migration amended on the branch, which Task 4's checkpoint may do.
+- Ruling: a pull-request row moves `confirmed` → `context_synchronized` → `complete` and `confirmed` → `abandoned` only; `context_synchronized` → `abandoned` is refused, unlike Cycle 03's graph — Part A names only those moves, RR2 finishes a completed child whatever else changed, and the second table starts at `confirmed` — if a Task 4 row needs it, Task 4's checkpoint adds the arm.
+- Ruling: the SQL and `validate` also refuse, for a pull-request row, a primary child, a cleanup category, a publication category before `complete`, and an answer outside its step's set (`complete`: `promoted`, `already_promoted`, `primary_holds`; `abandoned`: `primary_holds`, `remote_branch_deleted`, `history_unresolved`, `context_gone`, with the refusal `reconfirmation_required`) — each follows a Part C table — Task 4 may relax one with a row that needs it.
+- Ruling: `PromotionSituation { First, Again }` is defined here, stored as `first` and `again`, for Task 2's observation to reuse — the brief gives the column no type — none.
+- Ruling: the four begin-time columns are all set or all null, and `save_record` holds them, the mode and the answer equal to what was inserted — a refused record written at confirm has none, one that RR4 or RR5 end keeps those it began with (Part A) — none.
+
+- Commits: `fb666745` feat(promotion): the record's mode and stored answer; `a4586e67` test(promotion): pin the record's column checks (fix round 1).
+- Tests (implementer, each by exact name, 1 test each): `promotion_modes_migration_rebuilds_a_v2_table_once` and `pull_request_promotion_steps_and_checks` (new); the E-4 tests `promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once`, `privacy_column_inventory_for_both_new_tables`, `schema_rejects_free_text_categories_steps_and_refusal_payloads` (edited), `migration_preserves_legacy_rows_is_idempotent_and_audited`, `half_created_migration_and_missing_marked_table_fail_closed`, `record_forward_transitions_and_invalid_backwards_recover` (unchanged); E-15's `promotion_steps_map_to_the_shared_step_view`; E-3's `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly` (`--test recovery_foundation_gate`). Static gates clean. Red: a compile failure (133 errors), then four deliberate stubs (the pull-request `permits` on the direct graph, the no-integration-columns CHECK removed, the answer-implies-`reconfirmation_required` CHECK removed, the rebuild skipped), each failing a named assertion; in fix round 1, six column-CHECK stubs and Cycle 03's GLOB form for `answer_code`, each failing.
+- Named edits applied: E-3, E-4 (three of its six tests edited, additively; three unchanged), E-15. No E-18 onwards.
+- Review (Opus): spec compliant; one Important: five new free-text schema assertions were never red and hit table CHECKs rather than their column CHECKs, so the closed lists, the digest's length and the consented OID's format were untested. Fix round 1/5 (1 addressed, 0 open; commits `fb666745..a4586e67`): each bad value now runs on a row where only its column CHECK can refuse it, beside a fitting value that must be accepted; `answer_code='merged'` pins the closed list against the GLOB form. Re-review (Sonnet): addressed, no new Critical or Important.
+- Deferred Minor findings (for the final review): an answered `abandoned` pull-request row with no begin-time columns is accepted by the SQL and by `validate` (a CHECK `answer_code IS NULL OR consented_context_oid IS NOT NULL` would refuse it; Task 3 or 4 may amend the migration on the branch); `primary_branch`'s bound counts characters in SQL and bytes in Rust; the `save_record` rows for the mode's and the answer's immutability pass through `validate` anyway, the refused-record nulls assertion passes because `abandoned` is terminal, and no row saves `context_synchronized` → `complete` with an answer; the comment at `record.rs:90` says the first three answers go with `complete` and the rest with `abandoned`, though `primary_holds` is allowed at `abandoned`; the row "abandoned with no refusal" (`record_tests.rs:2074`) also clears the answer; `parse_mode` copies the closure module's private parser (an `Integration::parse` in `canonical.rs` could serve both); the fix's `typeof` sub-clauses of `endpoint_digest` and `primary_branch` have no case that only they refuse.
+- Pointers for Task 3 (from the implementer): replace the `unreachable!("a promotion record is always direct")` hooks; guard `parent::complete_record` and `supersede` against pull-request rows; the finish function checks `permits`.
+- Task 1: complete (commits `679b2661..a4586e67`, review clean after fix round 1).
+
 ## Appendix A: References, Task 0 Steps 2 and 3 (research agent, verbatim)
 
 ### Task 0: names check of the Cycle 04 design against HEAD aee99255 (main 8e5d9832)
@@ -452,3 +470,140 @@ run: cargo test --locked --no-fail-fast --target ${{ matrix.target }} --lib --te
 ```
 
 and line 129 runs the desktop's `--features desktop-test-support --bin manyhands`. Every target the design extends (`document_promotion`, `ticket_closure`, `mutation_remote`, `mutation_confirmation`, `mutation_contract`, `read_items`, `read_contract`, `recovery_foundation_gate`, `cli`, `cli_remote`, `--lib`, `--bin manyhands-cli`) is in that list already. The AGENTS.md fast-tier command also needs no change.
+
+## Appendix C: Task 1 design checkpoint, approved (verbatim)
+
+### Task 1 design checkpoint (Step 0): the record's mode
+
+Phase 1 only: nothing below is written yet. Files read: `promotion/record.rs`, `promotion/lifecycle.rs` (`LifecycleRecord` impl), `closure/record.rs` (the pattern), `record_tests.rs`, `lifecycle_tests.rs`, `tests/recovery_foundation_gate.rs`, design Parts A to C and the named edits.
+
+### 1. Each of Part A's six columns against the RR and F rows
+
+All six stay. None is droppable; each is read by a row that has no other source.
+
+| Column | Read by | Why no other source serves |
+| --- | --- | --- |
+| `integration_mode` | Every row below applies to a pull-request record only. `path()` (Branch vs Direct) routes the runner (`run.rs` 375, 510, 654, 2239, 2293, 2326); `permits`/`validate`/CHECKs switch on it; F1 to F3 fence "a pull-request promotion record", so they must tell it from a direct one (the direct record is held by its own existing rules); C18 (a refused record "of the confirm's mode") | Cycle 01 decision 11: fixed for the record's life; the live configuration may have switched since (C18) |
+| `answer_code` | RR2 (a finished record answers from it), C14, C15 (the envelope was lost: "rebuilt from `answer_code`"), both Part C tables' "Record" column (`promoted`, `already_promoted`, `primary_holds`, `remote_branch_deleted`, `history_unresolved`, `context_gone`), `answered()` (the runner's re-entry at `run.rs` 376, 484, 618) | The envelope can be lost; the link row can be gone or renewed; the tracking primary has moved. Nothing else says which of the six answers was given |
+| `consented_context_oid` | RR4 ("the branch holds a commit its child did not make", before any attempt pushed: the check is the branch against the consented tip, the child's own moves being known by `child_state`); RR7 and the second table ("R-3 ... on the consented tip" after a child that ended or a branch gone); C25 | `context_oid` is unset at `confirmed` and, once set at `context_synchronized`, is the branch **after** the child (`context_step`, `run.rs` about 1176-1187), so it cannot be the pre-child baseline. The expectation is a digest and cannot be compared with a head. Cycle 03's column of the same name and immutability |
+| `situation` | The first table's second row ("the record's situation is `again`": `already_promoted`, `given_at` renewed) versus third row (`promoted`, link written); C4 to C7, C1 to C3: the answer follows the situation as consented, not the link row as it is when the record finishes (a link given between consent and finish changes the row, C19 makes that an `external_change` only before the record begins) | The row can change after begin (C11 deletes it on an ended record; a re-run after a crash finds it renewed). The consented situation is the contract |
+| `primary_branch` | RR2 ("without needing the live configuration", C26, C27): after a child that completed, R-3 and the link's pull-request base are judged on the primary branch the record began with, even if the configuration became unreadable or the setting changed | The live `RepositoryConfig` is the thing that may be unreadable (Baseline Fact 22: `recorded_config` needs a base, which a pull-request promotion never has) |
+| `endpoint_digest` | RR5 ("the publication remote's name or its endpoint (`endpoint_digest_of`) is not what the record began with"); C20; `remote_name` already holds the name, only the digest sees a changed URL under an unchanged name | `remote_name` alone cannot see a changed endpoint. Stored as the 32-byte digest (a BLOB, as retirement stores it, `context_retirement/record.rs` 269), never a URL |
+
+Task 4's checkpoint may still amend the rebuild on this branch (no real registry has run it).
+
+### 2. DDL
+
+`SCHEMA_V2` is today's `SCHEMA`, byte for byte (renamed; the `promotion_refusal_blockers_v2` step rebuilds from it). The new `SCHEMA` is `SCHEMA_V2` with these six columns appended after `refusal_blockers` and six table CHECKs appended after the existing six. `INDEX` is unchanged and still unique per `(repository_id,item_id)` for unfinished steps, of either mode. No SQL comments.
+
+```sql
+    integration_mode TEXT NOT NULL DEFAULT 'direct' CHECK(integration_mode IN ('direct','pull_request')),
+    answer_code TEXT CHECK(answer_code IN ('promoted','already_promoted','primary_holds','remote_branch_deleted','history_unresolved','context_gone')),
+    consented_context_oid TEXT CHECK(length(consented_context_oid)=40 AND consented_context_oid NOT GLOB '*[^0-9a-f]*' AND consented_context_oid!='0000000000000000000000000000000000000000'),
+    situation TEXT CHECK(situation IN ('first','again')),
+    primary_branch TEXT CHECK(primary_branch IS NULL OR (typeof(primary_branch)='text' AND length(primary_branch) BETWEEN 1 AND 255)),
+    endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
+    ... the six existing CHECKs, then:
+    CHECK((consented_context_oid IS NULL)=(situation IS NULL) AND (consented_context_oid IS NULL)=(primary_branch IS NULL) AND (consented_context_oid IS NULL)=(endpoint_digest IS NULL)),
+    CHECK(integration_mode='pull_request' OR (consented_context_oid IS NULL AND answer_code IS NULL)),
+    CHECK(integration_mode='direct' OR step='abandoned' OR consented_context_oid IS NOT NULL),
+    CHECK(integration_mode='direct' OR (base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND cleanup_category IS NULL AND primary_attempt=0 AND step NOT IN ('integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','superseded'))),
+    CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
+    CHECK(answer_code IS NULL OR step='complete' OR refusal_category='reconfirmation_required'),
+    CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current')))
+```
+
+Decisions inside it, for the approver:
+
+- **A closed answer list, not Cycle 03's `typeof/length/GLOB`.** This table's other categories are closed lists (`integration_kind`, `publication_category`), and Task 1's test of free-text rejection reads best against one. The cost: a seventh answer needs the migration amended on the branch, which the brief already allows. Say if you want the GLOB form instead.
+- **The four begin-time columns are all set or all null** (CHECK 1). A pull-request row holds all four from `confirmed` (CHECK 3); the only rows with none are refused records written at confirm (`abandoned`, no begin). A record that RR4 or RR5 end keeps the four it began with, as the design says.
+- **A pull-request row never holds `primary_attempt`/`primary_sync_id`** (CHECK 4, via the existing `(primary_attempt=0)=(primary_sync_id IS NULL)`), nor `cleanup_category`. The design says it never reaches a publication child or a cleanup (R-1, "never reaches `integrating` ... `superseded`"); I made the SQL say so.
+- **An answer implies the `reconfirmation_required` refusal** at `abandoned` (CHECK 6), as Cycle 03's `abandon_branch_record` stores them; a refused record has a refusal and no answer.
+- The `complete` CHECK also requires the child's category in `publication_category` (`published` or `already_current`), per Part A ("at `complete` holds its context child's category").
+- `refusal_blockers`'s range and the `(step='abandoned')=(refusal_category IS NOT NULL)` CHECK are unchanged and serve both modes.
+
+### 3. The migration
+
+Marker `wave_06_promotion_modes_v1`, run in `migrate` after `promotion_refusal_blockers_v2`:
+
+- the `promotion_refusal_blockers_v2` step rebuilds from `SCHEMA_V2` (not `SCHEMA`); its copy stays `INSERT ... SELECT *` (the pre-v2 table has the 21 V2 columns);
+- the modes step, if unmarked and not just created: `DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_modes; {SCHEMA}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM document_promotions_before_modes ORDER BY rowid; DROP TABLE document_promotions_before_modes;` then the marker insert. Existing rows read `direct` by the column default; the six new columns are null.
+- the create path (marker `cycle_09_document_promotions` absent) writes `SCHEMA` and, as today, falls through with `created = true`, so neither rebuild runs; both later markers are inserted.
+- `validate_schema` compares the stored DDL to `SCHEMA` exactly.
+
+`V2_COLUMNS` (21, in `SCHEMA_V2` order): `repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers`.
+
+New table order after `refusal_blockers`: `integration_mode, answer_code, consented_context_oid, situation, primary_branch, endpoint_digest` (this is the order the privacy inventory test lists).
+
+### 4. `PromotionStep::permits` and `validate`, per mode
+
+`permits(self, next, remote, mode: Integration)`; its one caller is `save_record`, which passes `old.integration_mode`.
+
+- `Direct`: exactly today's arms. No change.
+- `PullRequest`: not terminal, and `self == next` or `(Confirmed, ContextSynchronized)` or `(ContextSynchronized, Complete)` or `(Confirmed, Abandoned)`. Everything else is refused, so no integration, publication or cleanup step. `ContextSynchronized → Abandoned` is **not** permitted (design: "`confirmed` → `abandoned`" only; RR2 finishes a child that completed). Cycle 03's graph does permit it; if you want it for parity, it is one arm, say so. `ContextSynchronized → Complete` is the finish function's guard (Task 3), as `abandon_branch_record` calls `branch_permits`; `save_record` itself can never reach `complete` for a pull-request row, because `answer_code` is immutable in it and `complete` needs one (as a direct row's `complete` needs the retirement transaction, `record_forward_transitions...` pins that).
+
+`validate` is split. The common part (ids, attempts, refusal presence, zero OIDs, `context_oid` required from `context_synchronized` on, `remote_context_oid`/`remote_deleted` need a remote) stays inline as today. The four clauses that read the integration columns (base and kind from `integrating`, integration OID from `integrated`, the publication category at `published` onward, `publication_pending`) move to `validate_direct`, **unchanged in behaviour** and extended to demand the six new columns null (mode direct, no answer, no begin-time column). They cannot stay common: a pull-request `complete` has no base or integration. `validate_pull_request` demands:
+
+- no `base_oid`, `integration_oid`, `integration_kind`, `cleanup`, `primary_sync_id`; no step among the nine excluded ones;
+- the four begin-time columns all set or all none; all set at every step but `abandoned`; `primary_branch` set implies a remote name and passes `RemoteRefPlan::from_configuration(remote, primary_branch)`; a remote name present on every non-abandoned row (a pull-request record always has the publication remote);
+- `complete`: `context_oid`, `publication` in {`published`, `already_current`}, `answer_code` in {`promoted`, `already_promoted`, `primary_holds`}, no refusal;
+- `abandoned`: `publication` none; `answer_code` none (a refused record, any refusal) or in {`primary_holds`, `remote_branch_deleted`, `history_unresolved`, `context_gone`} **with** the refusal `reconfirmation_required`;
+- `confirmed`, `context_synchronized`: no answer, no publication.
+
+(The answer-set-per-step and the nones for `publication` are Rust-only, beyond the SQL above, and come straight from the two tables of Part C.)
+
+### 5. `save_record`
+
+The immutability list gains, as flat equality (not "once set": the begin-time columns are written at insert only, and a null stays null): `old.integration_mode != r.integration_mode`, `old.answer_code != r.answer_code`, and the four `consented_context_oid`, `situation`, `primary_branch`, `endpoint_digest`. All answer `recovery_required`, as the neighbouring rules do. The existing `context_oid` rule stands: unset at `confirmed`, set once at `context_synchronized`, then immutable. `answer_code` is written only by Task 3's finish function (like Cycle 03's `complete_branch_record`). The UPDATE statement writes none of the six.
+
+### 6. `PromotionAnswer` and the other new types (in `promotion/record.rs`, built with `categories!` as the neighbouring enums)
+
+- `PromotionAnswer { Promoted=>"promoted", AlreadyPromoted=>"already_promoted", PrimaryHolds=>"primary_holds", RemoteBranchDeleted=>"remote_branch_deleted", HistoryUnresolved=>"history_unresolved", ContextGone=>"context_gone" }`, with `name()`/`parse()` from the macro (any other text reads as recovery).
+- `PromotionSituation { First=>"first", Again=>"again" }`: the brief gives `situation` no type; I need one now so that decode and the CHECK agree. Task 2's observation may reuse it.
+- `PromotionRecord` gains `integration_mode: Integration`, `answer_code: Option<PromotionAnswer>`, `consented_context_oid: Option<Oid>`, `situation: Option<PromotionSituation>`, `primary_branch: Option<String>`, `endpoint_digest: Option<[u8; 32]>`. `decode` reads them (a private `parse_mode` of seven lines, copied rather than loosening Cycle 03's private one: no edit to `closure/record.rs`; the BLOB through `row.0.get::<_, Option<Vec<u8>>>` and `try_into`). `Debug` shows the mode, the answer and the situation, never the digest.
+
+### 7. `path()` and `answered()`
+
+Inherent methods on `PromotionRecord` as on `ClosureRecord`: `path()` is `RecordPath::Branch` for `PullRequest`, `Direct` for `Direct`; `answered()` is `answer_code.is_some()`. The `LifecycleRecord` impl for `PromotionRecord` in `lifecycle.rs` forwards both. No other change in `lifecycle.rs`. The `unreachable!("a promotion record is always direct")` branch hooks stay; no pull-request row can exist in a production run before Task 3 (nothing inserts one), and Task 3 replaces them.
+
+### 8. How the mode and the begin-time columns reach `begin_record`: the signature and dead-code question
+
+**Choice: nothing reaches `begin_record` in Task 1. Its signature and all about 32 callers stay as they are; Task 1 adds no begin-time function; the pull-request rows are created in the tests by a test-only insert helper in `record_tests.rs`.**
+
+Why:
+- A new `begin_pull_request_record` (or a mode argument on `begin_record`) has no production caller until Task 3 (nothing begins a pull-request promotion before it). The only way to compile it today is under this file's blanket `#![allow(dead_code)]`, which is exactly the "function with no production caller yet" the plan forbids. A mode argument that production passes as `Direct` would change 32 callers (each an E-18 onwards entry), for a variant production never builds.
+- What Task 1 owns is the schema, `validate`, `permits`, `save_record`, `decode`, `PromotionAnswer`, `path`/`answered`. All of it is exercised in production by direct rows (`decode`, `validate`, `save_record`, the migration, `path()`, `answered()` are called by the runner for every record) and tested for pull-request rows by inserting a row with SQL and reading it back through `read_record` (so `decode` and `validate` run) and saving through `save_record`.
+- `begin_pull_request_record` and `refuse_record`'s mode arrive in Task 3 with their caller, where Task 3 also tests that they write the four columns (a begin-time test row belongs there).
+
+Cost: Task 1 does not test that begin writes the four columns; Task 3's tests must. If you prefer the begin twin now behind the file's existing allow, say so; I recommend against.
+
+### 9. Tests (all in `src/repository/promotion/record_tests.rs`, library layer, in-memory registry, no SSH)
+
+New, names exact (the brief's):
+1. `promotion_modes_migration_rebuilds_a_v2_table_once`. Builds a table with `SCHEMA_V2` + `INDEX` and the old markers from rows made through `begin_record`/`save_record` at several steps (confirmed; context_synchronized; integrated; a refused `abandoned`; a `complete` through `complete_record` if cheap, else `publication_pending`) with distinct items, copied by `V2_COLUMNS`, the modes marker deleted. Migrates; asserts every row reads back equal to its pre-migration record with `integration_mode == Direct` and the six new fields none, rowid order kept, the stored DDL equals `SCHEMA`, the marker count is 1; a second `migrate` changes nothing (`total_changes`); a fresh registry has `SCHEMA`, `INDEX` and the three markers (`cycle_09_document_promotions`, `promotion_refusal_blockers_v2`, `wave_06_promotion_modes_v1`).
+2. `pull_request_promotion_steps_and_checks`. One table of cases `(label, step, mutate columns, rust_ok, sql_ok)`: a pull-request base row per step, inserted by the helper (an `insert_row(&PromotionRecord)` that writes all 27 columns), asserting the SQL accepts or refuses, and `validate` plus `decode` accept or refuse, for: the good rows at `confirmed`, `context_synchronized`, `complete` (`published` and `already_current`; each of the three answers), `abandoned` with `reconfirmation_required` and each of the four ended answers, `abandoned` as a refused record (each of `blocked`, `external_change`, `reconfirmation_required`; no answer; four columns null, and four columns set as RR4/RR5 leave them); the bad ones: any integration, cleanup, base, primary-attempt column; each excluded step; a begin-time column missing at `confirmed`/`context_synchronized`/`complete`; one of four set; answer at `confirmed`/`context_synchronized`; answer missing or `remote_branch_deleted` at `complete`; answer at `abandoned` with `blocked`/`external_change`; `primary_holds` at `abandoned` with no refusal; a direct row with any of the six; a bad `primary_branch`; a `complete` row with a missing/other publication category. Also `permits`: all 13 x 13 step pairs in pull-request mode against the expected set, and a few direct pairs unchanged. Also `path()` and `answered()` for both modes. Also `save_record`: from a `confirmed` pull-request row, each of the four begin-time columns, the mode and the answer changed refuses (`recovery_required`), `context_oid` set once at `context_synchronized` succeeds and then refuses a change; every non-listed step move refuses.
+
+One test per brief, a table inside each; the rows of the second carry the "pins unchanged" and "new" distinction in their labels.
+
+Extension of existing tests (E-4, additive only):
+- `privacy_column_inventory_for_both_new_tables`: the allowed `document_promotions` list gains the six names in the order above. Required: it fails otherwise.
+- `schema_rejects_free_text_categories_steps_and_refusal_payloads`: its assignment list gains `integration_mode='body sentinel'`, `answer_code='path sentinel'`, `situation='title sentinel'`, `endpoint_digest=x'01'`, `primary_branch=''`. Rows added, none changed.
+- `promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once`: rewritten to build the old table from `SCHEMA_V2.replace("131071","65535")` with `INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before`, deleting the two markers `promotion_refusal_blockers_v2` and `wave_06_promotion_modes_v1`, as `closure/record_tests.rs` (about 1782) does. Its assertions are unchanged, including the marker-count one (the modes marker is re-inserted by the same migration). Required: the current `SELECT *` into the 21-column V2 would fail.
+- `migration_preserves_legacy_rows_is_idempotent_and_audited`, `half_created_migration_and_missing_marked_table_fail_closed`, `record_forward_transitions_and_invalid_backwards_recover`: named in E-4 but I expect **no edit**: they do not enumerate columns (the first drops the table and one marker and re-creates with `SCHEMA`; the second drops the table; the third saves direct rows). I will run each by exact name in Phase 2 and edit only one that fails, and report it. The mode's rows live in my two new tests.
+
+Existing tests changed, beyond those:
+- **E-3** `tests/recovery_foundation_gate.rs` `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly` (about 1135-1143): the marker list gains `"wave_06_promotion_modes_v1"` after `"wave_06_closure_modes_v1"` (sorted `ORDER BY name`).
+- **E-15** `promotion/lifecycle_tests.rs:90` `promotion_steps_map_to_the_shared_step_view`: the `PromotionRecord { .. }` literal gains `integration_mode: Integration::Direct` and `answer_code`, `consented_context_oid`, `situation`, `primary_branch`, `endpoint_digest` all `None`. The 13 steps and the shared view are untouched. It is the only literal of the struct in `src/` and `tests/` (grep).
+- No caller of `begin_record` or `refuse_record` changes, so there is no E-18 onwards.
+
+### 10. Verification plan (Phase 2)
+
+Red: tests written first against the unchanged record (a compile failure on the new fields and `SCHEMA_V2`/`V2_COLUMNS`/`PromotionAnswer`, recorded). Then, since a compile failure shows no row biting, after implementing, one deliberate-stub run: with the pull-request arm of `permits` stubbed to the direct graph and CHECK 4 removed, the second test fails on named rows (recorded), then the stub is reverted. Green: each new test and each edited test by exact name; `recovery_foundation_gate` E-3 test by exact name; then check, fmt, clippy (`-D warnings`). No whole module, no whole target, no CLI.
+
+### 11. Points for the approver
+
+1. Closed answer list in SQL (vs the GLOB form). Recommended: closed.
+2. `ContextSynchronized → Abandoned` refused for pull-request rows (design-faithful); parity with Cycle 03 would permit it.
+3. The extra constraints beyond the design's words: no primary child and no cleanup category; `publication` only at `complete`; the answer set per step. Each follows a Part C table; Task 4 can relax one.
+4. No begin-time function in Task 1 (section 8).
+5. `PromotionSituation` is defined here.
