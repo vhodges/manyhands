@@ -1624,8 +1624,10 @@ fn primary_holds_by(
 /// conflict, an unresolved history, no tracking primary, a merge in
 /// progress at the root); the primary holds the document (`already_applied`,
 /// no record); the branch's history is `Deleted`; a link row, `again`;
-/// otherwise `first`. Nothing touches the primary, so the root's state, the
-/// local primary, an integration and the identity do not matter.
+/// otherwise `first`. Nothing touches the primary, so the local primary, an
+/// integration and the identity do not matter, nor does the root's state,
+/// except that a merge, rebase or cherry-pick in progress there blocks, with
+/// `primary_conflicted` and `context_conflicted`.
 fn observe_pull_request(
     repository: &git2::Repository,
     root: &Path,

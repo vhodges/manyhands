@@ -916,6 +916,7 @@ impl LifecyclePreview for DocumentPromotionPreview {
     /// synchronizes the branch with its remote copy and the remote's primary
     /// and publishes it (R-19), contained or not.
     fn runs_context_child(&self) -> bool {
+        // Defensive: a pull-request record does not reach this through `rerun_branch`.
         self.pull_request().is_some()
             || !(self.integration() == PlannedIntegration::AlreadyContained
                 && self.tracking_context().is_none())
@@ -1103,7 +1104,8 @@ impl Lifecycle for DocumentPromotionLifecycle {
         confirmation: Option<&ConfirmedCommitIdentity>,
     ) -> Result<(), DocumentPromotionError> {
         // A pull-request promotion commits nothing of its own: its child's
-        // own identity stop answers as `item sync`'s does.
+        // own identity stop answers as `item sync`'s does. Defensive: a
+        // pull-request record does not reach this through `rerun_branch`.
         if preview.pull_request().is_some()
             || preview.integration() == PlannedIntegration::AlreadyContained
         {

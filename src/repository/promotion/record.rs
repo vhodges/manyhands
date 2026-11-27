@@ -88,7 +88,8 @@ impl CleanupCategory {
 }
 
 // How a finished pull-request promotion answers, stored as its `answer_code`:
-// the first three when its context child completed, the rest when it ended.
+// the first three when its context child completed (`complete`), the rest when
+// it ended (`abandoned`); `primary_holds` goes with both.
 categories!(PromotionAnswer {
     Promoted=>"promoted", AlreadyPromoted=>"already_promoted", PrimaryHolds=>"primary_holds",
     RemoteBranchDeleted=>"remote_branch_deleted", HistoryUnresolved=>"history_unresolved", ContextGone=>"context_gone"

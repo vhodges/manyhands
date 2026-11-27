@@ -1550,9 +1550,7 @@ fn fill_complete_read(
         authoring_kind_name(kind),
         &id,
     )?
-    .filter(|_| {
-        kind == AuthoringKind::Ticket || document_link_outstanding(connection, repo, item, &id)
-    })
+    .filter(|_| kind == AuthoringKind::Ticket || document_link_offered(connection, repo, item, &id))
     .as_ref()
     .map(PullRequestDto::from);
     let publication = match &item.closure {
@@ -1571,7 +1569,7 @@ fn fill_complete_read(
 /// document's active context, and the primary does not hold the document, by
 /// the cheap check of Part E. Whatever cannot be read leaves the primary not
 /// holding it, as the proof's refusals do.
-fn document_link_outstanding(
+fn document_link_offered(
     connection: &Connection,
     repo: &ResolvedRepository,
     item: &ItemDto,
