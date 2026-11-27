@@ -3,11 +3,11 @@
 //! ticket closure table; this module keeps the promotion schema, step graph,
 //! invariants, insert and save.
 #![allow(dead_code)] // The approved Task 6 runner composes these transaction-scoped seams.
-use super::lifecycle::LifecycleKind;
+use super::lifecycle::{LifecycleKind, RecordPath};
 use super::lifecycle_record::{self as parent, Blocker, ParentRecord, categories};
 use super::{PromotionBlocker, PromotionExpectation};
 use crate::{
-    canonical::ItemId,
+    canonical::{Integration, ItemId},
     repository::{
         OperationId, RepositoryError, RepositoryService,
         cleanup::RetirementEvidence,
@@ -32,10 +32,22 @@ impl PromotionStep {
     pub(in super::super) fn terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Abandoned | Self::Superseded)
     }
-    fn permits(self, next: Self, remote: bool) -> bool {
+    /// The step graph of a record in `mode`. A pull-request promotion
+    /// synchronizes its context and finishes: it never integrates, publishes
+    /// a primary or cleans up, so it has no other step.
+    fn permits(self, next: Self, remote: bool, mode: Integration) -> bool {
         use PromotionStep::*;
         if self.terminal() {
             return false;
+        }
+        if mode == Integration::PullRequest {
+            return self == next
+                || matches!(
+                    (self, next),
+                    (Confirmed, ContextSynchronized)
+                        | (ContextSynchronized, Complete)
+                        | (Confirmed, Abandoned)
+                );
         }
         self == next
             || matches!(
@@ -73,6 +85,16 @@ impl CleanupCategory {
         )
     }
 }
+
+// How a finished pull-request promotion answers, stored as its `answer_code`:
+// the first three when its context child completed, the rest when it ended.
+categories!(PromotionAnswer {
+    Promoted=>"promoted", AlreadyPromoted=>"already_promoted", PrimaryHolds=>"primary_holds",
+    RemoteBranchDeleted=>"remote_branch_deleted", HistoryUnresolved=>"history_unresolved", ContextGone=>"context_gone"
+});
+// Whether the document had a link row when the pull-request promotion was
+// consented to.
+categories!(PromotionSituation { First=>"first", Again=>"again" });
 
 pub(in super::super) type Refusal = parent::Refusal<PromotionBlocker>;
 const BLOCKERS: [PromotionBlocker; 17] = [
@@ -120,6 +142,36 @@ pub(in super::super) struct PromotionRecord {
     pub cancel_requested: bool,
     pub updated_at: i64,
     pub refusal: Option<Refusal>,
+    /// The mode the record began in, fixed for its life. A pull-request
+    /// record has no integration, publication of the primary or cleanup.
+    pub integration_mode: Integration,
+    /// How a finished pull-request record answers, stored with its last step.
+    pub answer_code: Option<PromotionAnswer>,
+    /// The context head the pull-request observation's digest bound at
+    /// confirm. With the three that follow, set at begin and immutable; all
+    /// four are null only on a refused record written at confirm, and on a
+    /// direct record.
+    pub consented_context_oid: Option<Oid>,
+    pub situation: Option<PromotionSituation>,
+    /// The configured primary branch at begin.
+    pub primary_branch: Option<String>,
+    /// `endpoint_digest_of` the publication remote at begin.
+    pub endpoint_digest: Option<[u8; 32]>,
+}
+impl PromotionRecord {
+    /// A pull-request record takes the branch path: it publishes its context
+    /// and never integrates.
+    pub(in super::super) fn path(&self) -> RecordPath {
+        match self.integration_mode {
+            Integration::Direct => RecordPath::Direct,
+            Integration::PullRequest => RecordPath::Branch,
+        }
+    }
+    /// A finished pull-request record has its answer stored, and answers
+    /// from it.
+    pub(in super::super) fn answered(&self) -> bool {
+        self.answer_code.is_some()
+    }
 }
 impl std::fmt::Debug for PromotionRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -133,12 +185,17 @@ impl std::fmt::Debug for PromotionRecord {
             .field("publication", &self.publication)
             .field("cleanup", &self.cleanup)
             .field("refusal", &self.refusal)
+            .field("integration_mode", &self.integration_mode)
+            .field("answer_code", &self.answer_code)
+            .field("situation", &self.situation)
             .finish()
     }
 }
 /// The table parents are kept in.
 pub(in super::super) const TABLE: &str = "document_promotions";
-const SCHEMA:&str="CREATE TABLE document_promotions (
+/// The table as the `promotion_refusal_blockers_v2` rebuild left it, frozen: the
+/// modes rebuild renames it away, and `V2_COLUMNS` are its columns.
+const SCHEMA_V2:&str="CREATE TABLE document_promotions (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
     item_id TEXT NOT NULL CHECK(length(item_id)=26),
@@ -167,8 +224,54 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK((step='abandoned')=(refusal_category IS NOT NULL)),
     CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL))
 )";
+const SCHEMA:&str="CREATE TABLE document_promotions (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
+    item_id TEXT NOT NULL CHECK(length(item_id)=26),
+    expectation BLOB NOT NULL CHECK(typeof(expectation)='blob' AND length(expectation)=32),
+    remote_name TEXT,
+    step TEXT NOT NULL CHECK(step IN ('confirmed','context_synchronized','integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','complete','abandoned','superseded')),
+    context_attempt INTEGER NOT NULL DEFAULT 0 CHECK(context_attempt BETWEEN 0 AND 4294967295),
+    context_sync_id TEXT UNIQUE CHECK(length(context_sync_id)=26),
+    primary_attempt INTEGER NOT NULL DEFAULT 0 CHECK(primary_attempt BETWEEN 0 AND 4294967295),
+    primary_sync_id TEXT UNIQUE CHECK(length(primary_sync_id)=26),
+    base_oid TEXT CHECK(length(base_oid)=40 AND base_oid NOT GLOB '*[^0-9a-f]*' AND base_oid!='0000000000000000000000000000000000000000'),
+    context_oid TEXT CHECK(length(context_oid)=40 AND context_oid NOT GLOB '*[^0-9a-f]*' AND context_oid!='0000000000000000000000000000000000000000'),
+    integration_oid TEXT CHECK(length(integration_oid)=40 AND integration_oid NOT GLOB '*[^0-9a-f]*' AND integration_oid!='0000000000000000000000000000000000000000'),
+    integration_kind TEXT CHECK(integration_kind IN ('merged','already_contained')),
+    remote_context_oid TEXT CHECK(length(remote_context_oid)=40 AND remote_context_oid NOT GLOB '*[^0-9a-f]*' AND remote_context_oid!='0000000000000000000000000000000000000000'),
+    publication_category TEXT CHECK(publication_category IN ('published','already_current','no_publication_remote','conflict','rejected','transport','identity','busy','yielding','cancelled','recovery_required')),
+    cleanup_category TEXT CHECK(cleanup_category IN ('awaiting_publication','context_changed','ignored_files','remote_context_changed','remote_deletion_transport','remote_deletion_rejected','remote_deletion_configuration','remote_deletion_key','remote_deletion_unlock','remote_deletion_host','recovery_required','cancelled')),
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+    updated_at INTEGER NOT NULL CHECK(updated_at>=0),
+    refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 131071),
+    integration_mode TEXT NOT NULL DEFAULT 'direct' CHECK(integration_mode IN ('direct','pull_request')),
+    answer_code TEXT CHECK(answer_code IN ('promoted','already_promoted','primary_holds','remote_branch_deleted','history_unresolved','context_gone')),
+    consented_context_oid TEXT CHECK(length(consented_context_oid)=40 AND consented_context_oid NOT GLOB '*[^0-9a-f]*' AND consented_context_oid!='0000000000000000000000000000000000000000'),
+    situation TEXT CHECK(situation IN ('first','again')),
+    primary_branch TEXT CHECK(primary_branch IS NULL OR (typeof(primary_branch)='text' AND length(primary_branch) BETWEEN 1 AND 255)),
+    endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
+    CHECK((context_attempt=0)=(context_sync_id IS NULL)),
+    CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
+    CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
+    CHECK(primary_sync_id IS NULL OR (primary_sync_id!=operation_id AND primary_sync_id IS NOT context_sync_id)),
+    CHECK((step='abandoned')=(refusal_category IS NOT NULL)),
+    CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL)),
+    CHECK((consented_context_oid IS NULL)=(situation IS NULL) AND (consented_context_oid IS NULL)=(primary_branch IS NULL) AND (consented_context_oid IS NULL)=(endpoint_digest IS NULL)),
+    CHECK(integration_mode='pull_request' OR (consented_context_oid IS NULL AND answer_code IS NULL)),
+    CHECK(integration_mode='direct' OR step='abandoned' OR consented_context_oid IS NOT NULL),
+    CHECK(integration_mode='direct' OR (base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND cleanup_category IS NULL AND primary_attempt=0 AND step NOT IN ('integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','superseded'))),
+    CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
+    CHECK(answer_code IS NULL OR step='complete' OR refusal_category='reconfirmation_required'),
+    CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current')))
+)";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const BLOCKERS_MARKER: &str = "promotion_refusal_blockers_v2";
+const MODES_MARKER: &str = "wave_06_promotion_modes_v1";
+/// The 21 columns `SCHEMA_V2` has, in table order: what a table that
+/// predates the mode carries into the rebuild.
+const V2_COLUMNS: &str = "repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers";
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let mut created = false;
     let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_document_promotions')",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
@@ -198,11 +301,32 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
         // The refusal mask CHECK gained a bit; rebuild a table that predates
         // it. The index goes first so the rename cannot carry its name along.
         if !created {
-            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_blockers; {SCHEMA}; {INDEX}; INSERT INTO document_promotions SELECT * FROM document_promotions_before_blockers; DROP TABLE document_promotions_before_blockers;")).map_err(|_| state::recovery_required())?;
+            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_blockers; {SCHEMA_V2}; {INDEX}; INSERT INTO document_promotions SELECT * FROM document_promotions_before_blockers; DROP TABLE document_promotions_before_blockers;")).map_err(|_| state::recovery_required())?;
         }
         tx.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [BLOCKERS_MARKER],
+        )
+        .map_err(|_| state::recovery_required())?;
+    }
+    let moded: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [MODES_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !moded {
+        // The mode and the pull-request columns: rebuild a table that
+        // predates them. Its rows read `direct`, the column's default, with
+        // the rest null; the index goes first, and the rows are copied in
+        // rowid order, the order the records were made in.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_modes; {SCHEMA}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM document_promotions_before_modes ORDER BY rowid; DROP TABLE document_promotions_before_modes;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [MODES_MARKER],
         )
         .map_err(|_| state::recovery_required())?;
     }
@@ -235,9 +359,27 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<PromotionRecord, RepositoryError> {
         cancel_requested: row.flag("cancel_requested")?,
         updated_at: row.number("updated_at")?,
         refusal: row.refusal()?,
+        integration_mode: parse_mode(&row.text("integration_mode")?)?,
+        answer_code: row.category("answer_code", PromotionAnswer::parse)?,
+        consented_context_oid: row.oid("consented_context_oid")?,
+        situation: row.category("situation", PromotionSituation::parse)?,
+        primary_branch: row.opt("primary_branch")?,
+        endpoint_digest: row
+            .0
+            .get::<_, Option<Vec<u8>>>("endpoint_digest")
+            .map_err(|_| state::recovery_required())?
+            .map(|digest| digest.try_into().map_err(|_| state::recovery_required()))
+            .transpose()?,
     };
     validate(&r)?;
     Ok(r)
+}
+fn parse_mode(text: &str) -> Result<Integration, RepositoryError> {
+    match text {
+        "direct" => Ok(Integration::Direct),
+        "pull_request" => Ok(Integration::PullRequest),
+        _ => Err(state::recovery_required()),
+    }
 }
 fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
     use PromotionStep::*;
@@ -255,6 +397,7 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
             r.context_oid,
             r.integration_oid,
             r.remote_context_oid,
+            r.consented_context_oid,
         ]
         .into_iter()
         .flatten()
@@ -272,6 +415,32 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
                 | BranchDeleted
                 | Complete
         ) && r.context_oid.is_none()
+        || r.remote_name.is_none() && (r.remote_context_oid.is_some() || r.step == RemoteDeleted)
+    {
+        return Err(state::recovery_required());
+    }
+    match r.integration_mode {
+        Integration::Direct => validate_direct(r)?,
+        Integration::PullRequest => validate_pull_request(r)?,
+    }
+    if let Some(name) = &r.remote_name {
+        crate::repository::RemoteRefPlan::from_configuration(name, "main")
+            .map_err(|_| state::recovery_required())?;
+    }
+    if let Some(refusal) = &r.refusal {
+        refusal.encoded()?;
+    }
+    Ok(())
+}
+/// A direct record: the integration rules as they were, and none of a
+/// pull-request record's columns.
+fn validate_direct(r: &PromotionRecord) -> Result<(), RepositoryError> {
+    use PromotionStep::*;
+    if r.answer_code.is_some()
+        || r.consented_context_oid.is_some()
+        || r.situation.is_some()
+        || r.primary_branch.is_some()
+        || r.endpoint_digest.is_some()
         || matches!(
             r.step,
             Integrating
@@ -314,16 +483,86 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
                     r.publication,
                     Some(PublicationCategory::Published | PublicationCategory::AlreadyCurrent)
                 ))
-        || r.remote_name.is_none() && (r.remote_context_oid.is_some() || r.step == RemoteDeleted)
     {
         return Err(state::recovery_required());
     }
-    if let Some(name) = &r.remote_name {
-        crate::repository::RemoteRefPlan::from_configuration(name, "main")
-            .map_err(|_| state::recovery_required())?;
+    Ok(())
+}
+/// A pull-request record: it synchronizes its context and finishes with its
+/// answer, and never integrates, publishes the primary or cleans up. Its four
+/// begin-time columns are set from `confirmed` on, or all null on a record
+/// refused at confirm.
+fn validate_pull_request(r: &PromotionRecord) -> Result<(), RepositoryError> {
+    use PromotionStep::*;
+    let begun = r.consented_context_oid.is_some();
+    if r.base_oid.is_some()
+        || r.integration_oid.is_some()
+        || r.integration_kind.is_some()
+        || r.cleanup.is_some()
+        || r.primary_sync_id.is_some()
+        || matches!(
+            r.step,
+            Integrating
+                | Integrated
+                | Published
+                | PublicationPending
+                | RemoteDeleted
+                | WorktreeRemoving
+                | WorktreeRemoved
+                | BranchDeleted
+                | Superseded
+        )
+        // The four begin-time columns come together, and every unfinished or
+        // finished record has them; only a refused one may have none.
+        || [
+            r.situation.is_some(),
+            r.primary_branch.is_some(),
+            r.endpoint_digest.is_some(),
+        ]
+        .into_iter()
+        .any(|set| set != begun)
+        || !begun && r.step != Abandoned
+        // A record that began has the publication remote it began with.
+        || r.step != Abandoned && r.remote_name.is_none()
+        || r.primary_branch.as_deref().is_some_and(|branch| {
+            branch.is_empty()
+                || branch.len() > 255
+                || r.remote_name.as_deref().is_none_or(|remote| {
+                    crate::repository::RemoteRefPlan::from_configuration(remote, branch).is_err()
+                })
+        })
+    {
+        return Err(state::recovery_required());
     }
-    if let Some(refusal) = &r.refusal {
-        refusal.encoded()?;
+    let finished_with =
+        |answers: &[PromotionAnswer]| r.answer_code.is_some_and(|a| answers.contains(&a));
+    let ok = match r.step {
+        Complete => {
+            matches!(
+                r.publication,
+                Some(PublicationCategory::Published | PublicationCategory::AlreadyCurrent)
+            ) && finished_with(&[
+                PromotionAnswer::Promoted,
+                PromotionAnswer::AlreadyPromoted,
+                PromotionAnswer::PrimaryHolds,
+            ])
+        }
+        // A refused record has its refusal and no answer; one that ended after
+        // its child has an answer, with the refusal `reconfirmation_required`.
+        Abandoned => {
+            r.publication.is_none()
+                && (r.answer_code.is_none()
+                    || finished_with(&[
+                        PromotionAnswer::PrimaryHolds,
+                        PromotionAnswer::RemoteBranchDeleted,
+                        PromotionAnswer::HistoryUnresolved,
+                        PromotionAnswer::ContextGone,
+                    ]) && r.refusal == Some(Refusal::ReconfirmationRequired))
+        }
+        _ => r.answer_code.is_none() && r.publication.is_none(),
+    };
+    if !ok {
+        return Err(state::recovery_required());
     }
     Ok(())
 }
@@ -428,7 +667,15 @@ pub(in super::super) fn save_record(
     {
         return Err(parent::mismatch(KIND));
     }
-    if !old.step.permits(r.step, r.remote_name.is_some())
+    if !old
+        .step
+        .permits(r.step, r.remote_name.is_some(), old.integration_mode)
+        || old.integration_mode != r.integration_mode
+        || old.answer_code != r.answer_code
+        || old.consented_context_oid != r.consented_context_oid
+        || old.situation != r.situation
+        || old.primary_branch != r.primary_branch
+        || old.endpoint_digest != r.endpoint_digest
         || r.cancel_requested != old.cancel_requested
         || old.base_oid.is_some() && old.base_oid != r.base_oid
         || old.context_oid.is_some() && old.context_oid != r.context_oid

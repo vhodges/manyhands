@@ -569,6 +569,11 @@ fn schema_rejects_free_text_categories_steps_and_refusal_payloads() {
         "refusal_blockers=131072",
         "expectation=x'01'",
         "context_attempt=-1",
+        "integration_mode='body sentinel'",
+        "answer_code='path sentinel'",
+        "situation='title sentinel'",
+        "endpoint_digest=x'01'",
+        "primary_branch=''",
     ] {
         assert!(
             tx.execute_batch(&format!("UPDATE document_promotions SET {assignment}"))
@@ -605,6 +610,12 @@ fn privacy_column_inventory_for_both_new_tables() {
                 "updated_at",
                 "refusal_category",
                 "refusal_blockers",
+                "integration_mode",
+                "answer_code",
+                "consented_context_oid",
+                "situation",
+                "primary_branch",
+                "endpoint_digest",
             ],
         ),
         (
@@ -1418,16 +1429,10 @@ fn promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
     let mut db = db();
     let tx = db.transaction().unwrap();
     let old = refused_promotion(&tx, vec![PromotionBlocker::ContextDirty]);
-    let sql: String = tx
-        .query_row(
-            "SELECT sql FROM sqlite_master WHERE name='document_promotions'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    // The table as v1 left it: the v2 layout with the mask one bit narrower.
     tx.execute_batch(&format!(
-        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions SELECT * FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name='promotion_refusal_blockers_v2';",
-        sql.replace("131071", "65535")
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('promotion_refusal_blockers_v2','wave_06_promotion_modes_v1');",
+        SCHEMA_V2.replace("131071", "65535")
     ))
     .unwrap();
     assert!(
@@ -1456,4 +1461,883 @@ fn promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
             .refusal,
         new.refusal
     );
+}
+
+const ITEMS: [&str; 5] = [
+    "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "01BX5ZZKBKACTAV9WEVGEMMVRZ",
+    "01CX5ZZKBKACTAV9WEVGEMMVRZ",
+    "01DX5ZZKBKACTAV9WEVGEMMVRZ",
+    "01EX5ZZKBKACTAV9WEVGEMMVRZ",
+];
+const ALL_STEPS: [PromotionStep; 13] = [
+    PromotionStep::Confirmed,
+    PromotionStep::ContextSynchronized,
+    PromotionStep::Integrating,
+    PromotionStep::Integrated,
+    PromotionStep::Published,
+    PromotionStep::PublicationPending,
+    PromotionStep::RemoteDeleted,
+    PromotionStep::WorktreeRemoving,
+    PromotionStep::WorktreeRemoved,
+    PromotionStep::BranchDeleted,
+    PromotionStep::Complete,
+    PromotionStep::Abandoned,
+    PromotionStep::Superseded,
+];
+fn dump(db: &Connection, columns: &str) -> Vec<Vec<rusqlite::types::Value>> {
+    let mut statement = db
+        .prepare(&format!(
+            "SELECT {columns} FROM document_promotions ORDER BY rowid"
+        ))
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| {
+            (0..width)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect()
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+fn marker_count(db: &Connection, name: &str) -> i64 {
+    db.query_row(
+        "SELECT count(*) FROM registry_migrations WHERE name=?1",
+        [name],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+const MODES_MARKER: &str = "wave_06_promotion_modes_v1";
+
+/// A registry that holds a v2 table (the layout before the modes) with rows of
+/// several steps is rebuilt once: every row stays, byte for byte, as `direct`
+/// with the new columns null; a second migration changes nothing; a fresh
+/// registry is created with the new table and every marker.
+#[test]
+fn promotion_modes_migration_rebuilds_a_v2_table_once() {
+    let mut fresh = db();
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let item = |n: usize| -> ItemId { ITEMS[n].parse().unwrap() };
+    let begin_for = |n: usize| {
+        begin_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(n),
+            PromotionExpectation::from_bytes([n as u8; 32]),
+            Some("origin"),
+        )
+        .unwrap()
+    };
+    let _confirmed = begin_for(0);
+    let mut synchronized = begin_for(1);
+    synchronized.context_oid = Some(oid());
+    synchronized.step = PromotionStep::ContextSynchronized;
+    save_record(&tx, 1, &synchronized).unwrap();
+    let mut integrated = begin_for(2);
+    through_integration(&tx, &mut integrated);
+    let blocked = refuse_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(3),
+        PromotionExpectation::from_bytes([3; 32]),
+        Some("origin"),
+        &Refusal::Blocked(vec![
+            PromotionBlocker::ContextDirty,
+            PromotionBlocker::HistoryUnresolved,
+        ]),
+    )
+    .unwrap();
+    let external = refuse_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(4),
+        PromotionExpectation::from_bytes([4; 32]),
+        None,
+        &Refusal::ExternalChange,
+    )
+    .unwrap();
+    let before = records(&tx, 1).unwrap();
+    assert_eq!(before.len(), 5);
+    let v2_before = dump(&tx, V2_COLUMNS);
+    // The refused row's mask is stored as the two blockers' bits.
+    assert!(
+        v2_before
+            .iter()
+            .any(|row| row.contains(&rusqlite::types::Value::Integer((1 << 3) | (1 << 16)))),
+        "the refused row holds its blockers"
+    );
+    // The table as the v2 rebuild left it, with the modes marker not yet run.
+    tx.execute_batch(&format!(
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {SCHEMA_V2}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before ORDER BY rowid; DROP TABLE before; DELETE FROM registry_migrations WHERE name='{MODES_MARKER}';"
+    ))
+    .unwrap();
+    assert_eq!(dump(&tx, "*").first().map(Vec::len), Some(21));
+    assert_eq!(dump(&tx, V2_COLUMNS), v2_before);
+    assert_eq!(marker_count(&tx, MODES_MARKER), 0);
+    migrate(&tx).unwrap();
+    assert_eq!(marker_count(&tx, MODES_MARKER), 1);
+    assert_eq!(
+        dump(&tx, V2_COLUMNS),
+        v2_before,
+        "every v2 column, byte for byte"
+    );
+    let after = records(&tx, 1).unwrap();
+    assert_eq!(after, before);
+    for r in &after {
+        assert_eq!(r.integration_mode, Integration::Direct);
+        assert_eq!(r.path(), RecordPath::Direct);
+        assert!(!r.answered());
+        assert_eq!(
+            (
+                r.answer_code,
+                r.consented_context_oid,
+                r.situation,
+                &r.primary_branch,
+                r.endpoint_digest
+            ),
+            (None, None, None, &None, None)
+        );
+    }
+    assert_eq!(
+        after
+            .iter()
+            .find(|r| r.operation_id == blocked.operation_id)
+            .unwrap()
+            .refusal,
+        blocked.refusal
+    );
+    assert_eq!(
+        after
+            .iter()
+            .find(|r| r.operation_id == external.operation_id)
+            .unwrap()
+            .remote_name,
+        None
+    );
+    assert_eq!(
+        tx.query_row(
+            "SELECT sql FROM sqlite_master WHERE name='document_promotions'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        SCHEMA
+    );
+    let changes = tx.total_changes();
+    migrate(&tx).unwrap();
+    assert_eq!(
+        tx.total_changes(),
+        changes,
+        "a second migration changes nothing"
+    );
+    assert_eq!(marker_count(&tx, MODES_MARKER), 1);
+    assert_eq!(records(&tx, 1).unwrap(), before);
+    drop(tx);
+
+    // A fresh registry is created with the new table and every marker.
+    let tx = fresh.transaction().unwrap();
+    for marker in [
+        "cycle_09_document_promotions",
+        "promotion_refusal_blockers_v2",
+        MODES_MARKER,
+    ] {
+        assert_eq!(marker_count(&tx, marker), 1, "{marker}");
+    }
+    validate_schema(&tx).unwrap();
+    let r = begin(&tx, OperationId::new());
+    assert_eq!(r.integration_mode, Integration::Direct);
+}
+
+/// Inserts every column of `r` as it stands, as a begin or a finish would
+/// leave it; the SQL decides whether the row may exist.
+fn insert_row(db: &Connection, r: &PromotionRecord) -> rusqlite::Result<usize> {
+    let (category, mask) = Refusal::encoded_columns(r.refusal.as_ref()).unwrap();
+    db.execute(
+        "INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,integration_mode,answer_code,consented_context_oid,situation,primary_branch,endpoint_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)",
+        params![
+            r.repository_id,
+            r.operation_id.to_string(),
+            r.item_id.to_string(),
+            r.expectation.to_bytes().as_slice(),
+            r.remote_name,
+            r.step.name(),
+            r.context_attempt,
+            r.context_sync_id.map(|o| o.to_string()),
+            r.primary_attempt,
+            r.primary_sync_id.map(|o| o.to_string()),
+            r.base_oid.map(|o| o.to_string()),
+            r.context_oid.map(|o| o.to_string()),
+            r.integration_oid.map(|o| o.to_string()),
+            r.integration_kind.map(IntegrationKind::name),
+            r.remote_context_oid.map(|o| o.to_string()),
+            r.publication.map(PublicationCategory::name),
+            r.cleanup.map(CleanupCategory::name),
+            r.cancel_requested,
+            r.updated_at,
+            category,
+            mask,
+            r.integration_mode.as_str(),
+            r.answer_code.map(PromotionAnswer::name),
+            r.consented_context_oid.map(|o| o.to_string()),
+            r.situation.map(PromotionSituation::name),
+            r.primary_branch,
+            r.endpoint_digest.as_ref().map(|d| d.as_slice()),
+        ],
+    )
+}
+/// A pull-request row as the design says it stands at `step`, valid.
+fn pull_request(step: PromotionStep, item: &str) -> PromotionRecord {
+    use PromotionStep::*;
+    PromotionRecord {
+        repository_id: 1,
+        operation_id: OperationId::new(),
+        item_id: item.parse().unwrap(),
+        expectation: PromotionExpectation::from_bytes([7; 32]),
+        remote_name: Some("origin".into()),
+        step,
+        context_attempt: 0,
+        context_sync_id: None,
+        primary_attempt: 0,
+        primary_sync_id: None,
+        base_oid: None,
+        context_oid: matches!(step, ContextSynchronized | Complete).then(oid),
+        integration_oid: None,
+        integration_kind: None,
+        remote_context_oid: None,
+        publication: (step == Complete).then_some(PublicationCategory::Published),
+        cleanup: None,
+        cancel_requested: false,
+        updated_at: 1,
+        refusal: (step == Abandoned).then_some(Refusal::ReconfirmationRequired),
+        integration_mode: Integration::PullRequest,
+        answer_code: match step {
+            Complete => Some(PromotionAnswer::Promoted),
+            Abandoned => Some(PromotionAnswer::ContextGone),
+            _ => None,
+        },
+        consented_context_oid: Some(oid()),
+        situation: Some(PromotionSituation::First),
+        primary_branch: Some("main".into()),
+        endpoint_digest: Some([9; 32]),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Expect {
+    /// The SQL accepts, `validate` accepts and the row reads back as written.
+    Ok,
+    /// The SQL accepts and `validate` refuses it, on read as on save.
+    Rust,
+    /// The SQL refuses it, and so does `validate`.
+    Both,
+}
+type Mutate = fn(&mut PromotionRecord);
+fn bundle(r: &mut PromotionRecord, set: bool) {
+    r.consented_context_oid = set.then(oid);
+    r.situation = set.then_some(PromotionSituation::Again);
+    r.primary_branch = set.then(|| "main".to_owned());
+    r.endpoint_digest = set.then_some([9; 32]);
+}
+
+#[test]
+fn pull_request_promotion_steps_and_checks() {
+    use PromotionStep::*;
+    let cases: Vec<(&str, PromotionStep, Mutate, Expect)> = vec![
+        ("confirmed", Confirmed, |_| {}, Expect::Ok),
+        (
+            "context_synchronized",
+            ContextSynchronized,
+            |_| {},
+            Expect::Ok,
+        ),
+        ("complete promoted", Complete, |_| {}, Expect::Ok),
+        (
+            "complete already_current, already_promoted",
+            Complete,
+            |r| {
+                r.publication = Some(PublicationCategory::AlreadyCurrent);
+                r.answer_code = Some(PromotionAnswer::AlreadyPromoted);
+                r.situation = Some(PromotionSituation::Again);
+            },
+            Expect::Ok,
+        ),
+        (
+            "complete primary_holds",
+            Complete,
+            |r| r.answer_code = Some(PromotionAnswer::PrimaryHolds),
+            Expect::Ok,
+        ),
+        ("abandoned context_gone", Abandoned, |_| {}, Expect::Ok),
+        (
+            "abandoned primary_holds",
+            Abandoned,
+            |r| r.answer_code = Some(PromotionAnswer::PrimaryHolds),
+            Expect::Ok,
+        ),
+        (
+            "abandoned remote_branch_deleted",
+            Abandoned,
+            |r| r.answer_code = Some(PromotionAnswer::RemoteBranchDeleted),
+            Expect::Ok,
+        ),
+        (
+            "abandoned history_unresolved",
+            Abandoned,
+            |r| r.answer_code = Some(PromotionAnswer::HistoryUnresolved),
+            Expect::Ok,
+        ),
+        (
+            "refused blocked, no begin",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::Blocked(vec![PromotionBlocker::ContextDirty]));
+                r.answer_code = None;
+                r.remote_name = None;
+                bundle(r, false);
+            },
+            Expect::Ok,
+        ),
+        (
+            "refused external_change, no begin, a remote",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::ExternalChange);
+                r.answer_code = None;
+                bundle(r, false);
+            },
+            Expect::Ok,
+        ),
+        (
+            "refused reconfirmation_required, no begin",
+            Abandoned,
+            |r| {
+                r.answer_code = None;
+                bundle(r, false);
+            },
+            Expect::Ok,
+        ),
+        (
+            "refused external_change after begin (RR4, RR5)",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::ExternalChange);
+                r.answer_code = None;
+            },
+            Expect::Ok,
+        ),
+        // A refused record whose primary branch is set but whose remote is not.
+        (
+            "refused, primary_branch set, remote_name null",
+            Abandoned,
+            |r| {
+                r.refusal = Some(Refusal::ExternalChange);
+                r.answer_code = None;
+                r.remote_name = None;
+            },
+            Expect::Rust,
+        ),
+        // The integration and cleanup columns.
+        (
+            "base_oid",
+            Confirmed,
+            |r| r.base_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "integration_oid",
+            Confirmed,
+            |r| r.integration_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "integration_kind",
+            Confirmed,
+            |r| r.integration_kind = Some(IntegrationKind::Merged),
+            Expect::Both,
+        ),
+        (
+            "cleanup",
+            Confirmed,
+            |r| r.cleanup = Some(CleanupCategory::ContextChanged),
+            Expect::Both,
+        ),
+        (
+            "a primary child",
+            Confirmed,
+            |r| {
+                r.primary_attempt = 1;
+                r.primary_sync_id = Some(OperationId::new());
+            },
+            Expect::Both,
+        ),
+        (
+            "a publication at confirmed",
+            Confirmed,
+            |r| r.publication = Some(PublicationCategory::Published),
+            Expect::Rust,
+        ),
+        (
+            "a publication at abandoned",
+            Abandoned,
+            |r| r.publication = Some(PublicationCategory::Published),
+            Expect::Rust,
+        ),
+        // Every step a pull-request row never reaches.
+        (
+            "integrating",
+            Integrating,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "integrated",
+            Integrated,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "published",
+            Published,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "publication_pending",
+            PublicationPending,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "remote_deleted",
+            RemoteDeleted,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "worktree_removing",
+            WorktreeRemoving,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "worktree_removed",
+            WorktreeRemoved,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        (
+            "branch_deleted",
+            BranchDeleted,
+            |r| r.context_oid = Some(oid()),
+            Expect::Both,
+        ),
+        ("superseded", Superseded, |_| {}, Expect::Both),
+        // The four begin-time columns.
+        (
+            "none of the four at confirmed",
+            Confirmed,
+            |r| bundle(r, false),
+            Expect::Both,
+        ),
+        (
+            "none of the four at context_synchronized",
+            ContextSynchronized,
+            |r| bundle(r, false),
+            Expect::Both,
+        ),
+        (
+            "none of the four at complete",
+            Complete,
+            |r| bundle(r, false),
+            Expect::Both,
+        ),
+        (
+            "a consented tip alone",
+            Abandoned,
+            |r| {
+                bundle(r, false);
+                r.consented_context_oid = Some(oid());
+            },
+            Expect::Both,
+        ),
+        (
+            "a situation alone",
+            Abandoned,
+            |r| {
+                bundle(r, false);
+                r.situation = Some(PromotionSituation::First);
+            },
+            Expect::Both,
+        ),
+        (
+            "a digest alone",
+            Abandoned,
+            |r| {
+                bundle(r, false);
+                r.endpoint_digest = Some([1; 32]);
+            },
+            Expect::Both,
+        ),
+        (
+            "three of the four",
+            Confirmed,
+            |r| r.primary_branch = None,
+            Expect::Both,
+        ),
+        (
+            "an empty primary branch",
+            Confirmed,
+            |r| r.primary_branch = Some(String::new()),
+            Expect::Both,
+        ),
+        (
+            "a long primary branch",
+            Confirmed,
+            |r| r.primary_branch = Some("a".repeat(256)),
+            Expect::Both,
+        ),
+        (
+            "HEAD as the primary branch",
+            Confirmed,
+            |r| r.primary_branch = Some("HEAD".into()),
+            Expect::Rust,
+        ),
+        (
+            "an invalid primary branch",
+            Confirmed,
+            |r| r.primary_branch = Some("a..b".into()),
+            Expect::Rust,
+        ),
+        // The answer.
+        (
+            "an answer at confirmed",
+            Confirmed,
+            |r| r.answer_code = Some(PromotionAnswer::Promoted),
+            Expect::Both,
+        ),
+        (
+            "an answer at context_synchronized",
+            ContextSynchronized,
+            |r| r.answer_code = Some(PromotionAnswer::Promoted),
+            Expect::Both,
+        ),
+        (
+            "complete with no answer",
+            Complete,
+            |r| r.answer_code = None,
+            Expect::Both,
+        ),
+        (
+            "complete with an ended answer",
+            Complete,
+            |r| r.answer_code = Some(PromotionAnswer::RemoteBranchDeleted),
+            Expect::Rust,
+        ),
+        (
+            "complete with context_gone",
+            Complete,
+            |r| r.answer_code = Some(PromotionAnswer::ContextGone),
+            Expect::Rust,
+        ),
+        (
+            "abandoned with promoted",
+            Abandoned,
+            |r| r.answer_code = Some(PromotionAnswer::Promoted),
+            Expect::Rust,
+        ),
+        (
+            "abandoned with already_promoted",
+            Abandoned,
+            |r| r.answer_code = Some(PromotionAnswer::AlreadyPromoted),
+            Expect::Rust,
+        ),
+        (
+            "an answer with a blocked refusal",
+            Abandoned,
+            |r| r.refusal = Some(Refusal::Blocked(vec![PromotionBlocker::ContextDirty])),
+            Expect::Both,
+        ),
+        (
+            "an answer with external_change",
+            Abandoned,
+            |r| r.refusal = Some(Refusal::ExternalChange),
+            Expect::Both,
+        ),
+        (
+            "abandoned with no refusal",
+            Abandoned,
+            |r| {
+                r.refusal = None;
+                r.answer_code = None;
+            },
+            Expect::Both,
+        ),
+        (
+            "complete with a refusal",
+            Complete,
+            |r| r.refusal = Some(Refusal::ExternalChange),
+            Expect::Both,
+        ),
+        // The child's category and the rest at complete.
+        (
+            "complete with no publication",
+            Complete,
+            |r| r.publication = None,
+            Expect::Both,
+        ),
+        (
+            "complete with a conflict publication",
+            Complete,
+            |r| r.publication = Some(PublicationCategory::Conflict),
+            Expect::Both,
+        ),
+        (
+            "complete with no_publication_remote",
+            Complete,
+            |r| r.publication = Some(PublicationCategory::NoPublicationRemote),
+            Expect::Both,
+        ),
+        (
+            "context_synchronized with no context",
+            ContextSynchronized,
+            |r| r.context_oid = None,
+            Expect::Rust,
+        ),
+        (
+            "complete with no context",
+            Complete,
+            |r| r.context_oid = None,
+            Expect::Rust,
+        ),
+        (
+            "confirmed with no remote",
+            Confirmed,
+            |r| r.remote_name = None,
+            Expect::Rust,
+        ),
+        (
+            "complete with no remote",
+            Complete,
+            |r| r.remote_name = None,
+            Expect::Rust,
+        ),
+        // A direct row holds none of the six.
+        (
+            "direct, the four",
+            Confirmed,
+            |r| r.integration_mode = Integration::Direct,
+            Expect::Both,
+        ),
+        (
+            "direct, a consented tip alone",
+            Confirmed,
+            |r| {
+                r.integration_mode = Integration::Direct;
+                bundle(r, false);
+                r.consented_context_oid = Some(oid());
+            },
+            Expect::Both,
+        ),
+        (
+            "direct, an answer",
+            Abandoned,
+            |r| {
+                r.integration_mode = Integration::Direct;
+                bundle(r, false);
+            },
+            Expect::Both,
+        ),
+        (
+            "direct, nothing",
+            Confirmed,
+            |r| {
+                r.integration_mode = Integration::Direct;
+                bundle(r, false);
+            },
+            Expect::Ok,
+        ),
+    ];
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let mut seen = Vec::new();
+    for (label, step, mutate, expect) in cases {
+        let mut r = pull_request(step, ITEMS[0]);
+        mutate(&mut r);
+        let validated = validate(&r);
+        tx.execute_batch("SAVEPOINT case_row").unwrap();
+        let inserted = insert_row(&tx, &r);
+        let read = (inserted.is_ok()).then(|| read_record(&tx, 1, r.operation_id));
+        tx.execute_batch("ROLLBACK TO case_row; RELEASE case_row")
+            .unwrap();
+        match expect {
+            Expect::Ok => {
+                validated.unwrap_or_else(|e| panic!("{label}: {e:?}"));
+                inserted.unwrap_or_else(|e| panic!("{label}: {e:?}"));
+                assert_eq!(read.unwrap().unwrap().as_ref(), Some(&r), "{label}");
+                if r.integration_mode == Integration::PullRequest {
+                    assert_eq!(r.path(), RecordPath::Branch, "{label}");
+                    assert_eq!(r.answered(), r.answer_code.is_some(), "{label}");
+                    seen.extend(r.answer_code);
+                }
+            }
+            Expect::Rust => {
+                assert!(validated.is_err(), "{label}: validate");
+                assert!(inserted.is_ok(), "{label}: the SQL accepts it");
+                assert!(read.unwrap().is_err(), "{label}: it does not read");
+            }
+            Expect::Both => {
+                assert!(validated.is_err(), "{label}: validate");
+                assert!(inserted.is_err(), "{label}: the SQL refuses it");
+            }
+        }
+    }
+    for answer in [
+        PromotionAnswer::Promoted,
+        PromotionAnswer::AlreadyPromoted,
+        PromotionAnswer::PrimaryHolds,
+        PromotionAnswer::RemoteBranchDeleted,
+        PromotionAnswer::HistoryUnresolved,
+        PromotionAnswer::ContextGone,
+    ] {
+        assert!(seen.contains(&answer), "{answer:?} round-trips");
+        assert_eq!(PromotionAnswer::parse(answer.name()).unwrap(), answer);
+    }
+    assert!(PromotionAnswer::parse("free text").is_err());
+    assert!(PromotionSituation::parse("sometimes").is_err());
+
+    // The graph: a pull-request row moves confirmed -> context_synchronized
+    // -> complete, or confirmed -> abandoned, and nothing else; a direct
+    // row's graph is as it was.
+    for from in ALL_STEPS {
+        for to in ALL_STEPS {
+            let expected = !from.terminal()
+                && (from == to
+                    || matches!(
+                        (from, to),
+                        (Confirmed, ContextSynchronized)
+                            | (ContextSynchronized, Complete)
+                            | (Confirmed, Abandoned)
+                    ));
+            assert_eq!(
+                from.permits(to, true, Integration::PullRequest),
+                expected,
+                "pull request {from:?} -> {to:?}"
+            );
+        }
+    }
+    for (from, to, direct) in [
+        (Confirmed, ContextSynchronized, true),
+        (ContextSynchronized, Integrating, true),
+        (ContextSynchronized, Abandoned, true),
+        (Confirmed, Abandoned, true),
+        (Integrated, Published, true),
+        (Confirmed, Integrating, false),
+        (Confirmed, Complete, false),
+        (ContextSynchronized, Complete, false),
+    ] {
+        assert_eq!(
+            from.permits(to, true, Integration::Direct),
+            direct,
+            "direct {from:?} -> {to:?}"
+        );
+    }
+    let direct = begin(&tx, OperationId::new());
+    assert_eq!(direct.integration_mode, Integration::Direct);
+    assert_eq!(direct.path(), RecordPath::Direct);
+    assert!(!direct.answered());
+
+    // save_record: the mode, the answer and the four begin-time columns are
+    // fixed; the context tip is set once, at context_synchronized.
+    let mut stored = pull_request(Confirmed, ITEMS[1]);
+    insert_row(&tx, &stored).unwrap();
+    let changes: [(&str, Mutate); 6] = [
+        ("mode", |r| r.integration_mode = Integration::Direct),
+        ("answer", |r| {
+            r.answer_code = Some(PromotionAnswer::Promoted)
+        }),
+        ("consented tip", |r| {
+            r.consented_context_oid =
+                Some(git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap())
+        }),
+        ("situation", |r| {
+            r.situation = Some(PromotionSituation::Again)
+        }),
+        ("primary branch", |r| {
+            r.primary_branch = Some("trunk".into())
+        }),
+        ("endpoint digest", |r| r.endpoint_digest = Some([8; 32])),
+    ];
+    for (label, change) in changes {
+        let mut r = stored.clone();
+        change(&mut r);
+        assert_eq!(
+            save_record(&tx, 1, &r).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "{label}"
+        );
+        let mut r = stored.clone();
+        change(&mut r);
+        r.context_oid = Some(oid());
+        r.step = ContextSynchronized;
+        assert!(save_record(&tx, 1, &r).is_err(), "{label} with the step");
+    }
+    assert_eq!(
+        read_record(&tx, 1, stored.operation_id).unwrap().unwrap(),
+        stored
+    );
+    for step in [
+        Integrating,
+        Integrated,
+        Published,
+        PublicationPending,
+        Complete,
+    ] {
+        let mut r = stored.clone();
+        r.step = step;
+        r.context_oid = Some(oid());
+        assert!(save_record(&tx, 1, &r).is_err(), "{step:?} from confirmed");
+    }
+    stored.context_oid = Some(oid());
+    stored.step = ContextSynchronized;
+    save_record(&tx, 1, &stored).unwrap();
+    // A save stamps the record's time.
+    let saved = read_record(&tx, 1, stored.operation_id).unwrap().unwrap();
+    stored.updated_at = saved.updated_at;
+    assert_eq!(saved, stored);
+    let mut moved = stored.clone();
+    moved.context_oid =
+        Some(git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap());
+    assert!(save_record(&tx, 1, &moved).is_err(), "the tip is set once");
+    let mut abandoned = stored.clone();
+    abandoned.step = Abandoned;
+    abandoned.refusal = Some(Refusal::ExternalChange);
+    assert!(
+        save_record(&tx, 1, &abandoned).is_err(),
+        "context_synchronized does not abandon"
+    );
+    // confirmed -> abandoned as a refusal with the begin-time columns it began with.
+    let mut ended = pull_request(Confirmed, ITEMS[2]);
+    insert_row(&tx, &ended).unwrap();
+    ended.step = Abandoned;
+    ended.refusal = Some(Refusal::ExternalChange);
+    save_record(&tx, 1, &ended).unwrap();
+    let saved = read_record(&tx, 1, ended.operation_id).unwrap().unwrap();
+    ended.updated_at = saved.updated_at;
+    assert_eq!(saved, ended);
+    // A refused record's nulls stay null.
+    let mut refused = pull_request(Abandoned, ITEMS[3]);
+    refused.answer_code = None;
+    refused.refusal = Some(Refusal::ExternalChange);
+    bundle(&mut refused, false);
+    insert_row(&tx, &refused).unwrap();
+    let mut filled = refused.clone();
+    bundle(&mut filled, true);
+    assert!(save_record(&tx, 1, &filled).is_err());
 }

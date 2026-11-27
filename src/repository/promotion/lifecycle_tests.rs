@@ -108,6 +108,12 @@ fn promotion_steps_map_to_the_shared_step_view() {
         cancel_requested: false,
         updated_at: 0,
         refusal: None,
+        integration_mode: crate::canonical::Integration::Direct,
+        answer_code: None,
+        consented_context_oid: None,
+        situation: None,
+        primary_branch: None,
+        endpoint_digest: None,
     };
     let all = [
         (P::Confirmed, "confirmed"),

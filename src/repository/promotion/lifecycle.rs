@@ -723,6 +723,12 @@ impl LifecycleRecord for PromotionRecord {
     fn set_step(&mut self, step: ParentStep) {
         self.step = step.into();
     }
+    fn path(&self) -> RecordPath {
+        PromotionRecord::path(self)
+    }
+    fn answered(&self) -> bool {
+        PromotionRecord::answered(self)
+    }
     fn context_sync_id(&self) -> Option<OperationId> {
         self.context_sync_id
     }
