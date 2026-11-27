@@ -69,6 +69,7 @@ pub(super) fn item(spec: &Spec) -> ItemDto {
             },
             closed_at: None,
             closed_by: None,
+            publication: None,
         }),
         slug: spec.slug.map(str::to_owned),
         parent: None,
@@ -85,6 +86,7 @@ pub(super) fn item(spec: &Spec) -> ItemDto {
                 .into_iter()
                 .collect(),
         }),
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: None,
         source: None,

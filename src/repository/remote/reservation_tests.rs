@@ -3759,6 +3759,51 @@ fn close_parent_at_branch_deleted(
     })
     .unwrap()
 }
+/// A new branch's parent at `branch_deleted`: its old context `1…` is the one
+/// it retires, the tracking primary `2…`, its commit `3…`.
+fn new_branch_parent_at_branch_deleted(
+    service: &RepositoryService,
+    root: &Path,
+) -> crate::repository::closure::record::ClosureRecord {
+    use crate::repository::closure::{
+        ClosureExpectation,
+        record::{self as closure, ClosureStep},
+    };
+    state::with_transaction(service, root, |tx, id| {
+        let op = OperationId::new();
+        closure::begin_new_branch_record(
+            tx,
+            id,
+            op,
+            &close_item(),
+            ClosureExpectation::from_bytes([7; 32]),
+            Some("origin"),
+            closure::ClosureKind::Record,
+            Some(close_oid('1')),
+            Some(close_oid('1')),
+        )?;
+        closure::begin_new_branch(
+            tx,
+            id,
+            op,
+            close_oid('2'),
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            close_oid('3'),
+            Some(close_oid('1')),
+        )?;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        for step in [
+            ClosureStep::WorktreeRemoving,
+            ClosureStep::WorktreeRemoved,
+            ClosureStep::BranchDeleted,
+        ] {
+            r.step = step;
+            closure::save_record(tx, id, &r)?;
+        }
+        closure::read_record(tx, id, op).map(Option::unwrap)
+    })
+    .unwrap()
+}
 fn reserve_close(service: &RepositoryService, root: &Path, op: OperationId) -> RemoteReservation {
     match service
         .reserve_remote_operation(root, op, &close_target())
@@ -4014,9 +4059,16 @@ fn close_cancel_flags_parent_and_reservation() {
 /// `branch_deleted` after `setup` adjusts its rows. Returns the result and
 /// the close reservation's phase afterwards.
 fn finish_close_case(setup: impl FnOnce(&Connection, OperationId)) -> (bool, String) {
+    finish_case(close_parent_at_branch_deleted, setup)
+}
+/// `finish_close_case` for the parent `parent` makes.
+fn finish_case(
+    parent: fn(&RepositoryService, &Path) -> crate::repository::closure::record::ClosureRecord,
+    setup: impl FnOnce(&Connection, OperationId),
+) -> (bool, String) {
     use crate::repository::promotion::lifecycle::LifecycleKind;
     let (data, root, service) = fixture();
-    let parent = close_parent_at_branch_deleted(&service, root.path());
+    let parent = parent(&service, root.path());
     let op = parent.operation_id;
     let owner = reserve_close(&service, root.path(), op);
     for point in [
@@ -4123,6 +4175,81 @@ fn finish_close_refuses_document_retirement_row() {
     });
     assert!(!finished);
     assert_ne!(phase, "completed");
+}
+
+/// A new branch's parent row ends with its record's end: its retirement (the
+/// record at `retired`, the old context retired at its `retired_oid`) is
+/// `completed`, and an abandon under the reservation (no pending ref left,
+/// something retired for) is `cancelled`. Neither without its record's end, at
+/// another tip, or from the direct close's own rows.
+#[test]
+fn finish_close_ends_a_new_branch_s_reservation_by_its_end() {
+    fn new_branch(setup: impl FnOnce(&Connection, OperationId)) -> (bool, String) {
+        finish_case(new_branch_parent_at_branch_deleted, setup)
+    }
+    let retired = |db: &Connection| {
+        db.execute_batch("UPDATE ticket_closures SET step='retired'")
+            .unwrap();
+    };
+    let abandoned = |db: &Connection| {
+        db.execute_batch("UPDATE ticket_closures SET step='abandoned',refusal_category='external_change',answer_code='external_change',pending_ref=NULL")
+            .unwrap();
+    };
+    assert_eq!(
+        new_branch(|db, op| {
+            retired(db);
+            retire(db, op, "ticket", '1');
+        }),
+        (true, "completed".to_owned())
+    );
+    assert_eq!(
+        new_branch(|db, _| abandoned(db)),
+        (true, "cancelled".to_owned())
+    );
+    for (name, setup) in [
+        (
+            "retired at another tip",
+            Box::new(|db: &Connection, op| {
+                retired(db);
+                retire(db, op, "ticket", '3');
+            }) as Box<dyn FnOnce(&Connection, OperationId)>,
+        ),
+        (
+            "retired, nothing retired",
+            Box::new(|db: &Connection, _| retired(db)),
+        ),
+        (
+            "branch_deleted, retired",
+            Box::new(|db: &Connection, op| retire(db, op, "ticket", '1')),
+        ),
+        (
+            "retired by another operation",
+            Box::new(|db: &Connection, _| {
+                retired(db);
+                retire(db, OperationId::new(), "ticket", '1');
+            }),
+        ),
+        (
+            "a document retired",
+            Box::new(|db: &Connection, op| {
+                retired(db);
+                retire(db, op, "document", '1');
+            }),
+        ),
+        (
+            "abandoned with nothing to retire",
+            Box::new(|db: &Connection, _| {
+                abandoned(db);
+                db.execute_batch("UPDATE ticket_closures SET retired_oid=NULL")
+                    .unwrap();
+            }),
+        ),
+    ] {
+        let (finished, phase) = new_branch(setup);
+        assert!(!finished, "{name}");
+        assert_ne!(phase, "completed", "{name}");
+        assert_ne!(phase, "cancelled", "{name}");
+    }
 }
 
 /// A closure parent with a minted context attempt, and its child execution.
@@ -4453,6 +4580,255 @@ fn child_fence_admits_closure_primary_only_while_integrated_or_publication_pendi
     );
 }
 
+/// A branch record's second slot is its publication child: allowed while
+/// `closing` and `publication_pending`, never for a direct record, and a
+/// branch record has no primary child.
+#[test]
+fn child_fence_admits_the_publication_child_only_while_a_branch_record_publishes() {
+    use crate::repository::{
+        SynchronizationTarget,
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::ChildRole,
+    };
+    let (_data, root, service) = fixture();
+    // A `confirmed` direct record made a pull-request close at `closing`, in
+    // SQL: its writers land with the branch runner.
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    let set = |sql: &str| {
+        state::with_transaction(&service, root.path(), |tx, _| {
+            tx.execute_batch(&format!(
+                "UPDATE ticket_closures SET {sql} WHERE operation_id='{op}'"
+            ))
+            .map_err(|_| state::recovery_required())
+        })
+        .unwrap();
+    };
+    let reads = |id_op: OperationId| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::read_record(tx, id, id_op).map(Option::unwrap)
+        })
+        .unwrap()
+    };
+    // Neither a direct record nor a branch record's `confirmed` has the slot.
+    let direct = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(closure::next_attempt(tx, id, op, ChildRole::Publication).map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(direct.unwrap_err(), RepositoryErrorKind::RecoveryRequired);
+    set(&format!(
+        "integration_mode='pull_request',step='closing',closure_kind='existing',context_oid='{}',base_oid='{}'",
+        "1".repeat(40),
+        "2".repeat(40)
+    ));
+    let branch = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(closure::next_attempt(tx, id, op, ChildRole::Primary).map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(
+        branch.unwrap_err(),
+        RepositoryErrorKind::RecoveryRequired,
+        "a branch record has no primary child"
+    );
+    let parent = state::with_transaction(&service, root.path(), |tx, id| {
+        closure::next_attempt(tx, id, op, ChildRole::Publication)
+    })
+    .unwrap();
+    let child = parent.primary_sync_id.expect("the second slot");
+    assert_eq!(parent.context_sync_id, None);
+    let execution = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    // Its request is the ticket context's, never the primary's.
+    execution
+        .validate_request(&context_request(
+            root.path(),
+            child,
+            crate::repository::AuthoringKind::Ticket,
+        ))
+        .unwrap();
+    for wrong in [
+        SynchronizationTarget::Primary,
+        context_request(
+            root.path(),
+            child,
+            crate::repository::AuthoringKind::Document,
+        )
+        .target,
+    ] {
+        let mut request =
+            context_request(root.path(), child, crate::repository::AuthoringKind::Ticket);
+        request.target = wrong;
+        assert_eq!(
+            execution.validate_request(&request).unwrap_err().kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+    }
+    let validate = |execution: &crate::repository::promotion::record::ChildExecution| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(execution.validate(tx, id, child).map_err(|e| e.kind))
+        })
+        .unwrap()
+    };
+    // The step the record is at decides; the SQL here is the writers' work.
+    let at = |step: &str, extra: &str| {
+        set(&format!("step='{step}'{extra}"));
+        assert_eq!(reads(op).step.name(), step);
+    };
+    at("closing", "");
+    assert_eq!(validate(&execution), Ok(()));
+    at("publication_pending", ",publication_category='transport'");
+    assert_eq!(validate(&execution), Ok(()));
+    // The primary slot's own role: the same child as a primary execution is refused.
+    let primary = closure::child_execution(&reads(op), ChildRole::Primary).unwrap();
+    assert_eq!(
+        validate(&primary),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    at("published", "");
+    assert_eq!(
+        validate(&execution),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    set("step='complete',answer_code='published'");
+    assert_eq!(
+        validate(&execution),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    for step in [ClosureStep::Confirmed, ClosureStep::ContextSynchronized] {
+        set(&format!("answer_code=NULL,step='{}'", step.name()));
+        assert_eq!(
+            validate(&execution),
+            Err(RepositoryErrorKind::OperationMismatch),
+            "{step:?}"
+        );
+    }
+    // A direct record's second slot is its primary child, never a publication one.
+    let (_data, root, service) = fixture();
+    let (parent, _) = close_primary_child(&service, root.path());
+    let wrong = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    let verdict = state::with_transaction(&service, root.path(), |tx, id| {
+        Ok(wrong
+            .validate(tx, id, parent.primary_sync_id.unwrap())
+            .map_err(|e| e.kind))
+    })
+    .unwrap();
+    assert_eq!(verdict, Err(RepositoryErrorKind::OperationMismatch));
+}
+
+/// The closure hold on the ticket's context lets through its own branch
+/// record's publication child and nothing else of the ticket's context: not
+/// a synchronization with no execution, not a direct record's, and not an
+/// attempt the record has since replaced.
+#[test]
+fn closure_hold_lets_through_only_its_own_publication_child() {
+    use crate::repository::{
+        AuthoringKind,
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::ChildRole,
+    };
+    let (_data, root, service) = fixture();
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    state::with_transaction(&service, root.path(), |tx, _| {
+        tx.execute_batch(&format!(
+            "UPDATE ticket_closures SET integration_mode='pull_request',step='closing',closure_kind='existing',context_oid='{}',base_oid='{}' WHERE operation_id='{op}'",
+            "1".repeat(40),
+            "2".repeat(40)
+        ))
+        .map_err(|_| state::recovery_required())
+    })
+    .unwrap();
+    let next = || {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::next_attempt(tx, id, op, ChildRole::Publication)
+        })
+        .unwrap()
+    };
+    let stale = closure::child_execution(&next(), ChildRole::Publication).unwrap();
+    // The record replaces its unrun attempt, and publishes under the new one.
+    let parent = next();
+    state::with_transaction(&service, root.path(), |tx, _| {
+        tx.execute_batch(&format!(
+            "UPDATE ticket_closures SET step='publication_pending' WHERE operation_id='{op}'"
+        ))
+        .map_err(|_| state::recovery_required())
+    })
+    .unwrap();
+    let child = parent.primary_sync_id.unwrap();
+    let own = closure::child_execution(&parent, ChildRole::Publication).unwrap();
+    let target = context_sync_target(AuthoringKind::Ticket);
+    let holds_as = |execution: Option<&crate::repository::promotion::record::ChildExecution>,
+                    operation: OperationId| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure_holds_context(tx, id, &target, execution, operation)
+        })
+        .unwrap()
+    };
+    let holds = |execution| holds_as(execution, OperationId::new());
+    assert!(holds(None), "nothing else of the context passes");
+    assert!(!holds(Some(&own)), "its own publication child does");
+    // `conflict resolve`'s continuation of that child carries no attempt, and
+    // is let through by its ID alone. The record's own ID is no
+    // synchronization of it, and another ID with no attempt is held.
+    assert!(!holds_as(None, child), "its continuation does");
+    assert!(holds_as(None, op), "the record's ID is no synchronization");
+    assert!(
+        holds_as(None, OperationId::new()),
+        "another ID with no attempt is held"
+    );
+    // The reserve caller: the child reserves, and a synchronization that is
+    // no child is refused by the hold, as an attempt the record replaced is
+    // refused by the fence before it.
+    assert!(matches!(
+        service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service
+            .reserve_promotion_child(root.path(), child, &target, &stale, true)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert!(matches!(
+        service
+            .reserve_promotion_child(root.path(), child, &target, &own, true)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    // The restart caller passes it too, where a stale attempt cannot.
+    assert!(!matches!(
+        service
+            .restart_promotion_child(root.path(), child, &target, &own)
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    assert_eq!(
+        service
+            .restart_promotion_child(root.path(), child, &target, &stale)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    // A direct record holds the context against every execution.
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    assert_eq!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::read_record(tx, id, parent.operation_id)
+        })
+        .unwrap()
+        .map(|r| r.step),
+        Some(ClosureStep::Integrated)
+    );
+    let held = state::with_transaction(&service, root.path(), |tx, id| {
+        closure_holds_context(tx, id, &target, Some(&execution), OperationId::new())
+    })
+    .unwrap();
+    assert!(held, "a direct holder refuses every execution");
+}
+
 /// A closure context attempt before it reserved is refused once the
 /// parent's cancellation is requested, and so is its primary attempt.
 #[test]
@@ -4541,10 +4917,12 @@ fn wording_child(
         let (parent, execution) = match role {
             ChildRole::Context => close_child(service, root),
             ChildRole::Primary => close_primary_child(service, root),
+            ChildRole::Publication => unreachable!("a wording row of a branch record's child"),
         };
         let child = match role {
             ChildRole::Context => parent.context_sync_id,
             ChildRole::Primary => parent.primary_sync_id,
+            ChildRole::Publication => unreachable!("a wording row of a branch record's child"),
         };
         return (execution, child.unwrap());
     }
@@ -4576,6 +4954,7 @@ fn wording_child(
     let child = match role {
         ChildRole::Context => parent.context_sync_id,
         ChildRole::Primary => parent.primary_sync_id,
+        ChildRole::Publication => unreachable!("a promotion has no publication child"),
     };
     (execution, child.unwrap())
 }
@@ -4632,6 +5011,7 @@ fn assert_child_fence_wording(
                 request.target = match role {
                     ChildRole::Context => SynchronizationTarget::Primary,
                     ChildRole::Primary => context_request(root.path(), child, authoring).target,
+                    ChildRole::Publication => unreachable!("a wording row of a publication child"),
                 };
                 execution.validate_request(&request).unwrap_err()
             }
@@ -4659,6 +5039,7 @@ fn assert_child_fence_wording(
                 let prefix = match role {
                     ChildRole::Context => "context",
                     ChildRole::Primary => "primary",
+                    ChildRole::Publication => unreachable!("a wording row of a publication child"),
                 };
                 let change = match *case {
                     "repository" | "operation" => None,

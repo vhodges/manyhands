@@ -679,6 +679,7 @@ fn synchronization_errors() -> Vec<(SynchronizationError, ResultCode)> {
             },
             Code::PrimaryHasLocalCommits,
         ),
+        (Error::TicketClosed, Code::TicketClosed),
         (Error::PushRejected, Code::PushRejected),
         (Error::ExternalChange, Code::ExternalChange),
         (Error::RecoveryRequired, Code::RecoveryRequired),
@@ -705,9 +706,10 @@ fn synchronization_error_count(error: &SynchronizationError) -> usize {
         | Error::ExternalResolutionRequired { .. }
         | Error::MergeRequired { .. }
         | Error::PrimaryHasLocalCommits { .. }
+        | Error::TicketClosed
         | Error::PushRejected
         | Error::ExternalChange
-        | Error::RecoveryRequired => 20,
+        | Error::RecoveryRequired => 21,
     }
 }
 
@@ -1529,6 +1531,8 @@ fn a_resume_is_never_offered_again_for_what_only_the_original_request_can_do() {
         ResultCode::MergeRequired,
         ResultCode::PushRejected,
         ResultCode::PrimaryHasLocalCommits,
+        ResultCode::RemotePrimaryMissing,
+        ResultCode::RemoteAlreadySetUp,
     ] {
         assert!(
             actions_of(Command::OperationResume, code, false).is_empty(),
@@ -1623,6 +1627,8 @@ fn a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_
             ResultCode::RemoteBranchDeleted,
             ResultCode::PushRejected,
             ResultCode::PrimaryHasLocalCommits,
+            ResultCode::RemotePrimaryMissing,
+            ResultCode::RemoteAlreadySetUp,
             ResultCode::NoSelectedKey,
             ResultCode::KeyRejected,
             ResultCode::UnlockRequired,

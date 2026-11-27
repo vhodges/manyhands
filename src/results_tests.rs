@@ -31,7 +31,7 @@ const ENVELOPE_FIELDS: [&str; 11] = [
 /// order, then the mutation codes of the design's Result Mapping table,
 /// class by class in its order.
 /// The two CLI codes follow `invalid_input`.
-const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
+const DESIGN_CODES: [(&str, Option<FailureClass>); 75] = [
     ("ok", None),
     ("invalid_path", Some(FailureClass::Input)),
     ("not_repository", Some(FailureClass::Input)),
@@ -87,6 +87,9 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
     ("remote_branch_deleted", Some(FailureClass::Blocked)),
     ("push_rejected", Some(FailureClass::Blocked)),
     ("primary_has_local_commits", Some(FailureClass::Blocked)),
+    ("setup_pending", Some(FailureClass::Blocked)),
+    ("remote_primary_missing", Some(FailureClass::Blocked)),
+    ("remote_already_set_up", Some(FailureClass::Blocked)),
     ("no_selected_key", Some(FailureClass::Blocked)),
     ("key_unavailable", Some(FailureClass::Blocked)),
     ("key_rejected", Some(FailureClass::Blocked)),
@@ -103,6 +106,7 @@ const DESIGN_CODES: [(&str, Option<FailureClass>); 71] = [
     ("transport_unavailable", Some(FailureClass::Transient)),
     ("cancelled", Some(FailureClass::Cancelled)),
     ("already_applied", None),
+    ("already_closing", None),
 ];
 
 /// The codes a read returns, in its envelope or in its data.
@@ -209,6 +213,9 @@ fn result_code_messages_are_fixed() {
         "The published branch was deleted on the remote.",
         "The remote rejected the push.",
         "The local primary branch has commits the remote does not have.",
+        "The repository's Manyhands setup has not merged yet.",
+        "The remote has no primary branch to set up from.",
+        "The remote's primary already holds a Manyhands configuration.",
         "No key is selected.",
         "The selected key cannot be read.",
         "The remote rejected the selected key.",
@@ -225,6 +232,7 @@ fn result_code_messages_are_fixed() {
         "The transport is not available; try again.",
         "The request was cancelled.",
         "The request was already applied; nothing changed.",
+        "The ticket's branch already holds a closure.",
     ];
     let actual: Vec<_> = ResultCode::ALL.iter().map(|code| code.message()).collect();
     assert_eq!(actual, expected);
@@ -1076,6 +1084,7 @@ fn problem_codes_have_unique_snake_case_strings_and_fixed_guidance() {
             "dependency_cycle",
             "parent_cycle",
             "operations_unreadable",
+            "setup_unreadable",
             "unknown_problem",
         ]
     );

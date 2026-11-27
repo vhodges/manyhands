@@ -109,6 +109,8 @@ impl ContextRetireBinding {
         let snapshot = call
             .service
             .retirement_mutation_state(&accepted.root(), accepted.operation_id);
+        // The holder a refusal names, when the domain error carries one (R-17).
+        let mut blocker = None;
         let (code, state, standing, discovery, worktree, branch, materialization) = match result {
             Ok(ContextRetirementOutcome::Final(report)) => (
                 report.code,
@@ -164,7 +166,10 @@ impl ContextRetireBinding {
                 false,
             ),
             Err(error) => {
-                let answer = refused(error);
+                let held = error.blocker().cloned();
+                let mut answer =
+                    refused(error).naming(call.service, &accepted.root(), held.as_ref());
+                blocker = answer.blocker.take();
                 match snapshot {
                     Ok(Some(s)) => (
                         answer.code,
@@ -226,6 +231,7 @@ impl ContextRetireBinding {
                 },
                 local_change: worktree != RetirementRemoval::None
                     || branch != RetirementRemoval::None,
+                blocker,
                 ..Answer::stopped(code)
             }
             .with_data(data),

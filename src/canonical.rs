@@ -111,6 +111,18 @@ pub enum ForgeKind {
 }
 
 impl ForgeKind {
+    pub const ALL: [Self; 4] = [
+        Self::BitbucketCloud,
+        Self::BitbucketDataCenter,
+        Self::Github,
+        Self::Gitlab,
+    ];
+
+    /// The kind a contract spelling names, or `None` for any other text.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BitbucketCloud => "bitbucket-cloud",

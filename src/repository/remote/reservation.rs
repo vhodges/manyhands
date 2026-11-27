@@ -423,17 +423,42 @@ fn publication_intent(
 
 /// C1, C9: from `closing` until retirement a ticket context may hold its
 /// closure checkpoint, which a synchronization of that context would push to
-/// the remote context branch. Such a reservation or restart is `Busy`.
+/// the remote context branch. Such a reservation or restart is `Busy`: but for
+/// the publication child of the branch record that holds the context, which
+/// is the one synchronization that publishes the closure the record wrote.
+/// `execution` is the validated attempt of a lifecycle child, when this is
+/// one; `operation_id` is the synchronization asked for. The record's own
+/// publication child is also the one `operation_id` names when `conflict
+/// resolve` continues it, which carries no attempt (R-5, R-17): exactly the
+/// record's `primary_sync_id`, and no other synchronization.
 fn closure_holds_context(
     tx: &Transaction<'_>,
     id: i64,
     target: &RemoteOperationTarget,
+    execution: Option<&crate::repository::promotion::record::ChildExecution>,
+    operation_id: OperationId,
 ) -> Result<bool, RepositoryError> {
+    use crate::repository::promotion::lifecycle::{LifecycleKind, RecordPath};
     match target.item() {
         Some((crate::repository::AuthoringKind::Ticket, item))
             if target.action() == RemoteOperationAction::SynchronizeContext =>
         {
-            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+            Ok(
+                match crate::repository::closure::record::written_closure_holder(tx, id, item)? {
+                    None => false,
+                    Some((holder, RecordPath::Branch)) => {
+                        !(execution.is_some_and(|execution| {
+                            execution.is_publication_of(LifecycleKind::TicketClosure, holder)
+                        }) || crate::repository::closure::record::is_publication_child(
+                            tx,
+                            id,
+                            holder,
+                            operation_id,
+                        )?)
+                    }
+                    Some((_, RecordPath::Direct)) => true,
+                },
+            )
         }
         _ => Ok(false),
     }
@@ -1201,6 +1226,16 @@ fn finish_at(
 
 /// SQL-only finalization. Retirement and parent completion belong to this same
 /// caller-owned transaction; promotion never updates automatic poll policy.
+///
+/// The parent's own reservation ends with its record's end, which the
+/// parent's table says: a promotion is complete, and its context retired at
+/// its merged context; a direct closure is complete and its ticket context
+/// retired at the adopted synchronization, else its checkpoint, else its
+/// synchronized context, the reservation `completed`; a new branch's
+/// retirement (the record at `retired`, its old context retired at its
+/// `retired_oid`) ends it `completed` as well, and a new branch abandoned
+/// under it, holding no pending ref, ends it `cancelled`, as a superseded
+/// parent's does.
 pub(in super::super) fn finish_parent(
     kind: LifecycleKind,
     service: &RepositoryService,
@@ -1215,18 +1250,19 @@ pub(in super::super) fn finish_parent(
     {
         return Err(state::recovery_required());
     }
-    // The parent is complete and its own kind's context is retired at the
-    // merged context: promotion's `context_oid`; a closure's adopted
-    // synchronization, else its checkpoint, else its synchronized context.
-    let complete: bool = match kind {
-        LifecycleKind::DocumentPromotion => tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
-        LifecycleKind::TicketClosure => tx.query_row("SELECT EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket' AND r.operation_id=c.operation_id AND r.retired_oid=coalesce(c.adopted_context_oid,c.closure_oid,c.context_oid) WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
+    let end: Option<String> = match kind {
+        LifecycleKind::DocumentPromotion => tx
+            .query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0))
+            .map(|complete: bool| complete.then(|| "completed".to_owned())),
+        LifecycleKind::TicketClosure => tx
+            .query_row("SELECT CASE WHEN EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket' AND r.operation_id=c.operation_id AND r.retired_oid=coalesce(c.adopted_context_oid,c.closure_oid,c.context_oid) WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.step='complete') THEN 'completed' WHEN EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket' AND r.operation_id=c.operation_id AND r.retired_oid=c.retired_oid WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.action='new_branch' AND c.step='retired') THEN 'completed' WHEN EXISTS(SELECT 1 FROM ticket_closures c WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.action='new_branch' AND c.step='abandoned' AND c.retired_oid IS NOT NULL AND c.pending_ref IS NULL) THEN 'cancelled' END",params![id,owner.operation_id.to_string()],|r|r.get(0)),
     }
     .map_err(|_| state::recovery_required())?;
-    if !complete {
+    // No end is `recovery_required`, as a parent that is not complete is.
+    let Some(end) = end else {
         return Err(state::recovery_required());
-    }
-    tx.execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_|state::recovery_required())?;
+    };
+    tx.execute("UPDATE remote_operation_records SET phase=?3,outcome=?3,cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now(),end]).map_err(|_|state::recovery_required())?;
     Ok(())
 }
 
@@ -1615,7 +1651,7 @@ impl RepositoryService {
                     &call,
                 )?;
             }
-            if closure_holds_context(tx, repository_id, target)? {
+            if closure_holds_context(tx, repository_id, target, execution, operation_id)? {
                 return Ok(RemotePollReservationOutcome::Reservation(
                     RemoteReservationOutcome::Busy,
                 ));
@@ -3208,7 +3244,7 @@ impl RepositoryService {
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
             }
-            if closure_holds_context(tx, id, target)? {
+            if closure_holds_context(tx, id, target, execution, operation_id)? {
                 return Ok(RemoteReservationOutcome::Busy);
             }
             let foreign_conflict: bool = tx.query_row(

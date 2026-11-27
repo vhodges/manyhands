@@ -37,7 +37,15 @@ use super::{
         promotion::{lifecycle::CancellationProbe, run::RunObserver},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
-        transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
+        setup::{
+            cancel::{CancelSetupRequest, SetupCancelError, SetupCancelReport},
+            channel::ServiceChannel,
+            poll::{SetupPollError, SetupPollReport},
+            publish::{Published, SetupError, continue_setup},
+        },
+        transport::{
+            SetupScope, SshTransportError, SshTransportVerified, VerifySshTransportRequest,
+        },
     },
     bind::{Accepted, Binding, poll, sync},
     command::Command,
@@ -278,6 +286,18 @@ pub(crate) trait Session {
         progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
+    /// Withdraws a ticket's provisional closure with the session's
+    /// credentials, as `close_ticket` closes it; see
+    /// `RepositoryService::withdraw_ticket_closure`. `None` when the session
+    /// has no credentials, or they are in use: nothing was called.
+    fn withdraw_closure(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+        asked_of: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
+
     /// Polls with the session's credentials, stopped by the call's token and by
     /// the flag of the request `asked_of`; see
     /// `RepositoryService::poll_publication_remote`. `None` when the session
@@ -313,6 +333,48 @@ pub(crate) trait Session {
         service: &RepositoryService,
         request: VerifySshTransportRequest,
     ) -> Option<Result<SshTransportVerified, SshTransportError>>;
+
+    /// `verify_transport`, for the remote of a pending setup, which no
+    /// configuration file names yet; see
+    /// `RepositoryService::verify_setup_transport`.
+    fn verify_setup_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>>;
+
+    /// Publishes the pending setup of the repository at `root` for the
+    /// request `request_id` that recorded it, with the session's
+    /// credentials; see `setup::publish::continue_setup`. `None` when the
+    /// session has no credentials, or they are in use: nothing was called.
+    fn publish_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>>;
+
+    /// Polls the pending setup of the repository at `root` with the
+    /// session's credentials, stopped by the call's token and by the flag of
+    /// the request `asked_of`; see `RepositoryService::poll_setup`. `None`
+    /// when the session has no credentials, or they are in use: nothing was
+    /// called.
+    fn poll_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>>;
+
+    /// Cancels the pending setup of `request.root` with the session's
+    /// credentials; see `RepositoryService::cancel_setup`. `None` when the
+    /// session has no credentials, or they are in use: nothing was called.
+    fn cancel_setup(
+        &self,
+        service: &RepositoryService,
+        request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>>;
 }
 
 /// A call's sink, and whether it has panicked.
@@ -447,7 +509,31 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.close_ticket_observed(request, &mut credentials, probe, progress))
+        Some(service.close_ticket_observed(
+            request,
+            &mut credentials,
+            probe,
+            progress,
+            time::OffsetDateTime::now_utc,
+        ))
+    }
+
+    fn withdraw_closure(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+        asked_of: RequestId,
+        progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.withdraw_ticket_closure_observed(
+            request,
+            &mut credentials,
+            probe,
+            progress,
+            time::OffsetDateTime::now_utc,
+        ))
     }
 
     fn poll_once(
@@ -469,6 +555,48 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.verify_ssh_transport(request, &mut credentials))
     }
+
+    fn verify_setup_transport(
+        &self,
+        service: &RepositoryService,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.verify_setup_transport(request, scope, &mut credentials))
+    }
+
+    fn publish_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let mut channel = ServiceChannel::new(service, root.to_owned(), &mut credentials);
+        Some(continue_setup(service, root, request_id, &mut channel))
+    }
+
+    fn poll_setup(
+        &self,
+        service: &RepositoryService,
+        root: &std::path::Path,
+        asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.poll_setup_observed(root, false, &mut credentials, Some(&probe)))
+    }
+
+    fn cancel_setup(
+        &self,
+        service: &RepositoryService,
+        request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.cancel_setup(request, &mut credentials))
+    }
+
     fn poll_once_retiring(
         &self,
         service: &RepositoryService,
@@ -556,6 +684,16 @@ impl Session for NoSession {
         None
     }
 
+    fn withdraw_closure(
+        &self,
+        _service: &RepositoryService,
+        _request: CloseTicketRequest,
+        _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        None
+    }
+
     fn poll_once(
         &self,
         _service: &RepositoryService,
@@ -572,6 +710,42 @@ impl Session for NoSession {
     ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }
+
+    fn verify_setup_transport(
+        &self,
+        _service: &RepositoryService,
+        _request: VerifySshTransportRequest,
+        _scope: &SetupScope,
+    ) -> Option<Result<SshTransportVerified, SshTransportError>> {
+        None
+    }
+
+    fn publish_setup(
+        &self,
+        _service: &RepositoryService,
+        _root: &std::path::Path,
+        _request_id: RequestId,
+    ) -> Option<Result<Published, SetupError>> {
+        None
+    }
+
+    fn poll_setup(
+        &self,
+        _service: &RepositoryService,
+        _root: &std::path::Path,
+        _asked_of: RequestId,
+    ) -> Option<Result<SetupPollReport, SetupPollError>> {
+        None
+    }
+
+    fn cancel_setup(
+        &self,
+        _service: &RepositoryService,
+        _request: &CancelSetupRequest,
+    ) -> Option<Result<SetupCancelReport, SetupCancelError>> {
+        None
+    }
+
     fn poll_once_retiring(
         &self,
         _service: &RepositoryService,
@@ -631,7 +805,7 @@ const REQUEST_CANCEL: &str = "request cancel";
 fn asks_a_parent(record: &RequestRecord) -> bool {
     matches!(
         Command::parse(&record.command),
-        Some(Command::DocumentPromote | Command::TicketClose)
+        Some(Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure)
     )
 }
 
@@ -651,7 +825,9 @@ impl RepositoryService {
             Some(Command::DocumentPromote) => {
                 self.cancel_document_promotion(root, operation.operation_id)
             }
-            Some(Command::TicketClose) => self.cancel_ticket_closure(root, operation.operation_id),
+            Some(Command::TicketClose | Command::TicketWithdrawClosure) => {
+                self.cancel_ticket_closure(root, operation.operation_id)
+            }
             _ => Ok(false),
         }
     }

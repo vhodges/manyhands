@@ -11,7 +11,7 @@
     },
     "state": {
       "type": "string",
-      "enum": ["open", "closed", "unresolved"]
+      "enum": ["open", "closed", "unresolved", "closing"]
     },
     "slug": {
       "type": ["string", "null"]

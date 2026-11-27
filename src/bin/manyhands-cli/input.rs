@@ -217,6 +217,25 @@ impl InputObject {
         }
     }
 
+    /// An optional object that may be null: the outer `None` is a field that
+    /// is absent, `Some(None)` is one that is null.
+    pub fn nullable_object(
+        &self,
+        field: &'static str,
+    ) -> Result<Option<Option<InputObject>>, InputError> {
+        match self.fields.get(field) {
+            None => Ok(None),
+            Some(Json::Null) => Ok(Some(None)),
+            Some(Json::Object(fields)) => Ok(Some(Some(InputObject {
+                fields: fields.clone(),
+            }))),
+            _ => Err(InputError::WrongType {
+                field,
+                expected: "an object or null",
+            }),
+        }
+    }
+
     /// A required, non-empty array of objects. A missing field is
     /// `Missing`; a value that is no array, an element that is no object
     /// and an empty array are each `WrongType`, which names the field and

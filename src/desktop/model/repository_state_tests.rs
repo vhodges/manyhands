@@ -409,3 +409,82 @@ fn check_all_takes_each_repository_that_can_check() {
         assert_eq!(check_all_applies(&scene.facts(&titles)), takes, "{name}");
     }
 }
+
+fn setup(kind: &str, state: &str) -> Option<manyhands::repository::RepositorySetupDto> {
+    Some(manyhands::repository::RepositorySetupDto {
+        id: ulid(1),
+        kind: kind.to_owned(),
+        state: state.to_owned(),
+        request_id: ulid(2),
+        branch: format!("manyhands/setup/{}", ulid(1)),
+        remote: "origin".to_owned(),
+        integration: "pull_request".to_owned(),
+        pull_request: manyhands::repository::PullRequestDto {
+            source: format!("manyhands/setup/{}", ulid(1)),
+            target: "main".to_owned(),
+            forge: None,
+            url: None,
+        },
+    })
+}
+
+/// Wave 06 Cycle 02, Part J: a repository whose first-time setup waits on a
+/// pull request has no configuration yet, which is not a fault. Its row says
+/// where the setup is, ahead of Needs fixing, and offers nothing; a missing
+/// configuration with no setup, and a change to a configuration the
+/// repository has, read as they did.
+#[test]
+fn a_setup_pending_repository_reads_waiting_not_needs_fixing() {
+    let cases: Vec<(&str, Set, StateKind, Option<&str>)> = vec![
+        (
+            "published",
+            |s| {
+                s.invalid(ConfigurationState::Missing, Vec::new());
+                s.entry.summary.setup = setup("enable", "published");
+            },
+            StateKind::SetupPending,
+            Some("Waiting for setup to merge"),
+        ),
+        (
+            "recorded",
+            |s| {
+                s.invalid(ConfigurationState::Missing, Vec::new());
+                s.entry.summary.setup = setup("enable", "recorded");
+            },
+            StateKind::SetupPending,
+            Some("Setup not published yet"),
+        ),
+        (
+            "published, while a poll is queued",
+            |s| {
+                s.invalid(ConfigurationState::Missing, Vec::new());
+                s.entry.summary.setup = setup("enable", "published");
+                s.schedule().phase = Phase::Queued;
+            },
+            StateKind::SetupPending,
+            Some("Waiting for setup to merge"),
+        ),
+        (
+            "a missing configuration with no setup",
+            |s| s.invalid(ConfigurationState::Missing, Vec::new()),
+            StateKind::NeedsFixing,
+            Some(NEEDS_FIXING),
+        ),
+        (
+            "a change, on a configuration the repository has",
+            |s| s.entry.summary.setup = setup("change", "published"),
+            StateKind::Unknown,
+            None,
+        ),
+    ];
+    for (name, set, kind, label) in cases {
+        let mut scene = Scene::new();
+        set(&mut scene);
+        let state = scene.state();
+        assert_eq!(state.kind, kind, "{name}: kind");
+        assert_eq!(state.label.as_deref(), label, "{name}: label");
+        if kind == StateKind::SetupPending {
+            assert_eq!(act_of(&state.action), Act::None, "{name}: no action");
+        }
+    }
+}

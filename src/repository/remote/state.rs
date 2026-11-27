@@ -3150,6 +3150,42 @@ pub(super) fn record_poll_attempt(
     Ok(())
 }
 
+/// Records the attempt of a first-time setup's poll where the desktop reads
+/// it (design Part G): the outcome (`Completed` for any answered
+/// advertisement, `stopped_by` the transport's stop otherwise), the attempt's
+/// time and the next eligible time, as an ordinary poll's finish writes them.
+/// No remote row is reserved, so the rows of the poll are not touched.
+pub(in super::super) fn record_setup_poll_attempt(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    stopped_by: Option<&crate::repository::transport::SshTransportErrorKind>,
+    invocation: super::RemotePollInvocation,
+    now: OffsetDateTime,
+) -> Result<(), RepositoryError> {
+    let category = stopped_by.map_or(
+        RemoteOutcomeCategory::Completed,
+        super::observation::transport_category,
+    );
+    let policy = read_snapshot(transaction, repository_id)?.polling().clone();
+    let next = super::poll::next_eligible(category, invocation, now, &policy);
+    // The backoff grows for an automatic stop the network may cure, is
+    // cleared by an answered advertisement and is kept otherwise.
+    let backoff = match category {
+        RemoteOutcomeCategory::Completed => None,
+        RemoteOutcomeCategory::TransportUnavailable | RemoteOutcomeCategory::ProtocolRejected
+            if invocation == super::RemotePollInvocation::Automatic =>
+        {
+            next.and_then(|at| u64::try_from((at - now).whole_seconds()).ok())
+                .and_then(|seconds| AutomaticBackoff::from_seconds(seconds).ok())
+        }
+        _ => policy
+            .automatic_backoff()
+            .and_then(|current| AutomaticBackoff::from_seconds(current.as_secs()).ok()),
+    };
+    record_outcome(transaction, repository_id, category, backoff)?;
+    record_poll_attempt(transaction, repository_id, now, next)
+}
+
 /// Invoke only with the complete result of a successful advertisement. Failed,
 /// partial, or cancelled calls use record_outcome and leave the current batch.
 /// The caller wraps this in with_transaction; a stale configuration is rejected
@@ -3818,12 +3854,24 @@ pub(in super::super) fn lookup_fenced(
         .unwrap_or(false))
 }
 
-/// The context child that the promotion or closure `operation_id` of the
-/// repository `repository_id` holds now (decision 34): the outer `None` when
+/// A closure record that is a branch record (Part D, R-3): any but the direct
+/// close, whose second child slot is the primary's. The one test every read
+/// of the slot that tells the two apart makes.
+const BRANCH_RECORD: &str = "NOT (integration_mode = 'direct' AND action = 'close')";
+
+/// The child that the promotion or closure `operation_id` of the repository
+/// `repository_id` holds now (decision 34): the outer `None` when
 /// `operation_id` is no lifecycle parent of it, the inner one when the parent
-/// has no context child yet. A plain read of the parent's own row, as
-/// `conflict show` and `conflict resolve` map a parent's ID to its child. A
-/// stored ID that isn't one is `recovery_required`, never "no child".
+/// has no child yet. A plain read of the parent's own row, as `conflict show`
+/// and `conflict resolve` map a parent's ID to its child.
+///
+/// A promotion's or a direct close's child is its context child. A branch
+/// record has two slots: once its publication child exists (`primary_attempt`
+/// above 0) every call of the record goes straight to it and the context
+/// child is done with, so the publication child is the current one; before
+/// that, the context child (a new branch never has one: its first slot stays
+/// empty). A stored ID that isn't one is `recovery_required`, never "no
+/// child".
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(in super::super) fn lifecycle_context_child(
     connection: &Connection,
@@ -3832,12 +3880,17 @@ pub(in super::super) fn lifecycle_context_child(
 ) -> Result<Option<Option<crate::repository::OperationId>>, ReadError> {
     let row: Option<Option<String>> = connection
         .query_row(
-            "SELECT context_sync_id FROM document_promotions
-              WHERE repository_id = ?1 AND operation_id = ?2
-             UNION ALL
-             SELECT context_sync_id FROM ticket_closures
-              WHERE repository_id = ?1 AND operation_id = ?2
-             LIMIT 1",
+            &format!(
+                "SELECT context_sync_id FROM document_promotions
+                  WHERE repository_id = ?1 AND operation_id = ?2
+                 UNION ALL
+                 SELECT CASE WHEN {BRANCH_RECORD}
+                             THEN COALESCE(primary_sync_id, context_sync_id)
+                             ELSE context_sync_id END
+                   FROM ticket_closures
+                  WHERE repository_id = ?1 AND operation_id = ?2
+                 LIMIT 1"
+            ),
             params![repository_id, operation_id.to_string()],
             |row| row.get(0),
         )
@@ -3853,9 +3906,11 @@ fn stored_operation_id(text: &str) -> Result<crate::repository::OperationId, Rea
     crate::repository::OperationId::parse(text).map_err(|_| recovery_required().into())
 }
 
-/// The promotion or closure of the repository `repository_id` whose context
-/// child is `child` now, if one is (decision 34). A stored ID that isn't one
-/// is `recovery_required`.
+/// The promotion or closure of the repository `repository_id` whose child is
+/// `child` now, if one is (decision 34): a promotion's or a closure's context
+/// child, and a branch record's publication child (a direct close's primary
+/// child is no one's to map). A stored ID that isn't one is
+/// `recovery_required`.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(in super::super) fn lifecycle_parent_of(
     connection: &Connection,
@@ -3864,12 +3919,15 @@ pub(in super::super) fn lifecycle_parent_of(
 ) -> Result<Option<crate::repository::OperationId>, ReadError> {
     let row: Option<String> = connection
         .query_row(
-            "SELECT operation_id FROM document_promotions
-              WHERE repository_id = ?1 AND context_sync_id = ?2
-             UNION ALL
-             SELECT operation_id FROM ticket_closures
-              WHERE repository_id = ?1 AND context_sync_id = ?2
-             LIMIT 1",
+            &format!(
+                "SELECT operation_id FROM document_promotions
+                  WHERE repository_id = ?1 AND context_sync_id = ?2
+                 UNION ALL
+                 SELECT operation_id FROM ticket_closures
+                  WHERE repository_id = ?1
+                    AND (context_sync_id = ?2 OR (primary_sync_id = ?2 AND {BRANCH_RECORD}))
+                 LIMIT 1"
+            ),
             params![repository_id, child.to_string()],
             |row| row.get(0),
         )
@@ -4191,6 +4249,29 @@ pub(super) fn integration_window(
         _ => return Err(recovery_required()),
     };
     Ok(Some(IntegrationWindowEvidence { number, intent }))
+}
+
+/// The primary side the integration validators check a ticket's closure
+/// against (R-12): the fetched primary a ticket context's pinned window
+/// froze. In its Context stage that is the window's `primary_oid`, and in its
+/// Primary stage the step's incoming commit, which is the same commit. A
+/// primary-target synchronization and window zero (the legacy envelope, which
+/// has no `primary_oid`) have none, and so keep the strict rule.
+pub(super) fn window_primary_side(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+    window_number: u32,
+) -> Result<Option<Oid>, RepositoryError> {
+    if !record
+        .target
+        .item()
+        .is_some_and(|(kind, _)| kind == AuthoringKind::Ticket)
+    {
+        return Ok(None);
+    }
+    Ok(integration_window(connection, record, window_number)?
+        .and_then(|window| window.intent)
+        .map(|intent| intent.primary_oid))
 }
 
 /// Active orchestration reads only the newest pass and its two fixed slots.

@@ -1,6 +1,6 @@
-//! `document promote` and `ticket close`: C2's confirmed flow around one
+//! `document promote`, `ticket close` and `ticket withdraw-closure`: C2's confirmed flow around one
 //! library mutation, in the Ctrl-C window (`mutate.rs`), with C2's bounded
-//! retry. Neither takes input, and neither reads the item first: the library
+//! retry. None takes input, and none reads the item first: the library
 //! answers an unknown ID or a wrong kind. Results are rendered by
 //! `human_lifecycle`.
 
@@ -10,7 +10,8 @@ use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, TicketCloseInput,
+        DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, RequestId,
+        TicketCloseInput, TicketWithdrawClosureInput,
     },
 };
 
@@ -54,6 +55,22 @@ pub fn ticket_close(
     )
 }
 
+pub fn ticket_withdraw_closure(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    run(
+        service,
+        session,
+        spec,
+        args,
+        ItemDtoKind::Ticket,
+        |root, id| Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput { root, id }),
+    )
+}
+
 fn run(
     service: &RepositoryService,
     session: &mut Session,
@@ -84,7 +101,19 @@ fn run(
     mutate::finish(
         session.json,
         driven,
-        |envelope| human_lifecycle::prepare(kind, envelope),
+        |envelope| {
+            // The command of the request that holds the item, which a
+            // request ID is only ever sent again under: a read of its record.
+            let holder = |request: &str| {
+                let request = RequestId::parse(request).ok()?;
+                service
+                    .request_record(request)
+                    .ok()
+                    .flatten()
+                    .map(|record| record.command)
+            };
+            human_lifecycle::prepare(kind, envelope, &holder)
+        },
         human_lifecycle::output,
     )
 }

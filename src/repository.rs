@@ -31,9 +31,10 @@ mod bridges;
 mod cleanup;
 mod closure;
 pub use closure::{
-    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
-    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
-    TicketClosurePreview, TicketClosureResult,
+    BranchAnswer, BranchClosureOutcome, BranchRecording, CloseTicketRequest, ClosureAction,
+    ClosureBlocker, ClosureExpectation, ClosureRecording, ClosureWithdrawalPreflight,
+    PlannedClosure, PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome,
+    TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
 mod context_release;
@@ -72,10 +73,12 @@ mod native_resolution;
 #[path = "repository/native_resolution/windows.rs"]
 mod native_resolution;
 mod promotion;
+mod pull_request_links;
 mod read;
 mod recovery;
 mod registration_removal;
 mod remote;
+mod setup;
 mod ticket_guard;
 pub mod transport;
 #[cfg(test)]
@@ -146,6 +149,10 @@ pub use remote::{
     SynchronizationOutcome, SynchronizationResult, SynchronizationSettings, SynchronizationStage,
     SynchronizationTarget, SynchronizeRemoteRequest,
 };
+pub use setup::cancel::{
+    CancelSetupRequest, LocalBranch, RemoteBranch, SetupCancelError, SetupCancelReport,
+};
+pub use setup::poll::{SetupPollError, SetupPollOutcome, SetupPollReport};
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
 /// The attempt ID `conflict resolve` derives, for the source-included test
@@ -296,7 +303,12 @@ fn refuse_repair_intent(
 /// exists (C12). A creation, a repair and a write to another kind are not
 /// asked. A configuration that is not valid is left for the call to
 /// report.
+///
+/// A branch record that holds the ticket (R-17) is asked first, in either
+/// mode, from the registry: `recovery_required` naming the record. A direct
+/// record is no hold, and its closure is the guard's.
 fn refuse_closed_ticket(
+    service: &RepositoryService,
     repository: &Repository,
     root: &Path,
     operation: RepositoryOperation,
@@ -313,8 +325,19 @@ fn refuse_closed_ticket(
     else {
         return Ok(());
     };
-    ticket_guard::require_ticket_open(repository, &configuration.primary_branch, &target.item_id)
-        .map_err(|error| error.for_operation(operation, root))
+    // A branch record that holds the ticket (R-17) refuses before the guard
+    // below, which reads only the primary and so finds a closing ticket
+    // open. A direct record is no hold here: its closure is the guard's.
+    if let Some(holder) = service.branch_hold_of(root, &target.item_id, operation)? {
+        return Err(closure::record::hold_refusal(holder).for_operation(operation, root));
+    }
+    ticket_guard::require_ticket_open(
+        repository,
+        &configuration.primary_branch,
+        &target.item_id,
+        configuration.integration(),
+    )
+    .map_err(|error| error.for_operation(operation, root))
 }
 
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
@@ -440,6 +463,9 @@ pub struct RepositoryService {
     process_probe: Arc<dyn liveness::ProcessProbe>,
     /// How long a writer waits for a live holder of the row in its way.
     wait_policy: WaitPolicy,
+    /// How long a lifecycle waits for the repository lease before it is
+    /// `busy`; a test shortens it.
+    lease_wait: std::time::Duration,
     /// What that wait lets its time pass with.
     sleeper: Arc<dyn Sleeper>,
 }
@@ -649,6 +675,9 @@ enum IndexAvailability {
 pub enum LifecycleLeasePhase {
     RemoveRemoteUnselected,
     SetPublicationRemoteExisting,
+    /// A ticket repair holds the lease and its row is begun, before it asks
+    /// anything of the item.
+    RepairBegun,
 }
 
 /// The message of the commit enablement makes.
@@ -1135,6 +1164,12 @@ pub enum FailurePoint {
     /// Ticket closure: the context ref is at the checkpoint and nothing has
     /// reached the primary.
     AfterClosureCheckpoint,
+    /// A new branch's closure commit is recorded in SQL, unreferenced; its
+    /// pending ref is not made.
+    NewBranchCommitRecorded,
+    /// A new branch's closure commit is held by its pending ref; the old
+    /// context is untouched.
+    NewBranchCommitHeld,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
@@ -1282,6 +1317,9 @@ pub enum RepositoryOperation {
     CreateAndEnable,
     Enable,
     RemoveRegistration,
+    /// `repo setup-cancel`: the cancel's own row, recorded at
+    /// `setup_cancel_recorded`.
+    CancelSetup,
     ListRemotes,
     AddRemote,
     RemoveRemote,
@@ -2389,7 +2427,9 @@ impl RepositoryService {
             &authoring_context_target(&target),
         )?;
         let effects = CallEffects::default();
-        if let Err(error) = refuse_closed_ticket(&repository, &root, operation, &target, record) {
+        if let Err(error) =
+            refuse_closed_ticket(self, &repository, &root, operation, &target, record)
+        {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
@@ -2609,6 +2649,154 @@ impl RepositoryService {
             )?;
         }
         Ok(ContextProvisionOutcome::Created(context))
+    }
+
+    /// A ticket's editing context made at `commit`: its branch
+    /// `manyhands/<kind>/<ID>` at `commit` and its worktree at
+    /// `.manyhands/worktrees/<ID>` (a new branch's step 3). Unlike
+    /// `prepare_context_unlocked` it does not require the root to be on the
+    /// primary, nor the item to be in the primary: the commit, built on the
+    /// tracking primary, holds it. The caller holds the repository lease and
+    /// the item's closure hold, so no other writer makes the context.
+    ///
+    /// Idempotent over its own partial work: a branch already at `commit` is
+    /// kept, and a worktree already made at it is checked and kept. The
+    /// branch anywhere else, or one of the branch's worktree pair without the
+    /// other, is `MismatchedAuthoringContext`, with nothing changed.
+    fn context_at_commit(
+        &self,
+        root: &Path,
+        kind: AuthoringKind,
+        item_id: &canonical::ItemId,
+        commit: git2::Oid,
+    ) -> Result<ItemContext, RepositoryError> {
+        let operation = RepositoryOperation::PrepareContext;
+        let (repository, root) = canonical_repository_root(root, operation)?;
+        let configuration = match read_configuration_for(&root, operation)? {
+            ConfigurationInspection::Valid(configuration) => configuration,
+            ConfigurationInspection::Missing => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::RepositoryNotEnabled,
+                    "a Manyhands configuration is required before authoring",
+                ));
+            }
+            ConfigurationInspection::Invalid(problem) => {
+                return Err(RepositoryError::new(
+                    operation,
+                    Some(root),
+                    RepositoryErrorKind::InvalidConfiguration,
+                    problem.message,
+                ));
+            }
+        };
+        let id = item_id.to_string();
+        let branch = format!("manyhands/{}/{id}", authoring_kind_segment(&kind));
+        if configuration.primary_branch == branch {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the configured primary branch cannot be an authoring branch",
+            ));
+        }
+        let worktree = root.join(".manyhands/worktrees").join(&id);
+        let context = ItemContext {
+            root: root.clone(),
+            kind,
+            item_id: item_id.clone(),
+            branch: branch.clone(),
+            worktree: worktree.clone(),
+        };
+        let git = |error| RepositoryError::git(operation, Some(root.clone()), error);
+        let target = repository.find_commit(commit).map_err(git)?;
+        validate_deterministic_worktree_path_chain(&worktree, &root, operation)?;
+        if branch_checked_out_in_another_worktree(
+            &repository,
+            &worktree,
+            &branch,
+            operation,
+            &root,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                "the deterministic authoring branch is checked out in another worktree",
+            ));
+        }
+        let mismatched = |message: &str| {
+            RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::MismatchedAuthoringContext,
+                message,
+            )
+        };
+        let directory = match std::fs::symlink_metadata(&worktree) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(RepositoryError::io(operation, Some(root.clone()), error)),
+        };
+        let registered = repository.find_worktree(&id).is_ok();
+        let existing = match repository.find_branch(&branch, BranchType::Local) {
+            Ok(existing) => Some(existing),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(git(error)),
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|existing| existing.get().target() != Some(commit))
+        {
+            return Err(mismatched(
+                "the deterministic authoring branch exists at another commit",
+            ));
+        }
+        if directory != registered {
+            return Err(mismatched(
+                "the deterministic worktree and its registration do not agree",
+            ));
+        }
+        if directory {
+            // Made by an earlier call: the branch must be here, at `commit`,
+            // and checked out in it.
+            if existing.is_none() {
+                return Err(mismatched(
+                    "the deterministic worktree has no authoring branch",
+                ));
+            }
+            validate_context_worktree_identity(&repository, &context, operation)?;
+            let linked = Repository::open(&worktree).map_err(git)?;
+            let head = linked
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(git)?;
+            if head.id() != commit {
+                return Err(mismatched(
+                    "the deterministic worktree is not at the commit",
+                ));
+            }
+            return Ok(context);
+        }
+        ensure_authoring_worktree_base(&root, operation)?;
+        let reference = match existing {
+            Some(existing) => existing.into_reference(),
+            None => {
+                self.check_failure(FailurePoint::BeforeContextBranchCreation, operation, &root)?;
+                repository
+                    .branch(&branch, &target, false)
+                    .map_err(git)?
+                    .into_reference()
+            }
+        };
+        let mut options = WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        self.check_failure(FailurePoint::BeforeWorktreeCreation, operation, &root)?;
+        repository
+            .worktree(&id, &worktree, Some(&options))
+            .map_err(git)?;
+        Ok(context)
     }
 
     pub fn save_document(
@@ -3093,9 +3281,14 @@ impl RepositoryService {
         }
         let effects = CallEffects::default();
         // Every ticket save, relationship and short-code write comes here.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let result = (|| {
@@ -3279,6 +3472,18 @@ impl RepositoryService {
                     &context.root,
                     RepositoryErrorKind::InvalidPath,
                     "ticket ID does not match the selected target",
+                ));
+            }
+            // A save never changes the closure: a person who edits those
+            // fields by hand is refused, in both modes (R-11).
+            if ticket_guard::closure_differs_from_head(&repository, &ticket)
+                .map_err(|error| error.for_operation(operation, &context.root))?
+            {
+                return Err(authoring_error(
+                    operation,
+                    &context.root,
+                    RepositoryErrorKind::InvalidItemSource,
+                    "a ticket save does not change the ticket's closure",
                 ));
             }
             if !record.is_new {
@@ -3477,9 +3682,14 @@ impl RepositoryService {
         let effects = CallEffects::default();
         // Before the publication binding is recorded: a refusal leaves
         // nothing for the row to owe.
-        if let Err(error) =
-            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
-        {
+        if let Err(error) = refuse_closed_ticket(
+            self,
+            &root_repository,
+            &root,
+            operation,
+            &request.target,
+            record,
+        ) {
             return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
         }
         let mut known_checkpoint = None;
@@ -4102,7 +4312,13 @@ impl RepositoryService {
         loop {
             // A lease that cannot be taken in time is waited for as the row
             // of a live holder is, when one is at work; see `waited`.
-            let begun = repository_lease(repository, root, operation).and_then(|lease| {
+            let begun = coordination::repository_lease_waiting(
+                repository,
+                root,
+                operation,
+                self.lease_wait,
+            )
+            .and_then(|lease| {
                 self.begin_lifecycle_record_reaching(root, operation, operation_id, target, reach)
                     .map(|record| (lease, record))
             });
@@ -4325,7 +4541,11 @@ impl RepositoryService {
             | LocalStep::Completed
             | LocalStep::Rejected
             | LocalStep::Abandoned
-            | LocalStep::LocalSyncPrepared => false,
+            | LocalStep::LocalSyncPrepared
+            // A setup's steps are recorded in the transaction that holds
+            // the record, with no owned write before them.
+            | LocalStep::SetupRecorded
+            | LocalStep::SetupCancelRecorded => false,
         };
         if follows_an_owned_write
             && self.should_inject(
@@ -4488,6 +4708,34 @@ impl RepositoryService {
             ));
         }
         Ok(())
+    }
+
+    /// The branch record that holds the ticket (R-17), read from the
+    /// registry. A repository the registry does not know has none.
+    fn branch_hold_of(
+        &self,
+        root: &Path,
+        item_id: &canonical::ItemId,
+        operation: RepositoryOperation,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        let _cache_guard = cache_read_guard(&self.registry_path, root, operation)?;
+        let connection = self
+            .open_migrated_registry(operation)
+            .map_err(|error| error.for_operation(operation, root))?;
+        let root_path = registry_root_key(root, operation)?;
+        let repository_id: Option<i64> = connection
+            .query_row(
+                "SELECT id FROM repositories WHERE root_path=?1",
+                [root_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+        let Some(repository_id) = repository_id else {
+            return Ok(None);
+        };
+        closure::record::branch_hold(&connection, repository_id, item_id)
+            .map_err(|error| error.for_operation(operation, root))
     }
 
     /// Marks the context a checkpoint committed to, and only it, as owed an
@@ -5338,6 +5586,7 @@ impl RepositoryService {
             context_tree_validations: Mutex::new(ContextTreeValidations::default()),
             process_probe: Arc::new(liveness::SystemProbe),
             wait_policy: WaitPolicy::default(),
+            lease_wait: coordination::LEASE_TIMEOUT,
             sleeper: Arc::new(blocker::SystemSleeper),
         })
     }
@@ -5364,8 +5613,32 @@ impl RepositoryService {
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
+        self.enable_direct_with(request, slug_prefix, None, None)
+    }
+
+    /// `enable_with_slug_prefix`, writing `remote` and `forge` to the
+    /// configuration it commits as well (design R-9): a direct enable that
+    /// names a publication remote or a forge writes them in its
+    /// initialization commit. A remote that is missing or not eligible is
+    /// refused before anything is written. With neither it is
+    /// `enable_with_slug_prefix` byte for byte. On a repository that is
+    /// enabled already nothing writes them, and the caller has checked that
+    /// they are the configuration's.
+    pub(crate) fn enable_direct_with(
+        &self,
+        request: EnableRepositoryRequest,
+        slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
+    ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
-        self.enable_with_identity_provider(request, slug_prefix, &mut RepositoryIdentityConfig)
+        self.enable_with_identity_provider(
+            request,
+            slug_prefix,
+            remote,
+            forge,
+            &mut RepositoryIdentityConfig,
+        )
     }
 
     pub fn list_remotes(&self, root: &Path) -> Result<Vec<RemoteInfo>, RepositoryError> {
@@ -5648,6 +5921,24 @@ impl RepositoryService {
         &self,
         request: SetPublicationRemoteRequest,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
+        self.set_publication_remote_with(request, None, None)
+    }
+
+    /// `set_publication_remote`, with the `[forge]` table the same commit is
+    /// to leave: `None` leaves it as it is, `Some(None)` removes it,
+    /// `Some(Some(setting))` replaces it.
+    ///
+    /// With a `guard`, the change the caller planned the call from is planned
+    /// again under the lease, on the configuration found there: anything but
+    /// a direct commit (or nothing to do) is an `external_change` and nothing
+    /// is committed, so that a request that is a pull-request one by its
+    /// intent never commits to the primary.
+    pub(crate) fn set_publication_remote_with(
+        &self,
+        request: SetPublicationRemoteRequest,
+        forge: Option<Option<&canonical::ForgeSetting>>,
+        guard: Option<&setup::change::Change<'_>>,
+    ) -> Result<PublicationRemoteOutcome, RepositoryError> {
         let operation = RepositoryOperation::SetPublicationRemote;
         self.require_index_available(operation, Some(&request.root))?;
         let (repository, root) = canonical_repository_root(&request.root, operation)?;
@@ -5668,6 +5959,8 @@ impl RepositoryService {
         let effects = CallEffects::default();
         let result = self.set_publication_remote_recorded(
             request,
+            forge,
+            guard,
             repository,
             root.clone(),
             &mut lease,
@@ -5677,9 +5970,12 @@ impl RepositoryService {
         self.settle_rejected_lifecycle(&root, operation, record, &effects, result)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn set_publication_remote_recorded(
         &self,
         request: SetPublicationRemoteRequest,
+        forge: Option<Option<&canonical::ForgeSetting>>,
+        guard: Option<&setup::change::Change<'_>>,
         repository: Repository,
         root: PathBuf,
         lease: &mut Option<RepositoryLease>,
@@ -5687,7 +5983,7 @@ impl RepositoryService {
         effects: &CallEffects,
     ) -> Result<PublicationRemoteOutcome, RepositoryError> {
         let operation = RepositoryOperation::SetPublicationRemote;
-        let ConfigurationInspection::Valid(mut config) = read_configuration_for(&root, operation)?
+        let ConfigurationInspection::Valid(config) = read_configuration_for(&root, operation)?
         else {
             self.complete_lifecycle(&root, operation, record)?;
             return Err(RepositoryError::new(
@@ -5738,7 +6034,37 @@ impl RepositoryService {
             }
         }
         self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
-        if config.publication_remote == request.name {
+        // What the commit leaves: the remote and, when a forge is given, the
+        // `[forge]` table. With no forge this is the remote alone.
+        let mut intended = config.clone();
+        intended.publication_remote = request.name.clone();
+        setup::intent::apply_forge(&mut intended, forge);
+        let equal = intended == config;
+        // A request that is a direct one by its intent, planned from a
+        // configuration read before the lease, plans again from the one found
+        // here: a primary that turned pull request meanwhile (a sync took a
+        // collaborator's merged setup) is not committed over. A request that
+        // names a mode or a forge is asked even when the file this call
+        // intends is equal to the one found: it meant a direct selection,
+        // which a primary now in pull-request mode is not, and the shortcut
+        // below would answer it `already_applied`. A selection of a remote
+        // alone has no guard and is as it was.
+        if let Some(change) = guard
+            && (!equal || change.integration.is_some() || change.forge.is_some())
+            && !matches!(
+                setup::change::path_of(&config, change),
+                Ok(setup::change::ChangePath::Direct | setup::change::ChangePath::AlreadyApplied)
+            )
+        {
+            self.complete_lifecycle(&root, operation, record)?;
+            return Err(RepositoryError::new(
+                operation,
+                Some(root),
+                RepositoryErrorKind::ExternalChange,
+                "the configuration changed since the selection was planned",
+            ));
+        }
+        if equal {
             // A selection already made may have stopped before its index
             // update, or come from a version that made none. The checks above
             // showed the file matches HEAD and the entry only lags behind it.
@@ -5798,8 +6124,7 @@ impl RepositoryService {
                 "configure user.name and user.email before changing the publication remote",
             ));
         };
-        config.publication_remote = request.name;
-        let source = canonical::serialize_repository_config(&config).map_err(|problem| {
+        let source = canonical::serialize_repository_config(&intended).map_err(|problem| {
             RepositoryError::new(
                 operation,
                 Some(root.clone()),
@@ -6252,6 +6577,8 @@ impl RepositoryService {
         self.enable_with_identity_provider(
             request,
             None,
+            None,
+            None,
             &mut SuppliedIdentityConfig { effective_config },
         )
     }
@@ -6260,6 +6587,8 @@ impl RepositoryService {
         &self,
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
         identity_config: &mut impl IdentityConfigProvider,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::Enable, Some(&request.root))?;
@@ -6296,6 +6625,8 @@ impl RepositoryService {
         let result = self.enable_recorded(
             request,
             slug_prefix,
+            remote,
+            forge,
             identity_config,
             repository,
             root.clone(),
@@ -6311,6 +6642,8 @@ impl RepositoryService {
         &self,
         request: EnableRepositoryRequest,
         slug_prefix: Option<&str>,
+        remote: Option<&str>,
+        forge: Option<&canonical::ForgeSetting>,
         identity_config: &mut impl IdentityConfigProvider,
         repository: Repository,
         root: PathBuf,
@@ -6318,9 +6651,11 @@ impl RepositoryService {
         record: RecoveryRecord,
         effects: &CallEffects,
     ) -> Result<EnableRepositoryOutcome, RepositoryError> {
-        let requested_config = canonical_configuration(
+        let requested_config = canonical_configuration_with(
             &request.primary_branch,
             slug_prefix,
+            remote,
+            forge,
             &root,
             RepositoryOperation::Enable,
         )?;
@@ -6508,7 +6843,20 @@ impl RepositoryService {
                 self.complete_lifecycle(&root, RepositoryOperation::Enable, record)?;
                 return Ok(EnableRepositoryOutcome::AlreadyEnabled);
             }
-            ConfigurationInspection::Missing => {}
+            ConfigurationInspection::Missing => {
+                // A remote that is to be written is one this clone can
+                // publish to; nothing is written for one that is not.
+                if let Some(remote) = remote
+                    && !publication_remote_eligible(&repository, &root, remote)?
+                {
+                    return Err(RepositoryError::new(
+                        RepositoryOperation::Enable,
+                        Some(root),
+                        RepositoryErrorKind::UnavailablePublicationRemote,
+                        "the publication remote is unavailable or ineligible",
+                    ));
+                }
+            }
         }
 
         let (identity, write_identity) = match request.identity {
@@ -12004,18 +12352,45 @@ fn canonical_configuration(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<String, RepositoryError> {
-    let mut unknown = toml::Table::new();
+    canonical_configuration_with(primary_branch, slug_prefix, None, None, root, operation)
+}
+
+/// `canonical_configuration` for a direct enable that names a publication
+/// remote or a forge (design R-9): they are written with the primary branch
+/// and the prefix. A configuration with none is the one without them, byte
+/// for byte.
+fn canonical_configuration_with(
+    primary_branch: &str,
+    slug_prefix: Option<&str>,
+    remote: Option<&str>,
+    forge: Option<&canonical::ForgeSetting>,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<String, RepositoryError> {
+    // A direct enable: today's file, with the remote and the forge when
+    // they are named.
+    let config = setup::intent::base_configuration(
+        primary_branch,
+        remote,
+        canonical::Integration::Direct,
+        forge,
+    );
+    canonical_configuration_for(config, slug_prefix, root, operation)
+}
+
+/// The file of `config`, with the short code prefix put in.
+fn canonical_configuration_for(
+    mut config: canonical::RepositoryConfig,
+    slug_prefix: Option<&str>,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<String, RepositoryError> {
     if let Some(prefix) = slug_prefix {
-        unknown.insert(
+        config.unknown.insert(
             canonical::SLUG_PREFIX_KEY.to_owned(),
             toml::Value::String(prefix.to_owned()),
         );
     }
-    let config = canonical::RepositoryConfig {
-        primary_branch: primary_branch.to_owned(),
-        publication_remote: None,
-        unknown,
-    };
     if canonical::slug_settings(&config).is_err() {
         return Err(RepositoryError::new(
             operation,
@@ -13499,6 +13874,52 @@ fn reconcile_registration(
     })
 }
 
+/// Registers the repository at `root` for a setup that has no configuration
+/// in `HEAD` yet, in the caller's registry transaction, and returns its
+/// registration ID. `reconcile_registration` cannot: it needs the file in
+/// `HEAD`.
+///
+/// The row holds a null `config_blob_oid` and is marked accessible and for a
+/// refresh. An enable runs only on a repository whose HEAD holds no
+/// configuration, so a blob an existing row holds is stale, and would make
+/// `repo list` read the setup as complete: it is cleared. Nothing else is
+/// written.
+fn register_setup_pending(
+    transaction: &rusqlite::Transaction<'_>,
+    root: &Path,
+) -> Result<i64, RepositoryError> {
+    let operation = RepositoryOperation::Enable;
+    let enabled_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::Io,
+                error,
+            )
+        })?
+        .as_secs() as i64;
+    let root_path = registry_root_key(root, operation)?;
+    transaction
+        .execute(
+            "INSERT INTO repositories (
+                root_path, enabled_at, accessibility, config_blob_oid, refresh_required
+            ) VALUES (?1, ?2, 'accessible', NULL, 1)
+            ON CONFLICT(root_path) DO UPDATE
+            SET accessibility = 'accessible', config_blob_oid = NULL, refresh_required = 1",
+            (root_path, enabled_at),
+        )
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))?;
+    transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .map_err(|error| RepositoryError::sqlite(error).for_operation(operation, root))
+}
+
 fn committed_configuration_blob_oid(
     repository: &Repository,
     root: &Path,
@@ -13832,6 +14253,8 @@ mod tests {
                     identity: None,
                     operation_id: OperationId::new(),
                 },
+                None,
+                None,
                 None,
                 &mut provider,
             )

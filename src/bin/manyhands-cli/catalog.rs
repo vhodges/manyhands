@@ -172,7 +172,7 @@ const TICKET_LIST: &[OptionSpec] = &[
     PROJECT,
     option(
         "--closure",
-        Some("open|closed|all"),
+        Some("open|closed|closing|all"),
         false,
         "Filter by closure state (default: all).",
     ),
@@ -454,6 +454,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         verb: "remove",
         summary: "Remove a repository registration.",
         availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "setup-cancel",
+        summary: "Cancel the repository's pending setup.",
+        availability: Availability::Available("C5"),
         repo: Some(Required),
         options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
@@ -1056,6 +1068,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         resource: "ticket",
         verb: "close",
         summary: "Close a ticket.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "ticket",
+        verb: "withdraw-closure",
+        summary: "Withdraw a ticket's closure from its branch.",
         availability: Availability::Available("C5"),
         repo: Some(Required),
         options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],

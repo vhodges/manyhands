@@ -29,6 +29,7 @@ const C2: &[&str] = &[
     "repo create",
     "repo enable",
     "repo remove",
+    "repo setup-cancel",
     "repo identity-set",
     "remote add",
     "remote remove",
@@ -70,7 +71,14 @@ const C4: &[&str] = &[
     "operation resume",
     "operation abandon",
 ];
-const LIFECYCLE: &[&str] = &["document promote", "ticket close"];
+const LIFECYCLE: &[&str] = &[
+    "document promote",
+    "ticket close",
+    "ticket withdraw-closure",
+];
+/// The two lifecycle verbs whose recoverable codes are the C5 design's outcome
+/// tables' (Wave 06 Cycle 03's withdraw has its own list below).
+const PROMOTE_AND_CLOSE: &[&str] = &["document promote", "ticket close"];
 const LOCAL_SYNC: &[&str] = &[
     "context observe-local",
     "context show-local",
@@ -95,7 +103,7 @@ const FAMILIES: &[(&str, &[&str])] = &[
 /// outcomes.
 const C5_REQUIRED: &[(&[&str], &[&str])] = &[
     (
-        LIFECYCLE,
+        PROMOTE_AND_CLOSE,
         &[
             "recovery_required",
             "identity_required",
@@ -115,6 +123,18 @@ const C5_REQUIRED: &[(&[&str], &[&str])] = &[
         ],
     ),
     (&["ticket close"], &["ticket_closed"]),
+    // The withdraw's own rows (Wave 06 Cycle 03): its prepare's refusals, a
+    // held prepare, and a cancellation. Its other answers are the lifecycle
+    // binding's.
+    (
+        &["ticket withdraw-closure"],
+        &[
+            "recovery_required",
+            "ticket_closed",
+            "publication_remote_required",
+            "cancelled",
+        ],
+    ),
     (
         &["poll once"],
         &[
@@ -516,7 +536,7 @@ fn c5_codes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
         }
         verbs.insert(cells[1].trim_matches('`'), codes);
     }
-    assert_eq!(verbs.len(), 10, "{verbs:?}");
+    assert_eq!(verbs.len(), 11, "{verbs:?}");
     verbs
 }
 

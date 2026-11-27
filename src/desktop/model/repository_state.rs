@@ -99,6 +99,9 @@ impl RepoFacts<'_> {
 pub(crate) enum StateKind {
     CantOpen,
     BusyOpening,
+    /// A first-time setup on a branch for a pull request, not merged yet
+    /// (Wave 06 Cycle 02, Part J).
+    SetupPending,
     NeedsFixing,
     Checking,
     Locked,
@@ -215,6 +218,7 @@ pub(crate) fn action_label(action: &RowAction) -> &'static str {
 pub(crate) fn repository_state(facts: &RepoFacts<'_>) -> RepoState {
     let name = facts.entry.name();
     cant_open(facts, &name)
+        .or_else(|| setup_pending(facts))
         .or_else(|| needs_fixing(facts))
         .or_else(|| checking(facts, &name))
         .or_else(|| locked(facts))
@@ -244,6 +248,32 @@ fn cant_open(facts: &RepoFacts<'_>, repo: &str) -> Option<RepoState> {
         look(CANT_OPEN, "circle-alert", Tone::Failure),
         Some(RowAction::Retry),
         sentence,
+    ))
+}
+
+/// The row before Needs fixing, for a first-time setup: the repository has no
+/// configuration until the pull request merges, so that is not a fault to
+/// fix. It has no action (Cycle 06 adds Open pull request page). A setup that
+/// changes a configuration the repository has leaves its row as it is.
+fn setup_pending(facts: &RepoFacts<'_>) -> Option<RepoState> {
+    let setup = facts.entry.summary.setup.as_ref()?;
+    if setup.kind != SETUP_FIRST_TIME {
+        return None;
+    }
+    let (label, sentence, tone) = if setup.state == SETUP_PUBLISHED {
+        (SETUP_WAITING, SETUP_WAITING_SENTENCE, Tone::Warning)
+    } else {
+        (
+            SETUP_NOT_PUBLISHED,
+            SETUP_NOT_PUBLISHED_SENTENCE,
+            Tone::Muted,
+        )
+    };
+    Some(RepoState::labelled(
+        StateKind::SetupPending,
+        look(label, "git-merge", tone),
+        None,
+        vec![sentence.to_owned()],
     ))
 }
 

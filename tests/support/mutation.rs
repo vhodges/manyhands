@@ -674,6 +674,9 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -697,6 +700,8 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 
@@ -706,6 +711,9 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -729,6 +737,8 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 
@@ -842,6 +852,9 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -865,6 +878,8 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 
@@ -874,6 +889,9 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -897,6 +915,8 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 
@@ -906,6 +926,9 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -929,6 +952,8 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 
@@ -938,6 +963,9 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::ResolveHistory(_) => panic!("a history resolution's data"),
         MutationDataDto::Blocked(_) => panic!("the operation in the request's way"),
+        MutationDataDto::Setup(_) => panic!("a setup's data"),
+        MutationDataDto::SetupPoll(_) => panic!("a setup poll's data"),
+        MutationDataDto::SetupCancel(_) => panic!("a setup cancellation's data"),
         MutationDataDto::PollPolicy(_)
         | MutationDataDto::Poll(_)
         | MutationDataDto::PollRetirement(_) => {
@@ -961,6 +989,8 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Context(_) => panic!("a context's data"),
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
+        MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
 

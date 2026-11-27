@@ -15,6 +15,7 @@
         "closure": {
           "closed_at": "2026-09-30T12:34:56Z",
           "closed_by": "Ada Lovelace <ada@example.invalid>",
+          "publication": null,
           "state": "closed"
         },
         "context": {
@@ -35,6 +36,7 @@
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC1/ticket.md",
         "problems": [],
         "project": null,
+        "pull_request": null,
         "readiness": {
           "reasons": [],
           "state": "closed"
@@ -54,6 +56,7 @@
         "closure": {
           "closed_at": null,
           "closed_by": null,
+          "publication": null,
           "state": "open"
         },
         "context": {
@@ -86,6 +89,7 @@
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
         "problems": [],
         "project": "manyhands",
+        "pull_request": null,
         "readiness": {
           "reasons": [
             {

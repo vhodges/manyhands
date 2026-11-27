@@ -289,6 +289,57 @@ fn every_details_shape_renders_its_fields() {
         assert!(!out.contains("Apply with"));
     }
 }
+/// A pull-request close's preview prints its fields, the closure with its
+/// `closed_by`, and for a new branch each path the old context holds that the
+/// primary does not on a line of its own, as `not on <primary>: <change>
+/// <path>`, through the field escaping.
+#[test]
+fn a_pull_request_closure_preview_prints_its_unheld_paths() {
+    let details = PullRequestClosurePreviewDto {
+        r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
+        root: "root".into(),
+        action: PullRequestClosureAction::NewBranch,
+        item_id: "item".into(),
+        slug: Some("mh-1".into()),
+        branch: "manyhands/ticket/item".into(),
+        primary_branch: "main".into(),
+        remote: Some("origin".into()),
+        context_oid: Some("old-tip".into()),
+        tracking_primary_oid: Some("primary-tip".into()),
+        closure: LifecyclePlannedClosureDto {
+            recording: LifecycleRecording::Record,
+            closed_by: "A <a@example.invalid>".into(),
+        },
+        retired_context: Some("old-tip".into()),
+        unheld: vec![
+            LifecyclePathChangeDto {
+                path: "docs/notes.md".into(),
+                change: LifecyclePathChangeKind::Added,
+            },
+            LifecyclePathChangeDto {
+                path: "odd\u{1b}[31m\n.md".into(),
+                change: LifecyclePathChangeKind::Deleted,
+            },
+        ],
+        pull_request: None,
+    };
+    let out = preview(&sample(PreviewDetailsDto::PullRequestClosure(Box::new(
+        details,
+    ))));
+    for line in [
+        "Action: new_branch\n",
+        "Closure closed by: A <a@example.invalid>\n",
+        "Closure recording: record\n",
+        "Retired context: old-tip\n",
+        "not on main: added docs/notes.md\n",
+        "not on main: deleted odd\\u{1b}[31m\\n.md\n",
+    ] {
+        assert!(out.contains(line), "{line:?} in {out}");
+    }
+    // No unheld path is listed twice, or left as a field of its own.
+    assert!(!out.contains("Unheld"), "{out}");
+    no_raw_control(&out);
+}
 #[test]
 fn a_failure_adds_request_operation_effects_and_data_lines() {
     let mut effects = Effects::not_requested();
@@ -325,6 +376,127 @@ fn a_failure_adds_request_operation_effects_and_data_lines() {
     ] {
         assert!(out.contains(expected), "{out}");
     }
+}
+#[test]
+fn a_setup_answer_says_how_far_the_setup_has_come_and_where_its_pull_request_opens() {
+    let setup = |state: &str, url: Option<&str>| {
+        Envelope::mutation(
+            "repo enable",
+            Scope::default(),
+            Outcome::Partial,
+            ResultCode::NoSelectedKey,
+        )
+        .with_data(MutationDataDto::Setup(Box::new(
+            manyhands::repository::SetupMutationDto::from_stored_for_testing(&serde_json::json!({
+                "type": "setup", "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "kind": "enable",
+                "state": state, "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+                "branch": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV", "remote": "origin",
+                "integration": "pull_request",
+                "pull_request": {"source": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "target": "main", "forge": null, "url": url},
+            }))
+            .unwrap(),
+        )))
+    };
+    let recorded = failure_extra(&setup("recorded", None), false);
+    assert!(
+        recorded.contains("Setup: recorded, not published yet\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(
+            "open a pull request from manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV into main"
+        ),
+        "{recorded}"
+    );
+    let published = mutation_success(&setup(
+        "published",
+        Some("https://forge.example.invalid/pr"),
+    ))
+    .stdout;
+    assert!(
+        published.contains(
+            "Setup: waiting for manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV to merge into main\n"
+        ),
+        "{published}"
+    );
+    assert!(
+        published.contains("pull request: https://forge.example.invalid/pr"),
+        "{published}"
+    );
+}
+#[test]
+fn a_setup_cancel_says_what_it_left_and_hints_a_poll_only_for_a_merged_setup() {
+    let cancelled = |remote: &str, local: &str| {
+        Envelope::mutation(
+            "repo setup-cancel",
+            Scope::default(),
+            Outcome::Success,
+            ResultCode::Ok,
+        )
+        .with_data(MutationDataDto::SetupCancel(Box::new(
+            manyhands::repository::SetupCancelDto::from_stored_for_testing(&serde_json::json!({
+                "type": "setup_cancel", "setup_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "kind": "change", "remote_branch": remote, "local_branch": local,
+                "unregistered": false,
+            }))
+            .unwrap(),
+        )))
+    };
+    // Each branch that was left is said, and both are, when both were.
+    let both = mutation_success(&cancelled("kept", "kept")).stdout;
+    assert!(
+        both.contains("on the remote is at another commit"),
+        "{both}"
+    );
+    assert!(both.contains("The local setup branch was left"), "{both}");
+    let remote = mutation_success(&cancelled("kept", "deleted")).stdout;
+    assert!(
+        remote.contains("on the remote is at another commit"),
+        "{remote}"
+    );
+    assert!(!remote.contains("local setup branch"), "{remote}");
+    let local = mutation_success(&cancelled("deleted", "kept")).stdout;
+    assert!(local.contains("The local setup branch was left"), "{local}");
+    assert!(!local.contains("on the remote"), "{local}");
+    assert!(
+        !mutation_success(&cancelled("deleted", "deleted"))
+            .stdout
+            .contains("left")
+    );
+
+    // The poll hint is for a setup that has merged, which names its setup in
+    // the refusal's data, and for no other `recovery_required`.
+    let refusal = || {
+        Envelope::mutation(
+            "repo setup-cancel",
+            Scope::default(),
+            Outcome::Blocked,
+            ResultCode::RecoveryRequired,
+        )
+    };
+    let merged = failure_extra(
+        &refusal().with_data(MutationDataDto::Setup(Box::new(
+            manyhands::repository::SetupMutationDto::from_stored_for_testing(&serde_json::json!({
+                "type": "setup", "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "kind": "enable",
+                "state": "published", "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+                "branch": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV", "remote": "origin",
+                "integration": "pull_request",
+                "pull_request": {"source": "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "target": "main", "forge": null, "url": null},
+            }))
+            .unwrap(),
+        ))),
+        false,
+    );
+    assert!(merged.contains("manyhands-cli poll once"), "{merged}");
+    assert!(!merged.contains("waiting for"), "{merged}");
+    let other = failure_extra(&refusal(), false);
+    assert!(!other.contains("poll once"), "{other}");
+    // Another command's recovery_required never gets it.
+    let mut elsewhere = refusal();
+    elsewhere.command = "repo remove".into();
+    assert!(!failure_extra(&elsewhere, false).contains("poll once"));
 }
 #[test]
 fn the_wrong_passphrase_hint_appears_only_after_supplied_and_transport_unavailable() {

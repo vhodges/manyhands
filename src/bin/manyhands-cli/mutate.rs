@@ -61,6 +61,7 @@ pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
             | Mutation::OperationResume(_)
             | Mutation::DocumentPromote(_)
             | Mutation::TicketClose(_)
+            | Mutation::TicketWithdrawClosure(_)
             | Mutation::PollOnce(_)
             | Mutation::PollOnceRetiring(_)
             | Mutation::ContextRetire(_)
@@ -100,9 +101,14 @@ impl Boundary for RepositoryService {
 pub const RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
 pub fn should_retry(envelope: &Envelope<MutationDataDto>, request_id: RequestId) -> bool {
     // What a lifecycle answer names as blocking won't pass by itself.
-    if let Some(MutationDataDto::Lifecycle(data)) = &envelope.data
-        && !data.blockers.is_empty()
-    {
+    let names_blockers = match &envelope.data {
+        Some(MutationDataDto::Lifecycle(data)) => !data.blockers.is_empty(),
+        // A branch record's data names what stands in the way as a
+        // lifecycle's does.
+        Some(MutationDataDto::PullRequestClosure(data)) => !data.blockers.is_empty(),
+        _ => false,
+    };
+    if names_blockers {
         return false;
     }
     (envelope.code == ResultCode::Busy || envelope.outcome == Outcome::Partial)

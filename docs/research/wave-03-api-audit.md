@@ -22,6 +22,65 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Wave 06 Cycle 02 refresh (2026-11-25)
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): onboarding and setting changes on a setup branch (ticket `01M84H84WQYE8J2WJWEDGJ45W4`) add one verb, three result codes, one problem code, one operation action and three data shapes, and give a pending setup a gate that every write meets. This section says what each verb of C2 to C5 answers that it did not before, and the union blocks and result-set rows below are amended where the CLI audit tests read them (`tests/cli/exits.rs`, `tests/cli/authoring_exits.rs`, `tests/cli/collaboration_exits.rs`, `tests/cli/recovery_tables.rs`). The sources are the Cycle's design (`docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md`, Parts B to K) and its execution ledger, which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New codes.**
+
+- `setup_pending`: class blocked, exit 3, recovery action `repo.inspect`, no data, nothing written. The repository's Manyhands setup has not merged yet.
+- `remote_primary_missing`: blocked, exit 3, no recovery action. The setup's remote advertises no primary branch to set up from. It ends the setup.
+- `remote_already_set_up`: blocked, exit 3, no recovery action. A first-time setup's remote primary already holds a Manyhands configuration. It ends the setup. No fixture of the CLI produces it (a library test, `setup::publish_tests`, pins it).
+- `setup_unreadable` is a problem code of `repo inspect` and `repo list` (in `data.configuration.problems`), not a result code, as `operations_unreadable` is: a setup record that cannot be read degrades `setup` to null. `repo remove` clears it.
+
+**New verb.** `repo setup-cancel`: F2(`RepoSetupCancel`, `RepoSetupCancelInput { root }`), no JSON input, confirmed, with a local operation row whose action is the new `cancel_setup` (`operation list`, `operation show` and `operation abandon` name it). It stops at no safe point, so `request cancel` asks nothing of it. Its preview is `setup_cancel_preview` and its data is `setup_cancel`. Its codes are C2's, with `push_rejected` for a delete the server refused or lost and `recovery_required` for a setup the primary already holds. It is not gated.
+
+**Changed inputs.** `repo enable` gains optional `publication_remote`, `integration` and `forge`. `remote select` gains optional `integration` and `forge` (null removes the `[forge]` table). `repo create` is unchanged.
+
+**New data.** Mutation data `setup` (`setup_mutation`: the setup a pull-request `repo enable` or `remote select` recorded, with its state), `setup_poll` (a first-time setup's `poll once`) and `setup_cancel`; previews `setup_preview` and `setup_cancel_preview`; reads `repository_setup` (the `setup` of `repo list` and `repo inspect`, nullable) and `pull_request` (`source`, `target`, `forge`, `url`, nullable at the top level so Cycle 03 shares the file).
+
+**The gate.** One exhaustive table on the library's command type decides what a pending setup does to each command. A first call, an acceptance and a prepare are gated; a re-entry of the setup's own request is not. A complete setup (the local primary already holds it) refuses nothing and is finished first.
+
+| Gate | Verbs |
+| --- | --- |
+| Refused while any setup is pending | `ticket close`, `document promote`, `remote select`, `remote remove`, `repo enable` |
+| Refused while a first-time setup is pending | `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair`, `folder create`, `comment add`, `item sync`, `repo sync`, `item republish`, `item resolve-history`, `remote resolve-history`, `conflict resolve`, `context sync-local`, `context resolve-local` and the desktop's context prepare, release and retire |
+| Not gated | `repo create`, `repo remove`, `repo identity-set`, `repo setup-cancel`, `remote add`, the key and host verbs, `operation resume`, `operation abandon`, `poll once`, `poll configure`, `poll pause`, `poll resume`, `index refresh`, `index rebuild`, and every read |
+
+**What each verb newly answers.** The codes are additions to the verb's row, and each is an upper bound as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `repo enable` | `setup_pending`, `remote_primary_missing`, `remote_already_set_up`, `primary_has_local_commits`, `host_approval_required`, and its key, unlock, host-replacement, network, `busy`, `recovery_required` and `external_change` answers after the setup is recorded | A pull-request enable registers the repository as setup pending and then publishes, so it reaches the transport. A stop after recording is `partial`, exit 4, with the `setup` data, and the same request continues it. The three refusals end the setup. A second enable while a setup is pending is `setup_pending`, or `busy` first while the first holds the lease |
+| `remote select` | `setup_pending`, `remote_primary_missing`, `primary_has_local_commits`, `host_approval_required`, and the same transport and recovery answers; `external_change` also when a direct change meets a primary that turned pull-request mode under the lease | The setup path of a change of mode, forge or remote; `remote_already_set_up` is for a first-time setup only |
+| `remote remove` | `setup_pending` | Refused while any setup is pending |
+| `repo setup-cancel` | `host_approval_required`, the key, unlock and network stops, `push_rejected`, `busy`, `recovery_required`, `external_change`, `already_applied` | It connects only for a setup that was published; a setup with no commit needs no connection |
+| `repo remove` | no new code | It finishes an accepted setup request as `cancelled` (an accepted cancel as `already_applied`) and clears an unreadable record, with the root present or gone |
+| `host observe`, `host approve`, `host replace` | no new code | They take a setup's remote when the configuration has none; a setup's host stop offers `host.approve` and `host.replace` |
+| `poll once` | no new code | A first-time setup's poll answers `setup_poll` data, every outcome `ok` and final; the attempt is recorded in the polling state |
+| `operation resume` | no new code | A setup request's operation is `original_request_required`, naming the request |
+| C3's writing verbs, C4's `comment add`, `item sync`, `repo sync`, `item republish`, `conflict resolve`, C5's `ticket close`, `document promote`, `context sync-local`, `context resolve-local` | `setup_pending` | The gate; the unions and rows below hold it |
+
+### Wave 06 Cycle 03 refresh (2026-11-25)
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the pull-request close, the closing state and withdraw (ticket `01M87683QK8E34EYY8KS4VQG9Y`) add one verb and one result code, and amend the answers of `ticket close`, `item sync`, `operation resume` and the conflict verbs. The sources are the Cycle's design (`docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`, Parts A to H) and its execution ledger, which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New code.** `already_closing`: class none, exit 0, outcome `success`, no recovery action. The ticket's branch already holds a closure. It is appended after `already_applied`, and answered by a pull-request `ticket close` only; `ticket withdraw-closure` never answers it.
+
+**New verb.** `ticket withdraw-closure`: F2(`TicketWithdrawClosure`, `TicketWithdrawClosureInput { root, id }`), no JSON input, confirmed, delivered under the label `C5`, with an operation (a branch record of the ticket-closure lifecycle, listed by `operation list` as a `close`) that stops at safe points and finishes as a synchronization. Its row is in the C5 result-set table below, and the gate refuses it for any pending setup as it refuses `ticket close`.
+
+**What each verb newly answers.** Each is an upper bound, as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `ticket close` | `already_closing` | A pull-request close whose branch already holds a closure. Its data is `pull_request_closure`, and a blocked prepare may name the new blocker `remote_context_unmaterialized` |
+| `ticket withdraw-closure` | the codes of `ticket close` except `already_closing` | Its prepare answers `already_applied` for a ticket with no closure, `ticket_closed` when the primary holds it, `publication_remote_required` without a publication remote and `recovery_required` while a record holds the ticket |
+| `item sync` | no new code | A ticket context's synchronization of either mode answers `ticket_closed` for a head that lacks a closure the fetched primary holds, and in a pull-request repository answers with the data `pull_request_link` when it publishes or finds current a closing ticket's branch |
+| `operation resume` | `already_closing` | It gains the union of `ticket close`; a branch record that its accepted request holds answers `original_request_required` |
+| `conflict show`, `conflict resolve` | no new code | A branch record's ID maps to its current child, in either child slot |
+
+The C5 result-set table and the unions below are amended where the CLI audit tests read them (`tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`): the C5 union grows from 47 to 48 codes by `already_closing`, and the table has eleven verbs.
+
 ### Completed-context retirement delivery (2026-11-06)
 
 **Integration re-grounding, 2026-11-07 UTC:** the retirement branch now
@@ -487,16 +546,17 @@ an upper bound, not a promise that a fixture can force the path. C5 adds no
 
 | Verb | Codes | Count | Design anchor |
 | --- | --- | --- | --- |
-| `document promote` | M + R + C + I + T + Y | 41 | Answers table; Identity; Cache loss |
-| `ticket close` | M + R + C + I + T + Y + `ticket_closed` | 42 | The same, and Made-Ready Report |
+| `document promote` | M + R + C + I + T + Y + `setup_pending` | 42 | Answers table; Identity; Cache loss. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `ticket close` | M + R + C + I + T + Y + `ticket_closed setup_pending already_closing` | 44 | The same, and Made-Ready Report. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `already_closing` is added: a pull-request close of a ticket whose branch already holds a closure answers it. |
+| `ticket withdraw-closure` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Wave 06 Cycle 03's design, Part E. Added 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the verb is new and answers `ticket close`'s codes except `already_closing`; `already_applied` (a ticket with no closure) and `publication_remote_required` are in the groups. |
 | `poll once` | M + R + U + T + `poll_yielding discovery_pending` | 30 | Polling Verbs, frozen table |
 | `poll configure` | S + R + U + `request_mismatch invalid_input already_applied` | 15 | Policy verbs |
 | `poll pause` | S + R + U + `request_mismatch already_applied` | 14 | Policy verbs |
 | `poll resume` | S + R + U + `request_mismatch already_applied` | 14 | Policy verbs |
 | `context observe-local` | S + P + `repository_not_registered item_not_found` | 11 | Local-Sync Verbs, required outcomes |
 | `context show-local` | S + P + `repository_not_registered operation_not_found invalid_input` | 12 | The same |
-| `context sync-local` | M + R + U + I + `already_applied discovery_pending invalid_input external_change worktree_not_clean identity_required recovery_required original_request_required` | 23 | The same |
-| `context resolve-local` | M + R + U + `operation_not_found invalid_input external_change worktree_not_clean recovery_required original_request_required identity_required discovery_pending` | 22 | The same |
+| `context sync-local` | M + R + U + I + `already_applied discovery_pending invalid_input external_change worktree_not_clean identity_required recovery_required original_request_required setup_pending` | 24 | The same. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `context resolve-local` | M + R + U + `operation_not_found invalid_input external_change worktree_not_clean recovery_required original_request_required identity_required discovery_pending setup_pending` | 23 | The same. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
 
 `operation resume` keeps its C4 row, and gains the union of the `document promote`
 and `ticket close` rows for the lifecycle routes (Task 3), with
@@ -686,12 +746,12 @@ force the path. The groups are:
 
 | Verb | Codes | Count | Design anchor |
 | --- | --- | --- | --- |
-| `comment add` | M + R + U + I + T + Y + A | 41 | Comment Submission, required outcomes; Exit Statuses |
-| `item sync` | M + R + U + I + T + Y | 37 | Merging Synchronization, required outcomes |
-| `repo sync` | M + R + U + T + Y + `primary_has_local_commits` | 38 | the same table. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added. |
-| `item republish` | M + R + C + I + T + Y + `ticket_closed` | 42 | Republish, required outcomes; decision 17 |
+| `comment add` | M + R + U + I + T + Y + A + `setup_pending` | 42 | Comment Submission, required outcomes; Exit Statuses. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `item sync` | M + R + U + I + T + Y + `setup_pending` | 38 | Merging Synchronization, required outcomes. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `repo sync` | M + R + U + T + Y + `primary_has_local_commits setup_pending` | 39 | the same table. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): `primary_has_local_commits` is added. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `item republish` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Republish, required outcomes; decision 17. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
 | `conflict show` | P + S + `repository_not_registered operation_not_found invalid_input` | 12 | Conflict Inspection, required outcomes; R-12 (`busy`). Amended 2026-10-30 by C4 (Task 0's review): this row read R and counted 13. A read answers a never-enabled root as `repository_not_registered` (`read/mod.rs`, `repository_error_code`), so `repository_not_enabled` is not one of its codes. The union is unchanged |
-| `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required` | 40 | Conflict Resolution steps 1–7; interrupted-resolution table |
+| `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required setup_pending` | 41 | Conflict Resolution steps 1–7; interrupted-resolution table. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
 | `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path primary_has_local_commits` | 41 | Resume (R-20); `bind/resume.rs:104-483`. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added, because a resume of a pull-only `repo sync` can answer it. |
 | `operation abandon` | M + R + C + `operation_not_found invalid_input already_applied recovery_required invalid_path` | 23 | `bind/abandon.rs:104-413` (unchanged); decision 6 |
 
@@ -737,12 +797,12 @@ operation's *local* row, not by its publication:
 
 #### C4 exit-coverage union
 
-The eight row sets expand to these **48 library codes** (49 since 2026-11-24; see the amendment below the block). `tests/cli/collaboration_exits.rs`
+The eight row sets expand to these **48 library codes** (49 since 2026-11-24, 50 since 2026-11-25; see the amendments below the block). `tests/cli/collaboration_exits.rs`
 (Task 13) asserts set equality with this block (R-27), mapping each code to a
 binary row or to an individually justified reason that no fixture reaches it.
 
 ```text
-already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding primary_has_local_commits publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding primary_has_local_commits publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch setup_pending ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
 ```
 
 Three exclusions, each deliberate:
@@ -760,10 +820,12 @@ Three exclusions, each deliberate:
 
 Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): `repo sync` can answer the new code `primary_has_local_commits` in a pull-request repository, so the block above now holds it, and the union is **49 library codes** and **51 CLI-inclusive codes**. `tests/cli/collaboration_exits.rs` counts 49 and 51, and records the code with a reason, because the C4 binary table has no pull-request repository. The code's golden is `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`, and the CLI contract's recovery tables hold its row.
 
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `comment add`, `item sync`, `repo sync`, `item republish` and `conflict resolve` answer `setup_pending` while a first-time setup of their repository has not merged, so the block holds it: the union is **50 library codes** and **52 CLI-inclusive codes**, and `tests/cli/collaboration_exits.rs` counts 50 and 52, with a binary row for it (`a_pull_request_enable_without_a_key_stops_with_no_selected_key`, which sends `repo sync` to a repository whose setup is recorded). `operation resume` and `operation abandon` are not gated.
+
 The CLI-only additions are unchanged from C3: `usage_error`, `invalid_input`,
 `invalid_id`, `invalid_path`, `cancelled` and `internal_error`. Only
 `usage_error` and `invalid_id` extend the library union, giving **50
-CLI-inclusive codes**. The C5 verbs still answer `command_unavailable`, a
+CLI-inclusive codes** (52 since 2026-11-25, with the code above). The C5 verbs still answer `command_unavailable`, a
 C2 code that C4 neither adds nor removes. `noop` is an outcome, not a code: its
 code is `already_applied`.
 
@@ -1008,19 +1070,22 @@ are unchanged.
 #### C3 exit-coverage union
 
 The thirteen row sets expand to these **40 F1/F2 codes**, unchanged from
-Task 0. `tests/cli/authoring_exits.rs` covers this exact set plus CLI_ONLY
+Task 0 (41 since 2026-11-25; see the amendment below the block).
+`tests/cli/authoring_exits.rs` covers this exact set plus CLI_ONLY
 with **39 binary rows / 3 individually justified reasons** on Unix (38/4
-otherwise). The Unix reasons are `discovery_pending`, `registration_pending`
+otherwise); the 41st code is a 40th binary row on Unix. The Unix reasons are `discovery_pending`, `registration_pending`
 and `confirmation_expired`; non-Unix also retains prompt cancellation as a
 reason. C2's audit block and tests are unchanged.
 
 ```text
-already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change identity_ambiguous identity_required index_unavailable initials_required internal_error invalid_configuration invalid_input invalid_path invalid_relationship invalid_slug_configuration item_not_found not_confirmable not_repairable not_repository not_repository_root occupied_path ok path_not_found recovery_required registration_pending relationship_cycle repository_inaccessible repository_not_enabled repository_not_registered request_mismatch slug_already_assigned ticket_closed worktree_not_clean wrong_branch
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change identity_ambiguous identity_required index_unavailable initials_required internal_error invalid_configuration invalid_input invalid_path invalid_relationship invalid_slug_configuration item_not_found not_confirmable not_repairable not_repository not_repository_root occupied_path ok path_not_found recovery_required registration_pending relationship_cycle repository_inaccessible repository_not_enabled repository_not_registered request_mismatch setup_pending slug_already_assigned ticket_closed worktree_not_clean wrong_branch
 ```
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): every authoring verb that writes (`folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign` and `ticket repair`) answers `setup_pending` while a first-time setup of its repository has not merged, so the block above holds it: the union is **41 F1/F2 codes** and **43 CLI-inclusive codes**, and `tests/cli/authoring_exits.rs` counts 41 and 43 with `setup_pending` as a binary row (`tests/cli/repository.rs`, `a_pull_request_enable_without_a_key_stops_with_no_selected_key`, which sends `ticket create` to a repository whose setup is recorded). `index refresh` and `index rebuild` are not gated. The answer is the gate's, before the verb reads anything, and it writes nothing.
 
 The design's explicit `CLI_ONLY` inventory is `usage_error invalid_input
 invalid_id invalid_path cancelled internal_error`. Only `usage_error` and
-`invalid_id` extend the library union, giving **42 CLI-inclusive codes**.
+`invalid_id` extend the library union, giving **42 CLI-inclusive codes** (43 since 2026-11-25).
 `noop` is an outcome, not a code: its code is `already_applied`.
 Partial-outcome precedence is authoritative (`src/results.rs:273–288`):
 the interrupted repair's `internal_error` with `partial` maps to **exit 4**,
@@ -1277,7 +1342,7 @@ unpinned observation stops at host verification, before any unlock prompt.
 
 #### C2 exit-coverage union
 
-The eighteen F2 row sets expand to the following **49 codes**. C2's exit
+The eighteen F2 row sets expand to the following **49 codes** (54 since 2026-11-25; see the amendment below the block). C2's exit
 table plus its individually justified `REASONS` account for this union;
 SSH cases may supply the designated coverage. A code's inclusion is not a
 claim that a normal CLI fixture can force every defensive/race/backend path.
@@ -1286,22 +1351,26 @@ claim that a normal CLI fixture can force every defensive/race/backend path.
 already_applied bare_repository busy cancelled
 confirmation_expired confirmation_mismatch confirmation_not_found
 confirmation_required confirmation_used discovery_pending external_change
-host_mismatch host_replacement_required identity_required index_unavailable
+host_approval_required host_mismatch host_replacement_required identity_required index_unavailable
 internal_error invalid_configuration invalid_input invalid_path invalid_remote
 key_not_deletable
 key_not_found key_rejected key_unavailable no_selected_key not_confirmable
-not_repository not_repository_root occupied_path ok publication_remote_in_use
+not_repository not_repository_root occupied_path ok primary_has_local_commits
+publication_remote_in_use
 publication_remote_required push_rejected recovery_required registration_pending
-remote_name_conflict remote_unavailable repository_inaccessible
+remote_already_set_up remote_name_conflict remote_primary_missing remote_unavailable
+repository_inaccessible
 repository_not_enabled repository_not_registered request_mismatch request_not_found
-selected_key_in_use transport_unavailable unlock_failed unlock_required
+selected_key_in_use setup_pending transport_unavailable unlock_failed unlock_required
 worktree_conflicted worktree_not_clean wrong_branch
 ```
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): the block above now holds five codes that C2's verbs answer on a setup branch: `host_approval_required`, `primary_has_local_commits`, `remote_already_set_up`, `remote_primary_missing` and `setup_pending`, so the union is **54 codes** and **57 CLI-inclusive codes**, and `tests/cli/exits.rs` counts 54 and 57. `repo enable` and `remote select` answer all of them but `remote_already_set_up`, which only a first-time setup meets; `remote remove` answers `setup_pending`; and `repo setup-cancel`, which C2's tests list among its verbs, answers `host_approval_required` when it must connect. The exclusion of `host_approval_required` from C2 held while no C2 verb connected for anything but a host verification, whose observe answers a missing pin as data. The exit table records the five with their reasons, because its fixtures hold no pending setup and no SSH server; the CLI contract's recovery tables hold their rows and reasons.
 
 Additionally, the CLI owns the eight codes in design R-6: `usage_error`,
 `command_unavailable`, `invalid_path`, `invalid_input`, `invalid_id`,
 `cancelled`, `unlock_required`, `internal_error`. Their union with the F2 set
-is **52 codes**. Keep the three CLI-only additions explicit when building the
+is **52 codes** (57 since 2026-11-25). Keep the three CLI-only additions explicit when building the
 coverage table: `command_unavailable` covers the pre-delivery catalog guard,
 not a delivered C2 F2 call. Startup errors remain C1's. Library cancellation
 and prompt cancellation have different origins but share exit 130; a
@@ -1878,14 +1947,14 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `repo list` — C1/D1 | F1 `list_repositories() -> R<RepositoryListDto>` (`read/admin.rs:210`); codes S | All registrations ordered by root; stored accessibility/configuration/index state | Read session: yes; registry loss cannot infer unknown registrations | No consent/refresh; complete stored list | Fixed problems; no unlock or network | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo inspect` — C1/D1 | F1 `inspect_repository(path: &Path) -> R<RepositoryInspectionDto>` (`read/admin.rs:273`); codes S + P | Exact root or linked worktree owner; registration optional; no separate resolver | Read session: yes, registration lookup; Git inspection itself needs none; no enable/scan | No consent, progress or cancellation | Remotes redacted by F1; fixed errors | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo create` — C2 | F2(RepoCreate, RepoCreateInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:76–86` | Empty/absent root; **codes M + C + P0 +** `already_applied, invalid_input, occupied_path, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Request digest, preview observation, init/config/index/registration; replay checks commit reachability; create delegates enablement after initialization | Yes; `prepare` is local and initializes nothing | Supplied/effective identity, repository-local writes; no SSH; input `ticket_slug_prefix` maps to `slug_prefix` | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5–6, 11; R-admin |
-| `repo enable` — C2 | F2(RepoEnable, RepoEnableInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:91–101` | Existing root; **codes M + C + P0 +** `already_applied, invalid_input, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Exact preview and request digest; registration-only path from `01M5CVB2`; configuration index from `01M5B0Z6`; no second commit on replay | Yes; identity required if preview has none to display, even registration-only | No global identity write; no SSH; prefix checked by library | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 6, 11; R-admin |
+| `repo enable` — C2 | F2(RepoEnable, RepoEnableInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:91–101` | Existing root; **codes M + C + P0 +** `already_applied, invalid_input, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Exact preview and request digest; registration-only path from `01M5CVB2`; configuration index from `01M5B0Z6`; no second commit on replay | Yes; identity required if preview has none to display, even registration-only | No global identity write; no SSH; prefix checked by library | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 6, 11; R-admin Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): input and codes are in the [Wave 06 Cycle 02 refresh](#wave-06-cycle-02-refresh-2026-11-25). |
 | `repo remove` — C2 | F2(RepoRemove, RepoRemoveInput); `root: PathBuf`; `mutation/bind/repo_remove.rs:30–32` | Exact stored root also supports missing directory/`.git`; **codes M + C + P +** `already_applied, recovery_required` | Guarded registration removal; receipts survive; matching replay works without disk; files/drafts/key/trust state preserved | Yes; registry-only cleanup; binding `73–115,139–187,209–239` | No SSH or key access; fixed public errors | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 6, 11; [missing-root evidence](../plans/2026-10-19-missing-repository-registration-removal-execution.md); R-admin |
 | `repo identity` — C1/D1 | F1 `repository_identity(repo: &ResolvedRepository) -> R<IdentityDto>` (`read/admin.rs:325`); `ok`, `repository_inaccessible`, `internal_error` | Resolved repository; effective name/email/source/initials | Read session: no in method; yes in CLI resolution; no identity write | No consent/progress | Non-secret Git identity, not SSH identity | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo identity-set` — C2 | F2(RepoIdentitySet, RepoIdentitySetInput); `root: PathBuf, name: String, email: String, initials: InitialsChange`; `mutation/bind/repo_identity.rs:74–81` | Root need not be registered; **codes M + C + P +** `already_applied, invalid_input, recovery_required` | Exact local identity observation; atomic local config replacement; no operation journal; `InitialsChange::{Unchanged, Clear, Set(String)}` | Yes; `observe`, `call`, `preview` at `182–209,239–274,420–459` | Non-secret identity only; never global Git config | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/prompts.rs`, `tests/cli/human.rs` | F2; C2 Tasks 5, 11; R-admin |
 | `remote list` — C1/D1 | F1 `list_remotes_redacted(repo: &ResolvedRepository) -> R<RemoteListDto>` (`read/admin.rs:360`); `ok`, `repository_inaccessible`, `internal_error` | Resolved root; sorted names, selection and publication eligibility | Read session: no in method; yes in CLI resolution; local Git/config only | No consent/refresh | F1 redacts URLs and whole remote-helper locations | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `remote add` — C2 | F2(RemoteAdd, RemoteAddInput); `root: PathBuf, name: String, url: String`; `mutation/bind/remote.rs:50–54` | Registered root and valid name/URL; **codes M + U + R +** `already_applied, invalid_remote, remote_name_conflict, recovery_required, external_change, discovery_pending` | Request binds raw URL digest; config change and index handoff; no implicit select; `167–175,212–249,294–307,320–398` | No; prepare/confirmation supplied answer `not_confirmable` | No network; DTO location redacted, no backend text | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/remotes.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5, 11; R-admin |
 | `remote remove` — C2 | F2(RemoteRemove, RemoteRemoveInput); `root: PathBuf, name: String`; `mutation/bind/remote.rs:757–760` | Registered root; **codes M + C + R +** `already_applied, invalid_remote, publication_remote_in_use, recovery_required, discovery_pending` | Preview covers remote/tracking refs/upstreams; publication remote refused; `923–1211,1232–1270,1384–1556` | Yes; preview's `publication_affected` remains false | No network; preserves unrelated refs/config under F2's removal rules | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 7, 11; R-admin; existing removal defect remains separate |
-| `remote select` — C2 | F2(RemoteSelect, RemoteSelectInput); `root: PathBuf, name: Option<String>`; `mutation/bind/remote.rs:410–413` | Registered root, primary, clean configuration, eligible SSH endpoints; **codes M + U + R +** `already_applied, invalid_remote, identity_required, wrong_branch, worktree_not_clean, invalid_configuration, recovery_required, external_change, registration_pending, discovery_pending` | `None` clears selection; configuration checkpoint and registration/index handoff; shared `bind/save.rs`; `468–475,522–560,678–704` | No; prepare answers `not_confirmable` | Commit identity required, no SSH unlock/network | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 7, 11; R-admin |
+| `remote select` — C2 | F2(RemoteSelect, RemoteSelectInput); `root: PathBuf, name: Option<String>`; `mutation/bind/remote.rs:410–413` | Registered root, primary, clean configuration, eligible SSH endpoints; **codes M + U + R +** `already_applied, invalid_remote, identity_required, wrong_branch, worktree_not_clean, invalid_configuration, recovery_required, external_change, registration_pending, discovery_pending` | `None` clears selection; configuration checkpoint and registration/index handoff; shared `bind/save.rs`; `468–475,522–560,678–704` | No; prepare answers `not_confirmable` | Commit identity required, no SSH unlock/network | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 7, 11; R-admin Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): input and codes are in the [Wave 06 Cycle 02 refresh](#wave-06-cycle-02-refresh-2026-11-25). |
 | `key list` — C1/D1 | F1 `list_keys() -> R<KeyListDto>` (`read/credentials.rs:190`); codes S | Application-global registrations, selection, ownership, fingerprint and source states | Read session: yes; stored metadata only | No consent/progress | Opens no key file; public DTO fields only | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `key show` — C1/D1 | F1 `show_key(id: SharedKeyId) -> R<KeyDto>` (`read/credentials.rs:203`); codes S + `key_not_found` | Exact canonical key ULID; application-global | Read session: yes; stored registration only | No consent/progress | No private-key parsing or bytes | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `key generate` — C2 | F2(KeyGenerate, KeyGenerateInput); `store: KeyStore, label: String, protection: KeyProtection`; `mutation/bind/key.rs:610–614` | Application-global; **codes M + U +** `invalid_input, key_unavailable, key_not_found, key_not_deletable, external_change, recovery_required` | Request binds label/protection mode, never passphrase; own completed generation reports `ok`, not `already_applied`; `776–859,906–991`; material/storage errors via `outcome.rs:157–190` | No; prepare reads no protection, answers `not_confirmable` | Protected generation requires terminal in C2 (`unlock_required` is CLI-built); key-file tests Unix-only; no secret persisted | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/prompts.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 9, 11; R-admin |

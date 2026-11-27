@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull-request closure preview",
+  "description": "The data of a prepare envelope that gives a preview of ticket close in a pull-request repository, or of ticket withdraw-closure in either mode: the branch record it would run, whose action is close, new_branch or withdraw. Nothing of it reaches primary: it synchronizes the ticket's branch, records or removes a closure on it, publishes it, and gives the link a pull request is opened by. It holds names, commits and paths, and no title, body or content. A prepare contacts no remote. The confirmation binds what the domain's expectation binds: a change to any of it before the request is accepted is external_change. A withdraw's preview shows closure.recording existing, the closure it would remove, with pull_request null; action tells the three apart.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "root",
+        "action",
+        "item_id",
+        "slug",
+        "branch",
+        "primary_branch",
+        "remote",
+        "context_oid",
+        "tracking_primary_oid",
+        "closure",
+        "retired_context",
+        "unheld",
+        "pull_request"
+      ],
+      "properties": {
+        "type": {
+          "description": "The tag that tells these details from a direct close's.",
+          "type": "string",
+          "enum": [
+            "pull_request_closure_preview"
+          ]
+        },
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "action": {
+          "description": "close records or keeps a closure on the ticket's branch; new_branch makes the branch again from primary after its old one was deleted on the remote, keeping a provisional closure; withdraw removes a closure from the branch.",
+          "type": "string",
+          "enum": [
+            "close",
+            "withdraw",
+            "new_branch"
+          ]
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "slug": {
+          "description": "The ticket's short code, when the index holds one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "The ticket's editing branch, as its short name.",
+          "type": "string"
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "remote": {
+          "description": "The publication remote, by its name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_oid": {
+          "description": "The editing branch's head. Null for a new branch of a ticket with no context; for one with a context, its old tip.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracking_primary_oid": {
+          "description": "The remote's primary, as this clone last fetched it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closure": {
+          "description": "What the closure is: record is a closure this operation writes, and existing one the branch already holds, which a withdraw would remove. closed_by is the configured identity, or the value the ticket already holds.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recording",
+            "closed_by"
+          ],
+          "properties": {
+            "recording": {
+              "type": "string",
+              "enum": [
+                "record",
+                "existing"
+              ]
+            },
+            "closed_by": {
+              "type": "string"
+            }
+          }
+        },
+        "retired_context": {
+          "description": "What a new branch retires of the old context: its old tip, or the remote history's last published commit. Null for any other record, and for a new branch with nothing to retire.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unheld": {
+          "description": "For a new branch, each path the old context holds that the primary does not, relative to the repository with forward slashes.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "change"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "change": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted"
+                ]
+              }
+            }
+          }
+        },
+        "pull_request": {
+          "description": "Where to open the pull request. Null for a withdraw.",
+          "$ref": "pull_request.schema.json"
+        }
+      }
+    }
+  }
+}

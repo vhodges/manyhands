@@ -409,6 +409,12 @@ pub enum SynchronizationError {
         commits: Vec<(git2::Oid, String)>,
         complete: bool,
     },
+    /// A ticket context's head lacks the closure the primary it fetched
+    /// holds, and nothing was merged that could give it that closure
+    /// (R-30): it is not pushed. Terminal for an `item sync`, as
+    /// `HistoryUnresolved` is: the operation is ended and the reservation
+    /// let go. A lifecycle child is kept for its parent.
+    TicketClosed,
     PushRejected,
     ExternalChange,
     RecoveryRequired,
@@ -444,6 +450,7 @@ impl fmt::Display for SynchronizationError {
             Self::ExternalResolutionRequired { .. } => "external conflict resolution required",
             Self::MergeRequired { .. } => "merge required",
             Self::PrimaryHasLocalCommits { .. } => "primary has local commits",
+            Self::TicketClosed => "ticket closed",
             Self::PushRejected => "push rejected",
             Self::ExternalChange => "external change",
             Self::RecoveryRequired => "synchronization recovery required",
@@ -844,6 +851,37 @@ pub(in super::super) fn prepare_clean_merge_in(
     incoming: git2::Oid,
 ) -> Result<MergePreparation, SynchronizationError> {
     prepare::prepare_clean_merge_in(worker, path, local, incoming).map_err(Into::into)
+}
+
+/// A ticket context's merge, given the primary it fetched (R-30, Part G):
+/// `prepared` is `prepare_clean_merge`'s answer for `local` and `incoming`.
+/// Only a ticket context's has any effect; any other target's is as it is.
+fn keep_primary_closure(
+    path: &Path,
+    target: &SynchronizationTarget,
+    stage: merge::IntegrationStage,
+    local: git2::Oid,
+    incoming: git2::Oid,
+    primary: git2::Oid,
+    prepared: MergePreparation,
+) -> Result<MergePreparation, SynchronizationError> {
+    let SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id,
+    } = target
+    else {
+        return Ok(prepared);
+    };
+    prepare::keep_primary_closure(
+        path,
+        &crate::repository::closure::observe::ticket_path(item_id),
+        local,
+        incoming,
+        primary,
+        stage == merge::IntegrationStage::Context,
+        prepared,
+    )
+    .map_err(Into::into)
 }
 
 /// Import the objects the merge created and write its tree. An entry that was
@@ -3314,7 +3352,16 @@ fn reconcile_pending_candidate(
         if commit.parent_count() != 2
             || [commit.parent_id(0).ok(), commit.parent_id(1).ok()]
                 != [Some(step.intent.local_oid), Some(step.intent.incoming_oid)]
-            || !RepositoryService::validates_external_integration(&repository, &step, head)?
+            || !RepositoryService::validates_external_integration(
+                &repository,
+                &step,
+                service.synchronization_primary_side(
+                    root,
+                    owner.operation_id(),
+                    step.window_number,
+                )?,
+                head,
+            )?
         {
             return Err(SynchronizationError::RecoveryRequired);
         }
@@ -3434,6 +3481,11 @@ fn reconcile_pending_candidate(
             || !RepositoryService::validates_external_integration(
                 &repository,
                 &step,
+                service.synchronization_primary_side(
+                    root,
+                    owner.operation_id(),
+                    step.window_number,
+                )?,
                 observed_head,
             )?
         {
@@ -3714,7 +3766,10 @@ fn integrate_divergence(
             &intent,
         )?;
         let prepared = if classification == merge::IntegrationDisposition::MergeRequired {
-            Some(prepare_clean_merge(&path, local, incoming)?)
+            let prepared = prepare_clean_merge(&path, local, incoming)?;
+            Some(keep_primary_closure(
+                &path, target, stage, local, incoming, primary, prepared,
+            )?)
         } else {
             None
         };
@@ -4094,7 +4149,7 @@ const LISTED_LOCAL_COMMITS: usize = 20;
 /// The commits of `local` that `remote` does not have, newest first
 /// (`git2::Sort::TOPOLOGICAL | git2::Sort::TIME`), at most 20, each with
 /// its summary line, and whether that is all of them (R-7).
-fn local_only_commits(
+pub(in super::super) fn local_only_commits(
     repository: &git2::Repository,
     local: git2::Oid,
     remote: git2::Oid,
@@ -4240,14 +4295,40 @@ pub(in super::super) fn promotion_test_publication_plan(
     )
     .map(|_| ())
 }
+/// R-30: `TicketClosed` when `target` is a ticket context and `candidate`'s
+/// ticket does not hold the closure the fetched `primary`'s ticket holds.
+/// Any other target, and a primary that holds no closure, are not refused.
+fn primary_closure_push_refusal(
+    repository: &git2::Repository,
+    target: &SynchronizationTarget,
+    candidate: git2::Oid,
+    primary: git2::Oid,
+) -> Result<(), SynchronizationError> {
+    let SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id,
+    } = target
+    else {
+        return Ok(());
+    };
+    let ticket = crate::repository::closure::observe::ticket_path(item_id);
+    if prepare::lacks_primary_closure(repository, candidate, primary, &ticket)? {
+        Err(SynchronizationError::TicketClosed)
+    } else {
+        Ok(())
+    }
+}
 impl RepositoryService {
-    /// `error`, after ending the operation when it is `HistoryUnresolved`
-    /// or `PrimaryHasLocalCommits`: the owner's repair, or Git work outside
-    /// Manyhands, not a call of the same request, settles those, so the
+    /// `error`, after ending the operation when it is `HistoryUnresolved`,
+    /// `PrimaryHasLocalCommits` or `TicketClosed`: the owner's repair, Git
+    /// work outside Manyhands, or the forge's merge of the closure, not a
+    /// call of the same request, settles those, so the
     /// operation is cancelled and the reservation let go (as for a refused
     /// push). With a push intended an earlier call may have published, and
-    /// a lifecycle child belongs to its parent, which blocks on unresolved
-    /// history before it runs one: both are left as they are (`keep`). A
+    /// a lifecycle child belongs to its parent, which decides what becomes
+    /// of it (it blocks on unresolved history before it runs one, and lets
+    /// a child stopped by `TicketClosed` go): both are left as they are
+    /// (`keep`). A
     /// pull-only operation is never kept: it pushes nothing (decision 5).
     /// Should the ending fail, the operation is still pending and still
     /// holds the reservation, which either answer would deny, so the answer
@@ -4263,6 +4344,7 @@ impl RepositoryService {
             error,
             SynchronizationError::HistoryUnresolved
                 | SynchronizationError::PrimaryHasLocalCommits { .. }
+                | SynchronizationError::TicketClosed
         ) && !keep
             && self
                 .request_synchronization_cancellation(root, owner)
@@ -4272,6 +4354,33 @@ impl RepositoryService {
             return SynchronizationError::RecoveryRequired;
         }
         error
+    }
+    /// The tail of a publishing synchronization, from R-30's push decision
+    /// to the push: a ticket context does not push a head whose ticket lacks
+    /// the closure of the primary it fetched. Every path of a
+    /// synchronization that publishes ends at one candidate head, a merge
+    /// prepared in this pass having been given that closure already, so a
+    /// head that lacks it here is one nothing merged: a fast-forward, or a
+    /// head already integrated with the primary, even one the remote holds.
+    /// It answers `TicketClosed` and never calls `push`, ending the
+    /// operation as `ended_if_unresolved` does. `push` is the push itself
+    /// (`push_call`; a test passes one that records its call), and its
+    /// error is ended the same way.
+    #[allow(clippy::too_many_arguments)]
+    fn push_unless_unclosed(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        keep: bool,
+        repository: &git2::Repository,
+        target: &SynchronizationTarget,
+        candidate: git2::Oid,
+        primary: git2::Oid,
+        push: impl FnOnce() -> Result<bool, SynchronizationError>,
+    ) -> Result<bool, SynchronizationError> {
+        primary_closure_push_refusal(repository, target, candidate, primary)
+            .map_err(|error| self.ended_if_unresolved(root, owner, keep, error))?;
+        push().map_err(|error| self.ended_if_unresolved(root, owner, keep, error))
     }
     /// The reservation of the operation `op`, a synchronization's or a
     /// lifecycle child's (`execution`). A new one (`new`: no row under its
@@ -4551,12 +4660,14 @@ impl RepositoryService {
     fn validates_resolution_sides(
         repository: &git2::Repository,
         token: &merge::ConflictPathToken,
+        primary_side: Option<git2::Oid>,
         bytes: &[u8],
     ) -> Result<bool, SynchronizationError> {
         validate::validates_resolution_sides(
             repository,
             &token.path,
             [token.base, token.local, token.incoming],
+            primary_side,
             bytes,
         )
         .map_err(Into::into)
@@ -4589,12 +4700,14 @@ impl RepositoryService {
     fn validates_external_integration(
         repository: &git2::Repository,
         step: &state::IntegrationStepEvidence,
+        primary_side: Option<git2::Oid>,
         candidate: git2::Oid,
     ) -> Result<bool, SynchronizationError> {
         validate::validates_external_integration(
             repository,
             step.intent.local_oid,
             step.intent.incoming_oid,
+            primary_side,
             candidate,
         )
         .map_err(Into::into)
@@ -4605,6 +4718,23 @@ impl RepositoryService {
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
         validate::canonical_tree_sources(repository, tree).map_err(Into::into)
+    }
+
+    /// The primary side of a recorded synchronization's window, for the
+    /// closure rule of the validators (R-12): given only in a ticket
+    /// context's pinned window, none for a primary target or window zero.
+    pub(in super::super) fn synchronization_primary_side(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        window_number: u32,
+    ) -> Result<Option<git2::Oid>, SynchronizationError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            state::window_primary_side(tx, &record, window_number)
+        })
+        .map_err(Into::into)
     }
 
     /// Inspect only the exact conflict retained by this synchronization. This
@@ -4894,8 +5024,13 @@ impl RepositoryService {
         let repository = Self::inspect_conflict_target(root, &target)?;
         // Retained candidates from an earlier process/version receive the same
         // all-side invariant gate before index/ref/retirement effects.
+        let primary_side = self.synchronization_primary_side(
+            root,
+            request.synchronization_id,
+            step.window_number,
+        )?;
         for (token, bytes) in &request.resolutions {
-            if !Self::validates_resolution_sides(&repository, token, bytes.bytes())? {
+            if !Self::validates_resolution_sides(&repository, token, primary_side, bytes.bytes())? {
                 return Ok(Some(merge::ResolveSynchronizationOutcome::ValidationFailed));
             }
         }
@@ -5293,6 +5428,11 @@ impl RepositoryService {
             return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
         }
         let preflight_repository = Self::inspect_conflict_target(&root, &inspection.target)?;
+        let primary_side = self.synchronization_primary_side(
+            &root,
+            request.synchronization_id,
+            request.observation.window_number,
+        )?;
         let mut supplied = std::collections::BTreeMap::new();
         for (token, bytes) in &request.resolutions {
             if token.observation != request.observation
@@ -5301,7 +5441,12 @@ impl RepositoryService {
             {
                 return Ok(merge::ResolveSynchronizationOutcome::ValidationFailed);
             }
-            if !Self::validates_resolution_sides(&preflight_repository, token, bytes.bytes())? {
+            if !Self::validates_resolution_sides(
+                &preflight_repository,
+                token,
+                primary_side,
+                bytes.bytes(),
+            )? {
                 return Ok(merge::ResolveSynchronizationOutcome::ValidationFailed);
             }
         }
@@ -7091,77 +7236,89 @@ impl RepositoryService {
         // local merge and the open attempt intact for a later deliberate
         // invocation, never a refetch/merge loop, a regenerated candidate or
         // a forced update.
-        let pushed = self.push_call(
-            &steps,
-            session,
-            observer,
+        // R-30: the one head every path above ends at, the plan's and a
+        // merge's alike, is not pushed without the primary's closure.
+        let primary = primary.ok_or(SynchronizationError::PrimaryMissing)?;
+        let pushed = self.push_unless_unclosed(
+            &root,
+            &owner,
+            keep,
+            &repository,
+            &request.target,
             candidate,
-            &mut evidence,
-            |push, evidence, call| {
-                if self.observation_configuration_in(call, &root, &plan)? != configuration {
-                    return Err(SynchronizationError::ExternalChange);
-                }
-                if push.is_none()
-                    && let Some(boundary) = push_absence_boundary
-                {
-                    return Err(boundary.error());
-                }
-                // R-15: a pull-only operation never pushes. The push
-                // endpoint holds the candidate, which is recorded as the
-                // ordinary call that pushes nothing records it, or the
-                // operation is refused with what that endpoint lacks.
-                if pull_only {
-                    pull_only_push_decision(&repository, candidate, push)?;
-                    if !publication_open {
+            primary,
+            || {
+                self.push_call(
+                    &steps,
+                    session,
+                    observer,
+                    candidate,
+                    &mut evidence,
+                    |push, evidence, call| {
+                        if self.observation_configuration_in(call, &root, &plan)? != configuration {
+                            return Err(SynchronizationError::ExternalChange);
+                        }
+                        if push.is_none()
+                            && let Some(boundary) = push_absence_boundary
+                        {
+                            return Err(boundary.error());
+                        }
+                        // R-15: a pull-only operation never pushes. The push
+                        // endpoint holds the candidate, which is recorded as the
+                        // ordinary call that pushes nothing records it, or the
+                        // operation is refused with what that endpoint lacks.
+                        if pull_only {
+                            pull_only_push_decision(&repository, candidate, push)?;
+                            if !publication_open {
+                                evidence.push_oid = Some(candidate);
+                                evidence.push_advertised_oid = push;
+                            }
+                            return Ok(None);
+                        }
+                        if publication_open {
+                            if push == Some(candidate) {
+                                return Ok(None);
+                            }
+                            // Fetch and Push are independent endpoints: only the
+                            // Push-direction advertisement decides whether an
+                            // ordinary update can apply.
+                            //
+                            // Known limit: when the Push endpoint is strictly AHEAD
+                            // of the candidate (the candidate is already contained
+                            // there, but a distinct Fetch endpoint does not yet show
+                            // that descendant), this is still `PushRejected` on
+                            // every invocation until Fetch catches up. Nothing is
+                            // pushed and nothing is claimed; a verified attempt must
+                            // equal the advertisement, and integrating Push-only
+                            // history is refused by design.
+                            if push.is_some()
+                                && push_intent_relation(&repository, candidate, push)?
+                                    != PushIntentRelation::Behind
+                            {
+                                return Err(SynchronizationError::PushRejected);
+                            }
+                            return Ok(Some(PushIntent::Attempt { advertised: push }));
+                        }
                         evidence.push_oid = Some(candidate);
                         evidence.push_advertised_oid = push;
-                    }
-                    return Ok(None);
-                }
-                if publication_open {
-                    if push == Some(candidate) {
-                        return Ok(None);
-                    }
-                    // Fetch and Push are independent endpoints: only the
-                    // Push-direction advertisement decides whether an
-                    // ordinary update can apply.
-                    //
-                    // Known limit: when the Push endpoint is strictly AHEAD
-                    // of the candidate (the candidate is already contained
-                    // there, but a distinct Fetch endpoint does not yet show
-                    // that descendant), this is still `PushRejected` on
-                    // every invocation until Fetch catches up. Nothing is
-                    // pushed and nothing is claimed; a verified attempt must
-                    // equal the advertisement, and integrating Push-only
-                    // history is refused by design.
-                    if push.is_some()
-                        && push_intent_relation(&repository, candidate, push)?
-                            != PushIntentRelation::Behind
-                    {
-                        return Err(SynchronizationError::PushRejected);
-                    }
-                    return Ok(Some(PushIntent::Attempt { advertised: push }));
-                }
-                evidence.push_oid = Some(candidate);
-                evidence.push_advertised_oid = push;
-                if push == Some(candidate) {
-                    return Ok(None);
-                }
-                if resumed == Some(Checkpoint::PushVerified) {
-                    return Err(SynchronizationError::RecoveryRequired);
-                }
-                if push.is_some_and(|oid| {
-                    !repository
-                        .graph_descendant_of(candidate, oid)
-                        .unwrap_or(false)
-                }) {
-                    return Err(SynchronizationError::PushRejected);
-                }
-                Ok(Some(PushIntent::Checkpoint { resumed }))
+                        if push == Some(candidate) {
+                            return Ok(None);
+                        }
+                        if resumed == Some(Checkpoint::PushVerified) {
+                            return Err(SynchronizationError::RecoveryRequired);
+                        }
+                        if push.is_some_and(|oid| {
+                            !repository
+                                .graph_descendant_of(candidate, oid)
+                                .unwrap_or(false)
+                        }) {
+                            return Err(SynchronizationError::PushRejected);
+                        }
+                        Ok(Some(PushIntent::Checkpoint { resumed }))
+                    },
+                )
             },
-        );
-        let pushed =
-            pushed.map_err(|error| self.ended_if_unresolved(&root, &owner, keep, error))?;
+        )?;
         let authority = match (publication_open, pushed) {
             (true, false) => {
                 decision(self.prepare_synchronization_publication(
@@ -7942,7 +8099,9 @@ fn backfill_expected_oid(evidence: &mut Evidence, local: git2::Oid) {
 ///
 /// The second value is the commit the newest publication of the context
 /// put there, among those the classification counts as proven: `None` with
-/// no such publication.
+/// no such publication. The third is the commit of every publication the
+/// classification counts, proven or an intent, compatible or not, in row
+/// order: `None` for one whose commit is not recorded.
 fn push_absence(
     connection: &rusqlite::Connection,
     id: i64,
@@ -7951,9 +8110,9 @@ fn push_absence(
     target: &RemoteOperationTarget,
     own: Option<OperationId>,
     unissued: Option<OperationId>,
-) -> Result<(Option<PushAbsenceBoundary>, Option<git2::Oid>), RepositoryError> {
+) -> Result<PushAbsence, RepositoryError> {
     let Some((kind, item_id)) = target.item() else {
-        return Ok((None, None));
+        return Ok((None, None, Vec::new()));
     };
     // R1 retires only the previous context's publication history. New
     // ambiguous/verified attempts must still fence absence, even before
@@ -7992,6 +8151,7 @@ fn push_absence(
     let mut incompatible = false;
     // The row and the commit of the newest proven publication.
     let mut newest: Option<(i64, git2::Oid)> = None;
+    let mut counted = Vec::new();
     for operation in ids {
         let operation = OperationId::parse(&operation).map_err(|_| state::recovery_required())?;
         if Some(operation) == own {
@@ -8056,6 +8216,7 @@ fn push_absence(
             {
                 continue;
             }
+            counted.push(published);
             if record.generation != generation || record.target != *target {
                 incompatible = true;
             } else if proven {
@@ -8086,9 +8247,19 @@ fn push_absence(
         } else {
             None
         },
-        newest.map(|(_, published)| published),
+        newest,
+        counted,
     ))
 }
+
+/// What `push_absence` classifies: the boundary, the journal row and the
+/// commit of the newest proven publication, and the commit of every
+/// publication it counts.
+type PushAbsence = (
+    Option<PushAbsenceBoundary>,
+    Option<(i64, git2::Oid)>,
+    Vec<Option<git2::Oid>>,
+);
 
 /// How the deletion of an item's published editing branch is recorded, as
 /// the preview of `item republish` reads it (fact 55): from the records the
@@ -8145,6 +8316,104 @@ pub(crate) struct RepublishConsent {
     pub(crate) local: git2::Oid,
 }
 
+/// What `republish_evidence_in` reads: the evidence, the commit of every
+/// publication the push-absence classification counts in row order (`None`
+/// for one whose commit is not recorded), and the journal row of the newest
+/// proven one.
+pub(crate) type RepublishRead = (RepublishEvidence, Vec<Option<git2::Oid>>, Option<i64>);
+
+/// `republish_evidence` over a registry transaction, for the plan of the
+/// repository at `root`. A closure's prepare reads it in its own
+/// read-only transaction.
+pub(crate) fn republish_evidence_in(
+    tx: &rusqlite::Connection,
+    id: i64,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    kind: AuthoringKind,
+    item_id: &crate::canonical::ItemId,
+) -> Result<RepublishRead, RepositoryError> {
+    use rusqlite::OptionalExtension;
+    let target = SynchronizationTarget::Context {
+        kind,
+        item_id: item_id.clone(),
+    }
+    .operation_target(plan);
+    let generation = state::generation(tx, id)?;
+    let (boundary, newest, counted) = push_absence(tx, id, root, generation, &target, None, None)?;
+    let proven = newest.map(|(_, published)| published);
+    let fetched: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT state, last_advertised_oid FROM remote_context_states
+                  WHERE repository_id = ?1 AND kind = ?2 AND item_id = ?3",
+            rusqlite::params![id, authoring_kind_segment(&kind), item_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|_| state::recovery_required())?;
+    let none = |deletion| RepublishEvidence {
+        deletion,
+        last_published: None,
+    };
+    // History lost (a row, or the cache-loss flag) but a tracking ref
+    // says a fetch once saw the branch, and a current batch does not
+    // advertise it now: a deletion, last published at the tracking ref.
+    let lost_then_gone = if fetched
+        .as_ref()
+        .is_none_or(|(state, _)| state == "history_unknown")
+    {
+        let snapshot = state::read_snapshot(tx, id)?;
+        let target = plan.context(kind, item_id);
+        if snapshot.fetch_publication_evidence_for(kind, item_id)
+            == RemotePublicationEvidence::HistoryUnknown
+            && snapshot.has_current_batch()
+            && !snapshot
+                .observations()
+                .iter()
+                .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
+        {
+            git2::Repository::open(root)
+                .map_err(|_| state::recovery_required())?
+                .refname_to_id(target.tracking_ref())
+                .ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let evidence = match (boundary, fetched) {
+        (Some(PushAbsenceBoundary::Ambiguous { .. }), _) => none(DeletionEvidence::Ambiguous),
+        (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
+        (Some(PushAbsenceBoundary::Deleted) | None, Some((state, advertised)))
+            if state == "remotely_deleted" =>
+        {
+            RepublishEvidence {
+                deletion: DeletionEvidence::Fetched,
+                last_published: advertised
+                    .map(|oid| git2::Oid::from_str(&oid).map_err(|_| state::recovery_required()))
+                    .transpose()?,
+            }
+        }
+        // A fetch last found the branch there.
+        (Some(PushAbsenceBoundary::Deleted) | None, Some((state, _)))
+            if matches!(state.as_str(), "observed" | "unmaterialized" | "malformed") =>
+        {
+            none(DeletionEvidence::None)
+        }
+        (None, _) if lost_then_gone.is_some() => RepublishEvidence {
+            deletion: DeletionEvidence::Fetched,
+            last_published: lost_then_gone,
+        },
+        (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
+            deletion: DeletionEvidence::Pushed,
+            last_published: proven,
+        },
+        (None, _) => none(DeletionEvidence::None),
+    };
+    Ok((evidence, counted, newest.map(|(row, _)| row)))
+}
+
 impl RepositoryService {
     /// How the deletion of the editing branch of the item `item_id`, of
     /// `kind`, in the repository at `root` is recorded. Read only: it
@@ -8162,7 +8431,6 @@ impl RepositoryService {
         kind: AuthoringKind,
         item_id: &crate::canonical::ItemId,
     ) -> Result<RepublishEvidence, RepositoryError> {
-        use rusqlite::OptionalExtension;
         let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
             return Err(state::recovery_required());
         };
@@ -8171,87 +8439,8 @@ impl RepositoryService {
         };
         let plan = RemoteRefPlan::from_configuration(remote_name, &config.primary_branch)
             .map_err(|_| state::recovery_required())?;
-        let target = SynchronizationTarget::Context {
-            kind,
-            item_id: item_id.clone(),
-        }
-        .operation_target(&plan);
         state::with_transaction(self, root, |tx, id| {
-            let generation = state::generation(tx, id)?;
-            let (boundary, proven) = push_absence(tx, id, root, generation, &target, None, None)?;
-            let fetched: Option<(String, Option<String>)> = tx
-                .query_row(
-                    "SELECT state, last_advertised_oid FROM remote_context_states
-                      WHERE repository_id = ?1 AND kind = ?2 AND item_id = ?3",
-                    rusqlite::params![id, authoring_kind_segment(&kind), item_id.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(|_| state::recovery_required())?;
-            let none = |deletion| RepublishEvidence {
-                deletion,
-                last_published: None,
-            };
-            // History lost (a row, or the cache-loss flag) but a tracking ref
-            // says a fetch once saw the branch, and a current batch does not
-            // advertise it now: a deletion, last published at the tracking ref.
-            let lost_then_gone = if fetched
-                .as_ref()
-                .is_none_or(|(state, _)| state == "history_unknown")
-            {
-                let snapshot = state::read_snapshot(tx, id)?;
-                let target = plan.context(kind, item_id);
-                if snapshot.fetch_publication_evidence_for(kind, item_id)
-                    == RemotePublicationEvidence::HistoryUnknown
-                    && snapshot.has_current_batch()
-                    && !snapshot
-                        .observations()
-                        .iter()
-                        .any(|observation| observation.remote_ref() == Some(target.remote_ref()))
-                {
-                    git2::Repository::open(root)
-                        .map_err(|_| state::recovery_required())?
-                        .refname_to_id(target.tracking_ref())
-                        .ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            Ok(match (boundary, fetched) {
-                (Some(PushAbsenceBoundary::Ambiguous { .. }), _) => {
-                    none(DeletionEvidence::Ambiguous)
-                }
-                (Some(PushAbsenceBoundary::Unknown), _) => none(DeletionEvidence::Unknown),
-                (Some(PushAbsenceBoundary::Deleted) | None, Some((state, advertised)))
-                    if state == "remotely_deleted" =>
-                {
-                    RepublishEvidence {
-                        deletion: DeletionEvidence::Fetched,
-                        last_published: advertised
-                            .map(|oid| {
-                                git2::Oid::from_str(&oid).map_err(|_| state::recovery_required())
-                            })
-                            .transpose()?,
-                    }
-                }
-                // A fetch last found the branch there.
-                (Some(PushAbsenceBoundary::Deleted) | None, Some((state, _)))
-                    if matches!(state.as_str(), "observed" | "unmaterialized" | "malformed") =>
-                {
-                    none(DeletionEvidence::None)
-                }
-                (None, _) if lost_then_gone.is_some() => RepublishEvidence {
-                    deletion: DeletionEvidence::Fetched,
-                    last_published: lost_then_gone,
-                },
-                (Some(PushAbsenceBoundary::Deleted), _) => RepublishEvidence {
-                    deletion: DeletionEvidence::Pushed,
-                    last_published: proven,
-                },
-                (None, _) => none(DeletionEvidence::None),
-            })
+            republish_evidence_in(tx, id, root, &plan, kind, item_id).map(|(evidence, ..)| evidence)
         })
     }
 

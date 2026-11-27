@@ -356,6 +356,148 @@ fn retirement_proof_history_refusals() {
 }
 
 #[test]
+fn unheld_entries_against_the_primary() {
+    use super::proof::UnheldEntry;
+    use crate::repository::PathChange::*;
+    let with = |name: &str, bytes: &str| {
+        let mut changed = files(false);
+        changed.insert(
+            name.as_bytes().to_vec(),
+            (bytes.as_bytes().to_vec(), 0o100644),
+        );
+        changed
+    };
+    // A squash holds the branch's content in a commit of its own; the marker
+    // keeps its id from being the branch tip's.
+    let squashed = |name: &str, bytes: &str| {
+        let mut changed = with(name, bytes);
+        changed.insert(b"squash".to_vec(), (b"squash".to_vec(), 0o100644));
+        changed
+    };
+    let entry = |name: &str, change| UnheldEntry {
+        path: name.as_bytes().to_vec(),
+        change,
+    };
+    for case in [
+        "none_when_the_primary_holds_exactly",
+        "modified_after_a_squash_the_primary_moved_past",
+        "added",
+        "deleted",
+        "a_rename_is_a_deletion_and_an_addition",
+        "equal_to_the_primary",
+        "a_primary_that_descends_from_the_branch",
+        "a_path_only_the_primary_changed_is_not_listed",
+        "a_change_the_primary_deleted_is_an_addition",
+        "an_addition_the_primary_made_differently_is_a_modification",
+        "unrelated_history",
+        "multiple_merge_bases",
+        "shallow",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let base = commit(&repo, &files(false), &[]);
+        let (local, primary, expected) = match case {
+            "none_when_the_primary_holds_exactly" => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let primary = commit(&repo, &squashed("code", "branch"), &[base]);
+                (local, primary, Ok(vec![]))
+            }
+            "modified_after_a_squash_the_primary_moved_past" => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let squash = commit(&repo, &squashed("code", "branch"), &[base]);
+                let primary = commit(&repo, &squashed("code", "moved on"), &[squash]);
+                (local, primary, Ok(vec![entry("code", Modified)]))
+            }
+            "added" => {
+                let local = commit(&repo, &with("new.txt", "branch"), &[base]);
+                (local, base, Ok(vec![entry("new.txt", Added)]))
+            }
+            "deleted" => {
+                let mut deleted = files(false);
+                deleted.remove(b"code".as_slice());
+                let local = commit(&repo, &deleted, &[base]);
+                (local, base, Ok(vec![entry("code", Deleted)]))
+            }
+            "a_rename_is_a_deletion_and_an_addition" => {
+                let mut renamed = files(false);
+                let moved = renamed.remove(b"code".as_slice()).unwrap();
+                renamed.insert(b"moved".to_vec(), moved);
+                let local = commit(&repo, &renamed, &[base]);
+                let primary = commit(&repo, &with("other", "primary"), &[base]);
+                (
+                    local,
+                    primary,
+                    Ok(vec![entry("code", Deleted), entry("moved", Added)]),
+                )
+            }
+            "equal_to_the_primary" => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                (local, local, Ok(vec![]))
+            }
+            "a_primary_that_descends_from_the_branch" => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let primary = commit(&repo, &with("code", "moved on"), &[local]);
+                (local, primary, Ok(vec![]))
+            }
+            "a_path_only_the_primary_changed_is_not_listed" => {
+                // The branch adds `new.txt` and keeps `other`. After the base
+                // the primary modified `code` and deleted `other`, which the
+                // branch left alone: neither is the branch's to hold.
+                let base = commit(&repo, &with("other", "other"), &[]);
+                let mut branch = with("other", "other");
+                branch.insert(b"new.txt".to_vec(), (b"branch".to_vec(), 0o100644));
+                let local = commit(&repo, &branch, &[base]);
+                let mut moved = with("other", "other");
+                moved.insert(b"code".to_vec(), (b"moved on".to_vec(), 0o100644));
+                moved.remove(b"other".as_slice());
+                let primary = commit(&repo, &moved, &[base]);
+                (local, primary, Ok(vec![entry("new.txt", Added)]))
+            }
+            "a_change_the_primary_deleted_is_an_addition" => {
+                // The change is read against the primary, which lacks `code`,
+                // not against the base, which has it.
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let mut deleted = files(false);
+                deleted.remove(b"code".as_slice());
+                let primary = commit(&repo, &deleted, &[base]);
+                (local, primary, Ok(vec![entry("code", Added)]))
+            }
+            "an_addition_the_primary_made_differently_is_a_modification" => {
+                let local = commit(&repo, &with("new.txt", "branch"), &[base]);
+                let primary = commit(&repo, &with("new.txt", "primary"), &[base]);
+                (local, primary, Ok(vec![entry("new.txt", Modified)]))
+            }
+            "unrelated_history" => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                let primary = commit(&repo, &files(true), &[]);
+                (local, primary, Err(UnrelatedHistory))
+            }
+            "multiple_merge_bases" => {
+                let a = commit(&repo, &with("a", "a"), &[base]);
+                let b = commit(&repo, &with("b", "b"), &[base]);
+                let local = commit(&repo, &with("c", "c"), &[a, b]);
+                let primary = commit(&repo, &with("d", "d"), &[b, a]);
+                (local, primary, Err(MultipleMergeBases))
+            }
+            _ => {
+                let local = commit(&repo, &with("code", "branch"), &[base]);
+                std::fs::write(repo.path().join("shallow"), format!("{base}\n")).unwrap();
+                (local, base, Err(ShallowHistory))
+            }
+        };
+        assert_eq!(
+            proof::unheld_entries(&repo, local, primary),
+            expected,
+            "{case}"
+        );
+        assert!(
+            !dir.path().join(Path::new(".manyhands")).exists(),
+            "proof is tree-only"
+        );
+    }
+}
+
+#[test]
 fn retirement_proof_completion_is_independent_of_unreadable_unrelated_content() {
     let dir = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(dir.path()).unwrap();

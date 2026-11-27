@@ -88,6 +88,7 @@ fn remote(name: &str, location: &str, eligible: bool) -> RemoteDto {
 fn canned(root: &Path, configured: Option<&str>) -> RepositoryInspectionDto {
     let set_up = configured.is_some();
     RepositoryInspectionDto {
+        setup: None,
         selected_path: key(root),
         root: key(root),
         registered: false,

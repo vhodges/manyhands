@@ -2247,6 +2247,7 @@ fn a_promotion_s_or_a_closure_s_rows_record_no_author() {
     for (command, author) in [
         (Some("document promote"), None),
         (Some("ticket close"), None),
+        (Some("ticket withdraw-closure"), None),
         (Some("ticket save"), Some(AUTHOR)),
         (Some("comment add"), Some(AUTHOR)),
         (None, Some(AUTHOR)),

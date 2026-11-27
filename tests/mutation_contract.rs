@@ -638,6 +638,8 @@ fn remote_select(world: &World, name: Option<&str>) -> Mutation {
     Mutation::RemoteSelect(RemoteSelectInput {
         root: world.root.clone(),
         name: name.map(str::to_owned),
+        integration: None,
+        forge: None,
     })
 }
 
@@ -1600,7 +1602,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 69] = [
+const DATA_ROOTS: [&str; 77] = [
     "blocked.schema.json",
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
@@ -1654,6 +1656,9 @@ const DATA_ROOTS: [&str; 69] = [
     "polling_status.schema.json",
     "preview.schema.json",
     "primary_local_commits.schema.json",
+    "pull_request_closure_mutation.schema.json",
+    "pull_request_closure_preview.schema.json",
+    "pull_request_link.schema.json",
     "public_key.schema.json",
     "relationship_check.schema.json",
     "remote_history.schema.json",
@@ -1667,6 +1672,11 @@ const DATA_ROOTS: [&str; 69] = [
     "repository_list.schema.json",
     "repository_removal_preview.schema.json",
     "request.schema.json",
+    "setup_cancel.schema.json",
+    "setup_cancel_preview.schema.json",
+    "setup_mutation.schema.json",
+    "setup_poll.schema.json",
+    "setup_preview.schema.json",
     "synchronization_conflict_mutation.schema.json",
     "synchronization_mutation.schema.json",
     "ticket_mutation.schema.json",
@@ -1787,7 +1797,7 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 4] = [
     (
         ResultCode::CommandUnavailable,
         "a CLI code for a planned verb, and no verb is planned once poll once is bound \
@@ -1804,6 +1814,12 @@ const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
         "item sync and repo sync merge divergent history (Wave 03 C4, R-16), so no command \
          of execute or prepare returns it; it stays a code of the domain for a caller set to \
          refuse divergence, which no binding is",
+    ),
+    (
+        ResultCode::RemoteAlreadySetUp,
+        "a library test pins it (setup::publish_tests): the remote's primary already holds a \
+         configuration, a decision a local remote makes as well as an SSH one, so the SSH \
+         case does not repeat it",
     ),
 ];
 
@@ -1839,7 +1855,7 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 8] = [
     (
         ResultCode::UsageError,
         "a CLI parse result; no command of execute or prepare returns it",
@@ -1869,6 +1885,10 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
     (
         ResultCode::AuthorityNotFound,
         "a read's code, of host inspect: no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::RemoteAlreadySetUp,
+        "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
     ),
 ];
 

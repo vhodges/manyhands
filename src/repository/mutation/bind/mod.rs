@@ -58,6 +58,7 @@ pub(crate) mod resolve_history;
 pub(crate) mod resume;
 pub(crate) mod retire;
 pub(crate) mod save;
+pub(crate) mod setup_cancel;
 pub(crate) mod sync;
 pub(crate) mod ticket;
 
@@ -958,6 +959,12 @@ pub(crate) trait Binding {
     /// no branch or worktree, since none may exist.
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope;
 
+    /// Called before a stored result of the accepted request is given again,
+    /// when no prepare has run to tell the binding what its record is. A
+    /// binding whose `scope` depends on that reads it from the record here.
+    /// Nothing by default.
+    fn settled(&self, _service: &RepositoryService, _accepted: &Accepted) {}
+
     /// Validates the input and makes the checks that need no lease. An
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.
@@ -1081,6 +1088,11 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
                 service, &accepted,
             ));
         }
+        Some(Command::TicketWithdrawClosure) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Withdraw>(
+                service, &accepted,
+            ));
+        }
         _ => {}
     }
     let journal = accepted.journal_row(service);
@@ -1134,6 +1146,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // A registration is removed in one transaction: nothing of it is
         // ever done with work remaining.
         Some(Command::RepoRemove) => Recorded::nothing(),
+        // The cancel's one local row is a record of the setup it ended: no
+        // effect is shown for it.
+        Some(Command::RepoSetupCancel) => Recorded::nothing(),
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),
@@ -1189,7 +1204,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             Recorded::of(repair::recorded_effects(record, &accepted))
         }
         // Answered above, from the parent record: this is not reached.
-        Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
+        Some(Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure) => {
+            Recorded::nothing()
+        }
         // A poll names refs and items in its data and has no effect to show:
         // what it moved of an unfinished request is its report's to say.
         Some(Command::PollOnce) => Recorded::nothing(),

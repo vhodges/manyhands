@@ -40,6 +40,7 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
         LifecyclePublicationPendingReason, LifecycleWayOut, MutationDataDto, PrepareDataDto,
+        PullRequestClosureAction, PullRequestClosureMutationDto, PullRequestClosureRecording,
         lifecycle_prepare_way_out, lifecycle_way_out,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
@@ -267,8 +268,11 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
                 route.next.push(resume_line(root, &operation_id));
             }
             // C2's actions say these, or (`RepairOutside`) nothing does; the
-            // rest are a prepare's.
+            // rest are a prepare's. A branch record's new request is worded
+            // with its verb (Task 11).
             LifecycleWayOut::SendAgain
+            | LifecycleWayOut::PrepareAgain
+            | LifecycleWayOut::SyncItem { .. }
             | LifecycleWayOut::Inspect
             | LifecycleWayOut::RepairOutside
             | LifecycleWayOut::RetryRequest { .. }
@@ -340,6 +344,8 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
             | LifecycleWayOut::ResumeOperation { .. }
             | LifecycleWayOut::ResolveChildConflict { .. }
             | LifecycleWayOut::Republish { .. }
+            | LifecycleWayOut::PrepareAgain
+            | LifecycleWayOut::SyncItem { .. }
             | LifecycleWayOut::RepairOutside => {}
         }
     }
@@ -348,8 +354,13 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
 
 /// A prepare refused because an unfinished request, or an operation no request
 /// holds, has the item (decision 33): the command that goes on with it, in
-/// place of the action's own line.
-fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Option<Output> {
+/// place of the action's own line. `holder` gives the command of the request
+/// that holds it, when the request store names one.
+fn held(
+    envelope: &Envelope<PrepareDataDto>,
+    way_out: &[LifecycleWayOut],
+    holder: &dyn Fn(&str) -> Option<String>,
+) -> Option<Output> {
     let (Some(root), Some(item)) = (
         envelope.scope.repository.as_deref(),
         envelope.scope.item_id.as_deref(),
@@ -358,7 +369,11 @@ fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Opt
     };
     let (line, note) = match way_out {
         [LifecycleWayOut::RetryRequest { request_id }] => {
-            (again(&envelope.command, root, item, request_id), HELD_NOTE)
+            // A request ID is only sent again under its own command, and the
+            // two closure verbs share one record: the holder may be the
+            // other verb's request.
+            let command = holder(request_id).unwrap_or_else(|| envelope.command.clone());
+            (again(&command, root, item, request_id), HELD_NOTE)
         }
         [LifecycleWayOut::ResumeOperation { operation_id }] => {
             (resume_line(root, operation_id), HELD_RESUME_NOTE)
@@ -373,9 +388,13 @@ fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Opt
 
 /// The human output of a prepare of these verbs: C2's, with a blocked prepare's
 /// way out.
-pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output {
+pub fn prepare(
+    kind: ItemDtoKind,
+    envelope: &Envelope<PrepareDataDto>,
+    holder: &dyn Fn(&str) -> Option<String>,
+) -> Output {
     let way_out = lifecycle_prepare_way_out(kind, envelope);
-    if let Some(output) = held(envelope, &way_out) {
+    if let Some(output) = held(envelope, &way_out, holder) {
         return output;
     }
 
@@ -411,8 +430,112 @@ pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output
     output
 }
 
+/// What a record whose publication remote changed or went leaves to do (R-35).
+const SYNC_NOTE: &str = "this record's commit stays on the local branch; once a publication remote is selected, item sync publishes it.";
+
+/// A branch record's answer (Part H): what it did to the closure, how its
+/// branch was published, and the link to open, in that order, then the rest of
+/// its data and its way out, worded with this verb.
+fn branch_output(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestClosureMutationDto,
+    supplied: bool,
+) -> Output {
+    let mut body = String::new();
+    match data.closure.recording {
+        PullRequestClosureRecording::Recorded => {
+            let at = data.closure.closed_at.as_deref().unwrap_or_default();
+            body.push_str(&format!("closure: recorded {}\n", field(at)));
+        }
+        PullRequestClosureRecording::Existing => body.push_str("closure: already recorded\n"),
+        PullRequestClosureRecording::Withdrawn => body.push_str("closure: withdrawn\n"),
+        PullRequestClosureRecording::Nothing => {}
+    }
+    if let Some(publication) = data.publication {
+        body.push_str(&format!("publication: {}\n", publication.as_str()));
+    }
+    if let Some(link) = &data.pull_request {
+        let link = manyhands::forge::PullRequestLink {
+            source: link.source.clone(),
+            target: link.target.clone(),
+            forge: None,
+            url: link.url.clone(),
+        };
+        body.push_str(&format!("{}\n", field(&link.human_line())));
+    }
+    body.push_str(&blockers_line(&data.blockers));
+    body.push_str(&human_admin::fields_without(
+        data,
+        &["type", "closure", "publication", "pull_request", "blockers"],
+    ));
+    let mut notes = Vec::new();
+    if let (Some(root), Some(item)) = (
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+    ) {
+        for step in lifecycle_way_out(envelope) {
+            match step {
+                LifecycleWayOut::Republish { item_id } => {
+                    body.push_str(&format!("next: {}\n", republish(root, &item_id)));
+                }
+                // The record's own verb: a resume that continued it has the
+                // resume's command, which is no verb to prepare again.
+                LifecycleWayOut::PrepareAgain => body.push_str(&format!(
+                    "next: manyhands-cli {} --repo {} --id {} --prepare\n",
+                    match data.action {
+                        PullRequestClosureAction::Withdraw => "ticket withdraw-closure",
+                        PullRequestClosureAction::Close | PullRequestClosureAction::NewBranch => {
+                            "ticket close"
+                        }
+                    },
+                    quoted(root),
+                    field(item)
+                )),
+                LifecycleWayOut::SyncItem { item_id } => {
+                    body.push_str(&format!(
+                        "next: manyhands-cli item sync --repo {} --id {}\n",
+                        quoted(root),
+                        field(&item_id)
+                    ));
+                    notes.push(SYNC_NOTE.to_owned());
+                }
+                LifecycleWayOut::ResolveChildConflict { operation_id } => {
+                    for line in child_conflict(root, &operation_id) {
+                        body.push_str(&format!("next: {line}\n"));
+                    }
+                    notes.push(CONFLICT_NOTE.to_owned());
+                }
+                LifecycleWayOut::SendAgain
+                | LifecycleWayOut::Inspect
+                | LifecycleWayOut::RetryRequest { .. }
+                | LifecycleWayOut::CancelThenSendAgain { .. }
+                | LifecycleWayOut::ResumeOperation { .. }
+                | LifecycleWayOut::RepairLocally { .. }
+                | LifecycleWayOut::SharePrimary
+                | LifecycleWayOut::PollOnce
+                | LifecycleWayOut::ResolveHistory
+                | LifecycleWayOut::SaveItem { .. }
+                | LifecycleWayOut::RepairOutside => {}
+            }
+        }
+    }
+    let mut shown = envelope.clone();
+    shown.data = None;
+    render::compact(
+        &shown,
+        supplied,
+        &body,
+        "",
+        envelope.recovery.clone(),
+        &note_lines(&notes),
+    )
+}
+
 /// The human output of a result of these verbs.
 pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
+    if let Some(MutationDataDto::PullRequestClosure(data)) = &envelope.data {
+        return branch_output(envelope, data, supplied);
+    }
     let Some(MutationDataDto::Lifecycle(data)) = &envelope.data else {
         return render::mutation_output(false, envelope, supplied);
     };
