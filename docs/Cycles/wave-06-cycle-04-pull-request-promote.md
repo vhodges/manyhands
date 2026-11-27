@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-rphcs (`01M87684C9GM9BJP5QQ429KMAK`), branch `manyhands/ticket/01M87684C9GM9BJP5QQ429KMAK`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 04 design](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md). Plan: [Cycle 04 implementation plan](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-implementation.md).
 
-Status: **draft**, revision 7, 2026-11-26. Not yet approved.
+Status: **approved** by the owner on 2026-11-26, at revision 7 (decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
 
 Revision history:
 
@@ -21,6 +21,7 @@ Revision history:
 - Revision 6: re-grounded on main `8e5d9832` after Cycle 03 merged (integrated at `6bc4b69c`), by two read-only research agents: the design's Baseline Facts and line numbers, and its alignment with Cycle 03 as landed (design Review Record).
 - Revision 6 (Cycle document `477864ee`, design `e22f88ea`, plan `11c40228`) had a short scoped review at the owner's request (0 Blocking, 4 Important, 11 Minor).
 - Revision 7: that review's corrections. Revisions 5 and 7 have not been independently reviewed.
+- Revision 7 (Cycle document `ca1a483f`, design `725a1a01`, plan `e57f0117`) was approved by the owner on 2026-11-26, without a further round (decision 16). This approval edit changes only the status lines, this history, decision 16, the notes and the Review Record.
 
 ## Purpose And Authority
 
@@ -60,7 +61,7 @@ Authorities, in order:
 - **Ticket close**: Cycle 03's. **Onboarding**: Cycle 02's, landed.
 - **No forced push and no remote deletion** in this Cycle.
 
-**Notes owed to other tickets at approval** (the planning skill's step 9):
+**Notes left on other tickets at approval** (the planning skill's step 9), 2026-11-26: vh-ssepw comment `01M8DAX2D6CGW2GYJY04QJRB3P` and vh-p7st2 comment `01M8DAX3584DNP5NW9KY9P8SNA`, both published. Their content:
 
 - vh-ssepw: `primary_holds_document` (design R-3) is the content-proof rule for its detection of a promoted document; its confirmed manual cleanup and its surviving-branch deletion end a document's context and so must delete its link row, as both retirement paths do, and must respect the retirement fence of an unfinished pull-request promotion (decision 13); promote already answers `already_applied` once a clone has seen the merge; K-9 and K-12 are edges its cleanup settles.
 - vh-p7st2: the new preview `pull_request_promotion_preview` and data `pull_request_promotion`; `document show`'s `pull_request` for a document; "Approve and merge" in a pull-request repository; and `repo inspect`'s listing of outstanding links, for tickets and documents (decision 12).
@@ -128,6 +129,7 @@ Nothing has been run. Every status above is planned.
 13. **Retirement is fenced while a pull-request promotion is unfinished** (after review round 2; stated as the design's table F from revision 4). The poll's, `context retire`'s and the desktop's retirement skip a document whose pull-request promotion record is unfinished, as they already skip a ticket whose closure is unfinished; re-running the request then finds the branch deleted and the primary holding the document, answers `already_applied`, and the next poll retires it. Chosen over recording the consented tip and ending through `ContextGone`.
 14. **A stopped promote that changed since consent ends as `external_change`** (after review round 2; refined from revision 4 by the design's table RR, whose window is "before any attempt of its child pushed" and whose checks are a commit its child did not make and a changed remote name or endpoint, and by decision 15). Before its child completes, a re-run whose publication remote is no longer the configured one, or whose branch tip is no longer the consented one, ends as a refused record (`external_change`), with nothing published by it; a new prepare starts over. Once the child has published, the promote finishes regardless, because the rest needs no network. Chosen over leaving it to Cycle 03's runner rule, under which it would wait for good.
 15. **A held child continues to its own end** (after review round 4). While a conflict or an identity window holds the promote's child, which neither `request cancel` nor the runner can let go, the child continues by its way out (resolving the conflict publishes the resolution, as any `item sync` conflict's does), and the promote then finishes; the changed-since-consent checks apply only to a child that can be let go. A known limit (K-16). Chosen over making the conflict continuation check for changes before it pushes, which would touch the conflict verbs and the remote reservation and add the six remote SSH targets.
+16. **Approval** (2026-11-26). The owner approved the three documents at revision 7 without a further review round, including decisions 13 and 14 as refined by the design's tables RR and F and decision 15; approved the named test edits E-1 to E-14; chose subagent-driven execution, with Sonnet 5.5 at high effort as the implementer; and authorized implementation. Cycle 03 has merged (integrated at `6bc4b69c`), so Task 0 starts on this approval.
 
 ## Known Limits
 
@@ -189,6 +191,7 @@ None at this revision.
 | Review round 4 | A held child cannot be let go, and resolving its conflict publishes outside the promote's checks | decision | It continues to its own end (decision 15, K-16) | `remote/reservation.rs` about 1836-1857; `bind/conflict.rs` about 45-52 |
 | Review round 4 | The link "built from the record's inputs" had none to build from | ruling | Built when the record finishes, from the live remote URL and forge setting (design R-30, K-17) | `closure/checkpoint.rs` `branch_link`; `forge.rs` `recognise` |
 | Review round 5, scoped re-review of revision 6 | 0 Blocking, 4 Important, 11 Minor | — | Resolved in revision 7; see the design's Review Record | This revision |
+| Approval | Revision 7 presented with revisions 5 and 7 not independently reviewed | decision | Approved without another round, with the named edits, the execution method and implementation (decision 16) | Owner, 2026-11-26 |
 | Re-grounding after Cycle 03 merged | Cycle 03 landed its withdraw prepare, `item sync` link, way outs, replay fix and SSH case in shapes that change this design | correction | Revision 6: a held document at confirm is `external_change` (design R-29); a document arm in `item sync` (Part F); `from_stored`, way outs, replay and resume for the promote (Part D, Part G item 4, K-18); no contract-table row or second SSH golden (R-23); E-13, E-14 | Research at `8e5d9832`; not independently reviewed |
 | Review round 2 | Refused records carry no answer; the answer CHECK must be one-sided | correction | As Cycle 03's (design Part A) | `promotion/record.rs` `refuse_record`; `closure/record.rs` about 421-422 |
 | Review round 2 | The preview omitted a publication the synchronization makes | correction | All three effects, as the RFC (design R-24) | RFC "Document promote in pull-request mode" |
