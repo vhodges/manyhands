@@ -1602,7 +1602,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 78] = [
+const DATA_ROOTS: [&str; 79] = [
     "blocked.schema.json",
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
@@ -1659,6 +1659,7 @@ const DATA_ROOTS: [&str; 78] = [
     "pull_request_closure_mutation.schema.json",
     "pull_request_closure_preview.schema.json",
     "pull_request_link.schema.json",
+    "pull_request_promotion_mutation.schema.json",
     "pull_request_promotion_preview.schema.json",
     "public_key.schema.json",
     "relationship_check.schema.json",

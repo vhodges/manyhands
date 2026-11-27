@@ -327,9 +327,11 @@ pub(super) fn called(
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     if !value["data"].is_null() {
-        // A pull-request close's answers are its own data, by its tag.
+        // A pull-request close's or promote's answers are its own data, by
+        // its tag.
         let data_schema = match value["data"]["type"].as_str() {
             Some("pull_request_closure") => PULL_REQUEST_CLOSURE,
+            Some("pull_request_promotion") => PULL_REQUEST_PROMOTION,
             _ => MUTATION,
         };
         schema::check_published(data_schema, &value["data"]).expect("the lifecycle data schema");
@@ -3607,6 +3609,8 @@ fn never_pushed_context_is_published_then_deleted(verb: Verb) -> Result<(), Fixt
 
 const PULL_REQUEST_PREVIEW: &str = "pull_request_closure_preview.schema.json";
 const PULL_REQUEST_CLOSURE: &str = "pull_request_closure_mutation.schema.json";
+const PULL_REQUEST_PROMOTION_PREVIEW: &str = "pull_request_promotion_preview.schema.json";
+const PULL_REQUEST_PROMOTION: &str = "pull_request_promotion_mutation.schema.json";
 const PULL_REQUEST_LINK: &str = "pull_request_link.schema.json";
 /// The configuration's template: the harness's URL is no forge's.
 const FORGE_TEMPLATE: &str = "https://forge.example/new?from={source}&to={target}";
@@ -3614,6 +3618,24 @@ const FORGE_TEMPLATE: &str = "https://forge.example/new?from={source}&to={target
 /// `prepared`, for a pull-request close or a withdraw: the preview is the
 /// pull-request closure's.
 fn pull_request_prepared(w: &World, mutation: &Mutation) -> Envelope<PrepareDataDto> {
+    pull_request_prepared_as(w, mutation, PULL_REQUEST_PREVIEW, |details| {
+        matches!(details, PreviewDetailsDto::PullRequestClosure(_))
+    })
+}
+
+/// `prepared`, for a pull-request promote: the preview is the promotion's.
+fn pull_request_promotion_prepared(w: &World, mutation: &Mutation) -> Envelope<PrepareDataDto> {
+    pull_request_prepared_as(w, mutation, PULL_REQUEST_PROMOTION_PREVIEW, |details| {
+        matches!(details, PreviewDetailsDto::PullRequestPromotion(_))
+    })
+}
+
+fn pull_request_prepared_as(
+    w: &World,
+    mutation: &Mutation,
+    preview_schema: &str,
+    is_preview: fn(&PreviewDetailsDto) -> bool,
+) -> Envelope<PrepareDataDto> {
     let envelope = w.service.prepare(mutation);
     let rendered = serde_json::to_vec(&envelope).expect("an envelope serializes");
     ssh_privacy::clean(
@@ -3626,13 +3648,12 @@ fn pull_request_prepared(w: &World, mutation: &Mutation) -> Envelope<PrepareData
     assert!(
         matches!(
             &envelope.data,
-            Some(PrepareDataDto::Preview(preview))
-                if matches!(preview.details, PreviewDetailsDto::PullRequestClosure(_))
+            Some(PrepareDataDto::Preview(preview)) if is_preview(&preview.details)
         ),
         "{:?}",
         envelope.data
     );
-    schema::check_published(PULL_REQUEST_PREVIEW, &value["data"]).expect("the preview schema");
+    schema::check_published(preview_schema, &value["data"]).expect("the preview schema");
     envelope
 }
 
@@ -3658,11 +3679,22 @@ fn pull_request_closure_of(
     }
 }
 
+fn pull_request_promotion_of(
+    envelope: &Envelope<MutationDataDto>,
+) -> Option<&PullRequestPromotionMutationDto> {
+    match envelope.data.as_ref() {
+        Some(MutationDataDto::PullRequestPromotion(data)) => Some(data),
+        _ => None,
+    }
+}
+
 /// A pull-request repository's close, the same close again, `item sync`, a
-/// withdraw and a close again publish the ticket's branch and nothing else.
+/// withdraw and a close again publish the ticket's branch and nothing else;
+/// a document's promote and the same promote again then publish the
+/// document's branch and nothing else.
 ///
 /// Why SSH: no non-SSH publication remote can be selected, and the property
-/// is that only the ticket's branch reaches the server (decision 11): the
+/// is that only the item's own branch reaches the server (decision 11): the
 /// server's primary is never pushed, and no other ref is. The decisions
 /// behind each answer are pinned by library tests; this case checks that the
 /// pieces connect, and writes the goldens that only a server can make.
@@ -3673,6 +3705,8 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     const ITEM_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV4";
     const WITHDRAW: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV5";
     const CLOSE_LAST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV6";
+    const PROMOTE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV7";
+    const PROMOTE_AGAIN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FV8";
     let verb = Verb::Close;
     let w = World::plain_key()?;
     trust(&w)?;
@@ -3739,13 +3773,14 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     let local_primary = fixed(w.repo()?.refname_to_id(MAIN))?;
     assert_eq!(local_primary, primary);
     let before = w.server.receive_updates().len();
-    // Only the ticket's branch reaches the server, and every push of it is
-    // taken: a push of any other ref, or one refused, fails here.
-    let only_the_ticket_branch = |since: usize| {
+    // Since `since`, only `branch` has reached the server, and every push of
+    // it is taken: a push of any other ref, or one refused, fails here. Each
+    // group of steps names its own branch and its own start (E-13).
+    let only_pushed = |branch: &str, since: usize| {
         let updates = w.server.receive_updates();
         assert!(updates.len() >= since);
         for update in &updates[since..] {
-            assert_eq!(update.reference, verb.branch(), "{update:?}");
+            assert_eq!(update.reference, branch, "{update:?}");
             assert!(update.accepted, "{update:?}");
         }
         updates.len()
@@ -3776,7 +3811,7 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     assert_eq!(data.checkpoint_oid, Some(checkpoint.to_string()));
     assert!(closure_on_server(checkpoint)?);
     assert_eq!(served(MAIN), Some(primary));
-    let pushed = only_the_ticket_branch(before);
+    let pushed = only_pushed(verb.branch(), before);
     assert!(pushed > before);
     assert_eq!(data.action, PullRequestClosureAction::Close);
     assert_eq!(
@@ -3819,7 +3854,7 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     assert_eq!(data.pull_request.as_ref(), Some(&link));
     assert_eq!(ticket()?, checkpoint);
     assert_eq!(served(MAIN), Some(primary));
-    assert_eq!(only_the_ticket_branch(before), pushed);
+    assert_eq!(only_pushed(verb.branch(), before), pushed);
     golden_at(
         &w.root,
         "ticket_close_already_closing",
@@ -3844,7 +3879,7 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     }
     assert_eq!(ticket()?, checkpoint);
     assert_eq!(served(MAIN), Some(primary));
-    assert_eq!(only_the_ticket_branch(before), pushed);
+    assert_eq!(only_pushed(verb.branch(), before), pushed);
     golden_at(
         &w.root,
         "item_sync_pull_request_link",
@@ -3882,7 +3917,7 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
         Some(PullRequestClosurePublication::Published)
     );
     assert_eq!(served(MAIN), Some(primary));
-    let pushed_after = only_the_ticket_branch(before);
+    let pushed_after = only_pushed(verb.branch(), before);
     assert!(pushed_after > pushed);
     assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, primary);
     golden_at(
@@ -3911,17 +3946,17 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     assert_ne!(ticket()?, withdraw_commit);
     assert!(closure_on_server(ticket()?)?);
     assert_eq!(served(MAIN), Some(primary));
-    let pushed_last = only_the_ticket_branch(before);
+    let pushed_last = only_pushed(verb.branch(), before);
     assert!(pushed_last > pushed_after);
     let opened = connections(&w);
     let replayed = pull_request_called(&w, CLOSE_LAST, &confirmation, mutation());
     assert_eq!(replayed, last);
     assert_eq!(connections(&w), opened);
-    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    assert_eq!(only_pushed(verb.branch(), before), pushed_last);
     let resent = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, withdrawal());
     assert_eq!(resent, withdrawn);
     assert_eq!(connections(&w), opened);
-    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    assert_eq!(only_pushed(verb.branch(), before), pushed_last);
     let other = Mutation::TicketWithdrawClosure(TicketWithdrawClosureInput {
         root: w.root.clone(),
         id: OTHER_ITEM.parse().unwrap(),
@@ -3929,6 +3964,107 @@ fn a_pull_request_close_publishes_only_the_ticket_branch() -> Result<(), Fixture
     let mismatched = pull_request_called(&w, WITHDRAW, &withdraw_confirmation, other);
     assert_eq!(mismatched.code, ResultCode::RequestMismatch);
     assert_eq!(connections(&w), opened);
-    assert_eq!(only_the_ticket_branch(before), pushed_last);
+    assert_eq!(only_pushed(verb.branch(), before), pushed_last);
+
+    // 7. A document's promote in the same repository publishes the document's
+    // branch and nothing else (Cycle 04, decision 6). The ticket's own steps
+    // are over, so these steps count from here, and the ticket's branch is
+    // asserted where they left it.
+    let ticket_tip = ticket()?;
+    let document = Verb::Promote;
+    document.save(&w.service, &w.root)?;
+    let document_branch = document.branch();
+    let document_source = document_branch.strip_prefix("refs/heads/").unwrap();
+    let document_link = PullRequestDto {
+        source: document_source.to_owned(),
+        target: "main".to_owned(),
+        forge: None,
+        url: Some(format!(
+            "https://forge.example/new?from={document_source}&to=main"
+        )),
+    };
+    let promotion = || document.mutation(&w.root, document.id());
+    let document_before = w.server.receive_updates().len();
+    assert_eq!(served(document_branch), None);
+
+    // The promote: its preview is the promotion's, for a document with no
+    // link yet, and the answer is `ok` with the link and the branch
+    // published.
+    let preview = pull_request_promotion_prepared(&w, &promotion());
+    let confirmation = confirmation_of(&preview);
+    let Some(PrepareDataDto::Preview(details)) = &preview.data else {
+        return Err(FixtureError);
+    };
+    let PreviewDetailsDto::PullRequestPromotion(details) = &details.details else {
+        return Err(FixtureError);
+    };
+    assert_eq!(details.situation, PullRequestPromotionSituation::First);
+    assert_eq!(details.item_id, DOCUMENT);
+    assert_eq!(details.pull_request, document_link);
+    let promoted = pull_request_called(&w, PROMOTE, &confirmation, promotion());
+    assert_eq!(promoted.code, ResultCode::Ok, "{:?}", promoted.data);
+    assert_eq!(promoted.outcome, Outcome::Success);
+    assert_eq!(promoted.recovery, []);
+    // The server holds the document's branch, as this clone does, and has had
+    // nothing but that branch pushed; its primary and the ticket's branch are
+    // where they were.
+    let document_tip = served(document_branch).expect("the server holds the document's branch");
+    assert_eq!(
+        fixed(w.repo()?.refname_to_id(document_branch))?,
+        document_tip
+    );
+    assert_eq!(served(MAIN), Some(primary));
+    assert_eq!(ticket()?, ticket_tip);
+    let document_pushed = only_pushed(document_branch, document_before);
+    assert!(document_pushed > document_before);
+    assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, primary);
+    let data = pull_request_promotion_of(&promoted).ok_or(FixtureError)?;
+    assert_eq!(data.item_id, DOCUMENT);
+    assert_eq!(
+        data.publication,
+        Some(PullRequestPromotionPublication::Published)
+    );
+    assert!(!data.primary_holds);
+    assert_eq!(data.pull_request.as_ref(), Some(&document_link));
+    assert_eq!(data.blockers, []);
+    assert_eq!(state_of(&w, PROMOTE), Some(RequestState::Finished));
+    golden_at(
+        &w.root,
+        "document_promote_pull_request_ok",
+        Some(PULL_REQUEST_PROMOTION),
+        &promoted,
+    );
+
+    // The promote again finds the branch published and says so:
+    // `already_applied`, with the same link and nothing new on the server.
+    let preview = pull_request_promotion_prepared(&w, &promotion());
+    let confirmation = confirmation_of(&preview);
+    let Some(PrepareDataDto::Preview(details)) = &preview.data else {
+        return Err(FixtureError);
+    };
+    let PreviewDetailsDto::PullRequestPromotion(details) = &details.details else {
+        return Err(FixtureError);
+    };
+    assert_eq!(details.situation, PullRequestPromotionSituation::Again);
+    assert_eq!(details.pull_request, document_link);
+    let again = pull_request_called(&w, PROMOTE_AGAIN, &confirmation, promotion());
+    assert_eq!(again.code, ResultCode::AlreadyApplied, "{:?}", again.data);
+    assert_eq!(again.outcome, Outcome::Noop);
+    let data = pull_request_promotion_of(&again).ok_or(FixtureError)?;
+    assert_eq!(
+        data.publication,
+        Some(PullRequestPromotionPublication::Current)
+    );
+    assert!(!data.primary_holds);
+    assert_eq!(data.pull_request.as_ref(), Some(&document_link));
+    assert_eq!(data.blockers, []);
+    assert_eq!(served(document_branch), Some(document_tip));
+    assert_eq!(served(MAIN), Some(primary));
+    assert_eq!(ticket()?, ticket_tip);
+    assert_eq!(
+        only_pushed(document_branch, document_before),
+        document_pushed
+    );
+    assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, primary);
     Ok(())
 }

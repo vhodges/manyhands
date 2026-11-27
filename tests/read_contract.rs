@@ -734,7 +734,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
         PullRequestClosureMutationType, PullRequestClosurePreviewType,
         PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
-        PullRequestPromotionPreviewType, PullRequestPromotionSituation, RemoteBranch,
+        PullRequestPromotionMutationType, PullRequestPromotionPreviewType,
+        PullRequestPromotionPublication, PullRequestPromotionSituation, RemoteBranch,
         SetupCancelType, SetupPollOutcome, SetupPollType,
     };
     let mut enumerations = vec![
@@ -985,6 +986,25 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         ),
         (
             "pull_request_closure_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
+            "type",
+            PullRequestPromotionMutationType::ALL
+                .map(PullRequestPromotionMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
+            "publication",
+            PullRequestPromotionPublication::ALL
+                .map(PullRequestPromotionPublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
             "blockers.items",
             LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
         ),

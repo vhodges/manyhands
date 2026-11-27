@@ -271,6 +271,10 @@ const DATA: &[(&str, &[&str])] = &[
             "pull_request_promotion_preview",
             "lifecycle_blocked",
             "lifecycle_mutation",
+            "pull_request_promotion_mutation",
+            "synchronization_mutation",
+            "synchronization_conflict_mutation",
+            "blocked",
         ],
     ),
     // A pull-request close's preview, its blocked prepares and its answers
