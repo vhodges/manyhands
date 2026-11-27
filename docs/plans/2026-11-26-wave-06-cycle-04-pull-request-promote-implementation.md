@@ -16,11 +16,11 @@ manyhands_kind: document
 
 **Spec:** [Cycle 04 design](2026-11-26-wave-06-cycle-04-pull-request-promote-design.md) (revision 7), under the [Cycle document](../Cycles/wave-06-cycle-04-pull-request-promote.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft**, revision 7, 2026-11-26. Not yet approved.
+Status: **approved** by the owner on 2026-11-26, at revision 7 (Cycle document decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
 
 ## Global Constraints
 
-**Precondition.** The owner has approved the three documents, approved the named test edits, authorized implementation and chosen the execution method; and Cycle 03 (vh-gy8gz) has merged to main (decision 5; it was integrated at `6bc4b69c`, and main `8e5d9832` was merged into the ticket branch at `0c5027e0`). Task 0 does not start before the owner's approval.
+**Precondition.** The owner has approved the three documents, approved the named test edits, authorized implementation and chosen the execution method; and Cycle 03 (vh-gy8gz) has merged to main (decision 5; it was integrated at `6bc4b69c`, and main `8e5d9832` was merged into the ticket branch at `0c5027e0`). Task 0 does not start before the owner's approval. Met on 2026-11-26 (decision 16).
 
 **Roles.** The orchestrator runs the tasks, or dispatches one implementer per task and then a fresh reviewer, one at a time. It alone writes the ledger and ticket comments and publishes the ticket branch. Implementers never dispatch subagents and never edit ticket, comment or ledger files.
 
