@@ -72,7 +72,9 @@
               "promoted",
               "history_unknown",
               "unpublished",
-              "not_reached"
+              "not_reached",
+              "merged",
+              "unheld"
             ]
           },
           "before_oid": {

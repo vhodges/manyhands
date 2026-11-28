@@ -221,7 +221,8 @@ pub(crate) fn text_of(disposition: Disposition) -> Option<&'static str> {
         RemotelyDeleted => PollDisposition::RemotelyDeleted,
         HistoryUnknown => PollDisposition::HistoryUnknown,
         NotReached => PollDisposition::NotReached,
-        Current | FastForwarded | LocalAhead | Materialized | Closed | Promoted => return None,
+        Current | FastForwarded | LocalAhead | Materialized | Closed | Promoted | Merged
+        | Unheld => return None,
     };
     Some(library.guidance())
 }

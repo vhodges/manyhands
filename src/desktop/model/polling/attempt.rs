@@ -119,6 +119,8 @@ pub(crate) enum Disposition {
     HistoryUnknown,
     Unpublished,
     NotReached,
+    Merged,
+    Unheld,
 }
 
 /// A ticket or a document.
@@ -165,7 +167,8 @@ pub(crate) struct AttemptSummary {
     pub completed_at: Option<OffsetDateTime>,
     /// `FastForwarded` and `Materialized`.
     pub brought_in: u32,
-    /// `Current` and `LocalAhead`.
+    /// `Current`, `Merged`, `Unheld` and `LocalAhead` (the desktop shows the two
+    /// new values as `Current` until Cycle 06).
     pub up_to_date: u32,
     /// Every `LocalAhead`, `Unpublished` and `Diverged` target, main
     /// included: what the attempt found not shared yet.
@@ -227,11 +230,11 @@ impl AttemptSummary {
                 | RemotelyDeleted
                 | HistoryUnknown
                 | NotReached => summary.problems.push(target.clone()),
-                Current | FastForwarded | Materialized | Closed | Promoted => {}
+                Current | FastForwarded | Materialized | Closed | Promoted | Merged | Unheld => {}
             }
             match target.disposition {
                 FastForwarded | Materialized => summary.brought_in += 1,
-                Current | LocalAhead => summary.up_to_date += 1,
+                Current | Merged | Unheld | LocalAhead => summary.up_to_date += 1,
                 Closed | Promoted
                     if completed && target.item_id.is_some() && target.kind.is_some() =>
                 {

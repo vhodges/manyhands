@@ -2760,6 +2760,8 @@ contract_enum!(
         HistoryUnknown => "history_unknown",
         Unpublished => "unpublished",
         NotReached => "not_reached",
+        Merged => "merged",
+        Unheld => "unheld",
     }
 );
 
@@ -2787,6 +2789,8 @@ impl PollTargetDisposition {
             Self::HistoryUnknown => Domain::HistoryUnknown,
             Self::Unpublished => Domain::Unpublished,
             Self::NotReached => Domain::NotReached,
+            Self::Merged => Domain::Merged,
+            Self::Unheld => Domain::Unheld,
         }
         .guidance()
     }

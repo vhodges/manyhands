@@ -758,6 +758,12 @@ fn guidance(d: PollDisposition) -> &'static str {
         PollDisposition::MaterializationIncomplete => {
             "Inspect and repair the retained partial materialization."
         }
+        PollDisposition::Merged => {
+            "Done on the primary while its remote branch remains: run context cleanup to delete the branch and retire the context."
+        }
+        PollDisposition::Unheld => {
+            "Closed on the primary, but its branch holds changes the primary does not: review them with context cleanup --prepare."
+        }
         _ => panic!("exceptional guidance only"),
     }
 }

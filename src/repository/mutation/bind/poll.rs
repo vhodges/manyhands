@@ -308,6 +308,8 @@ pub(crate) fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposi
         PollDisposition::HistoryUnknown => PollTargetDisposition::HistoryUnknown,
         PollDisposition::Unpublished => PollTargetDisposition::Unpublished,
         PollDisposition::NotReached => PollTargetDisposition::NotReached,
+        PollDisposition::Merged => PollTargetDisposition::Merged,
+        PollDisposition::Unheld => PollTargetDisposition::Unheld,
     }
 }
 

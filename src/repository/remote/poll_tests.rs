@@ -216,11 +216,12 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
             panic!("recognition must not fast-forward")
         };
         let expected = match case {
-            "closed"
-            | "closed_missing_local_ref"
-            | "closed_symbolic_local_ref"
-            | "dirty"
-            | "unmatched" => PollDisposition::Closed,
+            "closed" | "closed_missing_local_ref" | "closed_symbolic_local_ref" | "dirty" => {
+                PollDisposition::Closed
+            }
+            // Decision 8: a closure the primary holds while the branch holds
+            // work it lacks is `unheld`.
+            "unmatched" => PollDisposition::Unheld,
             "promoted" => PollDisposition::Promoted,
             "unknown" => PollDisposition::HistoryUnknown,
             "unpublished" => PollDisposition::Unpublished,
@@ -3410,8 +3411,495 @@ fn poll_dispositions_have_only_fixed_guidance() {
             PollDisposition::NotReached,
             "This target was not reached; retry the poll when ready.",
         ),
+        (
+            PollDisposition::Merged,
+            "Done on the primary while its remote branch remains: run context cleanup to delete the branch and retire the context.",
+        ),
+        (
+            PollDisposition::Unheld,
+            "Closed on the primary, but its branch holds changes the primary does not: review them with context cleanup --prepare.",
+        ),
     ] {
         assert_eq!(disposition.guidance(), guidance);
+    }
+}
+
+/// A context for `detection_per_context`: the item's branch at `local`, its
+/// worktree registered, the local primary at `primary`.
+struct Detected {
+    target: SynchronizationTarget,
+    path: PathBuf,
+}
+
+/// How the local primary stands against the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Primary {
+    /// Holds the branch's commits and the item done.
+    Descends,
+    /// Holds the item done and nothing of the branch's code, on a history of
+    /// its own from the same base: a squash.
+    Independent,
+    /// The same, for a root commit that shares no history with the branch.
+    Unrelated,
+    /// Does not hold the item done.
+    NotDone,
+    /// A document held at another path.
+    MovedPath,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Branch {
+    kind: AuthoringKind,
+    primary: Primary,
+    /// The branch's tip is a later commit with code the primary lacks.
+    code: bool,
+    /// The repository is shallow.
+    shallow: bool,
+    /// The branch's local ref is gone.
+    no_local_ref: bool,
+}
+
+impl LocalFixture {
+    /// Builds the context of `branch` and the local primary it is read
+    /// against, as a poll leaves them once the primary has moved. Returns the
+    /// branch's tip.
+    fn detected(&self, branch: Branch) -> (Detected, git2::Oid) {
+        let ticket = branch.kind == AuthoringKind::Ticket;
+        let path = if ticket {
+            format!(".manyhands/tickets/{POLL_ID}/ticket.md")
+        } else {
+            "docs/example.md".to_owned()
+        };
+        let open = item_source(branch.kind, POLL_ID);
+        let done = if ticket {
+            String::from_utf8(open.clone()).unwrap().replace(
+                "status: open\n",
+                "status: open\nclosed_at: 2026-11-04T00:00:00Z\nclosed_by: Peer\n",
+            )
+        } else {
+            String::from_utf8(open.clone()).unwrap()
+        }
+        .into_bytes();
+        let commit = |item: Option<(&str, &[u8])>, code: bool, parents: &[git2::Oid]| {
+            let mut entries = vec![
+                ("file", b"old\n".to_vec(), 0o100644),
+                (
+                    ".gitignore",
+                    b".manyhands/worktrees/\nignored\n".to_vec(),
+                    0o100644,
+                ),
+                (
+                    ".manyhands/config.toml",
+                    b"format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+                        .to_vec(),
+                    0o100644,
+                ),
+            ];
+            if let Some((path, source)) = item {
+                entries.push((path, source.to_vec(), 0o100644));
+            }
+            if code {
+                entries.push(("code", b"later\n".to_vec(), 0o100644));
+            }
+            let tree = self
+                .repository
+                .find_tree(fixture_tree(&self.repository, &entries))
+                .unwrap();
+            let parents: Vec<_> = parents
+                .iter()
+                .map(|p| self.repository.find_commit(*p).unwrap())
+                .collect();
+            let signature = git2::Signature::new(
+                "Peer",
+                "peer@example.com",
+                &git2::Time::new(1000 + parents.len() as i64 + i64::from(code), 0),
+            )
+            .unwrap();
+            self.repository
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    "fixture",
+                    &tree,
+                    &parents.iter().collect::<Vec<_>>(),
+                )
+                .unwrap()
+        };
+        let first = commit(Some((&path, &open)), false, &[self.old]);
+        let local = if branch.code {
+            commit(Some((&path, &open)), true, &[first])
+        } else {
+            first
+        };
+        let held_path = if branch.primary == Primary::MovedPath {
+            "docs/moved.md"
+        } else {
+            &path
+        };
+        let primary = match branch.primary {
+            Primary::Descends => commit(Some((&path, &done)), branch.code, &[local]),
+            Primary::Independent => commit(Some((&path, &done)), false, &[self.old]),
+            Primary::Unrelated => commit(Some((&path, &done)), false, &[]),
+            Primary::NotDone => commit(
+                ticket.then_some((path.as_str(), &open[..])),
+                false,
+                &[first],
+            ),
+            Primary::MovedPath => commit(Some((held_path, &done)), false, &[first]),
+        };
+        let name = format!(
+            "manyhands/{}/{POLL_ID}",
+            if ticket { "ticket" } else { "document" }
+        );
+        let reference = self
+            .repository
+            .branch(&name, &self.repository.find_commit(local).unwrap(), false)
+            .unwrap()
+            .into_reference();
+        let context = self.root.join(".manyhands/worktrees").join(POLL_ID);
+        fs::create_dir_all(context.parent().unwrap()).unwrap();
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        self.repository
+            .worktree(POLL_ID, &context, Some(&options))
+            .unwrap();
+        self.repository
+            .reference("refs/heads/main", primary, true, "fixture primary")
+            .unwrap();
+        self.tracking(&SynchronizationTarget::Primary, primary);
+        if branch.no_local_ref {
+            self.repository
+                .find_reference(&format!("refs/heads/{name}"))
+                .unwrap()
+                .delete()
+                .unwrap();
+        }
+        if branch.shallow {
+            fs::write(self.repository.path().join("shallow"), format!("{first}\n")).unwrap();
+        }
+        (
+            Detected {
+                target: SynchronizationTarget::Context {
+                    kind: branch.kind,
+                    item_id: POLL_ID.parse().unwrap(),
+                },
+                path: context,
+            },
+            local,
+        )
+    }
+}
+
+// Part D's table: each poll classifies a context against the local primary,
+// after the primary moved. A ticket's closure needs the content proof as
+// well (decision 8), and only a content mismatch gives `unheld`; a document
+// is never `unheld`. Rows marked "as today" pin behaviour that does not
+// change.
+#[test]
+fn detection_per_context() {
+    use AuthoringKind::{Document, Ticket};
+    use PollDisposition as D;
+    let b = |kind, primary| Branch {
+        kind,
+        primary,
+        code: false,
+        shallow: false,
+        no_local_ref: false,
+    };
+    let code = |kind, primary| Branch {
+        code: true,
+        ..b(kind, primary)
+    };
+    let shallow = |kind, primary| Branch {
+        shallow: true,
+        ..b(kind, primary)
+    };
+    let mut wrong = Vec::new();
+    for (name, branch, deleted, expected) in [
+        // The branch is gone from the remote.
+        (
+            "ticket deleted, proof passes",
+            b(Ticket, Primary::Descends),
+            true,
+            D::Closed,
+        ),
+        (
+            "ticket deleted, squash holds its work",
+            b(Ticket, Primary::Independent),
+            true,
+            D::Closed,
+        ),
+        (
+            "ticket deleted, later code commit",
+            code(Ticket, Primary::Independent),
+            true,
+            D::Unheld,
+        ),
+        (
+            "ticket deleted, branch holds code the primary lacks",
+            code(Ticket, Primary::Unrelated),
+            true,
+            // Unrelated histories cannot be decided: as today.
+            D::Closed,
+        ),
+        (
+            "ticket deleted, shallow",
+            shallow(Ticket, Primary::Independent),
+            true,
+            D::Closed,
+        ),
+        (
+            "ticket deleted, unreadable local branch (as today)",
+            Branch {
+                no_local_ref: true,
+                ..code(Ticket, Primary::Independent)
+            },
+            true,
+            D::Closed,
+        ),
+        (
+            "ticket deleted, not done (as today)",
+            b(Ticket, Primary::NotDone),
+            true,
+            D::RemotelyDeleted,
+        ),
+        (
+            "document deleted, proof passes (as today)",
+            b(Document, Primary::Independent),
+            true,
+            D::Promoted,
+        ),
+        (
+            "document deleted, proof fails (as today)",
+            code(Document, Primary::Independent),
+            true,
+            D::RemotelyDeleted,
+        ),
+        // The branch is present and equal to its tracking ref.
+        (
+            "ticket present, proof passes",
+            b(Ticket, Primary::Descends),
+            false,
+            D::Merged,
+        ),
+        (
+            "ticket present, squash holds its work",
+            b(Ticket, Primary::Independent),
+            false,
+            D::Merged,
+        ),
+        (
+            "ticket present, later code commit",
+            code(Ticket, Primary::Independent),
+            false,
+            D::Unheld,
+        ),
+        (
+            "ticket present, unrelated history",
+            code(Ticket, Primary::Unrelated),
+            false,
+            D::Current,
+        ),
+        (
+            "ticket present, shallow",
+            shallow(Ticket, Primary::Independent),
+            false,
+            D::Current,
+        ),
+        (
+            "ticket present, not done (as today)",
+            b(Ticket, Primary::NotDone),
+            false,
+            D::Current,
+        ),
+        (
+            "document present, proof passes",
+            b(Document, Primary::Descends),
+            false,
+            D::Merged,
+        ),
+        (
+            "document present, squash holds its work",
+            b(Document, Primary::Independent),
+            false,
+            D::Merged,
+        ),
+        (
+            "document present, proof fails: never unheld",
+            code(Document, Primary::Independent),
+            false,
+            D::Current,
+        ),
+        (
+            "document present, moved on the primary",
+            b(Document, Primary::MovedPath),
+            false,
+            D::Current,
+        ),
+        (
+            "document present, not done (as today)",
+            b(Document, Primary::NotDone),
+            false,
+            D::Current,
+        ),
+    ] {
+        let f = LocalFixture::new();
+        let (context, local) = f.detected(branch);
+        let tracking = if deleted {
+            PollTrackingState::RemotelyDeleted
+        } else {
+            f.tracking(&context.target, local);
+            PollTrackingState::Present(local)
+        };
+        let before = snapshot(&f.root, &f.repository);
+        let result = classify_local_target(&f.root, "main", &context.target, tracking).unwrap();
+        let LocalPollClassification::Unchanged { disposition, .. } = result else {
+            panic!("{name}: detection must not fast-forward")
+        };
+        if disposition != expected {
+            wrong.push(format!("{name}: {disposition:?}, expected {expected:?}"));
+        }
+        // Detection only reads: nothing of the context or the primary moves.
+        assert_eq!(snapshot(&f.root, &f.repository), before, "{name}");
+        assert!(context.path.is_dir(), "{name}");
+    }
+
+    assert!(wrong.is_empty(), "{wrong:#?}");
+
+    // A present branch that is ahead of or behind its tracking ref is not
+    // read at all (R-13): the poll does not choose between its two tips.
+    let f = LocalFixture::new();
+    let (context, local) = f.detected(b(Ticket, Primary::Descends));
+    let ahead = f.incoming(local, None);
+    f.tracking(&context.target, ahead);
+    assert!(matches!(
+        classify_local_target(
+            &f.root,
+            "main",
+            &context.target,
+            PollTrackingState::Present(ahead)
+        )
+        .unwrap(),
+        LocalPollClassification::FastForward { .. }
+    ));
+    f.tracking(&context.target, f.old);
+    assert_eq!(
+        classify_local_target(
+            &f.root,
+            "main",
+            &context.target,
+            PollTrackingState::Present(f.old)
+        )
+        .unwrap(),
+        LocalPollClassification::Unchanged {
+            disposition: D::LocalAhead,
+            local_oid: Some(local)
+        }
+    );
+
+    detection_waits_while_the_root_is_off_the_primary();
+}
+
+// The same rows through a whole poll: the primary moves first, so the context
+// reads the primary as it now is; while the root is off the primary nothing
+// moves, nothing is recorded and nothing is detected, and once the root is
+// back the next poll does all three.
+fn detection_waits_while_the_root_is_off_the_primary() {
+    let polled = |off_primary: bool| {
+        let f = PollFixture::new();
+        let (context, local) = f.local.detected(Branch {
+            kind: AuthoringKind::Ticket,
+            primary: Primary::Descends,
+            code: false,
+            shallow: false,
+            no_local_ref: false,
+        });
+        // The fixture sets the primary where a poll would leave it; a poll
+        // starts from the old one and fetches the new one.
+        let primary = f.local.repository.refname_to_id("refs/heads/main").unwrap();
+        f.local
+            .repository
+            .reference("refs/heads/main", f.local.old, true, "before the poll")
+            .unwrap();
+        f.local.tracking(&context.target, local);
+        if off_primary {
+            f.local
+                .repository
+                .branch(
+                    "elsewhere",
+                    &f.local.repository.find_commit(f.local.old).unwrap(),
+                    false,
+                )
+                .unwrap();
+            f.local.repository.set_head("refs/heads/elsewhere").unwrap();
+        }
+        let SynchronizationTarget::Context { kind, item_id } = &context.target else {
+            unreachable!()
+        };
+        let advertised = vec![
+            ("refs/heads/main".into(), primary),
+            (
+                f.local.plan.context(*kind, item_id).remote_ref().into(),
+                local,
+            ),
+        ];
+        let (report, _) = report(f.run(advertised).unwrap());
+        let dispositions: Vec<_> = report.targets().iter().map(|t| t.disposition()).collect();
+        (
+            dispositions,
+            crate::repository::item_merges::rows_for_test(&f.db()),
+        )
+    };
+    let (dispositions, recorded) = polled(true);
+    assert_eq!(
+        dispositions,
+        [PollDisposition::Inaccessible, PollDisposition::Current]
+    );
+    assert_eq!(recorded, vec![]);
+    let (dispositions, recorded) = polled(false);
+    assert_eq!(
+        dispositions,
+        [PollDisposition::FastForwarded, PollDisposition::Merged]
+    );
+    assert_eq!(recorded.len(), 1);
+}
+
+// A frozen report written before `merged` and `unheld` decodes as it did, and
+// one that holds them decodes too (R-11: a retiring poll freezes its report).
+#[test]
+fn an_old_frozen_report_still_decodes() {
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let image = |first: &str, second: &str| {
+        format!(
+            r#"{{"completed_at":1794966601,"completion":"Completed","local_changes":false,"next_eligible_at":1794966901,"operation_id":"01M7P5H4XNXCFF8EVPM97GW144","outcome":"Completed","targets":[{{"after_oid":"661fba186601e11f7b026f518a2663b74fa78134","before_oid":"661fba186601e11f7b026f518a2663b74fa78134","disposition":"Current","item_id":null,"kind":null,"target":"refs/heads/main","tracking":"refs/remotes/origin/main"}},{{"after_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","before_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","disposition":"{first}","item_id":"01M4B4GSW8J262NA8WPBANSRN1","kind":"Ticket","target":"refs/heads/manyhands/ticket/01M4B4GSW8J262NA8WPBANSRN1","tracking":"refs/remotes/origin/manyhands/ticket/01M4B4GSW8J262NA8WPBANSRN1"}},{{"after_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","before_oid":"3ec17b90f79a97c4fa2bb20d4765caccb007a702","disposition":"{second}","item_id":"01M4B4GSW8J262NA8WPBANSRN2","kind":"Document","target":"refs/heads/manyhands/document/01M4B4GSW8J262NA8WPBANSRN2","tracking":"refs/remotes/origin/manyhands/document/01M4B4GSW8J262NA8WPBANSRN2"}}],"version":1}}"#
+        )
+    };
+    for (first, second, expected) in [
+        (
+            "Closed",
+            "Promoted",
+            [PollDisposition::Closed, PollDisposition::Promoted],
+        ),
+        (
+            "Merged",
+            "Unheld",
+            [PollDisposition::Merged, PollDisposition::Unheld],
+        ),
+    ] {
+        let bytes = image(first, second);
+        let decoded = RemotePollReport::decode_frozen(&bytes, &plan).unwrap();
+        assert_eq!(
+            decoded.targets()[1..]
+                .iter()
+                .map(|t| t.disposition())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            crate::repository::context_retirement::handoff::report_image(&decoded).unwrap(),
+            bytes
+        );
     }
 }
 

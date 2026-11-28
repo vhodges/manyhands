@@ -126,6 +126,8 @@
               "history_unknown",
               "unpublished",
               "not_reached",
+              "merged",
+              "unheld",
               null
             ]
           },

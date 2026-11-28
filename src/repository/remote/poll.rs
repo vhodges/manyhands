@@ -42,6 +42,8 @@ pub enum PollDisposition {
     HistoryUnknown,
     Unpublished,
     NotReached,
+    Merged,
+    Unheld,
 }
 impl PollDisposition {
     pub fn guidance(self) -> &'static str {
@@ -80,6 +82,12 @@ impl PollDisposition {
             }
             Self::Unpublished => "The remote context is not published yet; item sync publishes it.",
             Self::NotReached => "This target was not reached; retry the poll when ready.",
+            Self::Merged => {
+                "Done on the primary while its remote branch remains: run context cleanup to delete the branch and retire the context."
+            }
+            Self::Unheld => {
+                "Closed on the primary, but its branch holds changes the primary does not: review them with context cleanup --prepare."
+            }
         }
     }
 }
@@ -270,7 +278,10 @@ pub(super) fn classify_local_target(
             local_oid: local,
             tracking_oid: incoming,
         },
-        PollRelation::Current => unchanged(PollDisposition::Current, Some(local)),
+        PollRelation::Current => unchanged(
+            done_on_the_primary(root, primary, target, local).unwrap_or(PollDisposition::Current),
+            Some(local),
+        ),
         PollRelation::LocalAhead => unchanged(PollDisposition::LocalAhead, Some(local)),
         PollRelation::Diverged => unchanged(PollDisposition::Diverged, Some(local)),
     })
@@ -281,29 +292,135 @@ fn completed_deleted_context(
     primary: &str,
     target: &SynchronizationTarget,
 ) -> Option<PollDisposition> {
-    use crate::repository::context_retirement::proof;
+    use crate::repository::context_retirement::proof::{self, ProofRefusal};
     let SynchronizationTarget::Context { kind, item_id } = target else {
         return None;
     };
     let repository = git2::Repository::open(root).ok()?;
     let primary = direct_oid(&repository, &format!("refs/heads/{primary}"))?;
+    let local = direct_oid(
+        &repository,
+        &format!(
+            "refs/heads/manyhands/{}/{item_id}",
+            crate::repository::authoring_kind_segment(kind)
+        ),
+    );
     match kind {
         AuthoringKind::Ticket => {
             proof::completion(&repository, primary, *kind, item_id).ok()?;
-            Some(PollDisposition::Closed)
+            // Decision 8: the closure needs the content proof as well, and
+            // only a real mismatch makes the branch `unheld`. A proof that
+            // cannot be decided, or a branch that cannot be read, keeps
+            // `closed` as before.
+            Some(
+                match local
+                    .map(|local| proof::preservation(&repository, local, primary, *kind, item_id))
+                {
+                    Some(Err(ProofRefusal::ContentMismatch)) => PollDisposition::Unheld,
+                    _ => PollDisposition::Closed,
+                },
+            )
         }
         AuthoringKind::Document => {
-            let local = direct_oid(
-                &repository,
-                &format!(
-                    "refs/heads/manyhands/{}/{item_id}",
-                    crate::repository::authoring_kind_segment(kind)
-                ),
-            )?;
-            proof::preservation(&repository, local, primary, *kind, item_id).ok()?;
+            proof::preservation(&repository, local?, primary, *kind, item_id).ok()?;
             Some(PollDisposition::Promoted)
         }
     }
+}
+
+/// A context whose remote branch is present and equal to its local one,
+/// read after the primary moved: `merged` when the local primary holds the
+/// item's done state and the branch's work, `unheld` when a ticket's closure is
+/// held but the branch holds content the primary does not. `None` is
+/// `current`. The proof runs only past a cheap check that the primary holds
+/// the item done (R-12), and a document is never `unheld`: the poll cannot
+/// tell a squash the primary moved on from an edit in progress.
+fn done_on_the_primary(
+    root: &Path,
+    primary: &str,
+    target: &SynchronizationTarget,
+    local: git2::Oid,
+) -> Option<PollDisposition> {
+    use crate::repository::context_retirement::proof::{self, ProofRefusal};
+    let SynchronizationTarget::Context { kind, item_id } = target else {
+        return None;
+    };
+    // The repository at the root, not the context's own: a linked worktree's
+    // handle does not see the common directory's `shallow` file.
+    let repository = &git2::Repository::open(root).ok()?;
+    let primary = direct_oid(repository, &format!("refs/heads/{primary}"))?;
+    let primary_tree = repository.find_commit(primary).ok()?.tree().ok()?;
+    let held = match kind {
+        AuthoringKind::Ticket => {
+            let entry = primary_tree
+                .get_path(Path::new(&format!(
+                    ".manyhands/tickets/{item_id}/ticket.md"
+                )))
+                .ok()?;
+            let blob = repository.find_blob(entry.id()).ok()?;
+            let path = format!(".manyhands/tickets/{item_id}/ticket.md");
+            matches!(
+                canonical::parse_item(Path::new(&path), std::str::from_utf8(blob.content()).ok()?),
+                Ok(canonical::CanonicalItem::Ticket(ticket)) if ticket.closed_at.is_some()
+            )
+        }
+        AuthoringKind::Document => {
+            let local_tree = repository.find_commit(local).ok()?.tree().ok()?;
+            let (path, blob) = document_blob(repository, &local_tree, item_id)?;
+            primary_tree
+                .get_path(Path::new(&path))
+                .is_ok_and(|entry| entry.id() == blob)
+        }
+    };
+    if !held {
+        return None;
+    }
+    match proof::preservation(repository, local, primary, *kind, item_id) {
+        Ok(_) => Some(PollDisposition::Merged),
+        Err(ProofRefusal::ContentMismatch) if *kind == AuthoringKind::Ticket => {
+            Some(PollDisposition::Unheld)
+        }
+        Err(_) => None,
+    }
+}
+
+/// The path and blob of the document `item_id` in `tree`, read from `docs/`
+/// alone.
+fn document_blob(
+    repository: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    item_id: &canonical::ItemId,
+) -> Option<(String, git2::Oid)> {
+    let docs = repository.find_tree(tree.get_name("docs")?.id()).ok()?;
+    let id = item_id.to_string();
+    let mut found = None;
+    docs.walk(git2::TreeWalkMode::PreOrder, |parent, entry| {
+        if entry.kind() != Some(git2::ObjectType::Blob)
+            || !entry.name().is_some_and(|name| name.ends_with(".md"))
+        {
+            return git2::TreeWalkResult::Ok;
+        }
+        let same_id = repository
+            .find_blob(entry.id())
+            .ok()
+            .and_then(|blob| {
+                std::str::from_utf8(blob.content())
+                    .ok()
+                    .and_then(canonical::front_matter)
+                    .and_then(|front| front.get("id").and_then(|v| v.as_str()).map(str::to_owned))
+            })
+            .is_some_and(|value| value == id);
+        if same_id {
+            found = Some((
+                format!("docs/{parent}{}", entry.name().unwrap_or("")),
+                entry.id(),
+            ));
+            return git2::TreeWalkResult::Abort;
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .ok();
+    found
 }
 impl RepositoryService {
     #[cfg(test)]
@@ -1314,6 +1431,8 @@ impl RemotePollReport {
                 PollDisposition::Closed,
                 PollDisposition::Promoted,
                 PollDisposition::HistoryUnknown,
+                PollDisposition::Merged,
+                PollDisposition::Unheld,
             ]
             .into_iter()
             .find(|d| row["disposition"] == format!("{d:?}"))

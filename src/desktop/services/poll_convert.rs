@@ -285,6 +285,8 @@ fn target_disposition(disposition: PollTargetDisposition) -> Disposition {
         Dto::HistoryUnknown => Disposition::HistoryUnknown,
         Dto::Unpublished => Disposition::Unpublished,
         Dto::NotReached => Disposition::NotReached,
+        Dto::Merged => Disposition::Merged,
+        Dto::Unheld => Disposition::Unheld,
     }
 }
 
@@ -493,6 +495,8 @@ fn disposition(disposition: PollDisposition) -> Disposition {
         PollDisposition::HistoryUnknown => Disposition::HistoryUnknown,
         PollDisposition::Unpublished => Disposition::Unpublished,
         PollDisposition::NotReached => Disposition::NotReached,
+        PollDisposition::Merged => Disposition::Merged,
+        PollDisposition::Unheld => Disposition::Unheld,
     }
 }
 

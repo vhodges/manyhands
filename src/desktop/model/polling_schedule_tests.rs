@@ -37,14 +37,17 @@ fn attempt_summary_counts() {
         HistoryUnknown,
         Unpublished,
         NotReached,
+        Merged,
+        Unheld,
     ];
     // (answer, brought in, up to date, to share, problems, listed, to
-    // retire): the fixture lists every disposition once, so three are to
+    // retire): the fixture lists every disposition once, so four are up to date
+    // (`Current`, `LocalAhead` and, as `Current`, `Merged` and `Unheld`), three are to
     // share (`LocalAhead`, `Unpublished`, `Diverged`) and ten need a look.
     let cases = [
-        (Answer::Completed, 2, 2, 3, 10, 12, 2),
-        (Answer::Interrupted, 2, 2, 3, 10, 14, 0),
-        (Answer::Cancelled(CancelCause::Quit), 2, 2, 3, 10, 14, 0),
+        (Answer::Completed, 2, 4, 3, 10, 12, 2),
+        (Answer::Interrupted, 2, 4, 3, 10, 14, 0),
+        (Answer::Cancelled(CancelCause::Quit), 2, 4, 3, 10, 14, 0),
     ];
     for (answer, brought_in, up_to_date, to_share, problems, listed, retire) in cases {
         let mut fx = Fx::new();

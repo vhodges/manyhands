@@ -317,7 +317,7 @@ fn poll_attempt_conversion() {
         assert_eq!(attempt.completed_at, Some(at(100)), "{category:?}");
     }
 
-    // Targets: all 18 dispositions, with the item and kind when given.
+    // Targets: all 20 dispositions, with the item and kind when given.
     use Disposition as D;
     use PollDisposition as P;
     let all = [
@@ -339,8 +339,10 @@ fn poll_attempt_conversion() {
         (P::HistoryUnknown, D::HistoryUnknown),
         (P::Unpublished, D::Unpublished),
         (P::NotReached, D::NotReached),
+        (P::Merged, D::Merged),
+        (P::Unheld, D::Unheld),
     ];
-    assert_eq!(all.len(), 18);
+    assert_eq!(all.len(), 20);
     let report = |completion| {
         let mut report = parts(completion, Some(C::Completed));
         for (at, (disposition, _)) in all.iter().enumerate() {
@@ -422,6 +424,8 @@ fn check_now_attempt_reads_the_report() {
         (Dto::HistoryUnknown, Disposition::HistoryUnknown),
         (Dto::Unpublished, Disposition::Unpublished),
         (Dto::NotReached, Disposition::NotReached),
+        (Dto::Merged, Disposition::Merged),
+        (Dto::Unheld, Disposition::Unheld),
     ];
     assert_eq!(pairs.len(), Dto::ALL.len(), "every disposition has a row");
     let operation = OperationId::new();

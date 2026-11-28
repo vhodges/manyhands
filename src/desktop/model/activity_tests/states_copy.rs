@@ -84,6 +84,8 @@ fn state_copy_table() {
         (Disposition::LocalAhead, "Local ahead"),
         (Disposition::Unpublished, "Unpublished"),
         (Disposition::Diverged, "Diverged"),
+        (Disposition::Merged, "Merged"),
+        (Disposition::Unheld, "Unheld"),
     ] {
         assert_eq!(disposition_name(disposition), name, "{disposition:?}");
         assert_eq!(disposition_sentence(disposition), None, "{disposition:?}");
@@ -94,6 +96,8 @@ fn state_copy_table() {
         Disposition::Materialized,
         Disposition::Closed,
         Disposition::Promoted,
+        Disposition::Merged,
+        Disposition::Unheld,
     ] {
         assert_eq!(disposition_sentence(disposition), None, "{disposition:?}");
     }

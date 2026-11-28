@@ -832,6 +832,8 @@ fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
         HistoryUnknown => "history_unknown",
         Unpublished => "unpublished",
         NotReached => "not_reached",
+        Merged => "merged",
+        Unheld => "unheld",
     }
 }
 fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryError> {
@@ -855,6 +857,8 @@ fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryEr
         "history_unknown" => HistoryUnknown,
         "unpublished" => Unpublished,
         "not_reached" => NotReached,
+        "merged" => Merged,
+        "unheld" => Unheld,
         _ => return Err(recovery_required()),
     })
 }

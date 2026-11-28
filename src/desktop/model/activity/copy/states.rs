@@ -196,7 +196,7 @@ pub(crate) fn disposition_sentence(disposition: Disposition) -> Option<&'static 
         HistoryUnknown => "Manyhands can't confirm its shared history.",
         NotReached => "The check didn't reach it this time.",
         Current | FastForwarded | LocalAhead | Materialized | Closed | Promoted | Unpublished
-        | Diverged => return None,
+        | Diverged | Merged | Unheld => return None,
     })
 }
 
@@ -222,6 +222,8 @@ pub(crate) fn disposition_name(disposition: Disposition) -> &'static str {
         HistoryUnknown => "History unknown",
         Unpublished => "Unpublished",
         NotReached => "Not reached",
+        Merged => "Merged",
+        Unheld => "Unheld",
     }
 }
 
