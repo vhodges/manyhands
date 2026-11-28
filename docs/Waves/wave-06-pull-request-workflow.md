@@ -68,9 +68,9 @@ Filed 2026-11-24 from the approved RFC, one ticket per Cycle. Cycle 01's plan (a
 
 ### Cycle 04, vh-rphcs: Document promote in pull-request mode
 
-- [ ] Promote publishes and gives the link; `already_applied` while the link is outstanding
-- [ ] A document counts as promoted only by the content proof
-- [ ] Reviewed and closed
+- [x] Promote publishes and gives the link; `already_applied` while the link is outstanding
+- [x] A document counts as promoted only by the content proof
+- [x] Reviewed and closed (merged 2026-11-27 at `a1aba5d5`)
 
 ### Cycle 05, vh-ssepw: After the merge: detection, merged_at, cleanup and surviving branches
 
