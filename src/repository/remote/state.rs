@@ -4549,6 +4549,67 @@ pub(super) fn prepare_integration_step_in_window(
         .ok_or_else(recovery_required)
 }
 
+/// The state a child that stopped mid-integration leaves, as its own
+/// reservation layer writes it: the first integration step of the child
+/// `operation` prepared and not applied, which the parent's child state reads
+/// as retained. For the parents' record tests.
+#[cfg(test)]
+pub(in super::super) fn prepare_step_for_test(
+    tx: &Transaction<'_>,
+    id: i64,
+    operation: crate::repository::OperationId,
+    oid: Oid,
+) -> Result<(), RepositoryError> {
+    let record = read_operation(tx, id, operation)?.ok_or_else(recovery_required)?;
+    prepare_integration_step(
+        tx,
+        &record,
+        &IntegrationStepIntent {
+            ordinal: 0,
+            stage: IntegrationStage::Context,
+            local_oid: oid,
+            incoming_oid: oid,
+            baseline_tree_oid: oid,
+            baseline_index_digest: [4; 32],
+        },
+    )?;
+    Ok(())
+}
+
+/// An integration step of the synchronization `operation`, applied: from the
+/// head `from` it began at to the head `to` it left, as the layer's own
+/// functions record it (the step is prepared, begun and observed). Ordinal 0 is
+/// the context stage, ordinal 1 the primary stage. For the parents' tests.
+#[cfg(test)]
+pub(in super::super) fn applied_step_for_test(
+    tx: &Transaction<'_>,
+    id: i64,
+    operation: crate::repository::OperationId,
+    ordinal: u8,
+    from: Oid,
+    to: Oid,
+) -> Result<(), RepositoryError> {
+    let record = read_operation(tx, id, operation)?.ok_or_else(recovery_required)?;
+    prepare_integration_step(
+        tx,
+        &record,
+        &IntegrationStepIntent {
+            ordinal,
+            stage: if ordinal == 0 {
+                IntegrationStage::Context
+            } else {
+                IntegrationStage::Primary
+            },
+            local_oid: from,
+            incoming_oid: to,
+            baseline_tree_oid: from,
+            baseline_index_digest: [4; 32],
+        },
+    )?;
+    begin_integration_effect(tx, &record, ordinal, Some(to))?;
+    observe_integration_effect(tx, &record, ordinal, to, to)
+}
+
 pub(super) fn begin_integration_effect(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,

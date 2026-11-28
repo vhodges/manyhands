@@ -64,6 +64,23 @@ pub(super) fn upsert_link(
     Ok(())
 }
 
+/// Renews the time an item was given its link, in the caller's transaction:
+/// `given_at` alone, the row's other columns as they are. An item with no
+/// row has nothing to renew, and the count says so.
+pub(super) fn touch_link(
+    connection: &Connection,
+    repository_id: i64,
+    kind: &str,
+    item_id: &str,
+    given_at: i64,
+) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE pull_request_links SET given_at = ?4
+          WHERE repository_id = ?1 AND kind = ?2 AND item_ulid = ?3",
+        rusqlite::params![repository_id, kind, item_id, given_at],
+    )
+}
+
 /// Deletes the link of an item, in the caller's transaction. An item with
 /// no link has nothing to delete.
 pub(super) fn delete_link(

@@ -6243,7 +6243,7 @@ fn ticket_show_gives_the_link_and_the_publication() {
     assert_eq!(publication(&a()), None);
 
     // A link row: a complete read of the ticket gives it, a list never does,
-    // and nor does a document's read, whatever row it has.
+    // and nor does a read of a document without an active context.
     give_link(data, "ticket", TICKET_A);
     give_link(data, "document", DOCUMENT_A);
     assert_eq!(a().pull_request, Some(given_link(TICKET_A)));
@@ -6328,5 +6328,110 @@ fn ticket_show_gives_the_link_and_the_publication() {
         .unwrap();
     assert_eq!(closed.closure.as_ref().unwrap().state, ClosureState::Closed);
     assert_eq!(publication(&closed), None);
+    assert_git_transport_uninitialized();
+}
+
+/// A document read from its active context with a link row gives the link
+/// while the primary does not hold the document (the cheap check of Part E),
+/// in either mode, and gives none once it does, without a row, without an
+/// active context, or in a list.
+#[test]
+fn document_show_gives_the_link_while_it_is_outstanding() {
+    let (fixture, enabled) = enabled();
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    // DOCUMENT_B is on the primary only; DOCUMENT_A has an active context.
+    let on_primary = "docs/primary.md";
+    write(
+        root,
+        on_primary,
+        &document_source(DOCUMENT_B, "Primary", ""),
+    );
+    commit(&fixture, &[on_primary], 2_000);
+    let own_path = "docs/active.md";
+    create_document_context(service, root, DOCUMENT_A, own_path);
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+    let own = context_worktree(root, DOCUMENT_A);
+    let git = &fixture.repository;
+    let signature =
+        git2::Signature::now("Manyhands Test", "manyhands-test@example.invalid").unwrap();
+    let primary_branch: String = index(data)
+        .query_row(
+            "SELECT primary_branch FROM configuration_observations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let base = git.head().unwrap().peel_to_commit().unwrap();
+    let tip = git
+        .find_reference(&format!("refs/heads/manyhands/document/{DOCUMENT_A}"))
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    assert_ne!(tip.id(), base.id());
+    let tracking_primary = format!("refs/remotes/origin/{primary_branch}");
+    let tracking_context = format!("refs/remotes/origin/manyhands/document/{DOCUMENT_A}");
+    let set = |name: &str, oid: git2::Oid| {
+        git.reference(name, oid, true, "fixture").unwrap();
+    };
+    let a = || service.show_item(&repo, &item_id(DOCUMENT_A)).unwrap();
+    let a_by_path = || {
+        service
+            .show_path(&repo, Some(&own), Path::new(own_path))
+            .unwrap()
+    };
+    // The row `give_link` writes.
+    let link = || Some(given_link(DOCUMENT_A));
+
+    // No row: null, whatever the primary holds.
+    set(&tracking_primary, base.id());
+    assert_eq!(a().pull_request, None);
+    // A row: the link, in a direct repository and in a pull-request one, by
+    // `show` and by `show --path`.
+    give_link(data, "document", DOCUMENT_A);
+    give_link(data, "document", DOCUMENT_B);
+    assert_eq!(a().pull_request, link());
+    assert_eq!(a_by_path().pull_request, link());
+    store_mode(data, "pull_request", Some("origin"));
+    assert_eq!(a().pull_request, link());
+    assert_eq!(a_by_path().pull_request, link());
+    // The tracking primary holds the document: null, by both.
+    set(&tracking_primary, tip.id());
+    assert_eq!(a().pull_request, None);
+    assert_eq!(a_by_path().pull_request, None);
+    // A copy of the branch on the remote that is ahead of the tip is another
+    // clone's work, which the primary does not hold.
+    let tree = tip.tree().unwrap();
+    let ahead = git
+        .commit(None, &signature, &signature, "ahead", &tree, &[&tip])
+        .unwrap();
+    set(&tracking_context, ahead);
+    assert_eq!(a().pull_request, link());
+    set(&tracking_context, tip.id());
+    assert_eq!(a().pull_request, None);
+    // No tracking primary at all: not held.
+    git.find_reference(&tracking_primary)
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(a().pull_request, link());
+
+    // A document read with no active context, whatever row it has, and a
+    // list, give none.
+    let primary_copy = service.show_item(&repo, &item_id(DOCUMENT_B)).unwrap();
+    assert_eq!(primary_copy.context.kind, ItemContextKind::Primary);
+    assert_eq!(primary_copy.pull_request, None);
+    let by_path = service
+        .show_path(&repo, None, Path::new(on_primary))
+        .unwrap();
+    assert_eq!(by_path.pull_request, None);
+    let documents = service.list_documents(&repo).unwrap();
+    assert!(
+        documents
+            .items
+            .iter()
+            .all(|item| item.pull_request.is_none())
+    );
     assert_git_transport_uninitialized();
 }

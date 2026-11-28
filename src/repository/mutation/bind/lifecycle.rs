@@ -44,6 +44,12 @@
 //! `item sync` answers that stop. Its effects have no integration or cleanup,
 //! and it reports no tickets made ready, since a closing ticket makes none.
 //!
+//! **A pull-request promote** is a branch record of its own (design Part D):
+//! its preview is `PullRequestPromotionPreviewDto`, and every finished answer
+//! of it carries `PullRequestPromotionMutationDto`, with the link record's link
+//! of the document's kind. A child of it that stops answers as `item sync`
+//! answers that stop.
+//!
 //! **Identity.** A promotion's preview has no blocker for it, so a ready
 //! preview that plans a merge commit is answered as blocked here, last, with
 //! nothing else in the way. A closure's preview names it itself.
@@ -67,17 +73,20 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchRecording, ClosureAction,
-            ClosureRecording, OperationFamily, OperationId, PlannedClosure, PlannedIntegration,
-            PlannedPublication, PromotionCleanup, PromotionCleanupPending, PromotionIntegration,
-            PromotionPublication, PromotionPublicationPending, PromotionRemoteDeletionCategory,
+            AuthoringKind, BranchAnswer, BranchClosureOutcome, BranchPromotionOutcome,
+            BranchRecording, ClosureAction, ClosureRecording, OperationFamily, OperationId,
+            PlannedClosure, PlannedIntegration, PlannedPublication, PromotionCleanup,
+            PromotionCleanupPending, PromotionIntegration, PromotionPublication,
+            PromotionPublicationPending, PromotionRemoteDeletionCategory,
             PromotionSynchronizationCategory, RemoteOperationSafePoint, RepositoryErrorKind,
             RepositoryOperation, RepositoryService, SynchronizationError,
             promotion::{
                 ParentView,
                 lifecycle::{ParentStep, RecordPath},
                 lifecycle_record::{ChildRole, Refusal},
-                record::{IntegrationKind, PublicationCategory},
+                record::{
+                    IntegrationKind, PromotionAnswer, PromotionSituation, PublicationCategory,
+                },
                 run::{RunEvent, RunObserver},
             },
             recovery::JournalRow,
@@ -95,6 +104,9 @@ use super::{
             PullRequestClosureMutationDto, PullRequestClosureMutationType,
             PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
             PullRequestClosurePublication, PullRequestClosureRecording,
+            PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
+            PullRequestPromotionPreviewDto, PullRequestPromotionPreviewType,
+            PullRequestPromotionPublication, PullRequestPromotionSituation,
             SynchronizationConflictMutationDto, SynchronizationConflictType,
         },
         evidence::{self, Position},
@@ -112,7 +124,8 @@ use super::{
 mod verb;
 use verb::{BranchReady, Ready};
 use verb::{
-    Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change, publication_pending,
+    Branched, Called, Observed, Reached, Stop, branch_code, cleanup_pending, path_change,
+    promotion_branch_code, publication_pending,
 };
 pub(in super::super) use verb::{Close, LifecycleVerb, Promote, Withdraw};
 pub use verb::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput};
@@ -211,18 +224,26 @@ pub(super) fn branch_scope(
     }
 }
 
-/// The ticket whose branch record the operation `operation` is, when its
-/// parent record is one.
+/// The item, and its kind, whose branch record the operation `operation` is,
+/// when its parent record is one: a ticket's closure, or a document's
+/// pull-request promotion. An operation ID is in one of the two tables.
 pub(super) fn branch_record_of(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-) -> Option<ItemId> {
-    Close::parent(service, root, operation)
+) -> Option<(AuthoringKind, ItemId)> {
+    let ticket = Close::parent(service, root, operation)
         .ok()
         .flatten()
         .filter(|parent| parent.path == RecordPath::Branch)
-        .map(|parent| parent.item_id)
+        .map(|parent| (AuthoringKind::Ticket, parent.item_id));
+    ticket.or_else(|| {
+        Promote::parent(service, root, operation)
+            .ok()
+            .flatten()
+            .filter(|parent| parent.path == RecordPath::Branch)
+            .map(|parent| (AuthoringKind::Document, parent.item_id))
+    })
 }
 
 /// Whether `observed` is ready with a closure the ticket already holds (R-15).
@@ -359,6 +380,60 @@ fn branch_effects(
     effects
 }
 
+/// The effects a ready preview lists, in the order the run makes them. A
+/// pull-request promotion integrates and cleans up nothing: it synchronizes
+/// the branch, publishes it and gives the link, whatever its situation (R-24:
+/// the synchronization may merge the primary in and publish even when `L`
+/// equals `R`), and never promises to publish the primary.
+fn ready_effects(ready: &Ready) -> Vec<PreviewEffect> {
+    if ready.pull_request.is_some() {
+        return vec![
+            PreviewEffect::ContextSynchronized,
+            PreviewEffect::ContextPublished,
+            PreviewEffect::PullRequestLink,
+        ];
+    }
+    let mut effects = Vec::new();
+    if ready.context_child {
+        effects.push(PreviewEffect::ContextSynchronized);
+    }
+    if matches!(ready.closure, Some(PlannedClosure::Record { .. })) {
+        effects.push(PreviewEffect::ClosureRecorded);
+    }
+    if ready.integration == PlannedIntegration::MergeCommit {
+        effects.push(PreviewEffect::PrimaryIntegrated);
+    }
+    if ready.publication == PlannedPublication::Publish {
+        effects.push(PreviewEffect::PrimaryPublished);
+    }
+    if ready.cleanup.remote_branch {
+        effects.push(PreviewEffect::RemoteBranchDeleted);
+    }
+    if ready.cleanup.worktree {
+        effects.push(PreviewEffect::WorktreeRemoved);
+    }
+    if ready.cleanup.local_branch {
+        effects.push(PreviewEffect::BranchDeleted);
+    }
+    effects
+}
+
+/// The answer of an observed state that offers nothing to confirm, when it
+/// is one: a withdraw of a ticket with no closure and a promote of a
+/// document the primary already holds (R-4) are `already_applied`, with no
+/// data; a repository with no publication remote is its own code.
+fn unoffered_answer(observed: &Observed) -> Option<Answer> {
+    match observed {
+        Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
+            Some(Answer::stopped(ResultCode::AlreadyApplied))
+        }
+        Observed::PublicationRemoteRequired => {
+            Some(Answer::stopped(ResultCode::PublicationRemoteRequired))
+        }
+        Observed::Ready(_) | Observed::Blocked(_) => None,
+    }
+}
+
 fn closure_action(action: ClosureAction) -> PullRequestClosureAction {
     match action {
         ClosureAction::Close => PullRequestClosureAction::Close,
@@ -417,6 +492,35 @@ fn branch_preview(
     }
 }
 
+/// What a pull-request promote's preview shows: the names, commits and path
+/// of `ready`, and the link its pull request opens by (design Part B): the
+/// row's for `again`, the one built now for `first`.
+fn promotion_preview(
+    item: &ItemId,
+    ready: &Ready,
+    facts: &crate::repository::promotion::PullRequestPromotion,
+) -> PullRequestPromotionPreviewDto {
+    PullRequestPromotionPreviewDto {
+        r#type: PullRequestPromotionPreviewType::PullRequestPromotionPreview,
+        item_id: item.to_string(),
+        path: facts.document_path().to_string_lossy().replace('\\', "/"),
+        branch: ready
+            .branch
+            .strip_prefix("refs/heads/")
+            .unwrap_or(&ready.branch)
+            .to_owned(),
+        primary_branch: ready.primary_branch.clone(),
+        remote: ready.remote.clone(),
+        context_oid: ready.context_oid.to_string(),
+        remote_context_oid: facts.unmerged_remote().map(|oid| oid.to_string()),
+        situation: match facts.situation() {
+            PromotionSituation::First => PullRequestPromotionSituation::First,
+            PromotionSituation::Again => PullRequestPromotionSituation::Again,
+        },
+        pull_request: crate::repository::PullRequestDto::from(facts.link()),
+    }
+}
+
 /// The digest a confirmation stores. The domain's expectation binds all the
 /// preview shows, `closed_by` among it, so this holds a hash of a hash.
 fn digest_of(command: Command, observed: &Observed) -> ObservationDigest {
@@ -438,6 +542,12 @@ fn digest_of(command: Command, observed: &Observed) -> ObservationDigest {
         // preview's consent was given for (Part E, Obligation 10).
         Observed::NothingToWithdraw => {
             Observation::of(name).text("unoffered", "nothing_to_withdraw")
+        }
+        // What a promote has nothing to offer for, as a withdraw's: a state of
+        // its own, which no ready digest equals, so a confirm that finds the
+        // document held is an external change at the boundary (R-29).
+        Observed::PrimaryHoldsDocument => {
+            Observation::of(name).text("unoffered", "primary_holds_document")
         }
         Observed::PublicationRemoteRequired => {
             Observation::of(name).text("unoffered", "publication_remote_required")
@@ -611,6 +721,40 @@ fn reached_effects(reached: &Reached) -> Effects {
     }
 }
 
+/// The answer of a finished branch record, of either lifecycle: its code,
+/// unless its index step is yet to run, which only an `ok` answer says (it is
+/// then owed, and offers the request that gave it); any other is final.
+fn branch_ran(
+    accepted: &Accepted,
+    code: ResultCode,
+    index_pending: bool,
+    effects: Effects,
+    data: Option<MutationDataDto>,
+) -> Ran {
+    let pending = index_pending && code == ResultCode::Ok;
+    Ran {
+        answer: Answer {
+            effects,
+            data,
+            recovery: if pending {
+                vec![outcome::same_request(accepted.request_id)]
+            } else {
+                Vec::new()
+            },
+            ..Answer::stopped(if pending {
+                ResultCode::DiscoveryPending
+            } else {
+                code
+            })
+        },
+        standing: if pending {
+            Standing::Owed
+        } else {
+            Standing::Final
+        },
+    }
+}
+
 impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// Learns from the record's path whether its answers name the ticket's
     /// branch (decision 17). A binding that has learned a branch record keeps
@@ -625,7 +769,10 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// its path. A blocked state, or one that answers before any record
     /// exists, names none, and keeps the scope a direct request has.
     fn note_observed(&self, observed: &Observed) {
-        if matches!(observed, Observed::Ready(ready) if ready.record.is_some()) {
+        if matches!(
+            observed,
+            Observed::Ready(ready) if ready.record.is_some() || ready.pull_request.is_some()
+        ) {
             self.branch_record.store(true, Ordering::Relaxed);
         }
     }
@@ -892,19 +1039,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     ) -> Ran {
         self.branch_record.store(true, Ordering::Relaxed);
         let code = branch_code(outcome.answer());
-        // The index step is yet to run: only a close that answered `ok` says so.
-        let pending = index_pending && code == ResultCode::Ok;
         let wrote = outcome.checkpoint_oid().is_some();
-        // What the record's publication child pushed is its own result. A
-        // record that ran none (an abandon) still shows what its context
-        // child pushed (R-32).
-        let published = match outcome.publication() {
-            Some(PromotionPublication::Published { oid }) => Some(oid),
-            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
-            Some(PromotionPublication::Pending { reason: _ }) | None => {
-                self.context_child_push(service, accepted)
-            }
-        };
         let effects = Effects {
             write: if wrote {
                 WriteEffect::Written
@@ -916,20 +1051,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             } else {
                 CheckpointEffect::NotRequested
             },
-            discovery: if index_pending {
-                DiscoveryEffect::Pending
-            } else {
-                DiscoveryEffect::Current
-            },
-            publication: match (outcome.publication(), published) {
-                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
-                    PublicationEffect::Current
-                }
-                (_, Some(_)) => PublicationEffect::Published,
-                (_, None) => PublicationEffect::NotRequested,
-            },
-            commit_oid: published.map(|oid| oid.to_string()),
-            ..Effects::not_requested()
+            ..self.branch_published_effects(service, accepted, outcome.publication(), index_pending)
         };
         // The five answers that report what the record did; the others are
         // the consent's or the remote's, and carry nothing of it.
@@ -945,26 +1067,133 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 | ResultCode::TicketClosed
         ) || outcome.answer() == BranchAnswer::RemoteChanged)
             .then(|| self.branch_data(service, &accepted.root(), outcome));
-        Ran {
-            answer: Answer {
-                effects,
-                data,
-                recovery: if pending {
-                    vec![outcome::same_request(accepted.request_id)]
-                } else {
-                    Vec::new()
-                },
-                ..Answer::stopped(if pending {
-                    ResultCode::DiscoveryPending
-                } else {
-                    code
-                })
+        branch_ran(accepted, code, index_pending, effects, data)
+    }
+
+    /// The answer of a pull-request promote that finished, whatever way: its
+    /// code is the answer's, and it names what its context child published.
+    /// Nothing reached primary. A promote whose index step is yet to run is
+    /// owed, and the request that gave the answer continues it. Every such
+    /// answer carries the promote's own data (design Part D).
+    fn promotion_branch_reached(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        outcome: &BranchPromotionOutcome,
+        index_pending: bool,
+    ) -> Ran {
+        self.branch_record.store(true, Ordering::Relaxed);
+        branch_ran(
+            accepted,
+            promotion_branch_code(outcome.answer()),
+            index_pending,
+            self.branch_published_effects(service, accepted, outcome.publication(), index_pending),
+            Some(self.promotion_data(service, &accepted.root(), outcome)),
+        )
+    }
+
+    /// What a finished pull-request promote did, as its answer's data: what
+    /// its child published, whether the primary holds the document, and the
+    /// link record's link as it stands. A document the primary holds is given
+    /// no link. A `promoted` answer whose record wrote no row, because the
+    /// document's context was gone when it finished (RR8), still gives the
+    /// link, built at answer time from the record's own remote and primary
+    /// branch, as the record built the one it would have written; that is
+    /// the one choice here that reads anything but the row, and a replay
+    /// answers with the envelope stored, so it never builds again.
+    fn promotion_data(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        outcome: &BranchPromotionOutcome,
+    ) -> MutationDataDto {
+        let answer = outcome.answer();
+        let primary_holds = answer == PromotionAnswer::PrimaryHolds;
+        let link = if primary_holds {
+            None
+        } else {
+            resolve_root(service, root).ok().and_then(|repository| {
+                service
+                    .read_session(RepositoryOperation::Read, |connection| {
+                        let id = self.id.to_string();
+                        let row = crate::repository::pull_request_links::link_of(
+                            connection,
+                            repository.registration_id(),
+                            crate::repository::authoring_kind_segment(&AuthoringKind::Document),
+                            &id,
+                        )?;
+                        Ok(row.or_else(|| {
+                            (answer == PromotionAnswer::Promoted)
+                                .then(|| {
+                                    crate::repository::promotion::answer::withheld_link(
+                                        connection,
+                                        repository.registration_id(),
+                                        repository.root(),
+                                        outcome.operation_id(),
+                                    )
+                                })
+                                .flatten()
+                        }))
+                    })
+                    .ok()
+                    .flatten()
+            })
+        };
+        MutationDataDto::PullRequestPromotion(Box::new(PullRequestPromotionMutationDto {
+            r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+            item_id: self.id.to_string(),
+            publication: match outcome.publication() {
+                Some(PromotionPublication::Published { oid: _ }) => {
+                    Some(PullRequestPromotionPublication::Published)
+                }
+                Some(PromotionPublication::AlreadyCurrent { oid: _ }) => {
+                    Some(PullRequestPromotionPublication::Current)
+                }
+                Some(PromotionPublication::Pending { reason: _ }) | None => None,
             },
-            standing: if pending {
-                Standing::Owed
+            primary_holds,
+            pull_request: link.as_ref().map(crate::repository::PullRequestDto::from),
+            blockers: if answer == PromotionAnswer::HistoryUnresolved {
+                vec![LifecycleBlocker::HistoryUnresolved]
             } else {
-                Standing::Final
+                Vec::new()
             },
+        }))
+    }
+
+    /// The effects every branch answer has: whether the index is current, and
+    /// what the record's context child published. What a publication child
+    /// pushed is its own result; a record that ran none (an abandon) still
+    /// shows what its context child pushed (R-32).
+    fn branch_published_effects(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        publication: Option<PromotionPublication>,
+        index_pending: bool,
+    ) -> Effects {
+        let published = match publication {
+            Some(PromotionPublication::Published { oid }) => Some(oid),
+            Some(PromotionPublication::AlreadyCurrent { oid: _ }) => None,
+            Some(PromotionPublication::Pending { reason: _ }) | None => {
+                self.context_child_push(service, accepted)
+            }
+        };
+        Effects {
+            discovery: if index_pending {
+                DiscoveryEffect::Pending
+            } else {
+                DiscoveryEffect::Current
+            },
+            publication: match (publication, published) {
+                (Some(PromotionPublication::AlreadyCurrent { oid: _ }), _) => {
+                    PublicationEffect::Current
+                }
+                (_, Some(_)) => PublicationEffect::Published,
+                (_, None) => PublicationEffect::NotRequested,
+            },
+            commit_oid: published.map(|oid| oid.to_string()),
+            ..Effects::not_requested()
         }
     }
 
@@ -1250,6 +1479,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 Ok(
                     Observed::Ready(_)
                     | Observed::NothingToWithdraw
+                    | Observed::PrimaryHoldsDocument
                     | Observed::PublicationRemoteRequired,
                 )
                 | Err(_) => None,
@@ -1314,9 +1544,13 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let ran = match called {
             Some(Ok(Called::Reached(reached))) => self.reached(call.service, accepted, &reached),
             Some(Ok(Called::Branch {
-                outcome,
+                outcome: Branched::Closure(outcome),
                 index_pending,
             })) => self.branch_reached(call.service, accepted, &outcome, index_pending),
+            Some(Ok(Called::Branch {
+                outcome: Branched::Promotion(outcome),
+                index_pending,
+            })) => self.promotion_branch_reached(call.service, accepted, &outcome, index_pending),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)
@@ -1496,6 +1730,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             Observed::Ready(ready) => Some(ready.expected),
             Observed::Blocked(_)
             | Observed::NothingToWithdraw
+            | Observed::PrimaryHoldsDocument
             | Observed::PublicationRemoteRequired => None,
         };
         self.closure_exists = closure_exists(&observed);
@@ -1542,11 +1777,10 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
-            Observed::NothingToWithdraw => {
-                return Err(Answer::stopped(ResultCode::AlreadyApplied));
-            }
-            Observed::PublicationRemoteRequired => {
-                return Err(Answer::stopped(ResultCode::PublicationRemoteRequired));
+            unoffered @ (Observed::NothingToWithdraw
+            | Observed::PrimaryHoldsDocument
+            | Observed::PublicationRemoteRequired) => {
+                return Err(unoffered_answer(&unoffered).expect("a state with nothing to offer"));
             }
             Observed::Blocked(blockers) => {
                 if names_no_item(call.service, &root, &self.id, &blockers) {
@@ -1579,18 +1813,20 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 ))),
             });
         }
-        let mut effects = Vec::new();
-        if ready.context_child {
-            effects.push(PreviewEffect::ContextSynchronized);
+        if let Some(facts) = &ready.pull_request {
+            return Ok(Previewed {
+                observation: digest.to_stored(),
+                effects: ready_effects(&ready),
+                details: PreviewDetailsDto::PullRequestPromotion(Box::new(promotion_preview(
+                    &self.id, &ready, facts,
+                ))),
+            });
         }
         let closure = ready.closure.as_ref().map(|closure| match closure {
-            PlannedClosure::Record { closed_by } => {
-                effects.push(PreviewEffect::ClosureRecorded);
-                LifecyclePlannedClosureDto {
-                    recording: LifecycleRecording::Record,
-                    closed_by: closed_by.clone(),
-                }
-            }
+            PlannedClosure::Record { closed_by } => LifecyclePlannedClosureDto {
+                recording: LifecycleRecording::Record,
+                closed_by: closed_by.clone(),
+            },
             PlannedClosure::Existing {
                 closed_at: _,
                 closed_by,
@@ -1599,21 +1835,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 closed_by: closed_by.clone(),
             },
         });
-        if ready.integration == PlannedIntegration::MergeCommit {
-            effects.push(PreviewEffect::PrimaryIntegrated);
-        }
-        if ready.publication == PlannedPublication::Publish {
-            effects.push(PreviewEffect::PrimaryPublished);
-        }
-        if ready.cleanup.remote_branch {
-            effects.push(PreviewEffect::RemoteBranchDeleted);
-        }
-        if ready.cleanup.worktree {
-            effects.push(PreviewEffect::WorktreeRemoved);
-        }
-        if ready.cleanup.local_branch {
-            effects.push(PreviewEffect::BranchDeleted);
-        }
+        let effects = ready_effects(&ready);
         let slug = self.slug_of(call.service, &root);
         Ok(Previewed {
             observation: digest.to_stored(),
@@ -1703,7 +1925,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
             }
             // A withdraw that has nothing left to withdraw is a state the
             // consent was not given for.
-            Observed::NothingToWithdraw => {
+            Observed::NothingToWithdraw | Observed::PrimaryHoldsDocument => {
                 self.expected = None;
                 Ok(Seen::State { found, own: None })
             }

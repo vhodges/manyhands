@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 pull-request link data",
-  "description": "The data of a result of item sync of a ticket in a pull-request repository, when the sync published, or found current, a branch whose ticket holds a provisional closure: where to open the pull request. Every other item sync answer carries the synchronization's own data. The link is also recorded for the item, and ticket show reads it from there.",
+  "description": "The data of a result of item sync of a ticket or a document in a pull-request repository, when the sync published, or found current, the item's branch: where to open the pull request. A ticket gets it when its branch holds a provisional closure no primary holds; a document gets it when it has a link row and the primary does not hold the document. Every other item sync answer carries the synchronization's own data. The link is also recorded for the item: item sync records a ticket's link, and only reads a document's, which document promote records. Ticket show and document show read it from there.",
   "type": "object",
   "additionalProperties": false,
   "required": [

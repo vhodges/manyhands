@@ -81,6 +81,24 @@ Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the pull-request close, the c
 
 The C5 result-set table and the unions below are amended where the CLI audit tests read them (`tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`): the C5 union grows from 47 to 48 codes by `already_closing`, and the table has eleven verbs.
 
+### Wave 06 Cycle 04 refresh (2026-11-27)
+
+Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): the pull-request `document promote` (ticket `01M87684C9GM9BJP5QQ429KMAK`) adds no verb and no result code, and amends the answers of `document promote`, `item sync`, `document show`, `operation resume` and the two retirement verbs. The sources are the Cycle's design (`docs/plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md`, Parts A to F) and its execution ledger (`docs/plans/2026-11-26-wave-06-cycle-04-pull-request-promote-execution.md`), which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New codes.** None. **New verb.** None.
+
+**What each verb newly answers.** Each is an upper bound, as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `document promote` | no new code | In a pull-request repository: `already_applied` at prepare, with no data, for a document the primary holds; at confirm, with the same link, for a repeated promote, and with `primary_holds` for a document the primary came to hold; `remote_branch_deleted` and `recovery_required` (blocker `history_unresolved`) as finished answers, with the data `pull_request_promotion`; a child's stop with the synchronization's own code and data. Group Y already holds these codes, so the row's codes and count are unchanged |
+| `item sync` | no new code | A document context in a pull-request repository that has a link row, while the primary does not hold the document, answers with the data `pull_request_link` |
+| `document show` | no new code | `pull_request` is filled for a document read from its active context, while the primary does not hold it |
+| `operation resume` | no new code | A pull-request promote that its accepted request holds answers `original_request_required`; one that finishes answers with the data `pull_request_promotion` |
+| `context retire`, `poll once` | no new code | A document with an unfinished pull-request promote is refused by `context retire` with `recovery_required` and skipped by the poll's retirement |
+
+No union grows and the C5 table keeps its eleven verbs, so `tests/cli/recovery_tables.rs` and `tests/cli/collaboration_exits.rs`, which read them, need no edit.
+
 ### Completed-context retirement delivery (2026-11-06)
 
 **Integration re-grounding, 2026-11-07 UTC:** the retirement branch now
@@ -546,7 +564,7 @@ an upper bound, not a promise that a fixture can force the path. C5 adds no
 
 | Verb | Codes | Count | Design anchor |
 | --- | --- | --- | --- |
-| `document promote` | M + R + C + I + T + Y + `setup_pending` | 42 | Answers table; Identity; Cache loss. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `document promote` | M + R + C + I + T + Y + `setup_pending` | 42 | Answers table; Identity; Cache loss. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): in a pull-request repository the verb answers `already_applied` (at prepare with no data, and at confirm), the synchronization's own stops, and `recovery_required` with the blocker `history_unresolved` and `remote_branch_deleted` as finished answers with the data `pull_request_promotion`. Group Y already holds each of these codes, so the row's codes and its count of 42 do not change. |
 | `ticket close` | M + R + C + I + T + Y + `ticket_closed setup_pending already_closing` | 44 | The same, and Made-Ready Report. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `already_closing` is added: a pull-request close of a ticket whose branch already holds a closure answers it. |
 | `ticket withdraw-closure` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Wave 06 Cycle 03's design, Part E. Added 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the verb is new and answers `ticket close`'s codes except `already_closing`; `already_applied` (a ticket with no closure) and `publication_remote_required` are in the groups. |
 | `poll once` | M + R + U + T + `poll_yielding discovery_pending` | 30 | Polling Verbs, frozen table |

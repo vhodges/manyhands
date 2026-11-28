@@ -390,6 +390,22 @@ fn commit_files(
         .unwrap()
 }
 
+/// The request an `item sync` of the repository at `root` was accepted as.
+fn accepted_in(root: &Path) -> Accepted {
+    Accepted {
+        request_id: RequestId::new(),
+        attempt: 1,
+        scope: ScopeKey::for_repository(root).unwrap(),
+        family: Some(OperationFamily::Remote),
+        operation_id: OperationId::new(),
+        position: Position {
+            base_ref: None,
+            base_oid: None,
+        },
+        expected: None,
+    }
+}
+
 /// A registered repository holding `configuration`, whose primary and the
 /// remote's tracking ref hold `primary` of the ticket, and whose ticket's
 /// editing branch holds `context` of it.
@@ -470,18 +486,7 @@ impl Closing {
         binding: &SyncBinding,
         result: &SynchronizationResult,
     ) -> (Ran, Option<crate::forge::PullRequestLink>) {
-        let accepted = Accepted {
-            request_id: RequestId::new(),
-            attempt: 1,
-            scope: ScopeKey::for_repository(self.root.path()).unwrap(),
-            family: Some(OperationFamily::Remote),
-            operation_id: OperationId::new(),
-            position: Position {
-                base_ref: None,
-                base_oid: None,
-            },
-            expected: None,
-        };
+        let accepted = accepted_in(self.root.path());
         let ran = binding.finished(&self.service, &accepted, result);
         let link = self
             .service
@@ -602,5 +607,225 @@ fn item_sync_gives_the_link_of_a_closing_ticket() {
             local_oid: pending.context,
             reason: crate::repository::PublishPendingReason::NoPublicationRemote,
         }),
+    );
+}
+
+const NOTE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const NOTE_PATH: &str = "docs/note.md";
+const NOTE_SOURCE: &str = "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAW\ntitle: A note\n---\n\nBody\n";
+
+/// A registered repository holding `configuration`, whose document `NOTE` is
+/// on its editing branch and, when `held`, on the primary and the remote's
+/// tracking ref too. `link` is the given time of the document's link row, when
+/// it has one.
+struct Documented {
+    _data: tempfile::TempDir,
+    root: tempfile::TempDir,
+    service: RepositoryService,
+    /// The tip of the document's editing branch.
+    context: git2::Oid,
+}
+
+impl Documented {
+    fn new(configuration: &str, held: bool, link: Option<i64>) -> Self {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repository = git2::Repository::init_opts(root.path(), &options).unwrap();
+        repository
+            .remote("origin", "ssh://git@example.invalid/team/repo.git")
+            .unwrap();
+        std::fs::create_dir_all(root.path().join(".manyhands")).unwrap();
+        std::fs::write(
+            root.path().join(crate::canonical::CONFIG_PATH),
+            configuration,
+        )
+        .unwrap();
+        let config = (crate::canonical::CONFIG_PATH.to_owned(), configuration);
+        let note = (NOTE_PATH.to_owned(), NOTE_SOURCE);
+        let main = commit_files(
+            &repository,
+            None,
+            &if held {
+                vec![config.clone(), note.clone()]
+            } else {
+                vec![config.clone()]
+            },
+        );
+        let context = commit_files(&repository, Some(main), &[config, note]);
+        for (name, oid) in [
+            ("refs/heads/main", main),
+            ("refs/remotes/origin/main", main),
+            (&format!("refs/heads/manyhands/document/{NOTE}"), context),
+        ] {
+            repository.reference(name, oid, true, "fixture").unwrap();
+        }
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let scope = ScopeKey::for_repository(root.path()).unwrap();
+        let registry = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        registry
+            .execute(
+                "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+                [scope.as_str()],
+            )
+            .unwrap();
+        if let Some(given_at) = link {
+            registry
+                .execute(
+                    "INSERT INTO pull_request_links
+                         (repository_id, kind, item_ulid, source, target, forge, url, given_at)
+                     SELECT id, 'document', ?1, ?2, 'main', 'github', 'https://forge.example/open', ?3
+                       FROM repositories",
+                    rusqlite::params![NOTE, format!("manyhands/document/{NOTE}"), given_at],
+                )
+                .unwrap();
+        }
+        Self {
+            _data: data,
+            root,
+            service,
+            context,
+        }
+    }
+
+    fn target() -> SynchronizationTarget {
+        SynchronizationTarget::Context {
+            kind: AuthoringKind::Document,
+            item_id: NOTE.parse().unwrap(),
+        }
+    }
+
+    fn binding(&self) -> SyncBinding {
+        SyncBinding {
+            root: self.root.path().to_owned(),
+            target: Self::target(),
+            republish: None,
+        }
+    }
+
+    /// What `item sync` answers for `outcome`, and the document's link row,
+    /// as `(link, given_at)`, afterwards.
+    fn finished(
+        &self,
+        outcome: SynchronizationOutcome,
+    ) -> (Ran, Option<(crate::forge::PullRequestLink, i64)>) {
+        let accepted = accepted_in(self.root.path());
+        let ran = self.binding().finished(
+            &self.service,
+            &accepted,
+            &SynchronizationResult::Complete(outcome),
+        );
+        let row = self
+            .service
+            .read_session(RepositoryOperation::Read, |db| {
+                let id: i64 = db.query_row("SELECT id FROM repositories", [], |row| row.get(0))?;
+                let link =
+                    crate::repository::pull_request_links::link_of(db, id, "document", NOTE)?;
+                let given_at = link
+                    .as_ref()
+                    .map(|_| {
+                        db.query_row(
+                            "SELECT given_at FROM pull_request_links
+                              WHERE repository_id = ?1 AND kind = 'document'",
+                            [id],
+                            |row| row.get(0),
+                        )
+                    })
+                    .transpose()?;
+                Ok(link.zip(given_at))
+            })
+            .unwrap();
+        (ran, row)
+    }
+
+    fn published(&self) -> SynchronizationOutcome {
+        SynchronizationOutcome::Published {
+            target: Self::target(),
+            oid: self.context,
+        }
+    }
+
+    fn current(&self) -> SynchronizationOutcome {
+        SynchronizationOutcome::AlreadyCurrent {
+            target: Self::target(),
+            oid: self.context,
+        }
+    }
+}
+
+/// `item sync` of a document in a pull-request repository that publishes, or
+/// finds current, its branch answers with the link its row holds while the
+/// primary does not hold the document, and writes nothing: the row is as the
+/// promote left it, `given_at` included (Part F, R-10). Every other answer is
+/// as it was: no data, and no row made.
+#[test]
+fn item_sync_gives_an_outstanding_document_link() {
+    // Published, and already current: the row's link, and the row untouched.
+    for (what, code, outcome) in [
+        (
+            "published",
+            ResultCode::Ok,
+            Documented::published as fn(&Documented) -> _,
+        ),
+        ("current", ResultCode::AlreadyApplied, Documented::current),
+    ] {
+        let note = Documented::new(PULL_REQUEST, false, Some(7));
+        let (ran, row) = note.finished(outcome(&note));
+        assert_eq!(ran.answer.code, code, "{what}");
+        let Some(MutationDataDto::PullRequestLink(data)) = &ran.answer.data else {
+            panic!("{what}: {:?}", ran.answer.data)
+        };
+        assert_eq!(
+            data.pull_request.source,
+            format!("manyhands/document/{NOTE}"),
+            "{what}"
+        );
+        assert_eq!(
+            data.pull_request.url.as_deref(),
+            Some("https://forge.example/open"),
+            "{what}"
+        );
+        // The row is the link the answer shows, and `given_at` is the
+        // promote's: item sync does not renew it.
+        let (link, given_at) = row.expect("the row stays");
+        assert_eq!(
+            crate::repository::PullRequestDto::from(&link),
+            data.pull_request,
+            "{what}"
+        );
+        assert_eq!(given_at, 7, "{what}");
+    }
+
+    // No row, the primary holding the document, and a direct repository give
+    // today's answer: no data. None makes a row or changes one.
+    let anyone = |what: &str, note: Documented, given: Option<i64>| {
+        let (ran, row) = note.finished(note.published());
+        assert!(ran.answer.data.is_none(), "{what}: {:?}", ran.answer.data);
+        assert_eq!(row.map(|(_, given_at)| given_at), given, "{what}");
+    };
+    // No row, no proof: a document that was never promoted pays nothing for
+    // the full content proof on every sync (decision 9). The count is the
+    // thread's, and each case reads it before and after.
+    let proofs = crate::repository::promotion::observe::document_proofs_run();
+    anyone("no row", Documented::new(PULL_REQUEST, false, None), None);
+    assert_eq!(
+        crate::repository::promotion::observe::document_proofs_run(),
+        proofs,
+        "no row, no proof"
+    );
+    anyone(
+        "the primary holds the document",
+        Documented::new(PULL_REQUEST, true, Some(7)),
+        Some(7),
+    );
+    assert!(
+        crate::repository::promotion::observe::document_proofs_run() > proofs,
+        "a row runs the proof: the count sees it"
+    );
+    anyone(
+        "a direct repository",
+        Documented::new(DIRECT, false, Some(7)),
+        Some(7),
     );
 }

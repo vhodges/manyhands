@@ -832,6 +832,120 @@ fn a_branch_record_names_its_way_out_from_its_data() {
     assert!(lifecycle_way_out(&conflicted("item sync", vec![retry(), inspect()])).is_empty());
 }
 
+/// What a pull-request promote's data gives as its way out (decision 11,
+/// R-22): a deleted branch is republished and then promoted by a new request,
+/// since the record is finished; an unresolved history is resolved, as `item
+/// sync`'s is; every other answer is the end of it. A stopped promote's
+/// conflict is the synchronization's data, routed to the conflict verbs, and
+/// the direct promote's, the close's and `item sync`'s way outs do not change.
+#[test]
+fn a_pull_request_promote_names_its_way_out_from_its_data() {
+    use crate::repository::{
+        PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
+    };
+    let promote = |code, blockers: Vec<LifecycleBlocker>, recovery: Vec<RecoveryAction>| {
+        let mut envelope = answer(
+            "document promote",
+            code,
+            data(ItemDtoKind::Document, vec![]),
+            recovery,
+        );
+        envelope.data = Some(MutationDataDto::PullRequestPromotion(Box::new(
+            PullRequestPromotionMutationDto {
+                r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+                item_id: ITEM.into(),
+                publication: None,
+                primary_holds: false,
+                pull_request: None,
+                blockers,
+            },
+        )));
+        envelope
+    };
+    // A deleted branch: republish it, then a new request (not the same one).
+    assert_eq!(
+        lifecycle_way_out(&promote(
+            ResultCode::RemoteBranchDeleted,
+            vec![],
+            vec![inspect()]
+        )),
+        [Republish { item_id: item() }, PrepareAgain, Inspect]
+    );
+    // An unresolved history is the owner's repair, as `item sync`'s stop.
+    assert_eq!(
+        lifecycle_way_out(&promote(
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::HistoryUnresolved],
+            vec![inspect()]
+        )),
+        [ResolveHistory, Inspect]
+    );
+    // Any other finished answer, or a recovery with no such blocker, is the end.
+    for (code, blockers) in [
+        (ResultCode::Ok, vec![]),
+        (ResultCode::AlreadyApplied, vec![]),
+        (ResultCode::ExternalChange, vec![]),
+        (ResultCode::RecoveryRequired, vec![]),
+    ] {
+        assert_eq!(
+            lifecycle_way_out(&promote(code, blockers, vec![inspect()])),
+            [Inspect],
+            "{code:?}"
+        );
+    }
+    // A stopped promote's conflict: the conflict verbs take the record's ID,
+    // then the same request. Only the promote and the close verbs have it.
+    let conflicted = |command: &str| {
+        let mut envelope = answer(
+            command,
+            ResultCode::RecoveryRequired,
+            data(ItemDtoKind::Document, vec![]),
+            vec![retry(), inspect()],
+        );
+        envelope.data = Some(MutationDataDto::SynchronizationConflict(
+            SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: crate::repository::ConflictNextDto {
+                    operation_id: OTHER_OPERATION.into(),
+                    next_action: crate::repository::ConflictNextAction::Resolve,
+                },
+            },
+        ));
+        envelope
+    };
+    assert_eq!(
+        lifecycle_way_out(&conflicted("document promote")),
+        [
+            ResolveChildConflict {
+                operation_id: OPERATION.into()
+            },
+            SendAgain,
+            Inspect
+        ]
+    );
+    assert!(lifecycle_way_out(&conflicted("item sync")).is_empty());
+    // A direct promote's lifecycle data keeps its way out, a deleted branch
+    // the cancellation, the republish and the same request.
+    let direct = answer(
+        "document promote",
+        ResultCode::RemoteBranchDeleted,
+        data(ItemDtoKind::Document, vec![]),
+        vec![cancel(), inspect()],
+    );
+    assert_eq!(
+        lifecycle_way_out(&direct),
+        [
+            CancelThenSendAgain {
+                request_id: REQUEST.into()
+            },
+            Republish { item_id: item() },
+            SendAgain,
+            Inspect,
+        ]
+    );
+}
+
 /// Unknown from evidence is the owner's repair, which a poll can't settle;
 /// next to blockers a poll reads, the poll still comes first.
 #[test]
