@@ -5070,6 +5070,9 @@ fn authoritative(result: DocumentPromotionResult) -> DocumentPromotionOutcome {
     match result {
         DocumentPromotionResult::Complete(o) => o,
         DocumentPromotionResult::IndexPending(p) => p.authoritative,
+        DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
+            unreachable!("a direct fixture never answers as a pull-request promotion")
+        }
     }
 }
 #[test]
@@ -7298,3 +7301,6 @@ fn a_new_child_waits_behind_an_unnamed_holder_and_a_restarting_one_does_not() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+#[path = "run_pull_request_tests.rs"]
+mod pull_request;

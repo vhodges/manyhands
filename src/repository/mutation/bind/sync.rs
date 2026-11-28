@@ -1103,24 +1103,26 @@ impl SyncBinding {
         }
     }
 
-    /// The pull request link of a ticket whose branch this `item sync`
-    /// published, or found current, holding a closure no primary holds (design
-    /// Part H, decision 12), and the link record's row, given here. Every
-    /// other synchronization gives no data: a republish, the primary's, a
-    /// document's, a direct repository's, a ticket that is open or closed.
-    /// A link that cannot be recorded is not given, and the next `item sync`
-    /// gives it.
+    /// The pull request link of an item whose branch this `item sync`
+    /// published, or found current, in a pull-request repository with a
+    /// remote (design Part H, decision 12, and Part F, decision 4).
+    ///
+    /// A ticket gets it when its branch holds a closure no primary holds,
+    /// and the link record's row is given here. A document gets it when its
+    /// link row exists and the primary does not hold the document after the
+    /// synchronization (R-3, the full proof); the row is read and never
+    /// written, so `given_at` stays the promote's (R-10). Every other
+    /// synchronization gives no data: a republish, the primary's, a direct
+    /// repository's, a ticket that is open or closed, a document with no row
+    /// or that the primary holds. A link that cannot be recorded is not
+    /// given, and the next `item sync` gives it.
     fn link_given(
         &self,
         service: &RepositoryService,
         accepted: &Accepted,
         outcome: &SynchronizationOutcome,
     ) -> Option<MutationDataDto> {
-        let SynchronizationTarget::Context {
-            kind: AuthoringKind::Ticket,
-            item_id,
-        } = &self.target
-        else {
+        let SynchronizationTarget::Context { kind, item_id } = &self.target else {
             return None;
         };
         let (SynchronizationOutcome::Published { target: _, oid }
@@ -1142,40 +1144,90 @@ impl SyncBinding {
             return None;
         }
         let repository = git2::Repository::open(&root).ok()?;
-        let primaries: Vec<git2::Oid> = [
-            format!("refs/heads/{}", config.primary_branch),
-            format!("refs/remotes/{remote}/{}", config.primary_branch),
-        ]
-        .iter()
-        .filter_map(|name| repository.refname_to_id(name).ok())
-        .collect();
-        if !crate::repository::closure::observe::holds_provisional_closure(
-            &repository,
-            item_id,
-            *oid,
-            &primaries,
-        ) {
-            return None;
-        }
-        let link = crate::repository::closure::checkpoint::branch_link(
-            &repository,
-            &config.primary_branch,
-            config.forge().as_ref(),
-            remote,
-            item_id,
-        );
-        crate::repository::remote::state::with_transaction(service, &root, |tx, repository_id| {
-            crate::repository::pull_request_links::upsert_link(
-                tx,
-                repository_id,
-                authoring_kind_segment(&AuthoringKind::Ticket),
-                &item_id.to_string(),
-                &link,
-                time::OffsetDateTime::now_utc().unix_timestamp(),
-            )
-            .map_err(|_| crate::repository::remote::state::recovery_required())
-        })
-        .ok()?;
+        let link = match kind {
+            AuthoringKind::Ticket => {
+                let primaries: Vec<git2::Oid> = [
+                    format!("refs/heads/{}", config.primary_branch),
+                    format!("refs/remotes/{remote}/{}", config.primary_branch),
+                ]
+                .iter()
+                .filter_map(|name| repository.refname_to_id(name).ok())
+                .collect();
+                if !crate::repository::closure::observe::holds_provisional_closure(
+                    &repository,
+                    item_id,
+                    *oid,
+                    &primaries,
+                ) {
+                    return None;
+                }
+                let link = crate::repository::closure::checkpoint::branch_link(
+                    &repository,
+                    &config.primary_branch,
+                    config.forge().as_ref(),
+                    remote,
+                    item_id,
+                );
+                crate::repository::remote::state::with_transaction(
+                    service,
+                    &root,
+                    |tx, repository_id| {
+                        crate::repository::pull_request_links::upsert_link(
+                            tx,
+                            repository_id,
+                            authoring_kind_segment(&AuthoringKind::Ticket),
+                            &item_id.to_string(),
+                            &link,
+                            time::OffsetDateTime::now_utc().unix_timestamp(),
+                        )
+                        .map_err(|_| crate::repository::remote::state::recovery_required())
+                    },
+                )
+                .ok()?;
+                link
+            }
+            AuthoringKind::Document => {
+                // The row is read first, outside any write: a document that
+                // was never promoted has none, and gets no answer without
+                // the full content proof being run for it.
+                let scope = super::super::identity::ScopeKey::for_repository(&root)?;
+                let link = service
+                    .read_session(RepositoryOperation::Read, |db| {
+                        let repository_id: Option<i64> = db
+                            .query_row(
+                                "SELECT id FROM repositories WHERE root_path=?1",
+                                [scope.as_str()],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        let Some(repository_id) = repository_id else {
+                            return Ok(None);
+                        };
+                        Ok(crate::repository::pull_request_links::link_of(
+                            db,
+                            repository_id,
+                            authoring_kind_segment(&AuthoringKind::Document),
+                            &item_id.to_string(),
+                        )?)
+                    })
+                    .ok()??;
+                let tracking_primary = repository
+                    .refname_to_id(&format!("refs/remotes/{remote}/{}", config.primary_branch))
+                    .ok();
+                if crate::repository::promotion::observe::primary_holds_document(
+                    &repository,
+                    *oid,
+                    tracking_primary,
+                    &config.primary_branch,
+                    remote,
+                    item_id,
+                    false,
+                ) {
+                    return None;
+                }
+                link
+            }
+        };
         Some(MutationDataDto::PullRequestLink(Box::new(
             PullRequestLinkDataDto::of(&link),
         )))

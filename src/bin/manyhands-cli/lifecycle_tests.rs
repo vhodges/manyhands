@@ -20,7 +20,10 @@ use manyhands::{
         PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PullRequestClosureAction,
         PullRequestClosureDto, PullRequestClosureMutationDto, PullRequestClosureMutationType,
         PullRequestClosurePreviewDto, PullRequestClosurePreviewType, PullRequestClosurePublication,
-        PullRequestClosureRecording, PullRequestDto, RequestId,
+        PullRequestClosureRecording, PullRequestDto, PullRequestPromotionMutationDto,
+        PullRequestPromotionMutationType, PullRequestPromotionPreviewDto,
+        PullRequestPromotionPreviewType, PullRequestPromotionPublication,
+        PullRequestPromotionSituation, RequestId,
     },
     results::{Effects, Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -1326,4 +1329,263 @@ fn a_resumed_branch_record_answers_in_full_with_its_own_verb() {
             "{text}"
         );
     }
+}
+
+/// A finished pull-request promote's answer, with the link a person opens.
+fn promotion_answer(
+    code: ResultCode,
+    publication: Option<PullRequestPromotionPublication>,
+    primary_holds: bool,
+    pull_request: Option<PullRequestDto>,
+    blockers: Vec<LifecycleBlocker>,
+) -> Envelope<MutationDataDto> {
+    let mut envelope = answer("document promote", code, None, vec![]);
+    envelope.data = Some(MutationDataDto::PullRequestPromotion(Box::new(
+        PullRequestPromotionMutationDto {
+            r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+            item_id: ITEM.into(),
+            publication,
+            primary_holds,
+            pull_request,
+            blockers,
+        },
+    )));
+    envelope
+}
+
+/// P9, Part D's human output: a pull-request promote's answer prints
+/// `publication: <state>` when a child completed, then the link's own line, or
+/// the fixed sentence `the primary branch already holds this document` when
+/// the primary holds it, which a prepare's `already_applied` prints too; its
+/// preview prints the link's line, escaped; and its blockers stop the
+/// automatic retry, as a lifecycle's do.
+#[test]
+fn pull_request_promotion_human_lines() {
+    let link = |url: Option<&str>| PullRequestDto {
+        source: format!("manyhands/document/{ITEM}"),
+        target: "main".into(),
+        forge: None,
+        url: url.map(str::to_owned),
+    };
+    use PullRequestPromotionPublication::{Current, Published};
+    for (publication, primary_holds, url, lines) in [
+        (
+            Some(Published),
+            false,
+            Some("https://forge.example/pr/1"),
+            vec![
+                "publication: published\n",
+                "pull request: https://forge.example/pr/1\n",
+            ],
+        ),
+        (
+            Some(Current),
+            false,
+            None,
+            vec![
+                "publication: current\n",
+                "open a pull request from manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAW into main\n",
+            ],
+        ),
+        (
+            Some(Published),
+            true,
+            None,
+            vec![
+                "publication: published\n",
+                "the primary branch already holds this document\n",
+            ],
+        ),
+    ] {
+        // A document the primary holds is given no link, and never a link line.
+        let out = output(
+            &promotion_answer(
+                ResultCode::Ok,
+                publication,
+                primary_holds,
+                (!primary_holds).then(|| link(url)),
+                vec![],
+            ),
+            false,
+        );
+        let text = stdout(&out);
+        for line in &lines {
+            assert!(text.contains(line), "{line:?} in {text}");
+        }
+        let at = |line: &str| text.find(line).unwrap();
+        assert!(at(lines[0]) < at(lines[1]), "{text}");
+        assert_eq!(text.matches("publication: ").count(), 1, "{text}");
+        assert_eq!(
+            text.contains("pull request") || text.contains("open a pull"),
+            !primary_holds,
+            "{text}"
+        );
+        no_raw_control(text);
+    }
+    // No child completed and the primary does not hold it: neither line.
+    let out = output(
+        &promotion_answer(ResultCode::ExternalChange, None, false, None, vec![]),
+        false,
+    );
+    let nothing = format!("{}{}", stdout(&out), stderr(&out));
+    for absent in [
+        "publication:",
+        "pull request",
+        "open a pull",
+        "already holds",
+    ] {
+        assert!(!nothing.contains(absent), "{absent:?} in {nothing}");
+    }
+    // A link's URL with a control character is escaped, as a field's is.
+    let out = output(
+        &promotion_answer(
+            ResultCode::Ok,
+            Some(Published),
+            false,
+            Some(link(Some("https://forge.example/\u{1b}[31m"))),
+            vec![],
+        ),
+        false,
+    );
+    no_raw_control(stdout(&out));
+    assert!(stdout(&out).contains("pull request: https://forge.example/"));
+    // A prepare's `already_applied` is the primary holding the document, and
+    // says so; it is no failure.
+    let mut prepared = Envelope::<PrepareDataDto>::failure(
+        "document promote",
+        scope(true),
+        ResultCode::AlreadyApplied,
+        vec![],
+    );
+    prepared.data = None;
+    let out = prepare(&prepared);
+    assert_eq!(out.status, 0);
+    assert_eq!(
+        stdout(&out),
+        "the primary branch already holds this document\n"
+    );
+    // The preview prints its fields, then the link's line.
+    let preview = Envelope::<PrepareDataDto>::read_success(
+        "document promote",
+        scope(true),
+        PrepareDataDto::Preview(Box::new(PreviewDto {
+            confirmation_id: "01ARZ3NDEKTSV4RRFFQ69G5FZ1".into(),
+            expires_at: "2026-11-26T10:05:00Z".into(),
+            command: "document promote".into(),
+            scope: scope(true),
+            effects: vec![PreviewEffectDto {
+                effect: PreviewEffect::PullRequestLink,
+            }],
+            details: PreviewDetailsDto::PullRequestPromotion(Box::new(
+                PullRequestPromotionPreviewDto {
+                    r#type: PullRequestPromotionPreviewType::PullRequestPromotionPreview,
+                    item_id: ITEM.into(),
+                    path: "docs/odd\u{1b}[31m.md".into(),
+                    branch: format!("manyhands/document/{ITEM}"),
+                    primary_branch: "main".into(),
+                    remote: Some("origin".into()),
+                    context_oid: OID.into(),
+                    remote_context_oid: None,
+                    situation: PullRequestPromotionSituation::First,
+                    pull_request: link(None),
+                },
+            )),
+        })),
+    );
+    let shown = stdout(&prepare(&preview)).to_owned();
+    assert!(
+        shown.contains(&format!(
+            "open a pull request from manyhands/document/{ITEM} into main\n"
+        )),
+        "{shown}"
+    );
+    assert!(shown.contains("Situation: first\n"), "{shown}");
+    assert!(!shown.contains("Pull request source"), "{shown}");
+    no_raw_control(&shown);
+
+    // Its blockers stop the automatic retry, as a lifecycle's do.
+    let id = RequestId::parse(REQUEST).unwrap();
+    let mut refused = promotion_answer(
+        ResultCode::Busy,
+        None,
+        false,
+        None,
+        vec![LifecycleBlocker::HistoryUnresolved],
+    );
+    refused.outcome = manyhands::results::Outcome::Partial;
+    refused.recovery = vec![retry()];
+    assert!(!should_retry(&refused, id));
+    if let Some(MutationDataDto::PullRequestPromotion(data)) = refused.data.as_mut() {
+        data.blockers = Vec::new();
+    }
+    assert!(should_retry(&refused, id));
+}
+
+/// A pull-request promote's way out is worded with its own verb: a deleted
+/// branch republishes, then prepares again with a new request; an unresolved
+/// history names the read that lists what to resolve.
+#[test]
+fn a_pull_request_promotion_s_way_out_is_worded_with_its_verb() {
+    let deleted = output(
+        &promotion_answer(ResultCode::RemoteBranchDeleted, None, false, None, vec![]),
+        false,
+    );
+    let next = |text: &str| next_lines(text).join("");
+    let text = stderr(&deleted);
+    let lines = next_lines(text);
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(
+        lines[0].starts_with("next: manyhands-cli item republish --repo '/repo' --id "),
+        "{text}"
+    );
+    assert_eq!(
+        lines[1],
+        format!("next: manyhands-cli document promote --repo '/repo' --id {ITEM} --prepare"),
+        "{text}"
+    );
+    let unresolved = output(
+        &promotion_answer(
+            ResultCode::RecoveryRequired,
+            None,
+            false,
+            None,
+            vec![LifecycleBlocker::HistoryUnresolved],
+        ),
+        false,
+    );
+    assert_eq!(
+        next(stderr(&unresolved)),
+        "next: manyhands-cli remote history --repo '/repo'"
+    );
+    // A finished record that is no one's way out prints none.
+    for code in [ResultCode::Ok, ResultCode::AlreadyApplied] {
+        let out = output(&promotion_answer(code, None, false, None, vec![]), false);
+        assert!(next_lines(stdout(&out)).is_empty(), "{code:?}");
+    }
+}
+
+/// An `operation resume` that continued a pull-request promote to its end
+/// answers as the promote would: its data goes to the lifecycle's human
+/// output, and its way out names `document promote`, not the resume.
+#[test]
+fn a_resumed_pull_request_promote_answers_in_full_with_its_own_verb() {
+    let mut envelope = promotion_answer(ResultCode::RemoteBranchDeleted, None, false, None, vec![]);
+    envelope.command = "operation resume".into();
+    envelope.outcome = manyhands::results::Outcome::Partial;
+    envelope.recovery = vec![inspect()];
+    assert!(crate::collaboration::continued_a_lifecycle(&envelope));
+    let out = output(&envelope, false);
+    let text = stderr(&out);
+    assert!(text.contains("Blockers: none\n"), "{text}");
+    assert!(!text.contains("Type: pull_request_promotion"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli document promote --repo '{ROOT}' --id {ITEM} --prepare\n"
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains("manyhands-cli operation resume --repo"),
+        "{text}"
+    );
 }

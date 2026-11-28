@@ -182,11 +182,12 @@ impl RepositoryService {
 /// That is the request's recorded position, with one exception. A pull-request
 /// close's or a withdraw's result, told by its data's tag, names a commit on
 /// the ticket's own branch while the position is primary's: nothing of it
-/// reaches primary. So the ticket's branch is read while it stands, as a
-/// parent's checkpoint is, and the position, primary, once it is gone, never
-/// whatever is checked out. The record's target names the ticket for these
-/// two commands (`ticket/<ID>`); a resume's names its operation, so a resumed
-/// branch record is read at its position.
+/// reaches primary. So does a pull-request promote's, on the document's. So
+/// the item's branch is read while it stands, as a parent's checkpoint is, and
+/// the position, primary, once it is gone, never whatever is checked out. The
+/// record's target names the item for these commands (`ticket/<ID>`,
+/// `document/<ID>`); a resume's names its operation, so a resumed branch
+/// record is read at its position.
 fn result_commit_held(
     root: &Path,
     command: Option<Command>,
@@ -195,13 +196,16 @@ fn result_commit_held(
     position: Option<&str>,
     commit: Oid,
 ) -> bool {
-    let branch = match (command, target.strip_prefix("ticket/")) {
-        (Some(Command::TicketClose | Command::TicketWithdrawClosure), Some(item))
-            if data.and_then(|d| d.get("type")).and_then(|t| t.as_str())
-                == Some("pull_request_closure") =>
-        {
-            Some(context_names(root, &AuthoringKind::Ticket, item).branch_ref)
-        }
+    let tag = data.and_then(|d| d.get("type")).and_then(|t| t.as_str());
+    let branch = match command {
+        Some(Command::TicketClose | Command::TicketWithdrawClosure) => target
+            .strip_prefix("ticket/")
+            .filter(|_| tag == Some("pull_request_closure"))
+            .map(|item| context_names(root, &AuthoringKind::Ticket, item).branch_ref),
+        Some(Command::DocumentPromote) => target
+            .strip_prefix("document/")
+            .filter(|_| tag == Some("pull_request_promotion"))
+            .map(|item| context_names(root, &AuthoringKind::Document, item).branch_ref),
         _ => None,
     };
     let stands = branch.as_deref().filter(|name| {

@@ -29,8 +29,10 @@ const SLUG: &str = "mh-vh-k9x2b";
 const BLOCKED: &str = "lifecycle_blocked.schema.json";
 const PREVIEW: &str = "lifecycle_preview.schema.json";
 const PULL_REQUEST_PREVIEW: &str = "pull_request_closure_preview.schema.json";
+const PULL_REQUEST_PROMOTION_PREVIEW: &str = "pull_request_promotion_preview.schema.json";
 const KEY_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR7";
 const SELECT_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR8";
+const ENDING_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR9";
 const MUTATION: &str = "lifecycle_mutation.schema.json";
 const CLOSED_BY_NAME: &str = "SENTINEL-CLOSED-BY-5e1d";
 const CLOSED_BY_EMAIL: &str = "sentinel-closed-by-5e1d@example.invalid";
@@ -1717,4 +1719,358 @@ fn withdraw_prepare_answers_publication_remote_required_ahead_of_the_hold() {
         &manyhands::canonical::serialize_repository_config(&configuration).unwrap(),
     );
     withdraw.json(&["--prepare"], 3, "publication_remote_required", None);
+}
+
+// A pull-request promote (Wave 06 Cycle 04, design Parts B to D): the same
+// repository as above, where the verb is `document promote`.
+
+impl Case {
+    /// The preview of a pull-request promote.
+    fn promotion_preview(&self) -> Value {
+        self.json(
+            &["--prepare"],
+            0,
+            "ok",
+            Some(PULL_REQUEST_PROMOTION_PREVIEW),
+        )
+    }
+
+    /// A confirm of a promote's preview, under `request`, that stops at the
+    /// context child: the remote refuses the connection.
+    fn stopped_promote(&self, request: &str) -> Value {
+        let confirmation = self.promotion_preview()["data"]["confirmation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.json(
+            &["--request-id", request, "--confirm", &confirmation],
+            5,
+            "transport_unavailable",
+            None,
+        )
+    }
+
+    /// The document's editing context goes, outside Manyhands: its worktree
+    /// and its branch.
+    fn context_removed(&self) {
+        self.git(&[
+            "worktree",
+            "remove",
+            "--force",
+            self.world.worktree(self.verb.id).to_str().unwrap(),
+        ]);
+        self.git(&[
+            "branch",
+            "-D",
+            "--quiet",
+            &format!("manyhands/document/{}", self.verb.id),
+        ]);
+    }
+
+    /// The forge squashed the document into the primary, and this clone
+    /// fetched it: the primary holds the document's file as the branch has it
+    /// with no merge of the branch, and the tracking primary is there too.
+    fn merged_by_the_forge(&self) {
+        let source =
+            fs::read_to_string(self.world.worktree(self.verb.id).join(self.verb.file())).unwrap();
+        self.primary_moved(&source);
+        let repository = &self.world.fixture.repository;
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&self.world.service, &self.world.root);
+    }
+}
+
+/// Part B and D: the preview of a pull-request promote is its own shape, with
+/// the three effects always and the link its pull request opens by, and
+/// changes nothing; in text it lists the effects and prints the link's line.
+#[test]
+fn a_pull_request_promote_previews_its_link() {
+    let case = Case::pull_request(PROMOTE);
+    let refs = case.refs();
+    let preview = case.promotion_preview();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["type"], "pull_request_promotion_preview");
+    assert_eq!(details["situation"], "first");
+    assert_eq!(details["item_id"], PROMOTE.id);
+    assert_eq!(details["path"], DOCUMENT_NEW_PATH);
+    assert_eq!(
+        details["branch"],
+        format!("manyhands/document/{}", PROMOTE.id)
+    );
+    assert_eq!(details["primary_branch"], "main");
+    assert_eq!(details["remote"], "origin");
+    assert_eq!(details["remote_context_oid"], Value::Null);
+    assert_eq!(
+        details["context_oid"],
+        case.world.branch_tip(PROMOTE.id).unwrap().to_string()
+    );
+    assert_eq!(
+        details["pull_request"],
+        serde_json::json!({
+            "source": format!("manyhands/document/{}", PROMOTE.id),
+            "target": "main",
+            "forge": null,
+            "url": null,
+        })
+    );
+    // A direct promote's fields are none of it.
+    for direct in [
+        "integration",
+        "cleanup",
+        "changes",
+        "primary_oid",
+        "publication",
+    ] {
+        assert!(details.get(direct).is_none(), "{direct}: {details}");
+    }
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "context_synchronized",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+    golden(
+        "document_promote_pull_request_preview",
+        &preview,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs, "a preview changes nothing");
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    let text = stdout(&human);
+    for line in [
+        "Will synchronize the editing branch with the remote.\n",
+        "Will publish the editing branch.\n",
+        "Will record the pull request link.\n",
+        &format!(
+            "open a pull request from manyhands/document/{} into main\n",
+            PROMOTE.id
+        ),
+        "Situation: first\n",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+    for absent in [
+        "Will merge the editing branch into primary.\n",
+        "Will publish primary",
+        "Pull request source",
+    ] {
+        assert!(!text.contains(absent), "{absent}: {text}");
+    }
+    text_golden(
+        "document_promote_pull_request_preview_text",
+        &human,
+        &case.world.root,
+    );
+}
+
+/// R-4: a pull-request promote of a document the primary already holds is
+/// `already_applied` at prepare, with no data and no confirmation, and says in
+/// text that the primary branch holds the document.
+#[test]
+fn a_pull_request_prepare_of_a_held_document_says_the_primary_holds_it() {
+    let case = Case::pull_request(PROMOTE);
+    case.merged_by_the_forge();
+    let refs = case.refs();
+    let noop = case.json(&["--prepare"], 0, "already_applied", None);
+    assert_eq!(noop["outcome"], "noop", "{noop}");
+    assert_eq!(noop["data"], Value::Null);
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert_eq!(
+        stdout(&human),
+        "the primary branch already holds this document\n"
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+/// Part B's blockers: a dirty context blocks; and none of the blockers a
+/// pull-request promote drops appears, though each holds here: a dirty
+/// primary, a primary ahead of the remote's, and no identity to commit with.
+#[test]
+fn a_pull_request_prepare_is_blocked() {
+    let case = Case::pull_request(PROMOTE);
+    // What blocks a direct promote and no pull-request one: nothing of it
+    // touches the primary.
+    fs::write(case.world.root.join("dirty-primary.txt"), b"dirty\n").unwrap();
+    items::write(&case.world.root, "notes/extra.txt", "extra\n");
+    items::commit(
+        &case.world.fixture,
+        &["notes/extra.txt"],
+        items::COMMITTED_AT + 60,
+    );
+    case.forget_identity();
+    // The one that does: an edit the context has not committed.
+    let worktree = case.world.worktree(PROMOTE.id);
+    let path = worktree.join(PROMOTE.file());
+    let mut source = fs::read_to_string(&path).unwrap();
+    source.push_str("\nAn edit nothing committed.\n");
+    fs::write(&path, source).unwrap();
+    let refs = case.refs();
+    let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+    assert_eq!(blocked["outcome"], "blocked");
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["context_dirty"]),
+        "{blocked}"
+    );
+    golden(
+        "document_promote_pull_request_blocked",
+        &blocked,
+        &case.world.root,
+    );
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    assert!(text.contains("context_dirty"), "{text}");
+    for dropped in [
+        "primary_not_checked_out",
+        "primary_dirty",
+        "primary_ahead_of_remote",
+        "context_behind_remote",
+        "integration_conflict",
+        "document_invalid_after_integration",
+        "identity_required",
+    ] {
+        assert!(!text.contains(dropped), "{dropped}: {text}");
+    }
+    text_golden(
+        "document_promote_pull_request_blocked_text",
+        &human,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+/// C12 and the way out: a pull-request promote whose context child cannot
+/// connect stops as `item sync` stops (the transport's own answer, the library
+/// tables pin the rest of its stops), and the
+/// same request is offered; the child's branch gone, the same request ends as
+/// the finished record it is, and a replay gives the stored envelope with its
+/// data.
+#[test]
+fn a_pull_request_confirm_stops_at_its_child() {
+    let case = Case::pull_request_with_a_key(PROMOTE);
+    let refs = case.refs();
+    let stopped = case.stopped_promote(REQUEST_1);
+    assert_eq!(stopped["outcome"], "error", "{stopped}");
+    assert_eq!(stopped["effects"]["write"], "not_requested");
+    assert_eq!(stopped["effects"]["publication"], "not_requested");
+    assert_eq!(case.refs(), refs, "nothing was written");
+    // The same request is what continues it, and the document's branch is the
+    // answer's scope, as a branch record's is.
+    assert_eq!(
+        stopped["recovery"][0]["action"], "request.retry",
+        "{stopped}"
+    );
+    assert_eq!(stopped["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    assert_eq!(
+        stopped["scope"]["branch"],
+        format!("manyhands/document/{}", PROMOTE.id)
+    );
+    // The editing context goes, outside Manyhands (RR7): the same request
+    // ends, `external_change`, and its data names the document.
+    case.context_removed();
+    let ended = case.json(&["--request-id", REQUEST_1], 3, "external_change", None);
+    assert_eq!(ended["data"]["type"], "pull_request_promotion", "{ended}");
+    assert_eq!(ended["data"]["item_id"], PROMOTE.id);
+    assert_eq!(ended["data"]["primary_holds"], false);
+    assert_eq!(ended["data"]["pull_request"], Value::Null);
+    assert_eq!(ended["data"]["blockers"], serde_json::json!([]));
+    // A replay of the finished request is its stored envelope, data and all.
+    let replayed = case.json(&["--request-id", REQUEST_1], 3, "external_change", None);
+    assert_eq!(replayed["data"], ended["data"], "{replayed}");
+    assert_eq!(replayed["operation_id"], ended["operation_id"]);
+}
+
+/// C21 and Part G item 4: an `operation resume` of a pull-request promote's
+/// operation is refused for the request that holds it
+/// (`original_request_required`); with that request gone it takes the
+/// operation up, naming the document's branch and worktree as the record's own
+/// request does; and when what it takes up ends, its answer carries the
+/// promote's data, and a replay of the resume keeps both.
+#[test]
+fn operation_resume_of_a_pull_request_promote_names_its_request_or_takes_it_up() {
+    let case = Case::pull_request_with_a_key(PROMOTE);
+    let stopped = case.stopped_promote(REQUEST_1);
+    let operation = stopped["operation_id"].as_str().unwrap().to_owned();
+    let resume = |request: &str, status: i32, code: &str| {
+        mutation::checked(
+            &[
+                "operation",
+                "resume",
+                "--repo",
+                case.root(),
+                "--operation-id",
+                &operation,
+                "--request-id",
+                request,
+                "--json",
+            ],
+            &case.env,
+            &[],
+            status,
+            code,
+            None,
+        )
+    };
+    let held = resume(REQUEST_2, 3, "original_request_required");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+
+    // The request that held it is gone: the resume takes it up, and its
+    // answer names the document's branch, not a ticket's.
+    items::index(case.world.data.path())
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid = ?1",
+            [REQUEST_1],
+        )
+        .unwrap();
+    let scope_is_the_documents = |answer: &Value| {
+        assert_eq!(
+            answer["scope"]["branch"],
+            format!("manyhands/document/{}", PROMOTE.id),
+            "{answer}"
+        );
+        assert_eq!(answer["scope"]["item_id"], PROMOTE.id, "{answer}");
+        assert_eq!(
+            answer["scope"]["worktree"],
+            Path::new(case.root())
+                .join(".manyhands")
+                .join("worktrees")
+                .join(PROMOTE.id)
+                .to_str()
+                .unwrap(),
+            "{answer}"
+        );
+    };
+    let continued = resume(REQUEST_3, 5, "transport_unavailable");
+    assert_eq!(continued["command"], "operation resume");
+    scope_is_the_documents(&continued);
+    let step: String = items::index(case.world.data.path())
+        .query_row(
+            "SELECT step FROM document_promotions WHERE operation_id = ?1",
+            [&operation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(step, "confirmed", "still the one record, unfinished");
+
+    // The context goes: the resume ends the record, with the promote's data.
+    case.context_removed();
+    let ended = resume(ENDING_REQUEST, 3, "external_change");
+    assert_eq!(ended["data"]["type"], "pull_request_promotion", "{ended}");
+    assert_eq!(ended["data"]["item_id"], PROMOTE.id);
+    scope_is_the_documents(&ended);
+    // A replay of the resume is its stored answer, with its data and scope.
+    let replayed = resume(ENDING_REQUEST, 3, "external_change");
+    assert_eq!(replayed["data"], ended["data"], "{replayed}");
+    scope_is_the_documents(&replayed);
 }

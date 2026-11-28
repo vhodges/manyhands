@@ -1,0 +1,66 @@
+{
+  "code": "ok",
+  "command": "document promote",
+  "data": {
+    "command": "document promote",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN",
+      "context_oid": "<context-oid>",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDN",
+      "path": "docs/notes/new.md",
+      "primary_branch": "main",
+      "pull_request": {
+        "forge": null,
+        "source": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN",
+        "target": "main",
+        "url": null
+      },
+      "remote": "origin",
+      "remote_context_oid": null,
+      "situation": "first",
+      "type": "pull_request_promotion_preview"
+    },
+    "effects": [
+      {
+        "effect": "context_synchronized"
+      },
+      {
+        "effect": "context_published"
+      },
+      {
+        "effect": "pull_request_link"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDN",
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FDN"
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDN",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FDN"
+  }
+}

@@ -701,6 +701,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
@@ -738,6 +739,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
@@ -879,6 +881,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
@@ -916,6 +919,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
@@ -953,6 +957,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }
@@ -990,6 +995,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::ContextRetirement(_) => panic!("a retirement's data"),
         MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
         MutationDataDto::PullRequestClosure(_) => panic!("a branch record's data"),
+        MutationDataDto::PullRequestPromotion(_) => panic!("a pull-request promote's data"),
         MutationDataDto::PullRequestLink(_) => panic!("a pull request link's data"),
     }
 }

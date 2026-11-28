@@ -809,6 +809,13 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Primary", Some(closure.primary_branch.clone()));
             put("Remote", closure.remote.clone());
         }
+        // Nor for this one: it keeps the generic fields until Cycle 06 designs
+        // the desktop's pull-request promote (R-14).
+        PreviewDetailsDto::PullRequestPromotion(promotion) => {
+            put("Branch", Some(promotion.branch.clone()));
+            put("Primary", Some(promotion.primary_branch.clone()));
+            put("Remote", promotion.remote.clone());
+        }
     }
     fields
 }

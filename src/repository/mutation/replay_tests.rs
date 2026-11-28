@@ -7,6 +7,7 @@ const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 const MAIN: &str = "refs/heads/main";
 const OTHER: &str = "refs/heads/other";
 const TICKET: &str = "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const DOCUMENT: &str = "refs/heads/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
 /// A commit with `parents` and a tree holding `name`, on no reference.
 fn commit(repository: &Repository, parents: &[Oid], name: &str) -> Oid {
@@ -44,6 +45,8 @@ enum Case {
     /// The branch is gone and primary holds a squash of it, while HEAD is on
     /// another branch that holds the commit.
     GoneSquashedHeadElsewhere,
+    /// The branch is gone and primary was fast-forwarded to it.
+    GoneFastForwarded,
 }
 
 #[test]
@@ -107,6 +110,67 @@ fn a_result_s_commit_is_held_where_its_request_left_it() {
             "pull_request_closure",
             false,
         ),
+        // A pull-request promote's commit is on the document's branch, and
+        // its data's tag says so (K-18): the same table, with the document's
+        // branch and target.
+        (
+            "a promote's commit at its branch's tip, primary behind",
+            Case::AtTheTip,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            true,
+        ),
+        (
+            "a promote's branch moved past the commit",
+            Case::PastIt,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            true,
+        ),
+        (
+            "a promote's branch reset behind the commit",
+            Case::ResetBehind,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            false,
+        ),
+        (
+            "a promote's branch gone, primary holds the commit by a merge",
+            Case::GoneMerged,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            true,
+        ),
+        (
+            "a promote's branch gone, primary fast-forwarded to it",
+            Case::GoneFastForwarded,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            true,
+        ),
+        (
+            // A squash holds no commit of it, and HEAD elsewhere does not
+            // count: the record answers as K-13 says, `recovery_required`.
+            "a promote's branch gone, a squash, HEAD on a branch that holds the commit",
+            Case::GoneSquashedHeadElsewhere,
+            Some(Command::DocumentPromote),
+            "pull_request_promotion",
+            false,
+        ),
+        (
+            "a promote's lifecycle data, the commit only on the document's branch",
+            Case::AtTheTip,
+            Some(Command::DocumentPromote),
+            "lifecycle",
+            false,
+        ),
+        (
+            "another command's data tagged as a promote's",
+            Case::AtTheTip,
+            Some(Command::TicketClose),
+            "pull_request_promotion",
+            false,
+        ),
     ];
     for (what, case, command, tag, held) in rows {
         let directory = tempfile::tempdir().unwrap();
@@ -116,21 +180,32 @@ fn a_result_s_commit_is_held_where_its_request_left_it() {
         let base = commit(&repository, &[], "base");
         point(&repository, MAIN, base);
         let closed = commit(&repository, &[base], "closed");
-        point(&repository, TICKET, closed);
+        // The item's branch and the target the record names it by: a
+        // promote's is the document's.
+        let (branch, target) = if command == Some(Command::DocumentPromote) {
+            (DOCUMENT, format!("document/{ITEM}"))
+        } else {
+            (TICKET, format!("ticket/{ITEM}"))
+        };
+        point(&repository, branch, closed);
         match case {
             Case::AtTheTip => {}
             Case::PastIt => {
                 let later = commit(&repository, &[closed], "later");
-                point(&repository, TICKET, later);
+                point(&repository, branch, later);
             }
-            Case::ResetBehind => point(&repository, TICKET, base),
+            Case::ResetBehind => point(&repository, branch, base),
             Case::GoneMerged => {
-                repository.find_reference(TICKET).unwrap().delete().unwrap();
+                repository.find_reference(branch).unwrap().delete().unwrap();
                 let merge = commit(&repository, &[base, closed], "merge");
                 point(&repository, MAIN, merge);
             }
+            Case::GoneFastForwarded => {
+                repository.find_reference(branch).unwrap().delete().unwrap();
+                point(&repository, MAIN, closed);
+            }
             Case::GoneSquashedHeadElsewhere => {
-                repository.find_reference(TICKET).unwrap().delete().unwrap();
+                repository.find_reference(branch).unwrap().delete().unwrap();
                 let squash = commit(&repository, &[base], "squash");
                 point(&repository, MAIN, squash);
                 point(&repository, OTHER, closed);
@@ -143,7 +218,7 @@ fn a_result_s_commit_is_held_where_its_request_left_it() {
                 directory.path(),
                 command,
                 Some(&data),
-                &format!("ticket/{ITEM}"),
+                &target,
                 Some(MAIN),
                 closed,
             ),
