@@ -120,7 +120,7 @@
       }
     },
     "pull_request": {
-      "description": "The pull request link this clone gave a ticket. Set only by a complete read of a ticket that has one; null in every list, for a document and for a ticket without a link.",
+      "description": "The pull request link this clone gave a ticket or a document. Set only by a complete read (show, and show --path) of a ticket that has one, or of a document read from its active context that has one while the primary does not hold the document; null in every list, for a document with no link, with no active context or held by the primary, and for a ticket without a link.",
       "$ref": "pull_request.schema.json"
     },
     "unknown_metadata": {

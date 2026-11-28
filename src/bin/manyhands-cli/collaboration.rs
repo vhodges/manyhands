@@ -215,11 +215,16 @@ pub(crate) fn run(
 }
 
 /// Whether the result is that of a promotion or a closure an `operation
-/// resume` continued: its data is the lifecycle's, or a branch record's.
+/// resume` continued: its data is the lifecycle's, or a branch record's, of
+/// a closure or of a pull-request promotion.
 pub(crate) fn continued_a_lifecycle(envelope: &Envelope<MutationDataDto>) -> bool {
     matches!(
         envelope.data,
-        Some(MutationDataDto::Lifecycle(_) | MutationDataDto::PullRequestClosure(_))
+        Some(
+            MutationDataDto::Lifecycle(_)
+                | MutationDataDto::PullRequestClosure(_)
+                | MutationDataDto::PullRequestPromotion(_)
+        )
     )
 }
 

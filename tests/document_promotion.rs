@@ -305,6 +305,7 @@ impl Pair {
                 }
                 Err(FixtureError)
             }
+            DocumentPromotionPreflight::PrimaryHolds => Err(FixtureError),
         }
     }
     fn promote(&self) -> Result<DocumentPromotionOutcome, FixtureError> {
@@ -316,6 +317,10 @@ impl Pair {
             DocumentPromotionResult::Complete(outcome) => Ok(outcome),
             DocumentPromotionResult::IndexPending(_) => {
                 ssh_harness::observation(&[801]);
+                Err(FixtureError)
+            }
+            // A direct fixture never answers as a pull-request promotion.
+            DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
                 Err(FixtureError)
             }
         }

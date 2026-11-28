@@ -1,0 +1,224 @@
+//! A pull-request promotion's answer tables (design Part C): the first table,
+//! after a context child that completed, and the second, after one that
+//! ended. Each judges whether the primary already holds the document (R-3) on
+//! what the child left, with no network, and finishes the record in one
+//! transaction. Nothing here fetches, merges, pushes or moves the primary.
+use super::{
+    DocumentPromotionError, PromotionExpectation,
+    lifecycle::{BranchEnd, LifecycleKind, LifecycleRequest},
+    observe,
+    record::{
+        self, BranchFinish, ChildRole, ChildState, LinkWrite, PromotionAnswer, PromotionRecord,
+        PromotionSituation, PublicationCategory,
+    },
+};
+use crate::forge::PullRequestLink;
+use crate::repository::{
+    ConfigurationInspection, RemoteRefPlan, RepositoryError, RepositoryOperation,
+    RepositoryService, SynchronizationError, canonical_repository_root, read_configuration,
+    remote::state,
+};
+use git2::Oid;
+use std::path::Path;
+
+/// What a begun record has of its own: its remote, the primary branch and
+/// the situation it began with, never the live configuration's.
+fn begun(r: &PromotionRecord) -> Result<(&str, &str, PromotionSituation, Oid), RepositoryError> {
+    match (
+        r.remote_name.as_deref(),
+        r.primary_branch.as_deref(),
+        r.situation,
+        r.consented_context_oid,
+    ) {
+        (Some(remote), Some(primary), Some(situation), Some(consented)) => {
+            Ok((remote, primary, situation, consented))
+        }
+        _ => Err(state::recovery_required()),
+    }
+}
+
+/// The tracking primary as it is now, which the child's fetch moved.
+fn tracking_primary(
+    repository: &git2::Repository,
+    root: &Path,
+    remote: &str,
+    primary: &str,
+) -> Result<Option<Oid>, RepositoryError> {
+    let plan = RemoteRefPlan::from_configuration(remote, primary)
+        .map_err(|_| observe::unavailable(root))?;
+    observe::reference_oid(repository, plan.primary().tracking_ref(), root)
+}
+
+/// The link as the remote's address and the configuration read now give it:
+/// the record holds no URL (R-30), and a configuration or an address that
+/// cannot be read never fails the promote.
+fn link_built_now(
+    repository: &git2::Repository,
+    root: &Path,
+    remote: &str,
+    primary: &str,
+    item: &crate::canonical::ItemId,
+) -> PullRequestLink {
+    let forge = match read_configuration(root) {
+        Ok(ConfigurationInspection::Valid(config)) => config.forge(),
+        _ => None,
+    };
+    crate::repository::closure::checkpoint::context_branch_link(
+        repository,
+        primary,
+        forge.as_ref(),
+        remote,
+        &LifecycleKind::DocumentPromotion.context_branch(item),
+    )
+}
+
+/// The link a finished `promoted` record of `operation` gives, which wrote no
+/// row because its context was gone when it finished (RR8): built as the
+/// record built it, from its own remote and primary branch. `None` for a
+/// record this build cannot read, or one that began with neither.
+pub(in super::super) fn withheld_link(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    root: &Path,
+    operation: crate::repository::OperationId,
+) -> Option<PullRequestLink> {
+    let record = record::read_record(db, repository_id, operation).ok()??;
+    let (remote, primary, _, _) = begun(&record).ok()?;
+    let (repository, _) =
+        canonical_repository_root(root, RepositoryOperation::RepositorySnapshot).ok()?;
+    Some(link_built_now(
+        &repository,
+        root,
+        remote,
+        primary,
+        &record.item_id,
+    ))
+}
+
+/// The first table, after a context child that completed: R-3 judged on the
+/// child's authority OID, then `already_promoted` for a promote again, else
+/// `promoted` with the link built now. The record finishes `complete` with
+/// the child's category.
+pub(super) fn finish(
+    service: &RepositoryService,
+    request: &LifecycleRequest<PromotionExpectation>,
+    r: &PromotionRecord,
+) -> Result<(), DocumentPromotionError> {
+    let root = &request.root;
+    let (remote, primary, situation, _) = begun(r)?;
+    let stored = match state::with_transaction(service, root, |tx, _| {
+        record::child_state(tx, r, ChildRole::Context)
+    })? {
+        ChildState::Complete(stored) => stored,
+        _ => return Err(DocumentPromotionError::RecoveryRequired),
+    };
+    let (authority, category) = match stored.authority {
+        Some(state::SynchronizationAuthority::Published(oid)) => {
+            (oid, PublicationCategory::Published)
+        }
+        Some(state::SynchronizationAuthority::AlreadyCurrent(oid)) => {
+            (oid, PublicationCategory::AlreadyCurrent)
+        }
+        None => return Err(DocumentPromotionError::RecoveryRequired),
+    };
+    let (repository, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let tracking = tracking_primary(&repository, root, remote, primary)?;
+    let given_at = (request.clock)().unix_timestamp();
+    // RR8: the context branch may be gone by now (a retirement, a removed
+    // worktree, a poll). The child published what it did, so the record still
+    // finishes on its authority, but no link row is written or renewed for a
+    // branch that is not there.
+    let present = observe::reference_oid(
+        &repository,
+        &LifecycleKind::DocumentPromotion.context_ref(&r.item_id),
+        root,
+    )?
+    .is_some();
+    let finish = if observe::primary_holds_document(
+        &repository,
+        authority,
+        tracking,
+        primary,
+        remote,
+        &r.item_id,
+        false,
+    ) {
+        BranchFinish {
+            answer: PromotionAnswer::PrimaryHolds,
+            category,
+            link: LinkWrite::Untouched,
+        }
+    } else if situation == PromotionSituation::Again {
+        BranchFinish {
+            answer: PromotionAnswer::AlreadyPromoted,
+            category,
+            link: if present {
+                LinkWrite::Renew { given_at }
+            } else {
+                LinkWrite::Withheld
+            },
+        }
+    } else if !present {
+        BranchFinish {
+            answer: PromotionAnswer::Promoted,
+            category,
+            link: LinkWrite::Withheld,
+        }
+    } else {
+        BranchFinish {
+            answer: PromotionAnswer::Promoted,
+            category,
+            link: LinkWrite::Give {
+                link: link_built_now(&repository, root, remote, primary, &r.item_id),
+                given_at,
+            },
+        }
+    };
+    state::with_transaction(service, root, |tx, id| {
+        record::complete_branch_record(tx, id, r.operation_id, &finish)
+    })?;
+    Ok(())
+}
+
+/// The second table, after a context child that ended (or a branch gone after
+/// its child): R-3 judged on the consented tip, then the end's own answer.
+/// The record is abandoned with the refusal `reconfirmation_required` and its
+/// answer; a deleted remote branch also ends the document's link.
+pub(super) fn end(
+    service: &RepositoryService,
+    root: &Path,
+    r: &PromotionRecord,
+    end: BranchEnd<'_>,
+) -> Result<(), RepositoryError> {
+    let (remote, primary, _, consented) = begun(r)?;
+    let (answer, remote_gone) = match end {
+        BranchEnd::ContextGone => (PromotionAnswer::ContextGone, false),
+        BranchEnd::ContextChild(SynchronizationError::RemoteContextDeleted) => {
+            (PromotionAnswer::RemoteBranchDeleted, true)
+        }
+        BranchEnd::ContextChild(SynchronizationError::HistoryUnresolved) => {
+            (PromotionAnswer::HistoryUnresolved, false)
+        }
+        // The runner ends a record only over the stops above, and only a
+        // ticket's context answers anything else it names.
+        BranchEnd::ContextChild(_) => return Err(state::recovery_required()),
+    };
+    let (repository, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    let tracking = tracking_primary(&repository, root, remote, primary)?;
+    let answer = if observe::primary_holds_document(
+        &repository,
+        consented,
+        tracking,
+        primary,
+        remote,
+        &r.item_id,
+        remote_gone,
+    ) {
+        PromotionAnswer::PrimaryHolds
+    } else {
+        answer
+    };
+    state::with_transaction(service, root, |tx, id| {
+        record::abandon_branch_record(tx, id, r.operation_id, answer)
+    })
+}

@@ -638,6 +638,108 @@ pub(in super::super) fn promotion_child_has_resolution(
     Ok(false)
 }
 
+/// The local moves the context child's operation `record` made, in the
+/// order it made them. First its envelope's fast-forward: from the head it
+/// began at (`expected_oid`) to `local_oid`, counted only when `local_oid`
+/// is a tip it fetched (`tracking_oid` or `primary_tracking_oid`), which a
+/// clean plan's fast-forward always ends at. A merge is never such a tip,
+/// though `checkpoint_synchronization_merge_applied` records it as
+/// `local_oid` at `local_fast_forwarded`. It is counted from `local_prepared`
+/// on: a process lost between `fast_forward` and `local_fast_forwarded`
+/// leaves `local_prepared` with the move made, and the only head the pair can
+/// add is the tip the child planned. Then each integration step it applied (a
+/// fast-forward, a merge, a resolution through the conflict verbs), from the
+/// head before it to the head it left. For a parent that tells its child's own
+/// moves from a commit the child did not make (Cycle 04 RR1, RR4).
+pub(in super::super) fn promotion_child_moves(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<Vec<(git2::Oid, git2::Oid)>, RepositoryError> {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = &record.sync_evidence;
+    let mut moves = Vec::new();
+    if let (Some(from), Some(to)) = (evidence.expected_oid, evidence.local_oid)
+        && from != to
+        && (Some(to) == evidence.tracking_oid || Some(to) == evidence.primary_tracking_oid)
+        && matches!(
+            record.sync_checkpoint,
+            Some(
+                C::LocalPrepared
+                    | C::LocalFastForwarded
+                    | C::PushPrepared
+                    | C::PushReturned
+                    | C::PushVerified
+            )
+        )
+    {
+        moves.push((from, to));
+    }
+    let mut steps = db
+        .prepare("SELECT local_oid,result_oid FROM remote_integration_steps WHERE operation_record_id=?1 AND phase='applied' ORDER BY window_number,ordinal")
+        .map_err(|_| state::recovery_required())?;
+    let rows = steps
+        .query_map([record.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|_| state::recovery_required())?;
+    for row in rows {
+        let (from, to) = row.map_err(|_| state::recovery_required())?;
+        // An applied step always has its result (`state.rs`, the table's CHECK).
+        let to = to.ok_or_else(state::recovery_required)?;
+        moves.push((
+            git2::Oid::from_str(&from).map_err(|_| state::recovery_required())?,
+            git2::Oid::from_str(&to).map_err(|_| state::recovery_required())?,
+        ));
+    }
+    Ok(moves)
+}
+
+/// The commit a context child's operation `record` is about to push at its
+/// `BeforePush` safe point: its push intent (`push_oid` at `push_prepared`),
+/// when it has no publication attempt; `None` otherwise.
+pub(in super::super) fn promotion_child_push_candidate(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<Option<git2::Oid>, RepositoryError> {
+    Ok(
+        if state::latest_publication_attempt(db, record)?.is_none()
+            && record.sync_checkpoint == Some(state::SynchronizationCheckpoint::PushPrepared)
+        {
+            record.sync_evidence.push_oid
+        } else {
+            None
+        },
+    )
+}
+
+/// Whether the context child's operation `record` ended before its push: its
+/// cancellation was acknowledged at `BeforePush` (phase `cancelled`,
+/// `completed_step` `before_push`), with its intent at `push_prepared`, no
+/// publication attempt and no authority. `push_exact` comes only after that
+/// safe point lets the call go on, so nothing of the intent is on the remote.
+/// When the outcome is still `cancelled`, the intent is recorded answered, as
+/// a refused or an abandoned push is (`record_refused_push`). Then no later
+/// synchronization of the context counts it unanswered (`push_absence`).
+pub(in super::super) fn settle_unsent_promotion_push(
+    tx: &Transaction<'_>,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let settled = record.phase == RemoteOperationPhase::Cancelled
+        && record.completed_step == Some(RemoteOperationSafePoint::BeforePush)
+        && record.sync_checkpoint == Some(state::SynchronizationCheckpoint::PushPrepared)
+        && record.sync_evidence.push_oid.is_some()
+        && record.authority.is_none()
+        && state::latest_publication_attempt(tx, record)?.is_none()
+        && matches!(
+            record.outcome,
+            Some(RemoteOutcomeCategory::Cancelled | RemoteOutcomeCategory::ProtocolRejected)
+        );
+    if settled && record.outcome == Some(RemoteOutcomeCategory::Cancelled) {
+        record_refused_push(tx, record.id)?;
+    }
+    Ok(settled)
+}
+
 fn acknowledge(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,

@@ -26,6 +26,10 @@
 //!   the resume. Only when the blockers name the item's own context conflicted
 //!   as well as `conflict_pending`, which alone is repository-wide: the answer
 //!   holds no field that says the conflict is this operation's child's;
+//! - for a pull-request promote's answer: `publication: <state>` when its child
+//!   completed, then the link's line, or the sentence that the primary branch
+//!   already holds the document, which a prepare's `already_applied` says too;
+//!   its way out is worded with `document promote`;
 //! - for a child's `remote_branch_deleted`, the route out of decision 18:
 //!   cancel, the same request, the republish, the same request. Under a
 //!   resume, decision 19's: the republish, then the resume, since the resume
@@ -41,7 +45,7 @@ use manyhands::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
         LifecyclePublicationPendingReason, LifecycleWayOut, MutationDataDto, PrepareDataDto,
         PullRequestClosureAction, PullRequestClosureMutationDto, PullRequestClosureRecording,
-        lifecycle_prepare_way_out, lifecycle_way_out,
+        PullRequestPromotionMutationDto, lifecycle_prepare_way_out, lifecycle_way_out,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -393,6 +397,16 @@ pub fn prepare(
     envelope: &Envelope<PrepareDataDto>,
     holder: &dyn Fn(&str) -> Option<String>,
 ) -> Output {
+    // A promote's prepare answers `already_applied` only in a pull-request
+    // repository, for a document the primary already holds (R-4).
+    if kind == ItemDtoKind::Document
+        && envelope.code == ResultCode::AlreadyApplied
+        && envelope.data.is_none()
+    {
+        let mut output = render::prepare_output(false, envelope);
+        output.stdout = format!("{PRIMARY_HOLDS}\n").into_bytes();
+        return output;
+    }
     let way_out = lifecycle_prepare_way_out(kind, envelope);
     if let Some(output) = held(envelope, &way_out, holder) {
         return output;
@@ -531,10 +545,92 @@ fn branch_output(
     )
 }
 
+/// What a pull-request promote's answer says when the primary already holds
+/// the document, and what a prepare says of the same (R-4).
+pub(crate) const PRIMARY_HOLDS: &str = "the primary branch already holds this document";
+
+/// A pull-request promote's answer (design Part D): how its branch was
+/// published, then the link to open or, when the primary holds the document,
+/// that it does; the rest of its data and its way out, worded with this
+/// verb.
+fn promotion_output(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestPromotionMutationDto,
+    supplied: bool,
+) -> Output {
+    let mut body = String::new();
+    if let Some(publication) = data.publication {
+        body.push_str(&format!("publication: {}\n", publication.as_str()));
+    }
+    if data.primary_holds {
+        body.push_str(&format!("{PRIMARY_HOLDS}\n"));
+    } else if let Some(link) = &data.pull_request {
+        body.push_str(&format!("{}\n", field(&human_admin::link_line(link))));
+    }
+    body.push_str(&blockers_line(&data.blockers));
+    body.push_str(&human_admin::fields_without(
+        data,
+        &[
+            "type",
+            "publication",
+            "primary_holds",
+            "pull_request",
+            "blockers",
+        ],
+    ));
+    let mut notes = Vec::new();
+    if let Some(root) = envelope.scope.repository.as_deref() {
+        for step in lifecycle_way_out(envelope) {
+            match step {
+                LifecycleWayOut::Republish { item_id } => {
+                    body.push_str(&format!("next: {}\n", republish(root, &item_id)));
+                }
+                LifecycleWayOut::PrepareAgain => body.push_str(&format!(
+                    "next: manyhands-cli document promote --repo {} --id {} --prepare\n",
+                    quoted(root),
+                    field(&data.item_id)
+                )),
+                LifecycleWayOut::ResolveHistory => {
+                    body.push_str(&format!(
+                        "next: manyhands-cli remote history --repo {}\n",
+                        quoted(root)
+                    ));
+                    notes.push(HISTORY_NOTE.to_owned());
+                }
+                LifecycleWayOut::SendAgain
+                | LifecycleWayOut::Inspect
+                | LifecycleWayOut::RetryRequest { .. }
+                | LifecycleWayOut::CancelThenSendAgain { .. }
+                | LifecycleWayOut::ResumeOperation { .. }
+                | LifecycleWayOut::RepairLocally { .. }
+                | LifecycleWayOut::ResolveChildConflict { .. }
+                | LifecycleWayOut::SyncItem { .. }
+                | LifecycleWayOut::SharePrimary
+                | LifecycleWayOut::PollOnce
+                | LifecycleWayOut::SaveItem { .. }
+                | LifecycleWayOut::RepairOutside => {}
+            }
+        }
+    }
+    let mut shown = envelope.clone();
+    shown.data = None;
+    render::compact(
+        &shown,
+        supplied,
+        &body,
+        "",
+        envelope.recovery.clone(),
+        &note_lines(&notes),
+    )
+}
+
 /// The human output of a result of these verbs.
 pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
     if let Some(MutationDataDto::PullRequestClosure(data)) = &envelope.data {
         return branch_output(envelope, data, supplied);
+    }
+    if let Some(MutationDataDto::PullRequestPromotion(data)) = &envelope.data {
+        return promotion_output(envelope, data, supplied);
     }
     let Some(MutationDataDto::Lifecycle(data)) = &envelope.data else {
         return render::mutation_output(false, envelope, supplied);
