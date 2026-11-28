@@ -14,9 +14,9 @@ manyhands_kind: document
 
 **Tech Stack:** Rust, `git2` 0.20.4 (`Revwalk`), `rusqlite`, the SSH test harness for steps added to one existing case.
 
-**Spec:** [Cycle 05 design](2026-11-27-wave-06-cycle-05-after-the-merge-design.md) (revision 2), under the [Cycle document](../Cycles/wave-06-cycle-05-after-the-merge.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
+**Spec:** [Cycle 05 design](2026-11-27-wave-06-cycle-05-after-the-merge-design.md) (revision 3), under the [Cycle document](../Cycles/wave-06-cycle-05-after-the-merge.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft**, revision 2, for review. Not approved.
+Status: **draft**, revision 3, for review. Not approved.
 
 ## Global Constraints
 
@@ -41,7 +41,7 @@ Status: **draft**, revision 2, for review. Not approved.
 
 **Every new check fails first.** Each new test or assertion is run red once, before its code or against a deliberate stub, and the red run is recorded in the ledger with the stub's description. A table test's rows are each shown red, by one run per stub (a table reports every failing row). Only a row that pins unchanged behaviour (the "as today" rows of design Part D, E-2's five-field decoding, the old frozen report) is exempt, and is recorded as such.
 
-**Test edits.** The design's named edits E-1 to E-22, and the edits Task 0's sweep finds, under the owner's test-edit approval: each logged in the ledger as E-23 onwards with its reason. An edit that removes, weakens or reverses an assertion's intent stops for the owner. A golden rewrite is logged with its diff's summary, and a rewrite that changes more than the fields of design Part G stops for the owner.
+**Test edits.** The design's named edits E-1 to E-23, and the edits Task 0's sweep finds, under the owner's test-edit approval: each logged in the ledger as E-24 onwards with its reason. An edit that removes, weakens or reverses an assertion's intent stops for the owner. A golden rewrite is logged with its diff's summary, and a rewrite that changes more than the fields of design Part G stops for the owner.
 
 **Intermediate commits.** Every commit compiles and passes the static gates and the registration tests: a function is added in the task that first calls it from production code, an enum value's exhaustive matches are given arms in the task that adds it, a schema and its registrations land with its first golden, a schema field and the goldens that carry it land together, and a new verb lands with its taxonomy row, its `autonomy.md` cell and the `help_root` goldens.
 
@@ -67,7 +67,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - Every move of the local primary records, and a move never fails or changes its answer because of the record. Tasks 1 and 2 pin it.
 - A context whose item is done is never retired while its remote branch survives or its proof finds a mismatch; it reads `merged` or `unheld` when its local and remote tips agree, as design Part D lists (K-6, K-9 and K-14 are its exceptions). Tasks 5 and 11 pin it.
 - `context cleanup` never deletes a branch that moved since the last fetch, never deletes or retires without a consent whose `L`, `R` and `unheld` it still matches, never loses a commit made after consent, and never lets a synchronization or a poll bring the branch back while it holds the reservation. Tasks 8, 9 and 13 pin it.
-- A stuck cleanup always has a way out: the same request, or `operation abandon` at the steps CC24 allows, and no other lifecycle record becomes abandonable. Task 10 pins it.
+- A stuck cleanup always has a way out: the same request, or `operation abandon` at any step no live run holds, which never races a live run; no other lifecycle record becomes abandonable. Task 10 pins it.
 - Old stored poll answers still decode and replay, and a retiring poll's frozen report and an old frozen image are unchanged. Tasks 5 and 6 pin it.
 - Every direct close, promote and branch record behaves as before. The runner tests, and the `ticket_closure` and `document_promotion` targets in Task 15, pin it.
 
@@ -84,12 +84,12 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | 4 | `remote/state.rs` (`POLL_DISPOSITION_SCHEMA_18`, the current catalog, `migrate_poll_dispositions`), `remote/state_tests.rs`; E-14, E-15 (the disposition marker) | 3 |
 | 5 | `remote/poll.rs` (`classify_local_target`, `completed_deleted_context`, the pre-filter, `PollDisposition`, `guidance`, `decode_frozen`), `remote/state.rs` (`disposition_name`, `disposition`), `mutation/bind/poll.rs` (`dto_disposition`), `mutation/dto.rs` (`PollTargetDisposition`), `schemas/v1/poll_mutation.schema.json`, `remote_history.schema.json`, the desktop's arms, `remote/poll_tests.rs`; E-6, E-7, E-18, E-19 (dispositions) | 4 |
 | 6 | `item_merges.rs` (`merges_by`), `mutation/bind/poll.rs` (`reported`), `context_retirement/pass_report.rs` (`finish`), `mutation/dto.rs` (`PollMutationDto`, `PollMergedDto`, `from_stored`), `schemas/v1/poll_mutation.schema.json`, `src/bin/manyhands-cli/polling.rs`, the literals and goldens of E-3 and E-5, the lifecycle tests; E-2, E-3, E-5 (`PollMutationDto`), E-8 (the poll's enums) | 5 |
-| 7 | `closure/record.rs` and `promotion/record.rs` (the cleanup action, columns, CHECKs, steps, rebuilds, holders), `closure/record_tests.rs`, `promotion/record_tests.rs`, `tests/recovery_foundation_gate.rs`; E-15 (the lifecycle markers), E-16 | 6 |
-| 8 | `mutation/command.rs`, `mutation/mod.rs`, `mutation/bind/lifecycle_verb.rs` (`CleanupTicket`, `CleanupDocument`), `mutation/bind/lifecycle.rs`, `mutation/bind/resume.rs`, `mutation/dto.rs` (the preview, the data, `LifecycleBlocker::NotDoneOnPrimary`), `recovery.rs` (`LIFECYCLE_COMMANDS`), `mutation/progress.rs`, `closure/lifecycle.rs` and `promotion/lifecycle.rs` (the cleanup lifecycles, the observation), `promotion/run.rs` (the third path's local part), the two schemas and the blocker schema, the CLI (`catalog.rs`, `dispatch.rs`, the handler, `human_admin.rs`), `docs/RFC/cli-contract.md` (the taxonomy row), `skills/manyhands-overview/references/autonomy.md` and `.agents/skills/…` (the cell), the desktop's arms, the registrations and goldens of E-8 to E-12 | 7 |
-| 9 | `promotion/run.rs` (the third path's reservation, delete and re-run checks), `promotion/lifecycle_record.rs` (`complete_record`), `remote/reservation.rs` (`finish_parent`'s join), `make_outcome`, the holders' sites, `closure/run_tests.rs`, `promotion/run_tests.rs` | 8 |
-| 10 | `remote/reservation.rs` (`abandonable`), `mutation/bind/abandon.rs`, the cleanup records' abandon, their tests; E-17 | 9 |
+| 7 | `closure/record.rs` and `promotion/record.rs` (the cleanup action, `RecordPath::Cleanup`, columns, CHECKs, steps with `remote_deleting`, rebuilds), `closure/record_tests.rs`, `promotion/record_tests.rs`, `tests/recovery_foundation_gate.rs`, the `RecordPath` matches; E-15 (the lifecycle markers), E-16, E-23 | 6 |
+| 8 | `mutation/command.rs`, `mutation/mod.rs`, `mutation/bind/lifecycle_verb.rs` (`CleanupTicket`, `CleanupDocument`), `mutation/bind/lifecycle.rs`, `mutation/bind/resume.rs`, `mutation/dto.rs` (the preview, the data, `LifecycleBlocker::NotDoneOnPrimary`), `recovery.rs` (`LIFECYCLE_COMMANDS`), `mutation/progress.rs`, `closure/lifecycle.rs` and `promotion/lifecycle.rs` (the cleanup lifecycles, the observation, `merged_context`), `promotion/run.rs` (the third path's local part, `make_outcome`), the command-keyed lists (`progress.rs` `cancel_parent`, `setup/change.rs`, `bind/mod.rs` `recorded_effects`, `replay.rs`, `way_out.rs`), the two schemas and the blocker schema, the CLI (`catalog.rs`, `dispatch.rs`, the handler, `human_admin.rs`), `docs/RFC/cli-contract.md` (the taxonomy row), `skills/manyhands-overview/references/autonomy.md` and `.agents/skills/…` (the cell), the desktop's arms, the registrations and goldens of E-8 to E-12 | 7 |
+| 9 | `promotion/run.rs` (the third path's reservation, consent re-check, head check, `remote_deleting`, delete, advertisement and stop mapping; `PromotionIo`'s advertisement method and `Absent`), `promotion/run_tests.rs` (`FakeIo`), `promotion/lifecycle_record.rs` (`complete_record`), `remote/reservation.rs` (`finish_parent`'s join), the holder predicate and its sites, `closure/run_tests.rs` | 8 |
+| 10 | `remote/reservation.rs` (`abandonable`), `mutation/bind/abandon.rs` (finding a cleanup record, its liveness, the takeover and end), their tests; E-17 | 9 |
 | 11 | `closure/run_pull_request_lifecycle_tests.rs`, `promotion/run_pull_request_lifecycle_tests.rs` | 10 |
-| 12 | `remote/poll.rs` (`root_checkout`, `RootCheckout`), `remote/mod.rs` (the re-export), `read/admin.rs`, `results.rs` (`ProblemCode`), `schemas/v1/problem.schema.json`, `index_problem.schema.json`, `src/bin/manyhands-cli/polling.rs`, `tests/read_repository.rs`, `tests/read_contract.rs` (its fixture), `polling_tests.rs`; E-8 (the problem codes), E-20 | 11 |
+| 12 | `remote/poll.rs` (`root_checkout`, `RootCheckout`, the poll's reading of it), `remote/mod.rs` and `src/repository.rs` (the re-exports), `read/admin.rs`, `results.rs` (`ProblemCode`), `schemas/v1/problem.schema.json`, `index_problem.schema.json`, `src/bin/manyhands-cli/polling.rs`, `tests/read_repository.rs`, `tests/read_contract.rs` (its fixture), `polling_tests.rs`; E-8 (the problem codes), E-20 | 11 |
 | 13 | `tests/mutation_remote/c5_lifecycle.rs`, `tests/support/mutation_golden.rs`, the `mutation_v1` goldens; E-11 (`CASES`), E-22 | 12 |
 | 14 | `docs/RFC/cli-contract.md`, `docs/RFC/pull-request-mode.md`, `docs/RFC/repository-index-persistence-and-refresh.md`, `docs/research/wave-03-api-audit.md`, `skills/`, `.agents/skills/`, `tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`; E-13 | 13 |
 | 15 | — | 14 |
@@ -101,18 +101,18 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - [ ] **Step 1:** In the worktree, `git fetch origin`, `git merge origin/main`, `git merge-base --is-ancestor origin/main HEAD`, `git status --short`. Record the base SHA and `HEAD` before and after in the ledger.
 - [ ] **Step 2:** Re-check every name, path and line of design Baseline Facts 1 to 27 and Parts A to G at the new `HEAD`, in a ledger table with its current file and line. A name that changed shape stops for the owner.
 - [ ] **Step 3:** Confirm every module path this plan names (among them `repository::discovery`'s tests, `repository::item_merges::tests`, `repository::remote::poll::tests`, `repository::remote::sync`'s and `repository::remote::state`'s tests, `repository::closure::run_tests`, `repository::promotion::run_tests`, `repository::closure::record_tests`, `repository::promotion::record_tests`, `repository::setup::poll`'s tests, `repository::closure::run_pull_request_lifecycle_tests`, `repository::promotion::run_pull_request_lifecycle_tests`, `repository::mutation::dto`'s tests, the CLI's `human_tests` and `polling_tests`), and the targets `read_items`, `read_repository`, `read_contract`, `discovery_rebuild`, `mutation_contract`, `mutation_confirmation`, `cli`, `repository_enablement`, `recovery_foundation_gate`, `mutation_remote`, `cli_remote`, `remote_polling`. Record corrections.
-- [ ] **Step 4: Premise sweep.** Grep for the design's sweep list (Named Edits, last paragraph). List every golden that carries a poll answer or an item, with the test that writes it and whether that test is an SSH case. Settle U-7. Add each hit beyond E-1 to E-22 to the ledger as E-23 onwards. An edit that reverses an intent is listed for the owner before its task.
+- [ ] **Step 4: Premise sweep.** Grep for the design's sweep list (Named Edits, last paragraph). List every golden that carries a poll answer or an item, with the test that writes it and whether that test is an SSH case. Settle U-7. Add each hit beyond E-1 to E-23 to the ledger as E-24 onwards. An edit that reverses an intent is listed for the owner before its task.
 - [ ] **Step 5:** Read the rows of E-6, E-7 and E-21 and write down, per row, what it pins today and what the design gives.
 - [ ] **Step 6:** Confirm that no CI test list changes: this Cycle adds no test target.
 - [ ] **Step 7:** Commit the ledger. The orchestrator publishes the branch and adds the start checkpoint comment.
 
 ## Task 1: The Arrival Record At The Poll's Move (Design Part A)
 
-**Files:** `src/repository/item_merges.rs` (new: `Arrival`, `arrivals`, `record`, `record_after_move`, `#[cfg(test)] take_walked`), `src/repository/item_merges_tests.rs` (new), `src/repository.rs` (the module), `src/repository/discovery.rs` (`ITEM_MERGES_MARKER`, `ITEM_MERGES_TABLE`, `migrate_item_merges` after `migrate_pull_request_links`, its unit test), `remote/poll.rs` (`poll_after_fetch_into`, after the primary's `FastForwarded`), `remote/poll_tests.rs`. Named edit: E-1.
+**Files:** `src/repository/item_merges.rs` (new: `Arrival`, `arrivals`, `record`, `record_after_move`, `#[cfg(test)] take_diffed`), `src/repository/item_merges_tests.rs` (new), `src/repository.rs` (the module), `src/repository/discovery.rs` (`ITEM_MERGES_MARKER`, `ITEM_MERGES_TABLE`, `migrate_item_merges` after `migrate_pull_request_links`, its unit test), `remote/poll.rs` (`poll_after_fetch_into`, after the primary's `FastForwarded`), `remote/poll_tests.rs`. Named edit: E-1.
 
 **Interfaces:** Produces `Arrival { kind: AuthoringKind, item_id: ItemId, commit: Oid, merged_at: OffsetDateTime }`, `arrivals(&git2::Repository, before: Oid, after: Oid) -> Result<Vec<Arrival>, git2::Error>`, `record(&Transaction, i64, &OperationId, &[Arrival]) -> rusqlite::Result<()>`, and `record_after_move(service: &RepositoryService, root: &Path, operation: &OperationId, before: Oid, after: Oid)`, which returns nothing and drops its own failures.
 
-- [ ] **Step 1: Write the failing tests.** `discovery.rs` `item_merges_migration_creates_its_table_once` (P1); `item_merges_tests.rs` `arrivals_follow_the_range` (P2), every row of design Testing's P2 with its expected arrivals, times and exact `take_walked()` count; `remote/poll_tests.rs` `the_poll_records_its_arrivals` (P3's poll row, through `PollFixture` and `synthetic_fetch`, asserting one row per arrival with the poll's operation ID, and that a failure injected into `record` leaves the poll's answer unchanged).
+- [ ] **Step 1: Write the failing tests.** `discovery.rs` `item_merges_migration_creates_its_table_once` (P1); `item_merges_tests.rs` `arrivals_follow_the_range` (P2), every row of design Testing's P2 with its expected arrivals, times and exact `take_diffed()` count, and design R-37's rows (a ticket closed again, a deleted document, two records out of order); `remote/poll_tests.rs` `the_poll_records_its_arrivals` (P3's poll row, through `PollFixture` and `synthetic_fetch`, asserting one row per arrival with the poll's operation ID, and that a failure injected into `record` leaves the poll's answer unchanged).
 - [ ] **Step 2: Run** each:
   `devenv shell -- cargo test --all-features --locked --lib repository::discovery::tests::item_merges_migration_creates_its_table_once -- --exact`
   `devenv shell -- cargo test --all-features --locked --lib repository::item_merges::tests::arrivals_follow_the_range -- --exact`
@@ -150,7 +150,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 0: Merge main** if it moved. **Design checkpoint:** write in the ledger the upgrade against design Part D's truth table, its marker checks, and each test of E-14 with the change it needs. The orchestrator approves it before code.
 - [ ] **Step 1: Write the failing test** `the_poll_disposition_catalog_upgrades_by_its_truth_table` (P5), one row per line of the truth table, from tables holding rows of every old value.
-- [ ] **Step 2: Run** `devenv shell -- cargo test --all-features --locked --lib repository::remote::state::tests::the_poll_disposition_catalog_upgrades_by_its_truth_table -- --exact`. Expected: FAIL.
+- [ ] **Step 2: Run** `devenv shell -- cargo test --all-features --locked --lib repository::remote::state::persistence_tests::the_poll_disposition_catalog_upgrades_by_its_truth_table -- --exact`. Expected: FAIL.
 - [ ] **Step 3: Implement** the catalog and its upgrade. No Rust enum changes yet: the CHECK accepts the values before anything writes them.
 - [ ] **Step 4:** Apply E-14 and E-15's disposition marker; run each edited test by exact name. Expected: PASS.
 - [ ] **Step 5: Run** the new test again. Expected: PASS.
@@ -172,8 +172,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 **Files:** `item_merges.rs` (`merges_by`), `mutation/bind/poll.rs` (`reported`), `context_retirement/pass_report.rs` (`finish`), `mutation/dto.rs` (`PollMutationDto.merged`, `PollMergedDto`, `from_stored`), `schemas/v1/poll_mutation.schema.json`, `src/bin/manyhands-cli/polling.rs` (the lines, `fields_without`), the literals of E-5 (`PollMutationDto`), the goldens of E-3, `closure/run_pull_request_lifecycle_tests.rs`, `promotion/run_pull_request_lifecycle_tests.rs`, `polling_tests.rs`. Named edits: E-2, E-3, E-5 (`PollMutationDto`), E-8 (the poll's enums).
 
-- [ ] **Step 0: Design checkpoint (U-4).** Write down where `merged` is added for an ordinary poll and for a retiring poll, inside `pass_report.rs` `finish`'s transaction, and where its `made_ready` is read after that transaction. The orchestrator approves it.
-- [ ] **Step 1: Write the failing tests** (P6): `repository::closure::run_pull_request_lifecycle_tests::a_poll_lists_its_arrivals_with_the_dependents_made_ready` and `…::a_retiring_poll_lists_its_arrivals`, `repository::promotion::run_pull_request_lifecycle_tests::a_poll_lists_a_document_s_arrival`, the two `mutation/dto.rs` decoding tests (E-2's new form and an old `poll_retirement`), and a `polling_tests.rs` test of the `merged:` and `made ready:` lines.
+- [ ] **Step 0: Design checkpoint.** Write down where `merged` is added for an ordinary poll, and where a retiring poll builds `merged` and its `made_ready` and freezes them with its summary in `pass_report.rs` `finish` (design R-38). The orchestrator approves it.
+- [ ] **Step 1: Write the failing tests** (P6): `repository::closure::run_tests::pull_request::lifecycles::a_poll_lists_its_arrivals_with_the_dependents_made_ready` and `…::a_retiring_poll_lists_its_arrivals` (with a replay of its frozen summary), `repository::promotion::run_tests::pull_request::lifecycles::a_poll_lists_a_document_s_arrival`, the two `mutation/dto.rs` decoding tests (E-2's new form and an old `poll_retirement`), and a `polling_tests.rs` test of the `merged:` and `made ready:` lines.
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
 - [ ] **Step 3: Implement** Part C; apply E-2's library edits and E-5's `PollMutationDto` literals; add the poll's enums to `contract_enumerations` (E-8).
 - [ ] **Step 4:** E-3: rewrite the poll goldens with `MANYHANDS_UPDATE_GOLDEN=1` by the cases that write them, each by exact name (SSH cases one at a time, among them `tests/cli_remote/retirement.rs`'s, with its assertion of six fields), reading each diff, which must add only `merged`. Run, by exact name, `mutation_contract`'s golden-schema test and `an_opted_poll_matches_its_distinct_closed_schema_and_golden`. Expected: PASS.
@@ -182,59 +182,59 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 ## Task 7: `context cleanup`: Design Checkpoint And The Records (Design Part E, Items 1, 4 And 5; R-19, R-28, R-29)
 
-**Files:** `closure/record.rs` and `promotion/record.rs` (the action `cleanup`, the columns, CHECKs and step graph, the rebuilds under `wave_06_closure_cleanup_v1` and `wave_06_promotion_cleanup_v1`, the immutables, the holder predicates), `closure/record_tests.rs`, `promotion/record_tests.rs`, `tests/recovery_foundation_gate.rs`. Named edits: E-15 (the lifecycle markers), E-16.
+**Files:** `closure/record.rs` and `promotion/record.rs` (the action `cleanup`, `RecordPath::Cleanup` and its arms, the columns, CHECKs and step graph with `remote_deleting`, the rebuilds under `wave_06_closure_cleanup_v1` and `wave_06_promotion_cleanup_v1`, the immutables), `closure/record_tests.rs`, `promotion/record_tests.rs`, `tests/recovery_foundation_gate.rs`. Named edits: E-15 (the lifecycle markers), E-16, E-23 (the `RecordPath` arms).
 
-- [ ] **Step 0: Merge main** if it moved. **Design checkpoint (U-2, U-5, U-6).** A designer on the most capable model writes in the ledger, before any code, the mechanism for every row CC1 to CC26, as design Part E's last section lists: the rebuilt tables' columns, CHECKs and step graph and a cleanup record's immutables; the runner's third path, its consent re-check and its head check; `finish_parent`'s join, `make_outcome` and `complete_record` for a cleanup record; the holder predicates for CC3 and CC26; the two `LifecycleVerb`s and the resume discriminator; `abandonable` and the abandon's end. A separate checker on the most capable model re-reads the source for each claim. The orchestrator approves it and posts it on the ticket before any code. A row that cannot be met, or a mechanism that needs a change to the remote reservation's rules beyond `finish_parent`'s join and `abandonable` for a cleanup record, a new remote action, a change to the transport or a change to the conflict verbs, stops for the owner.
-- [ ] **Step 1: Write the failing tests** `repository::closure::record_tests::cleanup_records_rebuild_once` and `repository::promotion::record_tests::cleanup_records_rebuild_once` (P7): each rebuilds a table at today's schema holding rows of every action and step, checks every old row reads its old action, a cleanup row's CHECKs and step graph (accepted and refused transitions), idempotence and a half-done migration failing closed.
+- [ ] **Step 0: Merge main** if it moved. **Design checkpoint (U-2, U-5, U-6).** A designer on the most capable model writes in the ledger, before any code, the mechanism for every row CC1 to CC26, as design Part E's last section lists: the rebuilt tables' columns, CHECKs and step graph and a cleanup record's immutables; the runner's third path, its consent re-check, its head check, its `remote_deleting` save and its stop mapping (R-34, R-35); `finish_parent`'s join, `make_outcome`, `merged_context` and `complete_record` for a cleanup record; the advertisement-only `PromotionIo` method; the holder predicate for CC3 and CC28 and its sites; the two `LifecycleVerb`s, the command-keyed lists and the resume discriminator; the abandon's liveness source, takeover and end (R-36). A separate checker on the most capable model re-reads the source for each claim. The orchestrator approves it and posts it on the ticket before any code. A row that cannot be met, or any trigger of design Part E item 7 (a change to the remote reservation's rules beyond `finish_parent`'s join and `abandonable` for a cleanup record, a new remote action, a change to the transport, a change to the conflict verbs), stops for the owner.
+- [ ] **Step 1: Write the failing tests** `repository::closure::record::tests::cleanup_records_rebuild_once` and `repository::promotion::record::tests::cleanup_records_rebuild_once` (P7): each rebuilds a table at today's schema holding rows of every action and step, checks every old row reads its old action, a cleanup row's CHECKs and step graph (accepted and refused transitions), idempotence and a half-done migration failing closed.
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
 - [ ] **Step 3: Implement** the records and their migrations.
-- [ ] **Step 4:** Apply E-15's lifecycle markers and E-16; run each edited test by exact name. Expected: PASS.
+- [ ] **Step 4:** Apply E-15's lifecycle markers, E-16 and E-23's `RecordPath` arms; run each edited test by exact name. Expected: PASS.
 - [ ] **Step 5: Run** the new tests again. Expected: PASS.
 - [ ] **Step 6: Commit** "lifecycle: cleanup records". The orchestrator adds the checkpoint's comment if not yet posted.
 
-## Task 8: `context cleanup`: Prepare, Preview, Registrations And A Confirm With No Remote (Design Part E Item 3, CC1 To CC8, CC14, CC15; Part G Items 1 To 3, 9 And 11; R-20 To R-22, R-30)
+## Task 8: `context cleanup`: Prepare, Preview, Registrations And A Confirm With No Remote (Design Part E Item 4, CC1 To CC9, CC17, CC18; Part G Items 1 To 3, 9 And 11; R-20 To R-22, R-30, R-33)
 
 **Files:** `mutation/command.rs` (`Command::ContextCleanup` and every classifier, `setup_gate`), `mutation/mod.rs`, `mutation/bind/lifecycle_verb.rs` (`CleanupTicket`, `CleanupDocument`), `mutation/bind/lifecycle.rs`, `mutation/bind/resume.rs`, `mutation/dto.rs` (`ContextCleanupPreviewDto`, `ContextCleanupMutationDto`, `LifecycleBlocker::NotDoneOnPrimary`, `PreviewDetailsDto`, `MutationDataDto`, `from_stored`), `recovery.rs` (`LIFECYCLE_COMMANDS`), `mutation/progress.rs`, `closure/lifecycle.rs` and `promotion/lifecycle.rs` (the cleanup lifecycles and their observation), `promotion/run.rs` (the third path's local part), `schemas/v1/context_cleanup_preview.schema.json`, `context_cleanup_mutation.schema.json` and the blocker schema, the CLI (`catalog.rs`, `dispatch.rs`, the handler, `human_admin.rs`), `docs/RFC/cli-contract.md` (the taxonomy row only), the `autonomy.md` cell in both skill trees, the desktop's arms, the goldens `cli_v1` `context_cleanup_preview`, `context_cleanup_blocked` (JSON and text) and `context_cleanup_ok_no_remote`, and `help_root` and `help_root_text`. Named edits: E-8 (the cleanup's enums), E-9 to E-12.
 
-- [ ] **Step 1: Write the failing table tests** `repository::closure::run_tests::context_cleanup_prepare_outcomes` and `repository::promotion::run_tests::context_cleanup_prepare_outcomes` (P7, CC1 to CC8, and CC14 and CC15 with no publication remote): each row builds a repository with a context, a local primary and tracking refs, and asserts the answer, the preview's fields and effects, the blockers in order, the digest's response to each field of CC8, nothing recorded where the row says so, and, with no remote, the local retirement and its data.
+- [ ] **Step 1: Write the failing table tests** `repository::closure::run_tests::context_cleanup_prepare_outcomes` and `repository::promotion::run_tests::context_cleanup_prepare_outcomes` (P7, CC1 to CC9, and CC17 and CC18 with no publication remote): each row builds a repository with a context, a local primary and tracking refs, and asserts the answer, the preview's fields and effects, the blockers in order, the digest's response to each field of CC8, nothing recorded where the row says so, and, with no remote, the local retirement and its data.
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
-- [ ] **Step 3: Implement** the command, the two verbs, the observation and preview, the DTOs and schemas, the registrations, the CLI, and the third path for a record with no publication remote. A confirm of a record with a remote answers `recovery_required` until Task 9; no test reaches it before then, since a confirm with a remote needs the SSH harness.
+- [ ] **Step 3: Implement** the command, the two verbs, the observation and preview, the DTOs and schemas, the registrations, the command-keyed lists, the CLI, `merged_context` and `make_outcome` for a cleanup record, and the third path for a record with no publication remote. A confirm of a record with a remote answers `recovery_required` until Task 9; Task 8's tests script no remote, and Task 9's add it.
 - [ ] **Step 4:** Write the `cli_v1` goldens through `tests/cli` (no network) and their conformance rows; add the taxonomy row and the `autonomy.md` cell; rewrite `help_root` and `help_root_text`; apply E-8 to E-12. Run each by exact name, and the registration tests by exact name: `tests/cli/inventory.rs` `the_catalog_and_the_rfc_taxonomies_name_the_same_verbs` and the mutating-verb, input and `DATA` tests Task 0 named; `tests/mutation_contract.rs`'s `DATA_ROOTS`, reachability and data-root tests; `tests/cli/skills.rs` `every_mutation_sits_in_one_autonomy_column`; `tests/cli/help.rs`'s root tests. Expected: PASS.
 - [ ] **Step 5: Run** the tables again. Expected: PASS. Each row red once against a stub recorded in the ledger.
 - [ ] **Step 6:** Desktop compile check, as in Task 5.
 - [ ] **Step 7: Commit** "context cleanup: prepare, preview and a cleanup with no remote".
 
-## Task 9: `context cleanup`: The Remote Confirm, Stops, Holds And Replay (Design Part E Item 2, CC9 To CC23, CC25, CC26; R-23, R-24, R-31)
+## Task 9: `context cleanup`: The Remote Confirm, Stops, Holds And Replay (Design Part E Items 2, 3 And 5, CC10 To CC25, CC27 To CC29; R-23, R-24, R-31, R-34, R-35)
 
-**Files:** `promotion/run.rs` (the third path's reservation, delete, consent re-check and head check), `promotion/lifecycle_record.rs` (`complete_record`), `remote/reservation.rs` (`finish_parent`'s join for a cleanup record), `make_outcome`, the holder sites the checkpoint named, `closure/run_tests.rs`, `promotion/run_tests.rs`.
+**Files:** `promotion/run.rs` (the third path's reservation, consent re-check, head check, `remote_deleting`, delete, advertisement and stop mapping; `PromotionIo`'s advertisement method and its `Absent`), `promotion/run_tests.rs` (`FakeIo`'s scripts), `promotion/lifecycle_record.rs` (`complete_record`), `remote/reservation.rs` (`finish_parent`'s join for a cleanup record, completed or cancelled), the holder predicate and its sites the checkpoint named, `closure/run_tests.rs`.
 
-- [ ] **Step 1: Write the failing table tests** (P7), in both run-test modules, with `FakeIo` scripting the delete: `context_cleanup_confirm_outcomes` (CC9 to CC16, CC21, CC25), `context_cleanup_stops_and_crashes` (CC17 to CC20, CC23, each crash point by the runner's existing safe points and hooks), and `context_cleanup_holds_its_item_and_the_repository` (CC22: a local write, an `index refresh`, a poll, an `item sync`, a `repo sync` and a comment's publication attempted while it holds its reservation answer as CC22 says, and none republishes or materializes the branch; CC26: each retirement path skips or refuses its item, and retires it once the record finishes).
+- [ ] **Step 1: Write the failing table tests** (P7), in both run-test modules, with `FakeIo` scripting the delete and the advertisement: `context_cleanup_confirm_outcomes` (CC10 to CC17, CC19, CC27), `context_cleanup_stops_and_crashes` (CC20 to CC23, CC25, each crash point by the runner's existing safe points and hooks, `remote_deleting` among them), and `context_cleanup_holds_its_item_and_the_repository` (CC3: a close, withdraw or promote prepare of its item held; CC24: a local write, a comment, an `index refresh`, a poll, an `item sync` and a `repo sync` attempted while it holds its reservation answer as CC24 says, and none republishes or materializes the branch; CC28: each retirement path skips or refuses its item, and retires it once the record finishes; CC29: a change of setting refused).
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
 - [ ] **Step 3: Implement** the checkpoint's mechanism; remove Task 8's interim answer.
-- [ ] **Step 4: Run** again. Expected: PASS. Each row red once against a stub recorded in the ledger (among them: a delete not guarded by `R`; a retirement before the observation; a re-run that skips the consent check; a retirement at the live tip rather than the consented `L`).
+- [ ] **Step 4: Run** again. Expected: PASS. Each row red once against a stub recorded in the ledger (among them: a delete not guarded by `R`; a retirement before the observation; a re-run that skips the consent check; a re-run at `remote_deleting` that re-checks consent; a refusal that keeps its reservation; a retirement at the live tip rather than the consented `L`).
 - [ ] **Step 5: Commit** "context cleanup: the confirm with a remote".
 
-## Task 10: `context cleanup`: Abandon (Design Part E Item 5, CC24, Decision 9)
+## Task 10: `context cleanup`: Abandon (Design Part E Item 6, CC26, Decisions 9 And 11, R-36)
 
-**Files:** `remote/reservation.rs` (`abandonable`), `mutation/bind/abandon.rs`, the cleanup records' abandon and its end of the reservation, `closure/run_tests.rs`, `promotion/run_tests.rs`, the abandon tests of E-17. Named edit: E-17.
+**Files:** `remote/reservation.rs` (`abandonable`), `mutation/bind/abandon.rs` (finding a cleanup record in the lifecycle tables, its liveness, the takeover with `restart_remote_lifecycle` and the end with `finish_parent` as `cancelled`), `closure/run_tests.rs`, `promotion/run_tests.rs`, the abandon tests of E-17. Named edit: E-17.
 
-- [ ] **Step 1: Write the failing table test** `context_cleanup_abandon` (P7, CC24) in both run-test modules: each allowed step abandons (the record `abandoned`, the reservation ended, the context and its branches as they were), each refused step refuses (a delete in flight; every other lifecycle record, as today).
+- [ ] **Step 1: Write the failing table test** `context_cleanup_abandon` (P7, CC26) in both run-test modules: at every unfinished step, with and without a reservation, an abandon with no live run ends the record `abandoned`, ends the reservation, keeps the context and its branches as they were, and answers whether the remote branch was not deleted, may have been deleted or was deleted; an abandon while a live run holds the request answers `busy` and changes nothing; every other lifecycle record is refused, as today; the abandoned request sent again answers `external_change` (CC27).
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
 - [ ] **Step 3: Implement** it; apply E-17 and run each edited test by exact name.
-- [ ] **Step 4: Run** again. Expected: PASS. The refused rows red against a stub that lets every lifecycle record be abandoned.
+- [ ] **Step 4: Run** again. Expected: PASS. The refused rows red against a stub that lets every lifecycle record be abandoned, and the `busy` row red against a stub that skips the liveness check.
 - [ ] **Step 5: Commit** "context cleanup: abandon". The orchestrator adds the checkpoint comment for Tasks 7 to 10.
 
 ## Task 11: The Owner's Lifecycles (Design P8; Acceptance A1 To A3)
 
 **Files:** `closure/run_pull_request_lifecycle_tests.rs`, `promotion/run_pull_request_lifecycle_tests.rs`, each reusing its own `Forge`.
 
-- [ ] **Step 1: Write the table tests** `repository::closure::run_pull_request_lifecycle_tests::a_ticket_after_its_merge` and `repository::promotion::run_pull_request_lifecycle_tests::a_document_after_its_merge`, as design Testing's P8 lists them, the second clone's row in the closure tests with `Peer`.
+- [ ] **Step 1: Write the table tests** `repository::closure::run_tests::pull_request::lifecycles::a_ticket_after_its_merge` and `repository::promotion::run_tests::pull_request::lifecycles::a_document_after_its_merge`, as design Testing's P8 lists them, the second clone's row in the closure tests with `Peer`.
 - [ ] **Step 2: Run** each by exact name. Expected: PASS on the code of Tasks 1 to 10. Show each red against two stubs recorded in the ledger: the poll's pre-Cycle classification, and `merged_at` from every parent.
 - [ ] **Step 3: Commit** "test: the lifecycles after a merge".
 
 ## Task 12: The Checkout Warning (Design Part F, R-16 To R-18)
 
-**Files:** `remote/poll.rs` (`root_checkout`, `RootCheckout`), `remote/mod.rs` (the re-export), `read/admin.rs` (`inspect_selected`), `results.rs` (`ProblemCode::PrimaryNotCheckedOut`, `PrimaryDirty`, their guidance), `schemas/v1/problem.schema.json`, `index_problem.schema.json`, `src/bin/manyhands-cli/polling.rs` (the warning line), `tests/read_repository.rs`, `tests/read_contract.rs` (`add_fixture_remotes`), `polling_tests.rs`. Named edits: E-8 (the problem codes), E-20.
+**Files:** `remote/poll.rs` (`root_checkout`, `RootCheckout`, the poll's one reading of it before the primary's classification), `remote/mod.rs` and `src/repository.rs` (the re-exports), `read/admin.rs` (`inspect_selected`, gated on the registry's publication remote or a pending setup), `results.rs` (`ProblemCode::PrimaryNotCheckedOut`, `PrimaryDirty`, their guidance), `schemas/v1/problem.schema.json`, `index_problem.schema.json`, `src/bin/manyhands-cli/polling.rs` (the warning line), `tests/read_repository.rs`, `tests/read_contract.rs` (`add_fixture_remotes`), `polling_tests.rs`. Named edits: E-8 (the problem codes), E-20.
 
 - [ ] **Step 1: Write the failing tests** (P9): `tests/read_repository.rs` `repo_inspect_warns_when_the_root_is_off_the_primary`; `repository::remote::poll::tests::root_checkout_is_the_poll_s_guard`, asserting for each case that `root_checkout` and the poll's primary disposition agree; a `polling_tests.rs` test of the warning line under a root off the primary and its absence when `inaccessible` comes from the obstruction scan.
 - [ ] **Step 2: Run** each by exact name. Expected: FAIL.
@@ -248,7 +248,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 **Files:** `tests/mutation_remote/c5_lifecycle.rs` (`a_pull_request_close_publishes_only_the_ticket_branch`), `tests/support/mutation_golden.rs` (`CASES`), the `mutation_v1` goldens `context_cleanup_ok` and `poll_once_merged`. Named edits: E-11 (`CASES`), E-22.
 
 - [ ] **Step 1:** Add the steps after the case's last: write a merge commit of the ticket's branch into the server's bare repository (as `tests/mutation_remote.rs` about 5418-5430 writes a squash), keeping the branch; poll (the ticket reads `merged`, and the `merged` list has it); `context cleanup --prepare` and `--confirm`; then assert, from a new cursor, that the only server ref update is the deletion of the ticket's branch (its new OID zero, accepted), that the server's primary is the forge's merge, and that a last poll finds nothing to do.
-- [ ] **Step 2: Run** `devenv shell -- cargo test --all-features --locked --test mutation_remote a_pull_request_close_publishes_only_the_ticket_branch -- --exact`, first with `MANYHANDS_UPDATE_GOLDEN=1` to write the goldens, then without. Expected: PASS. Show it red once against a stub the server can see, recorded in the ledger: a cleanup that skips the delete (the assertion of one deletion fails), or one that also pushes the ticket's branch.
+- [ ] **Step 2: Run** `devenv shell -- cargo test --all-features --locked --test mutation_remote c5_lifecycle::a_pull_request_close_publishes_only_the_ticket_branch -- --exact`, first with `MANYHANDS_UPDATE_GOLDEN=1` to write the goldens, then without. Expected: PASS. Show it red once against a stub the server can see, recorded in the ledger: a cleanup that skips the delete (the assertion of one deletion fails), or one that also pushes the ticket's branch.
 - [ ] **Step 3: Commit** "test: context cleanup over SSH". The orchestrator adds the checkpoint comment for Tasks 11 to 13.
 
 ## Task 14: The Contracts, RFCs, Audit And Skills (Design D-1 To D-5)
@@ -286,18 +286,21 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 | A13 | 8 |
 | A14 | 14 |
 | A15 | 15 |
-| R-1, R-2, R-3, R-4, R-5 | 1 |
+| R-1, R-2, R-3, R-4, R-5, R-37 | 1 |
 | R-6 | 2 |
 | R-7, R-26 | 3 |
 | R-11 | 4 |
-| R-10, R-12, R-13, R-27 | 5 |
-| R-8, R-9 | 6 |
+| R-10, R-12, R-13 | 5 |
+| R-27 | 5, 8, 9 |
+| R-8, R-9, R-38 | 6 |
 | R-14 | 5, 6, 8 |
 | R-15 | 13 |
 | R-16, R-17, R-18 | 12 |
 | R-19, R-28, R-29 | 7, 9 |
+| R-33 | 7, 8 |
 | R-20, R-21, R-22, R-30 | 8 |
-| R-23, R-24, R-25, R-31 | 9 |
+| R-23, R-24, R-25, R-31, R-34, R-35 | 9 |
+| R-36 | 10 |
 | R-32 | 14 |
 | Review Focus lines | 1, 2, 5, 6, 8, 9, 10, 11, 13, 15 |
 
