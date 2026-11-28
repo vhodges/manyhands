@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Ticket: vh-rphcs (`01M87684C9GM9BJP5QQ429KMAK`), branch `manyhands/ticket/01M87684C9GM9BJP5QQ429KMAK`. Wave: [Wave 06](../Waves/wave-06-pull-request-workflow.md). Design: [Cycle 04 design](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md). Plan: [Cycle 04 implementation plan](../plans/2026-11-26-wave-06-cycle-04-pull-request-promote-implementation.md).
 
-Status: **approved** by the owner on 2026-11-26, at revision 7 (decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer. Implementation: **review-ready** on 2026-11-27, awaiting the owner's review.
+Status: **approved** by the owner on 2026-11-26, at revision 7 (decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer. Implementation: **done**: the owner approved the review, and the ticket was closed and merged on 2026-11-27 at `a1aba5d5`.
 
 Revision history:
 
@@ -24,6 +24,7 @@ Revision history:
 - Revision 7 (Cycle document `ca1a483f`, design `725a1a01`, plan `e57f0117`) was approved by the owner on 2026-11-26, without a further round (decision 16). This approval edit changes only the status lines, this history, decision 16, the notes and the Review Record.
 - Execution, 2026-11-27: the owner's decisions 17 to 19 and the known limits K-19 and K-20, from Task 4's design checkpoint, with K-16 amended; and the design's row C28 restored after an editing error. Not independently reviewed as documents; the checkpoint they come from was checked four times (execution ledger, Task 4).
 - Review-ready, 2026-11-27: the status line and the Acceptance statuses, from the execution ledger. No other change.
+- Closed, 2026-11-27: the status line, after the owner's review approval and the close. No other change.
 
 ## Purpose And Authority
 
