@@ -16,7 +16,7 @@ manyhands_kind: document
 
 **Spec:** [Cycle 04 design](2026-11-26-wave-06-cycle-04-pull-request-promote-design.md) (revision 7), under the [Cycle document](../Cycles/wave-06-cycle-04-pull-request-promote.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **approved** by the owner on 2026-11-26, at revision 7 (Cycle document decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer.
+Status: **approved** by the owner on 2026-11-26, at revision 7 (Cycle document decision 16). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer. Implementation: **done**: the owner approved the review, and the ticket was closed and merged on 2026-11-27 at `a1aba5d5`.
 
 ## Global Constraints
 
