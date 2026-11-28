@@ -71,6 +71,16 @@ Task 0 complete: no name changed shape, no edit reverses an intent, no CI list c
 - Task 2: fix round 1/5 (2 addressed, 0 open; commits fcd98605..4ccfec7f).
 - Task 2: complete (commits 2c48629d..4ccfec7f, review clean, 4 Minor parked).
 
+## Task 3: `merged_at` And A Closed Ticket's Link In Reads
+
+- BASE `c942843f`. Implementer (Sonnet 5.5, high): commit `5db80123` "read: merged_at, and a closed ticket's link ends". `ClosureDto.merged_at` and a top-level `ItemDto.merged_at` (both `Option<String>`, required and nullable in `item.schema.json`), filled by `fill_complete_read` through the new `item_merges::merge_of` with the `timestamp()` formatter `closed_at` uses: a ticket's only while its closure reads `closed` and a row exists, a document's whenever a row exists, null in lists. A closed ticket's `pull_request` is null whatever its link row says (decision 10). Human `show` prints `Merged at:` after `Closed by:` for a ticket and after `Title:` for a document.
+- Tests, red first, by exact name: `tests/read_items.rs` `ticket_show_gives_merged_at_on_its_closure`, `document_show_gives_merged_at`, `a_closed_ticket_s_link_is_no_longer_offered` (E-21 as a new assertion, Ruling P-2); `tests/discovery_rebuild.rs` `an_item_merge_survives_an_index_rebuild` (red only against a stub that deletes the rows: it pins unchanged behaviour); a `human::tests` test of `Merged at:`. E-4: the 25 golden writers, by exact name with `MANYHANDS_UPDATE_GOLDEN=1`, rewrote 24 fixtures with 97 added lines, each `"merged_at": null,`, and no line removed. E-5's literals. Static gates and the desktop compile check clean.
+- E-34 (found by the implementer): `closure/run_tests.rs` `a_completed_closure_reads_closed_from_the_primary_only` now asserts the shown closure's `merged_at` is set (Task 2's direct close records an arrival) and compares the list entry with `merged_at` null; every other field still exact.
+- Review 1 (Sonnet 5.5): spec ❌, 1 Important: `tests/ticket_closure/journeys.rs` `discoverable` (about 1188) compares a shown closure with its list entry and would fail. 3 Minor, deferred: (m1) a ragged reflow of `ItemDto.pull_request`'s doc comment in `read/dto.rs`; (m2) `merge_of` is queried for an open ticket only to be dropped; (m3) `ItemMerge` omits the commit.
+- Fix round 1 (the same implementer): commit `8ac876e6`. E-35: `discoverable` asserts the shown `merged_at` is set and compares the rest exactly; `--test ticket_closure closed_ticket_discoverable_from_both_clones -- --exact` (one SSH case) red before ("observation: 1188"), green after. Scoped re-review (Sonnet 5.5): ADDRESSED, no new breakage.
+- Task 3: fix round 1/5 (1 addressed, 0 open; commits 5db80123..8ac876e6).
+- Task 3: complete (commits c942843f..8ac876e6, review clean, 3 Minor parked).
+
 ## Appendix A: Premise sweep, Task 0 Steps 4 and 5 (research agent, verbatim)
 
 # Task 0 sweep (read-only)
