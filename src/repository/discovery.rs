@@ -2757,7 +2757,8 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::context_retirement::record::migrate(connection)?;
     migrate_pull_request_mode(connection)?;
     migrate_repository_setup(connection)?;
-    migrate_pull_request_links(connection)
+    migrate_pull_request_links(connection)?;
+    migrate_item_merges(connection)
 }
 
 /// The marker of the pull-request mode migration's one-time marks.
@@ -3017,6 +3018,82 @@ fn pull_request_links_state(
         )
         .map_err(RepositoryError::sqlite)?;
     Ok(PullRequestLinksState { has_table, marked })
+}
+
+/// The marker of the item merges migration.
+const ITEM_MERGES_MARKER: &str = "wave_06_item_merges_v1";
+
+/// The table of the arrivals this clone recorded: one row per item of a
+/// registration, the commit that brought the item's done state to the primary
+/// and when that commit was made. It is keyed on the registration, so an
+/// index rebuild leaves it and a repository's removal takes it.
+const ITEM_MERGES_TABLE: &str = "CREATE TABLE item_merges (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('ticket','document')),
+    item_ulid TEXT NOT NULL,
+    commit_oid TEXT NOT NULL CHECK(length(commit_oid)=40 AND commit_oid NOT GLOB '*[^0-9a-f]*'),
+    merged_at INTEGER NOT NULL CHECK(typeof(merged_at)='integer' AND merged_at BETWEEN 0 AND 253402300799),
+    operation_ulid TEXT NOT NULL,
+    PRIMARY KEY(repository_id, kind, item_ulid)
+)";
+
+/// Adds the item merges table to a registry that lacks it, and marks that it
+/// did, as `migrate_pull_request_links` does for its table: the schema
+/// decides the table, the marker records only that the migration ran, a
+/// registry that has both is only read, and one that lacks either is migrated
+/// in a transaction that takes the write lock before it looks again.
+fn migrate_item_merges(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if item_merges_state(connection)?.is_complete() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    let state = item_merges_state(&transaction)?;
+    if !state.has_table {
+        transaction
+            .execute_batch(ITEM_MERGES_TABLE)
+            .map_err(RepositoryError::sqlite)?;
+    }
+    if !state.marked {
+        transaction
+            .execute(
+                "INSERT INTO registry_migrations (name) VALUES (?1)",
+                [ITEM_MERGES_MARKER],
+            )
+            .map_err(RepositoryError::sqlite)?;
+    }
+    transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// What the registry holds of the item merges migration.
+struct ItemMergesState {
+    has_table: bool,
+    marked: bool,
+}
+
+impl ItemMergesState {
+    fn is_complete(&self) -> bool {
+        self.has_table && self.marked
+    }
+}
+
+fn item_merges_state(connection: &Connection) -> Result<ItemMergesState, RepositoryError> {
+    let has_table = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item_merges')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    let marked = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name = ?1)",
+            [ITEM_MERGES_MARKER],
+            |row| row.get(0),
+        )
+        .map_err(RepositoryError::sqlite)?;
+    Ok(ItemMergesState { has_table, marked })
 }
 
 /// The columns the item reads need: who closed a ticket, an item's unknown
@@ -4206,6 +4283,119 @@ pull_request_url = \"https://git.example.com/bitbucket/compare?source={source}\"
             .execute("DELETE FROM repositories WHERE id = 1", [])
             .unwrap();
         assert_eq!(link_rows(&connection), 0);
+    }
+
+    fn item_merges_markers(connection: &Connection) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM registry_migrations
+                  WHERE name = 'wave_06_item_merges_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn merge_rows(connection: &Connection) -> i64 {
+        connection
+            .query_row("SELECT COUNT(*) FROM item_merges", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    const MERGE_COLUMNS: [&str; 6] = [
+        "repository_id",
+        "kind",
+        "item_ulid",
+        "commit_oid",
+        "merged_at",
+        "operation_ulid",
+    ];
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    // The arrival record is one table, made by checking the schema as the
+    // link record is: a registry from the build before it gains the table and
+    // the marker, one that holds both is only read, and one that is marked but
+    // lost the table gets it back. A row is one item of one registration, at a
+    // commit named in full lowercase hex and at a time a ticket can be saved
+    // at, and it goes with the registration.
+    #[test]
+    fn item_merges_migration_creates_its_table_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(column_names(&connection, "item_merges"), MERGE_COLUMNS);
+        assert_eq!(object_count(&connection, "table", "item_merges"), 1);
+        assert_eq!(item_merges_markers(&connection), 1);
+
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAV', '{COMMIT}', 1, 'op');"
+            ))
+            .unwrap();
+        // A second opening reads the schema and changes nothing.
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(object_count(&connection, "table", "item_merges"), 1);
+        assert_eq!(item_merges_markers(&connection), 1);
+        assert_eq!(merge_rows(&connection), 1);
+
+        // One row per item of a registration; a kind that is an item's; a
+        // commit that is 40 lowercase hex digits; a time that is an integer
+        // from 0 to the year 9999; a registration that exists.
+        for refused in [
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAV', '{COMMIT}', 2, 'op')"),
+            format!("INSERT INTO item_merges VALUES (1, 'comment', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', 2, 'op')"),
+            format!("INSERT INTO item_merges VALUES (2, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', 2, 'op')"),
+            "INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', 'abc', 2, 'op')".into(),
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{}', 2, 'op')", COMMIT.to_uppercase()),
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', -1, 'op')"),
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', 253402300800, 'op')"),
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', 'soon', 'op')"),
+            format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAW', '{COMMIT}', 2.5, 'op')"),
+        ] {
+            assert!(connection.execute(&refused, []).is_err(), "{refused}");
+        }
+        connection
+            .execute(
+                &format!("INSERT INTO item_merges VALUES (1, 'document', '01ARZ3NDEKTSV4RRFFQ69G5FAV', '{COMMIT}', 253402300799, 'op')"),
+                [],
+            )
+            .unwrap();
+        assert_eq!(merge_rows(&connection), 2);
+
+        // The build before the table: neither it nor the marker.
+        connection
+            .execute_batch(
+                "DROP TABLE item_merges;
+                 DELETE FROM registry_migrations WHERE name = 'wave_06_item_merges_v1';",
+            )
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(column_names(&connection, "item_merges"), MERGE_COLUMNS);
+        assert_eq!(item_merges_markers(&connection), 1);
+        assert_eq!(merge_rows(&connection), 0);
+
+        // A marked registry that lost the table gets it back, still marked
+        // once.
+        connection.execute_batch("DROP TABLE item_merges").unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(object_count(&connection, "table", "item_merges"), 1);
+        assert_eq!(item_merges_markers(&connection), 1);
+
+        // Its rows go with the registration.
+        connection
+            .execute(
+                &format!("INSERT INTO item_merges VALUES (1, 'ticket', '01ARZ3NDEKTSV4RRFFQ69G5FAV', '{COMMIT}', 2, 'op')"),
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("DELETE FROM repositories WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(merge_rows(&connection), 0);
     }
 
     #[test]

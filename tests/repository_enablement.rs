@@ -599,6 +599,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "discovered_items",
             "document_promotions",
             "item_edges",
+            "item_merges",
             "item_problems",
             "key_material_operations",
             "key_registry_changes",

@@ -59,6 +59,7 @@ mod git_fixtures;
 #[cfg(test)]
 mod index_step_tests;
 mod integration;
+mod item_merges;
 pub mod keys;
 pub use blocker::{Blocker, Sleeper, WaitPolicy};
 pub(crate) use blocker::{BlockerRow, LiveHolder};

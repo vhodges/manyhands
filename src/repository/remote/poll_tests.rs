@@ -1385,6 +1385,158 @@ fn task6_postfetch_advances_primary_and_replays_without_transport() {
     assert_eq!(replayed, r);
 }
 
+/// Two commits on top of the fixture's primary: the first closes a ticket and
+/// the second adds a document and changes the file the fixture always changes.
+fn arriving_commits(local: &LocalFixture) -> (git2::Oid, git2::Oid) {
+    let signature = |seconds| {
+        git2::Signature::new(
+            "Fixture",
+            "fixture@example.invalid",
+            &git2::Time::new(seconds, 0),
+        )
+        .unwrap()
+    };
+    let ticket = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {POLL_ID}\ntitle: Done\ntype: task\nstatus: closed\nclosed_at: 2026-01-01T00:00:00Z\nclosed_by: Fixture\n---\n"
+    )
+    .into_bytes();
+    let ticket_path = format!(".manyhands/tickets/{POLL_ID}/ticket.md");
+    let base =
+        |file: &[u8]| {
+            vec![
+            ("file", file.to_vec(), 0o100644),
+            (".gitignore", b".manyhands/worktrees/\nignored\n".to_vec(), 0o100644),
+            (
+                ".manyhands/config.toml",
+                b"format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n"
+                    .to_vec(),
+                0o100644,
+            ),
+        ]
+        };
+    let mut first_entries = base(b"old\n");
+    first_entries.push((ticket_path.as_str(), ticket.clone(), 0o100644));
+    let first_tree = local
+        .repository
+        .find_tree(fixture_tree(&local.repository, &first_entries))
+        .unwrap();
+    let first = local
+        .repository
+        .commit(
+            None,
+            &signature(1000),
+            &signature(1000),
+            "close",
+            &first_tree,
+            &[&local.repository.find_commit(local.old).unwrap()],
+        )
+        .unwrap();
+    let mut second_entries = base(b"new\n");
+    second_entries.push((ticket_path.as_str(), ticket, 0o100644));
+    second_entries.push((
+        "docs/example.md",
+        item_source(AuthoringKind::Document, OTHER_ID),
+        0o100644,
+    ));
+    let second_tree = local
+        .repository
+        .find_tree(fixture_tree(&local.repository, &second_entries))
+        .unwrap();
+    let second = local
+        .repository
+        .commit(
+            None,
+            &signature(2000),
+            &signature(2000),
+            "document",
+            &second_tree,
+            &[&local.repository.find_commit(first).unwrap()],
+        )
+        .unwrap();
+    (first, second)
+}
+
+// The poll's move of the primary records each arrival it brought, at the
+// commit that changed the item, under the poll's own operation; a recording
+// that fails costs the poll nothing.
+#[test]
+fn the_poll_records_its_arrivals() {
+    let rows = |f: &PollFixture| -> Vec<(String, String, String, i64, String)> {
+        f.db()
+            .prepare(
+                "SELECT kind, item_ulid, commit_oid, merged_at, operation_ulid
+                   FROM item_merges ORDER BY kind, item_ulid",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let polled = |f: &PollFixture, second: git2::Oid| {
+        f.local.tracking(&SynchronizationTarget::Primary, second);
+        let (report, pending) = report(f.run(vec![("refs/heads/main".into(), second)]).unwrap());
+        assert!(!pending);
+        report
+    };
+
+    let f = PollFixture::new();
+    let (first, second) = arriving_commits(&f.local);
+    let answered = polled(&f, second);
+    assert_eq!(
+        answered.targets()[0].disposition(),
+        PollDisposition::FastForwarded
+    );
+    assert_eq!(
+        rows(&f),
+        vec![
+            (
+                "document".to_owned(),
+                OTHER_ID.to_owned(),
+                second.to_string(),
+                2000,
+                f.owner.operation_id().to_string()
+            ),
+            (
+                "ticket".to_owned(),
+                POLL_ID.to_owned(),
+                first.to_string(),
+                1000,
+                f.owner.operation_id().to_string()
+            ),
+        ]
+    );
+
+    // The same poll with a recording that fails answers as it did and
+    // records nothing.
+    let failing = PollFixture::new();
+    let (_, failing_second) = arriving_commits(&failing.local);
+    assert_eq!(failing_second, second);
+    crate::repository::item_merges::fail_record_for_test(true);
+    let failed = polled(&failing, failing_second);
+    crate::repository::item_merges::fail_record_for_test(false);
+    assert_eq!(rows(&failing), vec![]);
+    assert_eq!(failed.completion(), answered.completion());
+    assert_eq!(failed.targets().len(), answered.targets().len());
+    for (failed, answered) in failed.targets().iter().zip(answered.targets()) {
+        assert_eq!(failed.disposition(), answered.disposition());
+        assert_eq!(failed.before_oid(), answered.before_oid());
+        assert_eq!(failed.after_oid(), answered.after_oid());
+    }
+    assert_eq!(
+        failing.local.repository.head().unwrap().target(),
+        Some(failing_second)
+    );
+}
+
 #[test]
 fn task6_automatic_gates_do_not_reserve_or_change_outcome() {
     for (enabled, paused, suspended, next, reason) in [

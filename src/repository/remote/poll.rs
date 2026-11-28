@@ -2179,18 +2179,30 @@ impl RepositoryService {
                                 tracking_oid,
                             } => {
                                 self.poll_prepare_local_effect(root, owner)?;
-                                self.poll_fast_forward_unlocked(
-                                    root,
-                                    plan,
-                                    configuration,
-                                    &PollFastForward {
-                                        target,
-                                        before: local_oid,
-                                        after: tracking_oid,
-                                    },
-                                    &repository,
-                                )
-                                .map_err(poll_local_error)?
+                                let primary = matches!(target, SynchronizationTarget::Primary);
+                                let answered = self
+                                    .poll_fast_forward_unlocked(
+                                        root,
+                                        plan,
+                                        configuration,
+                                        &PollFastForward {
+                                            target,
+                                            before: local_oid,
+                                            after: tracking_oid,
+                                        },
+                                        &repository,
+                                    )
+                                    .map_err(poll_local_error)?;
+                                if primary && answered == PollDisposition::FastForwarded {
+                                    crate::repository::item_merges::record_after_move(
+                                        self,
+                                        root,
+                                        &owner.operation_id(),
+                                        local_oid,
+                                        tracking_oid,
+                                    );
+                                }
+                                answered
                             }
                         };
                     }
