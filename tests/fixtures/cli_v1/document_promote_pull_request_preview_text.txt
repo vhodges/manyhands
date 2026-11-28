@@ -1,0 +1,17 @@
+Preview of document promote
+Branch: manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN
+Context oid: <oid>
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FDN
+Path: docs/notes/new.md
+Primary branch: main
+Remote: origin
+Remote context oid: none
+Situation: first
+open a pull request from manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN into main
+Will synchronize the editing branch with the remote.
+Will publish the editing branch.
+Will record the pull request link.
+Confirmation: <id> (expires <time>)
+Apply with the same command and --confirm <id>; add --request-id unless you run it at a terminal.
+--- stderr
+--- exit 0

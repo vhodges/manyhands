@@ -6,8 +6,8 @@
 //! the one with the wrong consent presents none.
 
 use manyhands::repository::{
-    AuthoringKind, ItemResolveHistoryInput, RemoteResolveHistoryInput, RemoteSelectInput,
-    ResolveHistoryChoice, TicketWithdrawClosureInput,
+    AuthoringKind, DocumentPromoteInput, ItemResolveHistoryInput, RemoteResolveHistoryInput,
+    RemoteSelectInput, ResolveHistoryChoice, TicketWithdrawClosureInput,
 };
 
 use super::{
@@ -367,6 +367,155 @@ fn withdraw_with_no_closure_is_already_applied() {
         &none.world.root,
         &noop,
     );
+}
+
+/// A pull-request repository (Wave 06 Cycle 04) with a publication remote
+/// nothing listens at, the tracking primary where the primary is, and a
+/// document with an editing context: a promote is offered, and no request
+/// reaches the remote.
+struct Promotable {
+    world: World,
+}
+
+impl Promotable {
+    fn new() -> Self {
+        let world = World::new();
+        let created = world.execute(
+            REQUEST_1,
+            world.document_create(mutation::DOCUMENT_NEW, mutation::DOCUMENT_NEW_PATH),
+        );
+        assert_eq!(created.outcome, Outcome::Success, "{}", created.message);
+        let repository = git2::Repository::open(&world.root).unwrap();
+        repository
+            .remote("origin", "git@example.invalid:team/project.git")
+            .unwrap();
+        let configuration = canonical::parse_repository_config(
+            "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        super::support::commit_tracked_configuration(
+            &world.fixture,
+            &canonical::serialize_repository_config(&configuration).unwrap(),
+        );
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&world.service, &world.root);
+        Self { world }
+    }
+
+    fn promote(&self) -> Mutation {
+        Mutation::DocumentPromote(DocumentPromoteInput {
+            root: self.world.root.clone(),
+            id: items::item_id(mutation::DOCUMENT_NEW),
+        })
+    }
+
+    /// The forge squashed the document into the primary and this clone
+    /// fetched it: the primary holds the document's file as the branch has
+    /// it, and so does the tracking primary.
+    fn merged_by_the_forge(&self) {
+        let source = fs::read_to_string(
+            self.world
+                .worktree(mutation::DOCUMENT_NEW)
+                .join(mutation::DOCUMENT_NEW_PATH),
+        )
+        .unwrap();
+        items::write(&self.world.root, mutation::DOCUMENT_NEW_PATH, &source);
+        items::commit(
+            &self.world.fixture,
+            &[mutation::DOCUMENT_NEW_PATH],
+            items::COMMITTED_AT + 60,
+        );
+        let repository = git2::Repository::open(&self.world.root).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&self.world.service, &self.world.root);
+    }
+
+    fn confirmations(&self) -> i64 {
+        items::index(self.world.data.path())
+            .query_row("SELECT count(*) FROM confirmation_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    fn promotions(&self) -> i64 {
+        items::index(self.world.data.path())
+            .query_row("SELECT count(*) FROM document_promotions", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+}
+
+/// Part B, R-4: a pull-request promote of a document the primary already
+/// holds has nothing to confirm. The prepare answers `already_applied` with no
+/// data and no confirmation, and writes nothing (the golden of the contract).
+#[test]
+fn pull_request_promote_with_the_primary_holding_it_is_already_applied() {
+    let held = Promotable::new();
+    held.merged_by_the_forge();
+    let before = held.confirmations();
+    let noop = held.world.service.prepare(&held.promote());
+    assert_eq!(noop.code, ResultCode::AlreadyApplied, "{}", noop.message);
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_eq!(noop.data, None);
+    assert!(noop.recovery.is_empty());
+    assert_eq!(held.confirmations(), before, "nothing to confirm");
+    assert_eq!(held.promotions(), 0, "no record");
+    assert_golden(
+        "document_promote_pull_request_primary_holds",
+        &held.world.root,
+        &noop,
+    );
+}
+
+/// Part G item 15, C19: a merge fetched between a prepare and its confirm is a
+/// state the consent was not given for. The confirm answers `external_change`
+/// with nothing recorded, as a withdraw's answers `nothing_to_withdraw`'s, and
+/// a new prepare then answers `already_applied`.
+#[test]
+fn a_held_document_at_confirm_is_external_change() {
+    let offered = Promotable::new();
+    let preview = offered
+        .world
+        .service
+        .prepare(&offered.promote())
+        .previewed();
+    assert_eq!(preview.code, ResultCode::Ok, "{}", preview.message);
+    let preview = preview.data.expect("a preview of the promote");
+    assert!(
+        matches!(preview.details, PreviewDetailsDto::PullRequestPromotion(_)),
+        "{:?}",
+        preview.details
+    );
+    offered.merged_by_the_forge();
+    let requests = offered.world.request_rows();
+    let refused = execute_confirmed(
+        &offered.world.service,
+        REQUEST_2,
+        &preview.confirmation_id,
+        offered.promote(),
+    );
+    assert_eq!(
+        refused.code,
+        ResultCode::ExternalChange,
+        "{}",
+        refused.message
+    );
+    assert_eq!(offered.promotions(), 0, "no record");
+    assert_eq!(offered.world.request_rows(), requests, "no request kept");
+    assert_eq!(refused.effects.commit_oid, None);
+    assert!(!refused.effects.is_durable());
+    // A new prepare says why: the primary holds the document.
+    let noop = offered.world.service.prepare(&offered.promote());
+    assert_eq!(noop.code, ResultCode::AlreadyApplied, "{}", noop.message);
+    assert_eq!(noop.data, None);
 }
 
 /// A repository with a publication remote whose cache was lost, which

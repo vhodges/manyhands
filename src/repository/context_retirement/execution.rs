@@ -328,6 +328,18 @@ impl RepositoryService {
                 }
                 let call = recovery::CallScope::retirement(&request.item_id);
                 recovery::require_no_pending_local(&tx, repository_id, &call)?;
+                // An unfinished pull-request promotion of the document owns its
+                // context (Cycle 04 decision 13): nothing is written, as the
+                // other early returns here leave it.
+                if let Some(holder) =
+                    crate::repository::promotion::record::pull_request_promotion_holder(
+                        &tx,
+                        repository_id,
+                        &request.item_id,
+                    )?
+                {
+                    return Err(crate::repository::closure::record::hold_refusal(holder));
+                }
                 // A terminal remote row may still own discovery/reconciliation
                 // before a local handoff row exists. Its released reservation
                 // is not permission for a new retirement to settle that debt.

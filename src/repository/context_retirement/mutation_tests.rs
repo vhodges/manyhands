@@ -3737,3 +3737,492 @@ fn table_b_a_poll_retirement_pass_behind(keep: impl Fn(TableBRow) -> bool) {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+// The retirement fence of a pull-request promotion (Wave 06 Cycle 04, Task
+// 4; design decision 13, table F; P13, A14), written before the behaviour.
+
+const DOCUMENT_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+
+/// `present_with_publication_history`'s twin for a document: a document
+/// context with its branch, its worktree and an earlier fetch that saw its
+/// remote branch published, whose tip the primary holds (the commit is made
+/// on the primary and the branch is made at it).
+fn present_document(f: &Fixture) -> String {
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    git.remote("origin", "ssh://fixture@127.0.0.1:1/fixture")
+        .unwrap();
+    let config = f.root.path().join(".manyhands/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap() + "publication_remote = \"origin\"\n";
+    std::fs::write(config, text).unwrap();
+    let branch = format!("refs/heads/manyhands/document/{ITEM}");
+    let path = "docs/document.md";
+    std::fs::create_dir_all(f.root.path().join(path).parent().unwrap()).unwrap();
+    std::fs::write(
+        f.root.path().join(path),
+        format!("---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {ITEM}\ntitle: Fixture document\n---\nPrivate fixture body\n"),
+    )
+    .unwrap();
+    let mut index = git.index().unwrap();
+    index.add_path(Path::new(path)).unwrap();
+    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
+    index.write().unwrap();
+    let tree = git.find_tree(index.write_tree().unwrap()).unwrap();
+    let parent = git.head().unwrap().peel_to_commit().unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let tip = git
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "document fixture",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    git.reference(&branch, tip, false, "fixture").unwrap();
+    let reference = git.find_reference(&branch).unwrap();
+    let worktree = f.root.path().join(".manyhands/worktrees").join(ITEM);
+    std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+    git.worktree(
+        ITEM,
+        &worktree,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+    )
+    .unwrap();
+    let plan = crate::repository::remote::observation::observation_plan(f.root.path()).unwrap();
+    let config = f
+        .service
+        .observation_configuration(f.root.path(), &plan)
+        .unwrap();
+    crate::repository::remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
+        use crate::repository::remote::state;
+        state::configure_endpoints(tx, id, &plan, &config.endpoint_digest())?;
+        let prior = RemoteRefObservation::from_advertisement(
+            &plan,
+            plan.context(AuthoringKind::Document, &ITEM.parse().unwrap())
+                .remote_ref(),
+            tip,
+            Some(tip),
+        )
+        .unwrap();
+        state::persist_complete_advertisement(
+            tx,
+            id,
+            &plan,
+            state::generation(tx, id)?,
+            &[prior],
+            1,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    branch
+}
+
+/// What a document's promotion record is, for the table.
+#[derive(Clone, Copy, Debug)]
+enum Record {
+    /// A pull-request promotion at `confirmed`.
+    Confirmed,
+    /// A pull-request promotion at `context_synchronized`.
+    Synchronized,
+    /// A pull-request promotion that ended (`abandoned`, `context_gone`).
+    Ended,
+    /// A refused pull-request promotion (`external_change`).
+    Refused,
+    /// An unfinished direct promotion.
+    Direct,
+}
+
+/// Gives `item` a promotion record of `record`, as a confirm leaves it.
+fn begin_record(
+    service: &RepositoryService,
+    root: &Path,
+    item: &str,
+    record: Record,
+) -> Result<OperationId, RepositoryError> {
+    use crate::repository::promotion::{PromotionExpectation, record as rec};
+    let tip = git2::Repository::open(root)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    let item: crate::canonical::ItemId = item.parse().unwrap();
+    let operation = OperationId::new();
+    let expectation = PromotionExpectation::from_bytes([9; 32]);
+    crate::repository::remote::state::with_transaction(service, root, |tx, id| {
+        match record {
+            Record::Confirmed | Record::Synchronized | Record::Ended => {
+                rec::begin_pull_request_record(
+                    tx,
+                    id,
+                    operation,
+                    &item,
+                    expectation,
+                    Some("origin"),
+                    &rec::PullRequestBegin {
+                        consented: tip,
+                        situation: rec::PromotionSituation::First,
+                        primary_branch: "main".into(),
+                        endpoint_digest: [0; 32],
+                    },
+                )?;
+                if matches!(record, Record::Synchronized) {
+                    let mut r = rec::read_record(tx, id, operation)?.unwrap();
+                    r.context_oid = Some(tip);
+                    r.step = rec::PromotionStep::ContextSynchronized;
+                    rec::save_record(tx, id, &r)?;
+                }
+                if matches!(record, Record::Ended) {
+                    rec::abandon_branch_record(
+                        tx,
+                        id,
+                        operation,
+                        rec::PromotionAnswer::ContextGone,
+                    )?;
+                }
+            }
+            Record::Refused => {
+                rec::refuse_record_on(
+                    tx,
+                    id,
+                    operation,
+                    &item,
+                    expectation,
+                    Some("origin"),
+                    &rec::Refusal::ExternalChange,
+                    crate::canonical::Integration::PullRequest,
+                )?;
+            }
+            Record::Direct => {
+                rec::begin_record(tx, id, operation, &item, expectation, Some("origin"))?;
+            }
+        }
+        Ok(operation)
+    })
+}
+
+fn retire_of(f: &Fixture, kind: AuthoringKind) -> Mutation {
+    Mutation::ContextRetire(ContextRetireInput {
+        root: f.root.path().into(),
+        kind,
+        id: ITEM.parse().unwrap(),
+    })
+}
+
+/// What a poll's retirement pass (`poll --retire-completed`: the capture of
+/// `capture_target` and the claim of `claim_initial`) did with the context
+/// `branch` of `kind`'s item `ITEM`: `retired`, `held` (left, its candidate
+/// or its retirement refused with `recovery_required`), or what else.
+fn fenced_poll(kind: AuthoringKind, record: Option<(&'static str, Record)>) -> String {
+    std::thread::spawn(move || {
+        let f = Fixture::new();
+        let branch = match kind {
+            AuthoringKind::Ticket => present(&f),
+            AuthoringKind::Document => present_document(&f),
+        };
+        if let Some((item, record)) = record {
+            begin_record(&f.service, f.root.path(), item, record).unwrap();
+        }
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference("refs/remotes/origin/main", primary, true, "synthetic fetch")
+            .unwrap();
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let answer = execute(
+            &f.service,
+            RequestId::new(),
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        let value = serde_json::to_value(&answer).unwrap();
+        let retired = git.find_reference(&branch).is_err();
+        let candidates: Vec<String> = f
+            .db()
+            .prepare("SELECT candidate FROM poll_retirement_candidates")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let refused = candidates.iter().any(|candidate| {
+            serde_json::from_str::<serde_json::Value>(candidate)
+                .is_ok_and(|c| c["item_id"] == ITEM && c["refusal"] == "recovery_required")
+        }) || value["data"]["retirements"]
+            .as_array()
+            .is_some_and(|retirements| {
+                retirements
+                    .iter()
+                    .any(|r| r["state"] == "refused" && r["code"] == "recovery_required")
+            });
+        if retired {
+            "retired".to_owned()
+        } else if refused {
+            "held".to_owned()
+        } else {
+            format!("left, unrefused: {value}")
+        }
+    })
+    .join()
+    .unwrap()
+}
+
+/// What `context retire` (`claim_scoped`; the desktop's retirement is the
+/// same library path) did with the context of `kind`'s item `ITEM`:
+/// `retired`, `held naming <operation>` (`recovery_required` with the
+/// holder's request), or what else. With `finish`, the record ends after
+/// the first answer and the retirement is sent again.
+fn fenced_retire(
+    kind: AuthoringKind,
+    record: Option<(&'static str, Record)>,
+    finish: bool,
+) -> String {
+    std::thread::spawn(move || {
+        let f = Fixture::new();
+        let branch = match kind {
+            AuthoringKind::Ticket => present(&f),
+            AuthoringKind::Document => present_document(&f),
+        };
+        let holder = record
+            .map(|(item, record)| begin_record(&f.service, f.root.path(), item, record).unwrap());
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let attempt = |expect_holder: Option<OperationId>| {
+            super::super::run::synthetic_advertisement(Ok(Vec::new()));
+            let answer = execute(&f.service, RequestId::new(), retire_of(&f, kind));
+            let value = serde_json::to_value(&answer).unwrap();
+            if git.find_reference(&branch).is_err() {
+                return "retired".to_owned();
+            }
+            match expect_holder {
+                Some(holder)
+                    if value["code"] == "recovery_required"
+                        && value["data"]["blocker"]["operation_id"] == holder.to_string() =>
+                {
+                    "held".to_owned()
+                }
+                _ => format!("left: {value}"),
+            }
+        };
+        let first = attempt(holder);
+        if !finish || first != "held" {
+            return first;
+        }
+        // The record finishes (it ends with a child that is gone), and the
+        // retirement is sent again.
+        crate::repository::remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
+            use crate::repository::promotion::record as rec;
+            rec::abandon_branch_record(tx, id, holder.unwrap(), rec::PromotionAnswer::ContextGone)
+        })
+        .unwrap();
+        // The pass that was refused left its synthetic advertisement
+        // unconsumed; the second attempt takes it.
+        let answer = execute(&f.service, RequestId::new(), retire_of(&f, kind));
+        let value = serde_json::to_value(&answer).unwrap();
+        if git.find_reference(&branch).is_err() {
+            "held, then retired".to_owned()
+        } else {
+            format!("held, then left: {value}")
+        }
+    })
+    .join()
+    .unwrap()
+}
+
+/// What `context retire` of a context that is absent answers: `held naming
+/// <operation>`, or the code it answers otherwise.
+fn fenced_absent_retire(record: Option<Record>) -> String {
+    std::thread::spawn(move || {
+        let f = Fixture::new();
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        git.remote("origin", "ssh://fixture@127.0.0.1:1/fixture")
+            .unwrap();
+        let config = f.root.path().join(".manyhands/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap() + "publication_remote = \"origin\"\n";
+        std::fs::write(config, text).unwrap();
+        let holder =
+            record.map(|record| begin_record(&f.service, f.root.path(), ITEM, record).unwrap());
+        super::super::run::synthetic_advertisement(Ok(Vec::new()));
+        let answer = execute(
+            &f.service,
+            RequestId::new(),
+            retire_of(&f, AuthoringKind::Document),
+        );
+        let value = serde_json::to_value(&answer).unwrap();
+        match holder {
+            Some(holder)
+                if value["code"] == "recovery_required"
+                    && value["data"]["blocker"]["operation_id"] == holder.to_string() =>
+            {
+                "held".to_owned()
+            }
+            _ => format!("not held: {}", value["code"]),
+        }
+    })
+    .join()
+    .unwrap()
+}
+
+/// P13, A14 and the F table (decision 13): while a pull-request promotion
+/// record of a document is unfinished (at `confirmed` and at
+/// `context_synchronized`, the only steps it has), every retirement path
+/// leaves the document's context: the poll's retirement (F1: `capture_target`
+/// skips it, `claim_initial` refuses it as a backstop), `context retire` and
+/// the desktop's retirement (F2: `claim_scoped`, and the branch that goes to
+/// `retire_context_scoped` when the context is absent), the last two with
+/// `recovery_required` naming the record's request. Once the record finishes
+/// (F4) everything retires as today. A document with no record, a record of
+/// another document, a refused or ended record, an unfinished direct record,
+/// and a ticket retire as today. This file tests those call sites already,
+/// through the production boundary (`table_b_*`, `ordinary_retirement_*`),
+/// where `tests.rs` holds only the proof's own rows.
+#[test]
+fn the_retirement_fence() {
+    use AuthoringKind::{Document, Ticket};
+    type Case = (
+        &'static str,
+        AuthoringKind,
+        Option<(&'static str, Record)>,
+        bool,
+    );
+    let table: [Case; 9] = [
+        ("a document with no record", Document, None, false),
+        (
+            "a document with a record at confirmed",
+            Document,
+            Some((ITEM, Record::Confirmed)),
+            true,
+        ),
+        (
+            "a document with a record at context_synchronized",
+            Document,
+            Some((ITEM, Record::Synchronized)),
+            true,
+        ),
+        (
+            "a document with an ended record (F4)",
+            Document,
+            Some((ITEM, Record::Ended)),
+            false,
+        ),
+        (
+            "a document with a refused record (F4)",
+            Document,
+            Some((ITEM, Record::Refused)),
+            false,
+        ),
+        (
+            "a document with an unfinished direct record",
+            Document,
+            Some((ITEM, Record::Direct)),
+            false,
+        ),
+        (
+            "a document, the record another document's",
+            Document,
+            Some((DOCUMENT_OTHER, Record::Confirmed)),
+            false,
+        ),
+        ("a ticket with no record", Ticket, None, false),
+        (
+            "a ticket, a record of a document",
+            Ticket,
+            Some((DOCUMENT_OTHER, Record::Confirmed)),
+            false,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (name, kind, record, held) in table {
+        let expected = if held { "held" } else { "retired" };
+        let polled = fenced_poll(kind, record);
+        if polled != expected {
+            mismatches.push(format!(
+                "F1 the poll's retirement, {name}: expected {expected}, today {polled}"
+            ));
+        }
+        let retired = fenced_retire(kind, record, false);
+        if retired != expected {
+            mismatches.push(format!(
+                "F2 context retire, {name}: expected {expected}, today {retired}"
+            ));
+        }
+    }
+    // F4: once the record finishes, the same retirement goes through.
+    let finished = fenced_retire(Document, Some((ITEM, Record::Confirmed)), true);
+    if finished != "held, then retired" {
+        mismatches.push(format!(
+            "F4 context retire, held and then the record finished: expected held, then retired, today {finished}"
+        ));
+    }
+    // The absent-context branch (`retire_context_scoped`).
+    for (name, record, expected) in [
+        ("no record", None, "not held: \"ok\""),
+        ("a record at confirmed", Some(Record::Confirmed), "held"),
+        (
+            "a record at context_synchronized",
+            Some(Record::Synchronized),
+            "held",
+        ),
+        ("an ended record", Some(Record::Ended), "not held: \"ok\""),
+    ] {
+        let answered = fenced_absent_retire(record);
+        if answered != expected
+            && !(expected.starts_with("not held") && answered.starts_with("not held"))
+        {
+            mismatches.push(format!(
+                "F2 context retire of an absent context, {name}: expected {expected}, today {answered}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// F1's backstop, `claim_initial`, and A14: a candidate captured before the
+/// record began (the capture saw no record, and the candidate holds a
+/// selected context) is met by the claim, which refuses it, and the context
+/// is left alone.
+#[test]
+fn a_candidate_captured_before_the_record_began_is_refused_at_its_claim() {
+    let outcome = std::thread::spawn(|| {
+        let f = Fixture::new();
+        let branch = present_document(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference("refs/remotes/origin/main", primary, true, "synthetic fetch")
+            .unwrap();
+        // Until the pass has frozen its candidates there is no record; then
+        // there is.
+        let root = f.root.path().to_owned();
+        let holder: std::rc::Rc<std::cell::Cell<Option<OperationId>>> = Default::default();
+        let began = holder.clone();
+        crate::repository::context_retirement::handoff::observe_eligible(move |service| {
+            began.set(Some(
+                begin_record(service, &root, ITEM, Record::Confirmed).unwrap(),
+            ));
+        });
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let answer = execute(
+            &f.service,
+            RequestId::new(),
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        let value = serde_json::to_value(&answer).unwrap();
+        let retirement = &value["data"]["retirements"][0];
+        (
+            holder.get().is_some(),
+            git.find_reference(&branch).is_ok(),
+            retirement["state"].clone(),
+            retirement["code"].clone(),
+            value,
+        )
+    })
+    .join()
+    .unwrap();
+    assert!(outcome.0, "the record never began: {}", outcome.4);
+    assert!(outcome.1, "the context was retired: {}", outcome.4);
+    assert_eq!(outcome.2, "refused", "{}", outcome.4);
+    assert_eq!(outcome.3, "recovery_required", "{}", outcome.4);
+}
