@@ -200,6 +200,18 @@ impl Forge {
         root: &Path,
         repo: &git2::Repository,
     ) -> serde_json::Value {
+        self.poll_as(service, root, repo, RequestId::new(), true)
+    }
+    /// One poll of a clone after a fetch, retiring or not, sent as the
+    /// request `request_id`: the envelope.
+    fn poll_as(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        repo: &git2::Repository,
+        request_id: RequestId,
+        retiring: bool,
+    ) -> serde_json::Value {
         let advertised = self.fetch(repo);
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let frozen = service.observation_configuration(root, &plan).unwrap();
@@ -208,11 +220,26 @@ impl Forge {
         })
         .unwrap();
         crate::repository::remote::synthetic_fetch(advertised);
+        Self::send(service, root, request_id, retiring)
+    }
+    /// A poll request sent: the envelope. A request sent again is answered
+    /// from its record, with no advertisement to read.
+    fn send(
+        service: &RepositoryService,
+        root: &Path,
+        request_id: RequestId,
+        retiring: bool,
+    ) -> serde_json::Value {
+        let input = PollOnceInput { root: root.into() };
         let envelope = service.execute(
             MutationCall {
-                request_id: RequestId::new(),
+                request_id,
                 confirmation: None,
-                mutation: Mutation::PollOnceRetiring(PollOnceInput { root: root.into() }),
+                mutation: if retiring {
+                    Mutation::PollOnceRetiring(input)
+                } else {
+                    Mutation::PollOnce(input)
+                },
             },
             &mut SessionCredentials::new(NoCredentials),
             &mut NoProgress,
@@ -221,6 +248,10 @@ impl Forge {
         let value = serde_json::to_value(&envelope).unwrap();
         assert_eq!(value["code"], "ok", "{value}");
         value
+    }
+    /// One ordinary poll after a fetch: the envelope.
+    fn poll_once(&self, p: &PullRequest) -> serde_json::Value {
+        self.poll_as(&p.f.service, p.f.root(), &p.f.repo, RequestId::new(), false)
     }
     /// One retiring poll after a fetch: the envelope.
     fn poll(&self, p: &PullRequest) -> serde_json::Value {
@@ -1050,4 +1081,142 @@ fn another_clone_reads_closing_after_its_poll() {
     assert_retired_by(&value, "the recording clone");
     assert_eq!(p.listed_state(), Some(ClosureState::Closed));
     assert_eq!(p.link(), None);
+}
+
+/// A time as a poll's `merged_at` writes it.
+fn rfc3339(seconds: i64) -> String {
+    crate::results::timestamp_string(OffsetDateTime::from_unix_timestamp(seconds).unwrap()).unwrap()
+}
+
+/// The ticket's entry in a poll's `merged` list, merged by `commit` of the
+/// forge, with the dependent it made ready once the poll's refresh held the
+/// closure.
+fn merged_entry(forge: &Forge, commit: Oid) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "ticket",
+        "item_id": ID,
+        "merged_at": rfc3339(forge.bare.find_commit(commit).unwrap().time().seconds()),
+        "made_ready": [{"id": DEPENDENT, "slug": null}],
+        "made_ready_state": "current",
+    })
+}
+
+/// A poll lists the items its own move of the primary brought, each with when
+/// it was merged, and for a ticket the dependents the closure made ready, as
+/// read after the poll's refresh; a poll that moved nothing lists none (Wave
+/// 06 Cycle 05, Part C). The list is ordered by kind and item, and a read
+/// before the refresh would only say `index_pending`.
+#[test]
+fn a_poll_lists_its_arrivals_with_the_dependents_made_ready() {
+    let mut p = PullRequest::new();
+    p.add_dependent();
+    let (p, forge) = prepared(p);
+    let (_, closure) = closed_and_published(&p, &forge);
+    assert_eq!(p.dependent_reasons(), [Reason::ClosingDependency]);
+    let merged = forge.squash(closure);
+    forge.delete_branch();
+
+    let value = forge.poll_once(&p);
+    assert_eq!(p.f.primary(), merged);
+    assert_eq!(
+        value["data"]["merged"],
+        serde_json::json!([merged_entry(&forge, merged)]),
+        "{value}"
+    );
+    assert_eq!(
+        p.dependent_reasons(),
+        [],
+        "the poll's refresh made it ready"
+    );
+
+    // The same rows, read as the list builder reads them: with the refresh
+    // not completed no dependent is named, and the entries keep the order of
+    // kind and then item, whatever the rows' order.
+    let operation = OperationId::parse(value["data"]["operation_id"].as_str().unwrap()).unwrap();
+    let before_refresh =
+        crate::repository::mutation::poll_merged(&p.f.service, p.f.root(), &operation, false);
+    assert_eq!(
+        serde_json::to_value(&before_refresh).unwrap()[0]["made_ready"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        serde_json::to_value(&before_refresh).unwrap()[0]["made_ready_state"],
+        "index_pending"
+    );
+    let other = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+    let document = "01ARZ3NDEKTSV4RRFFQ69G5FAA";
+    let db = p.f.db();
+    for (kind, item) in [("document", document), ("ticket", other)] {
+        db.execute(
+            "INSERT INTO item_merges
+                 (repository_id, kind, item_ulid, commit_oid, merged_at, operation_ulid)
+             SELECT repository_id, ?1, ?2, commit_oid, merged_at, operation_ulid
+               FROM item_merges WHERE item_ulid = ?3",
+            rusqlite::params![kind, item, ID],
+        )
+        .unwrap();
+    }
+    let listed =
+        crate::repository::mutation::poll_merged(&p.f.service, p.f.root(), &operation, true);
+    let order: Vec<(String, &str)> = listed
+        .iter()
+        .map(|entry| (entry.kind.as_str().to_owned(), entry.item_id.as_str()))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("document".to_owned(), document),
+            ("ticket".to_owned(), ID),
+            ("ticket".to_owned(), other),
+        ]
+    );
+    let document_entry = serde_json::to_value(&listed[0]).unwrap();
+    assert_eq!(document_entry["made_ready"], serde_json::Value::Null);
+    assert_eq!(document_entry["made_ready_state"], serde_json::Value::Null);
+    assert_eq!(
+        serde_json::to_value(&listed[2]).unwrap()["made_ready_state"],
+        "index_pending",
+        "a ticket the index does not hold closed has no dependents to name"
+    );
+
+    // A poll that moved nothing lists none.
+    let again = forge.poll_once(&p);
+    assert_eq!(again["data"]["merged"], serde_json::json!([]), "{again}");
+}
+
+/// A retiring poll lists the same entries, built when its summary is frozen:
+/// every later answer of the request is the frozen one, whatever the rows
+/// hold by then.
+#[test]
+fn a_retiring_poll_lists_its_arrivals() {
+    let mut p = PullRequest::new();
+    p.add_dependent();
+    let (p, forge) = prepared(p);
+    let (_, closure) = closed_and_published(&p, &forge);
+    let merged = forge.squash(closure);
+    forge.delete_branch();
+
+    let request = RequestId::new();
+    let value = forge.poll_as(&p.f.service, p.f.root(), &p.f.repo, request, true);
+    assert_retired_by(&value, "retiring");
+    assert_eq!(
+        value["data"]["poll"]["merged"],
+        serde_json::json!([merged_entry(&forge, merged)]),
+        "{value}"
+    );
+
+    // The rows change; the request's answer does not.
+    p.f.db()
+        .execute("UPDATE item_merges SET merged_at = 86400", [])
+        .unwrap();
+    let replayed = Forge::send(&p.f.service, p.f.root(), request, true);
+    assert_eq!(replayed["data"], value["data"], "{replayed}");
+
+    // A poll that moved nothing lists none.
+    let again = forge.poll(&p);
+    assert_eq!(
+        again["data"]["poll"]["merged"],
+        serde_json::json!([]),
+        "{again}"
+    );
 }

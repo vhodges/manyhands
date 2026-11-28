@@ -2809,6 +2809,90 @@ pub struct PollTargetDto {
     pub after_oid: Option<String>,
 }
 
+contract_enum!(
+    /// What a merged ticket's `made_ready` is in a poll's answer: `current`,
+    /// the set read after the poll's refresh; `index_pending`, none, since the
+    /// refresh had not completed or the read was not complete. A poll gives
+    /// no other value (a lifecycle's own vocabulary is longer).
+    PollMadeReadyState {
+        Current => "current",
+        IndexPending => "index_pending",
+    }
+);
+
+/// An item whose done state arrived in a poll's own move of the primary. A
+/// ticket's `made_ready` and its state say which dependents became ready; a
+/// document's are null.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollMergedDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub merged_at: String,
+    pub made_ready: Option<Vec<LifecycleMadeReadyDto>>,
+    pub made_ready_state: Option<PollMadeReadyState>,
+}
+
+impl PollMergedDto {
+    /// The entries of a stored `merged` list. Every entry has its five fields,
+    /// and a document's `made_ready` and state are both null.
+    fn all_from_stored(stored: &serde_json::Value) -> Option<Vec<Self>> {
+        stored
+            .as_array()?
+            .iter()
+            .map(|entry| {
+                if entry.as_object()?.len() != 5 {
+                    return None;
+                }
+                let kind = entry.get("kind")?.as_str()?;
+                let made_ready = match entry.get("made_ready")? {
+                    serde_json::Value::Null => None,
+                    list => Some(
+                        list.as_array()?
+                            .iter()
+                            .map(|ready| {
+                                if ready.as_object()?.len() != 2 {
+                                    return None;
+                                }
+                                Some(LifecycleMadeReadyDto {
+                                    id: ready.get("id")?.as_str()?.to_owned(),
+                                    slug: match ready.get("slug")? {
+                                        serde_json::Value::Null => None,
+                                        slug => Some(slug.as_str()?.to_owned()),
+                                    },
+                                })
+                            })
+                            .collect::<Option<Vec<_>>>()?,
+                    ),
+                };
+                let made_ready_state = match entry.get("made_ready_state")? {
+                    serde_json::Value::Null => None,
+                    state => {
+                        let state = state.as_str()?;
+                        Some(
+                            PollMadeReadyState::ALL
+                                .into_iter()
+                                .find(|known| known.as_str() == state)?,
+                        )
+                    }
+                };
+                // One story: a ticket has both, a document neither.
+                if made_ready.is_some() != made_ready_state.is_some() {
+                    return None;
+                }
+                Some(Self {
+                    kind: ItemDtoKind::ALL
+                        .into_iter()
+                        .find(|known| known.as_str() == kind)?,
+                    item_id: entry.get("item_id")?.as_str()?.to_owned(),
+                    merged_at: entry.get("merged_at")?.as_str()?.to_owned(),
+                    made_ready,
+                    made_ready_state,
+                })
+            })
+            .collect()
+    }
+}
+
 /// What `poll once` reports. A restart reports what its own pass saw.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PollMutationDto {
@@ -2817,14 +2901,22 @@ pub struct PollMutationDto {
     pub completed_at: String,
     pub next_eligible_at: Option<String>,
     pub targets: Vec<PollTargetDto>,
+    /// The items the poll's own move of the primary brought, ordered by kind
+    /// and item ID. Empty for a poll that moved nothing, and for an answer
+    /// stored before this field existed.
+    pub merged: Vec<PollMergedDto>,
 }
 
 impl PollMutationDto {
     /// The data as a finished record stored it.
     pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
-        if stored.as_object()?.len() != 5 {
-            return None;
-        }
+        // An answer stored before the `merged` field has five fields, and
+        // decodes with it empty; one stored since has six.
+        let has_merged = match stored.as_object()?.len() {
+            5 => false,
+            6 => true,
+            _ => return None,
+        };
         fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
             all.iter().copied().find(|known| name(*known) == text)
         }
@@ -2869,6 +2961,11 @@ impl PollMutationDto {
             completed_at: stored.get("completed_at")?.as_str()?.to_owned(),
             next_eligible_at: optional(stored, "next_eligible_at")?,
             targets,
+            merged: if has_merged {
+                PollMergedDto::all_from_stored(stored.get("merged")?)?
+            } else {
+                Vec::new()
+            },
         })
     }
 }
@@ -3485,9 +3582,91 @@ mod poll_retirement_recognition_tests {
         ];
         for disposition in legacy.into_iter().chain(["closed", "promoted"]) {
             let stored = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-04T00:00:00Z","next_eligible_at":null,"targets":[{"target":null,"kind":null,"item_id":null,"disposition":disposition,"before_oid":null,"after_oid":null}]});
+            // An answer stored before the `merged` field has five fields and
+            // decodes with it empty; the same answer with `merged` written
+            // has six and round-trips.
             let decoded = PollMutationDto::from_stored(&stored).expect("old and new values decode");
-            assert_eq!(serde_json::to_value(decoded).unwrap(), stored);
             assert_eq!(stored.as_object().unwrap().len(), 5);
+            assert!(decoded.merged.is_empty());
+            let mut current = stored.clone();
+            current["merged"] = serde_json::json!([]);
+            assert_eq!(serde_json::to_value(&decoded).unwrap(), current);
+            let reread = PollMutationDto::from_stored(&current).expect("six fields decode");
+            assert_eq!(reread, decoded);
+        }
+    }
+
+    #[test]
+    fn a_poll_with_merged_entries_round_trips_and_its_entries_are_closed() {
+        let ticket = serde_json::json!({"kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","merged_at":"2026-11-27T10:00:00Z","made_ready":[{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","slug":"vh-abcde"},{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAX","slug":null}],"made_ready_state":"current"});
+        let pending = serde_json::json!({"kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAY","merged_at":"2026-11-27T10:00:01Z","made_ready":[],"made_ready_state":"index_pending"});
+        let document = serde_json::json!({"kind":"document","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAZ","merged_at":"2026-11-27T10:00:02Z","made_ready":null,"made_ready_state":null});
+        let stored = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-27T10:01:00Z","next_eligible_at":null,"targets":[],"merged":[ticket,pending,document]});
+        let decoded = PollMutationDto::from_stored(&stored).expect("six fields decode");
+        assert_eq!(decoded.merged.len(), 3);
+        assert_eq!(
+            decoded.merged[0].made_ready_state,
+            Some(PollMadeReadyState::Current)
+        );
+        assert_eq!(
+            decoded.merged[1].made_ready_state,
+            Some(PollMadeReadyState::IndexPending)
+        );
+        assert_eq!(decoded.merged[2].made_ready, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), stored);
+        for (change, case) in [
+            (("merged", serde_json::json!("none")), "merged is a list"),
+            (
+                ("merged", serde_json::json!([{"kind":"ticket"}])),
+                "an entry has every field",
+            ),
+            (("extra", serde_json::json!(1)), "no seventh field"),
+        ] {
+            let mut bad = stored.clone();
+            bad[change.0] = change.1;
+            assert!(PollMutationDto::from_stored(&bad).is_none(), "{case}");
+        }
+        for (field, value) in [
+            ("kind", serde_json::json!("comment")),
+            ("made_ready_state", serde_json::json!("not_computed")),
+            (
+                "made_ready_state",
+                serde_json::json!("index_unavailable_final"),
+            ),
+            ("merged_at", serde_json::json!(5)),
+            ("extra", serde_json::json!(1)),
+        ] {
+            let mut bad = stored.clone();
+            bad["merged"][0][field] = value;
+            assert!(
+                PollMutationDto::from_stored(&bad).is_none(),
+                "entry {field}"
+            );
+        }
+        let mut missing = stored.clone();
+        missing["merged"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("made_ready");
+        assert!(
+            PollMutationDto::from_stored(&missing).is_none(),
+            "made_ready is required"
+        );
+    }
+
+    #[test]
+    fn an_old_poll_retirement_with_a_five_field_poll_still_decodes() {
+        let old = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-06T00:00:00Z","next_eligible_at":null,"targets":[]});
+        let mut current = old.clone();
+        current["merged"] = serde_json::json!([{"kind":"document","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAZ","merged_at":"2026-11-27T10:00:02Z","made_ready":null,"made_ready_state":null}]);
+        for (poll, merged) in [(old, 0), (current, 1)] {
+            let stored = serde_json::json!({"type":"poll_retirement","poll":poll,"completion":"completed","stop_code":null,"retirements":[]});
+            let decoded = PollRetirementMutationDto::from_stored(&stored).expect("decodes");
+            assert_eq!(decoded.poll.merged.len(), merged);
+            assert!(matches!(
+                MutationDataDto::from_stored(Command::PollOnce, &stored),
+                Some(MutationDataDto::PollRetirement(_))
+            ));
         }
     }
 }

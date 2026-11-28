@@ -4,8 +4,9 @@ use super::*;
 use crate::render::test_support::{no_raw_control, stderr, stdout};
 use manyhands::{
     repository::{
-        ItemDtoKind, PollMutationCompletion, PollPolicyMutationDto, PollTargetDisposition,
-        PollTargetDto, RequestId,
+        ItemDtoKind, LifecycleMadeReadyDto, PollMadeReadyState, PollMergedDto,
+        PollMutationCompletion, PollPolicyMutationDto, PollTargetDisposition, PollTargetDto,
+        RequestId,
     },
     results::{Effects, RecoveryAction, Scope},
 };
@@ -88,6 +89,7 @@ fn poll_envelope(code: ResultCode, targets: Vec<PollTargetDto>) -> Envelope<Muta
         completed_at: "2026-11-01T00:00:00Z".into(),
         next_eligible_at: None,
         targets,
+        merged: Vec::new(),
     }));
     envelope
 }
@@ -161,6 +163,79 @@ fn every_disposition_prints_the_domain_s_guidance() {
             "{disposition:?}"
         );
     }
+}
+
+/// An arrival is a line after the targets, a ticket's dependents are lines
+/// under it, and a list that is empty prints nothing; the generic printer
+/// leaves `merged` out.
+#[test]
+fn merged_entries_print_their_lines_after_the_targets() {
+    let mut envelope = poll_envelope(ResultCode::Ok, vec![malformed()]);
+    let Some(MutationDataDto::Poll(poll)) = envelope.data.as_mut() else {
+        unreachable!()
+    };
+    poll.merged = vec![
+        PollMergedDto {
+            kind: ItemDtoKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            merged_at: "2026-11-27T10:00:00Z".into(),
+            made_ready: Some(vec![
+                LifecycleMadeReadyDto {
+                    id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".into(),
+                    slug: Some("vh-abcde".into()),
+                },
+                LifecycleMadeReadyDto {
+                    id: "01ARZ3NDEKTSV4RRFFQ69G5FAX".into(),
+                    slug: None,
+                },
+            ]),
+            made_ready_state: Some(PollMadeReadyState::Current),
+        },
+        PollMergedDto {
+            kind: ItemDtoKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAY".into(),
+            merged_at: "2026-11-27T10:00:01Z".into(),
+            made_ready: Some(Vec::new()),
+            made_ready_state: Some(PollMadeReadyState::IndexPending),
+        },
+        PollMergedDto {
+            kind: ItemDtoKind::Document,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAZ".into(),
+            merged_at: "2026-11-27T10:00:02Z".into(),
+            made_ready: None,
+            made_ready_state: None,
+        },
+    ];
+    let output = once_output(&envelope, false, ROOT);
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    let target = lines
+        .iter()
+        .position(|line| line.starts_with("target: "))
+        .expect("the target line");
+    assert_eq!(
+        lines[target + 2..],
+        [
+            "merged: ticket 01ARZ3NDEKTSV4RRFFQ69G5FAV at 2026-11-27T10:00:00Z",
+            "  made ready: 01ARZ3NDEKTSV4RRFFQ69G5FAW vh-abcde",
+            "  made ready: 01ARZ3NDEKTSV4RRFFQ69G5FAX none",
+            "merged: ticket 01ARZ3NDEKTSV4RRFFQ69G5FAY at 2026-11-27T10:00:01Z",
+            "  made ready: index_pending",
+            "merged: document 01ARZ3NDEKTSV4RRFFQ69G5FAZ at 2026-11-27T10:00:02Z",
+        ],
+        "{text}"
+    );
+    assert!(
+        !text.contains("Merged"),
+        "the generic printer omits it: {text}"
+    );
+    // An empty list prints nothing of its own.
+    let output = once_output(
+        &poll_envelope(ResultCode::Ok, vec![malformed()]),
+        false,
+        ROOT,
+    );
+    assert!(!stdout(&output).to_lowercase().contains("merged"));
 }
 
 #[test]

@@ -458,6 +458,7 @@ fn check_now_attempt_reads_the_report() {
             .enumerate()
             .map(|(ix, (dto, _))| target(ix, *dto))
             .collect(),
+        merged: Vec::new(),
     };
 
     let attempt = check_now_attempt(&root(), &data(PollMutationCompletion::Completed), false)

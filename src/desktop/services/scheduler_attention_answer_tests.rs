@@ -325,6 +325,7 @@ async fn a_failed_check_now_is_recorded_when_its_answer_applies(cx: &mut TestApp
         completed_at: "2026-11-10T12:00:00Z".to_owned(),
         next_eligible_at: None,
         targets: Vec::new(),
+        merged: Vec::new(),
     }));
     checked_with(&world, &b, completed, cx).await;
     assert!(superseded(unreachable, cx), "a later check completed");

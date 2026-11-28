@@ -425,3 +425,41 @@ fn pull_request_promote_lifecycles() {
         }
     }
 }
+
+/// A poll lists a document whose merge it brought in, with when it was merged
+/// and no ticket's `made_ready`; a second poll that moves nothing lists none
+/// (Wave 06 Cycle 05, Part C). The squash holds the published branch's edit,
+/// which the primary did not have.
+#[test]
+fn a_poll_lists_a_document_s_arrival() {
+    let (f, forge) = owner(true);
+    let branch = f.tip();
+    f.repo
+        .remote_anonymous(&forge.url())
+        .unwrap()
+        .push(&[format!("{0}:{0}", context_ref())], None)
+        .unwrap();
+    assert_eq!(forge.tip(&context_ref()), Some(branch));
+    let merged = forge.squash(branch);
+    forge.delete_branch();
+
+    let value = forge.poll(&f, false);
+    assert_eq!(f.primary(), merged);
+    let at = forge.bare.find_commit(merged).unwrap().time().seconds();
+    assert_eq!(
+        value["data"]["merged"],
+        serde_json::json!([{
+            "kind": "document",
+            "item_id": ITEM,
+            "merged_at": crate::results::timestamp_string(
+                time::OffsetDateTime::from_unix_timestamp(at).unwrap()
+            ),
+            "made_ready": null,
+            "made_ready_state": null,
+        }]),
+        "{value}"
+    );
+
+    let again = forge.poll(&f, false);
+    assert_eq!(again["data"]["merged"], serde_json::json!([]), "{again}");
+}

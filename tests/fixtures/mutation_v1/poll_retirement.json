@@ -6,6 +6,7 @@
     "poll": {
       "completed_at": "<completed-at>",
       "completion": "completed",
+      "merged": [],
       "next_eligible_at": null,
       "operation_id": "<operation>",
       "targets": []

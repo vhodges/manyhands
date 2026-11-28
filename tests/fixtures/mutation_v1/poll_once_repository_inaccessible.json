@@ -4,6 +4,7 @@
   "data": {
     "completed_at": "<completed_at>",
     "completion": "completed",
+    "merged": [],
     "next_eligible_at": "<next_eligible_at>",
     "operation_id": "<operation>",
     "targets": [

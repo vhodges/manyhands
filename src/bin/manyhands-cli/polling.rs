@@ -15,9 +15,9 @@
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        Mutation, MutationDataDto, PollConfigureInput, PollMutationDto, PollOnceInput,
-        PollPauseInput, PollResumeInput, PollRetirementMutationDto, RepositoryService,
-        SetupPollDto,
+        Mutation, MutationDataDto, PollConfigureInput, PollMadeReadyState, PollMutationDto,
+        PollOnceInput, PollPauseInput, PollResumeInput, PollRetirementMutationDto,
+        RepositoryService, SetupPollDto,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -106,10 +106,12 @@ fn shown(value: Option<&str>) -> String {
     value.map_or_else(|| "none".to_owned(), field)
 }
 
-/// The report's fields, then a line per target with the domain's guidance. A
-/// slug isn't added: a poll names refs and items as the domain reports them.
+/// The report's fields, then a line per target with the domain's guidance, then
+/// a line per item the poll brought and, under a ticket's, the dependents it
+/// made ready. A slug isn't added to a target: a poll names refs and items as
+/// the domain reports them.
 fn report(data: &PollMutationDto) -> String {
-    let mut out = human_admin::fields_without(data, &["targets"]);
+    let mut out = human_admin::fields_without(data, &["targets", "merged"]);
     if data.targets.is_empty() {
         out.push_str("targets: none\n");
     }
@@ -124,6 +126,27 @@ fn report(data: &PollMutationDto) -> String {
             shown(target.after_oid.as_deref()),
             target.disposition.guidance(),
         ));
+    }
+    for merged in &data.merged {
+        out.push_str(&format!(
+            "merged: {} {} at {}\n",
+            merged.kind.as_str(),
+            field(&merged.item_id),
+            field(&merged.merged_at),
+        ));
+        match (&merged.made_ready, merged.made_ready_state) {
+            (Some(ready), Some(PollMadeReadyState::Current)) => {
+                for dependent in ready {
+                    out.push_str(&format!(
+                        "  made ready: {} {}\n",
+                        field(&dependent.id),
+                        shown(dependent.slug.as_deref()),
+                    ));
+                }
+            }
+            (_, Some(state)) => out.push_str(&format!("  made ready: {}\n", state.as_str())),
+            (_, None) => {}
+        }
     }
     out
 }

@@ -27,10 +27,12 @@
 //! to the next automatic one. No verb sets `enabled`, and `poll resume` doesn't
 //! lift the recovery suspension: its data names one that is set.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Transaction;
+use time::OffsetDateTime;
 
+use crate::canonical::ItemId;
 use crate::results::{DiscoveryEffect, Effects, ResultCode, Scope, timestamp_string};
 
 use crate::repository::setup::{
@@ -41,18 +43,20 @@ use crate::repository::setup::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, ItemDtoKind, OperationFamily, PollCompletion,
-            PollDisposition, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
-            ReadError, RemoteOperationPhase, RemoteOutcomeCategory, RemotePollError,
-            RemotePollInvocation, RemotePollOutcome, RemotePollReport, RemotePollResult,
-            RepositoryOperation, SynchronizationError, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, ItemDtoKind, OperationFamily, OperationId,
+            PollCompletion, PollDisposition, PollPublicationRemoteRequest, PollTargetReport,
+            PollingInterval, ReadError, RemoteOperationPhase, RemoteOutcomeCategory,
+            RemotePollError, RemotePollInvocation, RemotePollOutcome, RemotePollReport,
+            RemotePollResult, RepositoryOperation, RepositoryService, SynchronizationError,
+            item_merges, read_configuration_for,
             recovery::{JournalRow, PendingOperation},
             remote::state::{PollingChange, PollingUpdate, update_remote_polling},
         },
         command::Command,
         dto::{
-            MutationDataDto, PollMutationCompletion, PollMutationDto, PollPolicyMutationDto,
-            PollTargetDisposition, PollTargetDto, SetupPollDto,
+            LifecycleMadeReadyDto, MutationDataDto, PollMadeReadyState, PollMergedDto,
+            PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
+            PollTargetDto, SetupPollDto,
         },
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder, ScopeKey},
@@ -344,7 +348,84 @@ pub(crate) fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
             None => None,
         },
         targets: report.targets().iter().map(dto_target).collect(),
+        merged: Vec::new(),
     })
+}
+
+/// The items a poll's own move of the primary brought, as its answer lists
+/// them (design Part C): the rows its operation recorded, ordered by kind and
+/// item, each with when it was merged and, for a ticket, the dependents its
+/// closure made ready. `refreshed` is whether the poll's own refresh of the
+/// index completed: only then can the index say who became ready, and a ticket
+/// is `current` only when that read was complete and holds the ticket closed;
+/// otherwise its `made_ready` is empty and `index_pending`. The index is read
+/// here, outside any registry write transaction. The list is for display, so
+/// a failure to read it gives an empty one and never a failed answer.
+pub(crate) fn merged_of(
+    service: &RepositoryService,
+    root: &Path,
+    operation: &OperationId,
+    refreshed: bool,
+) -> Vec<PollMergedDto> {
+    let list = || -> Option<Vec<PollMergedDto>> {
+        let repository = resolve_root(service, root).ok()?;
+        let rows = service
+            .read_session(RepositoryOperation::Read, |connection| {
+                Ok(item_merges::merges_by(
+                    connection,
+                    repository.registration_id(),
+                    operation,
+                )?)
+            })
+            .ok()?;
+        Some(
+            rows.into_iter()
+                .filter_map(|(kind, item, merge)| {
+                    let merged_at = timestamp_string(
+                        OffsetDateTime::from_unix_timestamp(merge.merged_at).ok()?,
+                    )?;
+                    let (kind, made_ready, made_ready_state) = match kind {
+                        AuthoringKind::Document => (ItemDtoKind::Document, None, None),
+                        AuthoringKind::Ticket => {
+                            let read = refreshed
+                                .then(|| item.parse::<ItemId>().ok())
+                                .flatten()
+                                .and_then(|id| service.tickets_made_ready(&repository, &id).ok())
+                                .filter(|read| read.complete && read.target_closed);
+                            match read {
+                                Some(read) => (
+                                    ItemDtoKind::Ticket,
+                                    Some(
+                                        read.tickets
+                                            .into_iter()
+                                            .map(|ticket| LifecycleMadeReadyDto {
+                                                id: ticket.id,
+                                                slug: ticket.slug,
+                                            })
+                                            .collect(),
+                                    ),
+                                    Some(PollMadeReadyState::Current),
+                                ),
+                                None => (
+                                    ItemDtoKind::Ticket,
+                                    Some(Vec::new()),
+                                    Some(PollMadeReadyState::IndexPending),
+                                ),
+                            }
+                        }
+                    };
+                    Some(PollMergedDto {
+                        kind,
+                        item_id: item,
+                        merged_at,
+                        made_ready,
+                        made_ready_state,
+                    })
+                })
+                .collect(),
+        )
+    };
+    list().unwrap_or_default()
 }
 
 /// Whether a poll's row ended `failed`, which the journal reads as pending: its
@@ -528,10 +609,18 @@ impl PollOnceBinding {
                 return Self::by_the_row(call, accepted, answer);
             }
         };
-        let Some(data) = poll_data(&report) else {
+        let Some(mut data) = poll_data(&report) else {
             let answer = Answer::stopped(ResultCode::InternalError);
             return Self::by_the_row(call, accepted, answer);
         };
+        // After the poll's refresh, so a ticket's dependents are read as the
+        // index holds them with the closure (design Part C).
+        data.merged = merged_of(
+            call.service,
+            &accepted.root(),
+            &accepted.operation_id,
+            !pending,
+        );
         let discovery = |otherwise| {
             if pending {
                 DiscoveryEffect::Pending

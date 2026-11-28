@@ -802,6 +802,7 @@ fn check_now_is_heard_with_its_attempt() {
                     after_oid: None,
                 })
                 .collect(),
+            merged: Vec::new(),
         })
     };
     let envelope = |outcome, code, data: Option<MutationDataDto>| {

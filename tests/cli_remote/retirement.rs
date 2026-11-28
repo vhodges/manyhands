@@ -118,7 +118,10 @@ fn retirement_cli_authenticated_live_pass() -> Result<(), FixtureError> {
         "ordinary Fetch lists and downloads on its one authenticated connection"
     );
     schema::check_published("poll_mutation.schema.json", &default["data"]).unwrap();
-    assert_eq!(default["data"].as_object().unwrap().len(), 5);
+    // Named edit E-2: the five fields and `merged`, which a poll lists whether
+    // or not its own move brought an item.
+    assert_eq!(default["data"].as_object().unwrap().len(), 6);
+    assert!(default["data"]["merged"].is_array());
     assert_eq!(
         default["data"]["targets"]
             .as_array()

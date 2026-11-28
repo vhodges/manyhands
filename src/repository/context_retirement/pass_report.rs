@@ -220,6 +220,21 @@ fn snapshots(
     }
     Ok(result)
 }
+/// Whether the pass's summary was frozen by an earlier call.
+fn summary_is_frozen(
+    service: &RepositoryService,
+    root: &Path,
+    a: &Accepted,
+) -> Result<bool, RepositoryError> {
+    state::with_transaction(service, root, |tx, _| {
+        tx.query_row(
+            "SELECT summary IS NOT NULL FROM poll_retirement_passes WHERE operation_ulid=?1 AND request_ulid=?2",
+            params![a.operation_id.to_string(), a.request_id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())
+    })
+}
 /// One lease + one immediate TX: revoke starts/effects, snapshot exact children,
 /// release ONLY pass holds and write the one immutable cut before parent Final.
 pub(in super::super::super) fn finish(
@@ -234,6 +249,20 @@ pub(in super::super::super) fn finish(
     )?;
     let _lease =
         repository::repository_lease(&git, &root, repository::RepositoryOperation::RetireContext)?;
+    // The poll's `merged` list reads the index, which a registry write
+    // transaction cannot, so it is built before one and used only when this
+    // call composes the summary: a frozen summary is returned as it is, and
+    // every replay answers the same (design R-38). Whether the poll's refresh
+    // completed is the original operation's own record.
+    let merged = if summary_is_frozen(service, &root, a).unwrap_or(false) {
+        Vec::new()
+    } else {
+        let refreshed = state::with_transaction(service, &root, |tx, id| {
+            Ok(state::read_operation(tx, id, a.operation_id)?.is_some_and(|op| !op.index_pending))
+        })
+        .unwrap_or(false);
+        mutation::poll_merged(service, &root, &a.operation_id, refreshed)
+    };
     state::with_transaction(service, &root, |tx, id| {
         let cancelled = validate_parent(tx, a, false)?;
         let (summary,report,remote,primary,handoff,provenance,binding):PassSnapshotRow=tx.query_row("SELECT summary,original_report,remote_name,primary_branch,handoff,provenance_id,binding_id FROM poll_retirement_passes WHERE operation_ulid=?1 AND request_ulid=?2",params![a.operation_id.to_string(),a.request_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|_|recovery_required())?;
@@ -257,8 +286,11 @@ pub(in super::super::super) fn finish(
                 &primary.ok_or_else(recovery_required)?,
             )
             .map_err(|_| recovery_required())?;
-            mutation::poll_report_data(&RemotePollReport::decode_frozen(&report, &plan)?)
-                .ok_or_else(recovery_required)?
+            let mut poll =
+                mutation::poll_report_data(&RemotePollReport::decode_frozen(&report, &plan)?)
+                    .ok_or_else(recovery_required)?;
+            poll.merged = merged;
+            poll
         } else {
             fallback.ok_or_else(recovery_required)?
         };

@@ -731,8 +731,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
-        LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
-        PullRequestClosureMutationType, PullRequestClosurePreviewType,
+        LocalBranch, PollMadeReadyState, PollMutationCompletion, PollTargetDisposition,
+        PullRequestClosureAction, PullRequestClosureMutationType, PullRequestClosurePreviewType,
         PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
         PullRequestPromotionMutationType, PullRequestPromotionPreviewType,
         PullRequestPromotionPublication, PullRequestPromotionSituation, RemoteBranch,
@@ -1098,6 +1098,18 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "targets.items.disposition",
             PollTargetDisposition::ALL
                 .map(PollTargetDisposition::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "merged.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "merged.items.made_ready_state",
+            PollMadeReadyState::ALL
+                .map(PollMadeReadyState::as_str)
                 .to_vec(),
         ),
         (

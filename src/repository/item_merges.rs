@@ -303,6 +303,38 @@ pub(super) fn merge_of(
         .optional()
 }
 
+/// The arrivals the operation `operation` recorded in the registration
+/// `repository_id`, as (kind, item, arrival), ordered by kind name and item ID.
+/// A poll lists these as its own (design R-8): an item a later move brought
+/// again has its newer row, which names another operation.
+pub(super) fn merges_by(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    operation: &OperationId,
+) -> rusqlite::Result<Vec<(AuthoringKind, String, ItemMerge)>> {
+    connection
+        .prepare(
+            "SELECT kind, item_ulid, merged_at FROM item_merges
+              WHERE repository_id = ?1 AND operation_ulid = ?2
+              ORDER BY kind, item_ulid",
+        )?
+        .query_map(params![repository_id, operation.to_string()], |row| {
+            let kind: String = row.get(0)?;
+            Ok((
+                if kind == kind_name(AuthoringKind::Ticket) {
+                    AuthoringKind::Ticket
+                } else {
+                    AuthoringKind::Document
+                },
+                row.get(1)?,
+                ItemMerge {
+                    merged_at: row.get(2)?,
+                },
+            ))
+        })?
+        .collect()
+}
+
 /// Writes the arrivals in the caller's transaction: a row for each arrived
 /// item, replacing the item's earlier one unless that row's commit is not an
 /// ancestor of the new one (two sites that recorded one item out of order),

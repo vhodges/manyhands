@@ -72,6 +72,7 @@ pub(super) use bind::comment::comment_synchronization;
 #[cfg(test)]
 pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
 pub(crate) use bind::poll::category_code;
+pub(in super::super) use bind::poll::merged_of as poll_merged;
 pub(in super::super) use bind::poll::poll_data as poll_report_data;
 use bind::{
     Binding, Confirmed,
@@ -149,15 +150,16 @@ pub use dto::{
     LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
     LifecycleRecording, LocalCommitDto, LocalIdentityDto, MutationDataDto,
     OperationAbandonEvidenceDto, OperationAbandonPreviewDto, OperationMutationDto,
-    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollRetirementCompletion,
-    PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState, PollRetirementMutationDto,
-    PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
-    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, PrimaryLocalCommitsDto, PrimaryLocalCommitsType,
-    PullRequestClosureAction, PullRequestClosureDto, PullRequestClosureMutationDto,
-    PullRequestClosureMutationType, PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
-    PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataDto,
-    PullRequestLinkDataType, PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
+    PollMadeReadyState, PollMergedDto, PollMutationCompletion, PollMutationDto,
+    PollPolicyMutationDto, PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto,
+    PollRetirementItemState, PollRetirementMutationDto, PollRetirementMutationType,
+    PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto,
+    PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    PrimaryLocalCommitsDto, PrimaryLocalCommitsType, PullRequestClosureAction,
+    PullRequestClosureDto, PullRequestClosureMutationDto, PullRequestClosureMutationType,
+    PullRequestClosurePreviewDto, PullRequestClosurePreviewType, PullRequestClosurePublication,
+    PullRequestClosureRecording, PullRequestLinkDataDto, PullRequestLinkDataType,
+    PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
     PullRequestPromotionPreviewDto, PullRequestPromotionPreviewType,
     PullRequestPromotionPublication, PullRequestPromotionSituation, RemoteHistoryChoicesDto,
     RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto, RemoteRemovalPreviewDto,
