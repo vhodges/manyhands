@@ -8,7 +8,7 @@ manyhands_kind: document
 
 Cycle document: [Wave 06 Cycle 05](../Cycles/wave-06-cycle-05-after-the-merge.md). Ticket: vh-ssepw (`01M876851FT3NPSH9KDXKXR1AJ`). Authority: the [Pull-Request Mode RFC](../RFC/pull-request-mode.md), the Cycle document's Product-Owner Decisions, and [Wave 06 Cycle 04](../Cycles/wave-06-cycle-04-pull-request-promote.md) and [Cycle 03](../Cycles/wave-06-cycle-03-pull-request-close.md), whose lifecycle paths, content-proof rule, retirement fence, link record and `unheld` list this Cycle builds on.
 
-Status: **draft**, revision 4, for approval. Not approved. Revisions 1, 2 and 3 had two independent reviews each (Review Record); revision 4 applies the third round and the owner's decisions 12 to 14, and has not been independently reviewed. Three rounds found blockers in the same mechanism, `context cleanup`'s stops, abandon and fence, so revision 4 states them as required outcomes (CC1 to CC31) and leaves the rest of the mechanism to Task 7's test-first checkpoint, as the planning skill directs.
+Status: **approved** by the owner on 2026-11-28, at revision 4 (Cycle document decision 15), with the named edits E-1 to E-23. Revisions 1, 2 and 3 had two independent reviews each (Review Record); revision 4 has not been independently reviewed. Three rounds found blockers in the same mechanism, `context cleanup`'s stops, abandon and fence, so revision 4 states them as required outcomes (CC1 to CC31) and leaves the rest of the mechanism to Task 7's test-first checkpoint, as the planning skill directs.
 
 ## Intent And Approval Boundary
 
