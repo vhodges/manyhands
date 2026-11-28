@@ -27,7 +27,7 @@ use manyhands::repository::{
     transport::SshAuthority,
 };
 
-use super::{CANCEL, REFUSED, UNLOCK, label_for};
+use super::{CANCEL, NOT_NOW_NOTE, PASSPHRASE, REFUSED, UNLOCK};
 use crate::desktop::{
     keys::Quit,
     services::{
@@ -40,8 +40,11 @@ use crate::desktop::{
         fixtures::{Fixture, SSH_HOST, SSH_PORT},
     },
     view::{
+        activity_support::{choose_in_menu, highlighted, list_focus, pending_key},
         confirm::{CONFIRM, confirm},
-        harness::{Shell, wait_until},
+        harness::{Shell, key, wait_until},
+        operations::ABANDON,
+        repositories::tests::support::press_and_hold,
         workspace::{QuitPhase, Region},
     },
 };
@@ -147,9 +150,9 @@ fn focused(shell: &Shell, cx: &mut TestAppContext) -> Option<FocusHandle> {
     shell.frame(cx, |window, cx| window.focused(cx))
 }
 
-/// The dialog shows "Passphrase for <label>" over a masked input; Enter
-/// supplies exactly one passphrase. The input is emptied and released,
-/// and the dialog with it.
+/// The dialog shows "Passphrase" over a masked input; Enter supplies
+/// exactly one passphrase. The input is emptied and released, and the
+/// dialog with it.
 #[gpui_kit::test]
 async fn submit_supplies_the_passphrase_and_releases_the_input(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -161,9 +164,9 @@ async fn submit_supplies_the_passphrase_and_releases_the_input(cx: &mut TestAppC
 
     assert_eq!(
         shell.label("passphrase-label", cx).as_deref(),
-        Some(label_for("primary").as_str())
+        Some(PASSPHRASE)
     );
-    assert_eq!(label_for("primary"), "Passphrase for primary");
+    assert_eq!(PASSPHRASE, "Passphrase");
     assert_eq!(
         shell.label("passphrase-reason", cx).as_deref(),
         Some(UnlockReason::ProtectedKey.guidance())
@@ -301,7 +304,7 @@ async fn cancel_replies_cancelled(cx: &mut TestAppContext) {
 /// A prompt that arrives while the confirmation dialog is open shows
 /// above it. Escape answers the prompt, and only the prompt: the
 /// confirmation dialog stays, and its own Escape then gives focus back to
-/// the control that started it.
+/// the list, on the row that started it.
 #[gpui_kit::test]
 async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     cx: &mut TestAppContext,
@@ -311,9 +314,10 @@ async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     let root = fixture.create_repository("a");
     let ticket = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
     fixture.create_ticket(&root, ticket, "Stranded", "open");
-    let operation = fixture.strand_ticket_save(&root, ticket, "Edited");
+    fixture.strand_ticket_save(&root, ticket, "Edited");
     let shell = Shell::open(fixture, cx);
-    shell.click(("pending-abandon", 0usize), cx);
+    let row = pending_key(&shell, &key(&root), "save_ticket", cx);
+    choose_in_menu(&shell, &row, ABANDON, cx);
     assert!(shell.present("confirm-dialog", cx));
 
     let asked = ask(&shell, "primary", cx);
@@ -326,15 +330,13 @@ async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
     assert!(!shell.present("passphrase-dialog", cx));
     assert!(shell.present("confirm-dialog", cx));
 
-    shell.keys("escape", cx);
+    let list = list_focus(&shell, cx);
+    assert!(
+        press_and_hold(&shell, "escape", &list, cx),
+        "focus is back on the list"
+    );
     assert!(!shell.present("confirm-dialog", cx));
-    let abandon = shell
-        .workspace
-        .read_with(cx, |workspace, _| {
-            workspace.abandon_focus(root.to_str().unwrap(), &operation)
-        })
-        .expect("the Abandon control has a focus");
-    assert!(shell.frame(cx, |window, _| abandon.is_focused(window)));
+    assert_eq!(highlighted(&shell, cx), Some(row), "its row");
     // Nothing was submitted by either dialog.
     assert!(shell.requests(cx, |_| true).is_empty());
 }
@@ -533,7 +535,7 @@ async fn a_prompt_while_finishing_is_answered_unavailable(cx: &mut TestAppContex
 
 /// Every piece of text a test can read off the window: each observed
 /// element's label and accessibility value.
-fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+pub(in crate::desktop::view) fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
     shell.frame(cx, |window, _| {
         gpui_kit::base::test_support::snapshots(window)
             .iter()
@@ -672,7 +674,11 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
     assert!(shell.present("passphrase-dialog", cx));
     assert_eq!(
         shell.label("passphrase-label", cx).as_deref(),
-        Some(label_for("next").as_str())
+        Some(PASSPHRASE)
+    );
+    assert_eq!(
+        shell.label("passphrase-key-label", cx).as_deref(),
+        Some("next")
     );
     assert!(matches!(answer.try_recv(), Ok(None)), "not yet answered");
     type_text(&shell, SENTINEL, cx);
@@ -686,8 +692,9 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
 }
 
 /// A prompt raised while a share of repository `a` runs names what
-/// waits, and Cancel reads Not now, with a note on what it leaves; Not
-/// now answers `Cancelled`. A prompt with no share waiting names none.
+/// waits, and Cancel reads Not now, with the note on what it leaves; Not
+/// now answers `Cancelled`. A prompt with no share waiting names none, and
+/// shows the note too.
 #[gpui_kit::test]
 async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -700,7 +707,7 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     let asked = ask(&shell, "primary", cx);
     until_shown(&shell, cx).await;
     assert!(!shell.present("passphrase-subtitle", cx));
-    assert!(!shell.present("passphrase-note", cx));
+    assert!(shell.present("passphrase-note", cx));
     shell.click("passphrase-cancel", cx);
     assert_eq!(asked.answered(), "cancelled");
 
@@ -730,10 +737,7 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label("passphrase-note", cx).as_deref(),
-        Some(
-            "If you choose Not now, your work stays saved on this computer. \
-             Unlock later from the waiting share, or stop trying to share it."
-        )
+        Some(NOT_NOW_NOTE)
     );
     assert_eq!(CANCEL, "Not now");
     assert_eq!(
@@ -747,3 +751,47 @@ async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
     held.release();
     shell.until_ended(id, cx).await;
 }
+
+/// A prompt raised while a Check now runs is not a share's: the dialog
+/// names no share (Check now may prompt, and "Sharing a is waiting" would
+/// be wrong for it). The note is shown, as on every prompt.
+#[gpui_kit::test]
+async fn a_prompt_for_a_check_now_names_no_share(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+
+    let held = shell.backend.hold_job(JobKind::PollOnce);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::PollOnce { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        })
+        .await;
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-subtitle", cx));
+    assert!(shell.present("passphrase-note", cx));
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+
+    held.release();
+    shell.until_ended(id, cx).await;
+}
+
+// Part D's key card and refusal (P18, P19).
+#[path = "passphrase_tests/unlock.rs"]
+mod unlock;

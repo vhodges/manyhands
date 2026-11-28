@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull-request promotion preview",
+  "description": "The data of a prepare envelope that gives a preview of document promote in a pull-request repository. Nothing of it reaches primary: it synchronizes the document's branch with its remote copy and the remote's primary, publishes it, and gives the link a pull request is opened by. It holds names, commits and a path, and no title, body or content. A prepare contacts no remote. The confirmation binds the item, the document's path, the branch, the primary branch, the remote, the branch's head, the remote copy when it holds work this clone has not merged, the situation and the link: a change to any of it before the request is accepted is external_change. A document the primary already holds has no preview: the prepare answers already_applied with no data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "confirmation_id",
+    "expires_at",
+    "command",
+    "scope",
+    "effects",
+    "details"
+  ],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "item_id",
+        "path",
+        "branch",
+        "primary_branch",
+        "remote",
+        "context_oid",
+        "remote_context_oid",
+        "situation",
+        "pull_request"
+      ],
+      "properties": {
+        "type": {
+          "description": "The tag that tells these details from a direct promote's.",
+          "type": "string",
+          "enum": [
+            "pull_request_promotion_preview"
+          ]
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "path": {
+          "description": "The document's path on its editing branch, relative to the repository with forward slashes.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "The document's editing branch, as its short name.",
+          "type": "string"
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "remote": {
+          "description": "The publication remote, by its name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context_oid": {
+          "description": "The editing branch's head: what the promote publishes.",
+          "type": "string"
+        },
+        "remote_context_oid": {
+          "description": "The remote's copy of the branch, as this clone last fetched it, when it holds work this clone has not merged (it is ahead of the editing branch's head or beside it). Null when the remote has none, or holds what the branch holds or less: a push moves it, so those are one state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "situation": {
+          "description": "first when the document has no link yet: the promote builds it now. again when it has one: the promote publishes what the branch holds since and gives that link.",
+          "type": "string",
+          "enum": [
+            "first",
+            "again"
+          ]
+        },
+        "pull_request": {
+          "description": "Where to open the pull request: the link the document holds for again, the one that would be built now for first. Never null.",
+          "$ref": "pull_request.schema.json"
+        }
+      }
+    }
+  }
+}

@@ -31,14 +31,14 @@ use super::{
         Accepted, Answer, Binding, CallContext, Confirmed, Entered, Place, Previewed, Ran, Standing,
     },
     command::Command,
-    dto::{MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
+    dto::{BlockedDto, MutationDataDto, PrepareDataDto, PreviewDto, PreviewEffectDto},
     identity::{ConfirmationId, DigestSalt, IntentDigest, ScopeKey},
     observe::ObservationDigest,
     outcome,
     progress::NoSession,
     records::{ConfirmationRecord, NewConfirmation},
     reply::Reply,
-    stored_time,
+    setup_gate, stored_time,
 };
 
 /// How long a confirmation is there for a request to accept: ten minutes
@@ -91,7 +91,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         code,
         effects,
         // What a request would report is not what `prepare` gives: a
-        // preview, or what the one refusal below is about.
+        // preview, or what one of the refusals below is about.
         data: _,
         // What the binding or a read suggested is kept, as `execute`
         // keeps it; `outcome::offered` decides.
@@ -99,7 +99,17 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         local_change,
         offers_nothing,
         host_replacement,
+        lifecycle_blocked,
+        blocker,
     } = answer;
+    // The operation a preview was refused for, as an execute names it: the
+    // data of a `busy` or `recovery_required` answer that names nothing
+    // else of its own, with `operation.show` offered for it.
+    let blocker = blocker.filter(|_| {
+        matches!(code, ResultCode::Busy | ResultCode::RecoveryRequired)
+            && host_replacement.is_none()
+            && lifecycle_blocked.is_none()
+    });
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.
     let authority = host_replacement.as_ref().map(|data| data.authority());
@@ -117,12 +127,20 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         offers_nothing,
         authority.as_deref(),
     );
+    let recovery = match &blocker {
+        Some(blocker) => outcome::showing(recovery, &blocker.operation_id),
+        None => recovery,
+    };
     let envelope =
         Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
             .with_recovery(recovery);
-    match host_replacement {
-        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
-        None => envelope,
+    match (host_replacement, lifecycle_blocked, blocker) {
+        (Some(data), _, _) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
+        (None, Some(data), _) => envelope.with_data(PrepareDataDto::LifecycleBlocked(data)),
+        (None, None, Some(blocker)) => {
+            envelope.with_data(PrepareDataDto::Blocked(BlockedDto { blocker: *blocker }))
+        }
+        (None, None, None) => envelope,
     }
 }
 
@@ -142,6 +160,11 @@ pub(crate) enum Row {
     /// is: the domain is called. A row there is, then: this answer for
     /// a request with no row is `internal_error`, and nothing is run.
     Recorded,
+    /// The operation's own parent record says it began, and a parent usually
+    /// has no journal row. Nothing is compared, for the same
+    /// reason as `Recorded`, and the domain is called: it continues the
+    /// parent, or gives the outcome it stored.
+    Unfinished,
     /// Nothing of the request's is known to be done: the state is
     /// observed again and compared with what was previewed.
     Unrecorded,
@@ -181,7 +204,8 @@ pub(crate) enum Seen {
 ///    that no operation of the command has, ends the call here. A row
 ///    that has recorded the request's work is taken up by the domain
 ///    call with nothing compared. That is never said of a request with
-///    no row: a binding that says it is answered `internal_error`.
+///    no row: a binding that says it is answered `internal_error`. A
+///    parent record says the same with no row, as `Row::Unfinished`.
 /// 2. Otherwise the binding observes; see `Seen`. When the command's
 ///    end state holds and no row stands, the request is a no-op and is
 ///    finished; with a pending row the domain is called to end it.
@@ -218,6 +242,7 @@ pub(crate) fn reenter<B: Confirmed + ?Sized>(
             }
             return Ok(Entered::Unfinished);
         }
+        Row::Unfinished => return Ok(Entered::Unfinished),
         Row::Unrecorded => {}
     }
     match binding.observe_again(call, accepted, &journal)? {
@@ -311,8 +336,15 @@ impl RepositoryService {
             }
             (None, Place::Application) => None,
         };
-        let scope = binding.scope(repository, None);
+        let scope = binding.scope(repository.clone(), None);
         if let Some(answer) = failure {
+            return without_preview(command, scope, answer);
+        }
+        // A pending setup refuses the preview of a command that must wait
+        // for it: the envelope's own code, not an entry of the blockers.
+        if let Some(root) = setup_gate::root_of(binding.place())
+            && let Err(answer) = setup_gate::check(self, command, root)
+        {
             return without_preview(command, scope, answer);
         }
         let call = CallContext {
@@ -320,11 +352,15 @@ impl RepositoryService {
             session: &NoSession,
             confirmation: None,
         };
+        let previewed = binding.preview(&call);
+        // The preview may have told the binding what its scope names: a branch
+        // record's names the ticket's branch.
+        let scope = binding.scope(repository, None);
         let Previewed {
             observation,
             effects,
             details,
-        } = match binding.preview(&call) {
+        } = match previewed {
             Ok(previewed) => previewed,
             Err(answer) => return without_preview(command, scope, answer),
         };

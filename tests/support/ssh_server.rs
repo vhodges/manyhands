@@ -328,6 +328,7 @@ async fn relay(
     let mut hostile_sideband_sent = false;
     let mut commands = ReceiveCommands::default();
     let mut race_prefix = Vec::new();
+    let mut commands_forwarded = false;
     let mut abandoned = false;
     loop {
         if status.is_some() && !output_open {
@@ -348,6 +349,8 @@ async fn relay(
                             commands.observe_old_oids(&shared.repository);
                         }
                         let race_pending = receiving && shared.receive_race.lock().unwrap().is_some();
+                        let hold_pending = receiving && !commands_forwarded
+                            && shared.receive_command_hold.lock().unwrap().is_some();
                         let payload = if race_pending {
                             race_prefix.extend_from_slice(&incoming[..count]);
                             if race_prefix.len() > 81_904 { break; }
@@ -355,6 +358,26 @@ async fn relay(
                             if commands.updates.is_empty() { race_prefix.clear(); continue; }
                             let race = shared.receive_race.lock().unwrap().take().unwrap();
                             if !apply_receive_race(&shared, &commands, race) { break; }
+                            std::mem::take(&mut race_prefix)
+                        } else if hold_pending {
+                            // Nothing reaches receive-pack before the commands are
+                            // complete; then a push's are held, a listing's pass.
+                            race_prefix.extend_from_slice(&incoming[..count]);
+                            if race_prefix.len() > 81_904 { break; }
+                            if !commands.finished { continue; }
+                            commands_forwarded = true;
+                            if !commands.updates.is_empty() {
+                                let hold = shared.receive_command_hold.lock().unwrap().take();
+                                if let Some(hold) = hold {
+                                    if hold.reached.send(()).is_err() { break; }
+                                    let released = tokio::select! {
+                                        result = hold.release => result.is_ok(),
+                                        _ = shutdown.changed() => false,
+                                        _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                                    };
+                                    if !released { break; }
+                                }
+                            }
                             std::mem::take(&mut race_prefix)
                         } else { incoming[..count].to_vec() };
                         let written = tokio::select! {

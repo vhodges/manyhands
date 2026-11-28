@@ -18,7 +18,7 @@ fn transport_poll_stop_is_sticky_and_independent_of_backend_error_code() {
     );
 }
 
-fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
+pub(super) fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
     use crate::repository::keys::*;
     PreparedSshAttempt {
         registration: SharedKeyRegistration {
@@ -42,6 +42,8 @@ fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
             reapproval_required: false,
         },
         approval: None,
+        registry: crate::repository::CallRegistry::new(),
+        remote_source: RemoteSource::Configured,
     }
 }
 
@@ -99,7 +101,9 @@ pub(crate) fn callback_handshake(
     let attempt = CallbackAttempt::default();
     let result = remote.connect_auth(
         git2::Direction::Fetch,
-        Some(super::callbacks::build_callbacks(&prepared, None, &attempt)),
+        Some(super::callbacks::build_callbacks(
+            &prepared, None, None, &attempt,
+        )),
         None,
     );
     let (connected, backend_code) = match result {
@@ -179,9 +183,29 @@ fn transport_callback_host_decision_table() {
             presented: presented.clone()
         })
     );
-    prepared.approval = Some(approval(&host, Some(old), &presented));
+    prepared.approval = Some(approval(&host, Some(old.clone()), &presented));
     assert!(matches!(
         CallbackAttempt::default().check_host(
+            &prepared,
+            "example.invalid",
+            Some(presented.clone())
+        ),
+        Ok(git2::CertificateCheckStatus::CertificateOk)
+    ));
+    // A further connection of a call that finalized `presented` refuses the
+    // old pin the prepared policy still accepts, before any key is offered.
+    let further = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(
+        further
+            .check_host(&prepared, "example.invalid", Some(old.clone()))
+            .is_err()
+    );
+    assert_eq!(
+        further.failure(),
+        Some(SshTransportErrorKind::HostTrustChanged)
+    );
+    assert!(matches!(
+        CallbackAttempt::for_finalized_host(presented.clone()).check_host(
             &prepared,
             "example.invalid",
             Some(presented.clone())
@@ -191,9 +215,52 @@ fn transport_callback_host_decision_table() {
     prepared.approval = None;
     prepared.trust.pin = Some(presented.clone());
     assert!(matches!(
-        CallbackAttempt::default().check_host(&prepared, "EXAMPLE.INVALID", Some(presented)),
+        CallbackAttempt::default().check_host(
+            &prepared,
+            "EXAMPLE.INVALID",
+            Some(presented.clone())
+        ),
         Ok(git2::CertificateCheckStatus::CertificateOk)
     ));
+    // With no pin and no approval, a further connection of a call that
+    // finalized `presented` hands no other host to libgit2's known_hosts
+    // check: it is refused at the host check, as the pinned and approved
+    // branches refuse one, before any key is offered (the final review's
+    // F-4). The finalized host itself is still passed through.
+    prepared.trust.pin = None;
+    prepared.trust.reapproval_required = false;
+    let further = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(
+        further
+            .check_host(&prepared, "example.invalid", Some(old.clone()))
+            .is_err()
+    );
+    assert_eq!(
+        further.failure(),
+        Some(SshTransportErrorKind::HostTrustChanged)
+    );
+    assert!(!further.passthrough());
+    assert_eq!(further.key_submissions(), 0);
+    let url = prepared.endpoint.connection_url.clone();
+    assert!(
+        further
+            .credentials(
+                &prepared,
+                None,
+                None,
+                &url,
+                Some("fixture"),
+                git2::CredentialType::SSH_KEY,
+            )
+            .is_err()
+    );
+    assert_eq!(further.key_submissions(), 0);
+    let finalized = CallbackAttempt::for_finalized_host(presented.clone());
+    assert!(matches!(
+        finalized.check_host(&prepared, "example.invalid", Some(presented)),
+        Ok(git2::CertificateCheckStatus::CertificatePassthrough)
+    ));
+    assert!(finalized.passthrough());
 }
 
 #[test]
@@ -244,7 +311,14 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
     assert_eq!(
         i64::from(
             attempt
-                .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+                .credentials(
+                    &prepared,
+                    None,
+                    None,
+                    url,
+                    None,
+                    git2::CredentialType::USERNAME
+                )
                 .unwrap()
                 .credtype()
         ),
@@ -255,6 +329,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             attempt
                 .credentials(
                     &prepared,
+                    None,
                     None,
                     url,
                     Some("fixture"),
@@ -271,6 +346,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             .credentials(
                 &prepared,
                 None,
+                None,
                 url,
                 Some("fixture"),
                 git2::CredentialType::SSH_KEY
@@ -280,11 +356,25 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
     assert_eq!(attempt.failure(), Some(SshTransportErrorKind::KeyRejected));
     let attempt = CallbackAttempt::default();
     attempt
-        .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+        .credentials(
+            &prepared,
+            None,
+            None,
+            url,
+            None,
+            git2::CredentialType::USERNAME,
+        )
         .unwrap();
     assert!(
         attempt
-            .credentials(&prepared, None, url, None, git2::CredentialType::USERNAME)
+            .credentials(
+                &prepared,
+                None,
+                None,
+                url,
+                None,
+                git2::CredentialType::USERNAME
+            )
             .is_err()
     );
     for kind in [
@@ -297,7 +387,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
         let attempt = CallbackAttempt::default();
         assert_eq!(
             attempt
-                .credentials(&prepared, None, url, Some("fixture"), kind)
+                .credentials(&prepared, None, None, url, Some("fixture"), kind)
                 .err()
                 .unwrap()
                 .message(),
@@ -318,6 +408,7 @@ fn transport_credentials_are_selected_bounded_and_no_fallback() {
             attempt
                 .credentials(
                     &prepared,
+                    None,
                     None,
                     url,
                     username,
@@ -728,6 +819,7 @@ pub(crate) fn callback_privacy(
     let backend = attempt
         .credentials(
             &prepared,
+            None,
             None,
             "ssh://fixture@example.invalid/repository.git",
             Some(username),

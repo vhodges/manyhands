@@ -49,7 +49,6 @@ use std::{
     path::Path,
 };
 
-pub(crate) const SHOWN: &str = "Shown";
 pub(crate) const CLOSE_TAB: &str = "Close";
 pub(crate) const OPEN_TABS: &str = "Open tabs";
 pub(crate) const UNSAVED_TOOLTIP: &str = "Unsaved changes";
@@ -206,7 +205,7 @@ pub(crate) struct TabContent {
     /// own close once its unsaved work was settled, its repair's item
     /// to follow, and the workspace places its share and post controls
     /// open (`ItemRoute`).
-    related: HashMap<TabId, [Subscription; 8]>,
+    related: HashMap<TabId, [Subscription; 9]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -338,10 +337,12 @@ impl TabContent {
         let route = cx.subscribe(&pane, |this, _, event: &ItemRoute, cx| {
             this.item_route(event, cx)
         });
+        // An item's title loading is a refresh point of Activity (A4).
+        let titled = cx.observe(&pane, |this, pane, cx| this.pane_titled(&pane, cx));
         self.related.insert(
             id,
             [
-                related, review, discarded, details, settings, close, follow, route,
+                related, review, discarded, details, settings, close, follow, route, titled,
             ],
         );
         self.panes.insert(id, pane);
@@ -439,8 +440,8 @@ impl TabContent {
         }
     }
 
-    /// Gives every open tab its repository's publication remote as
-    /// `navigation` lists it (design, Share controls), so no tab reads
+    /// Gives every open tab its repository's publication remote, and its
+    /// primary branch (R-35), as `navigation` lists them (design, Share controls), so no tab reads
     /// remotes itself (D3's fact 41). The workspace calls it whenever it
     /// changes, which covers a tab just opened or followed and a list read
     /// that gave a new summary. A tab whose repository navigation does not
@@ -455,10 +456,19 @@ impl TabContent {
             let remote = PublicationRemote::from_summary(
                 entry.summary.configuration.publication_remote.as_deref(),
             );
-            if let Some(pane) = self.panes.get(id)
-                && *pane.read(cx).publication_remote() != remote
-            {
-                pane.update(cx, |pane, cx| pane.set_publication_remote(remote, cx));
+            let primary = entry.summary.configuration.primary_branch.clone();
+            if let Some(pane) = self.panes.get(id) {
+                let given = pane.read(cx);
+                let (remote_changed, primary_changed) = (
+                    *given.publication_remote() != remote,
+                    given.primary_branch() != primary.as_deref(),
+                );
+                if remote_changed || primary_changed {
+                    pane.update(cx, |pane, cx| {
+                        pane.set_publication_remote(remote, cx);
+                        pane.set_primary_branch(primary, cx);
+                    });
+                }
             }
         }
     }

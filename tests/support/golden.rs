@@ -68,6 +68,7 @@ pub const CASES: &[&str] = &[
     "relationship_check",
     "relationship_check_cycle",
     "relationship_check_invalid",
+    "remote_history",
     "remote_list",
     "repo_identity",
     "repo_inspect",

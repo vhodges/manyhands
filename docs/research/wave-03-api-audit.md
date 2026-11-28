@@ -22,6 +22,265 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Wave 06 Cycle 02 refresh (2026-11-25)
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): onboarding and setting changes on a setup branch (ticket `01M84H84WQYE8J2WJWEDGJ45W4`) add one verb, three result codes, one problem code, one operation action and three data shapes, and give a pending setup a gate that every write meets. This section says what each verb of C2 to C5 answers that it did not before, and the union blocks and result-set rows below are amended where the CLI audit tests read them (`tests/cli/exits.rs`, `tests/cli/authoring_exits.rs`, `tests/cli/collaboration_exits.rs`, `tests/cli/recovery_tables.rs`). The sources are the Cycle's design (`docs/plans/2026-11-25-wave-06-cycle-02-pull-request-onboarding-design.md`, Parts B to K) and its execution ledger, which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New codes.**
+
+- `setup_pending`: class blocked, exit 3, recovery action `repo.inspect`, no data, nothing written. The repository's Manyhands setup has not merged yet.
+- `remote_primary_missing`: blocked, exit 3, no recovery action. The setup's remote advertises no primary branch to set up from. It ends the setup.
+- `remote_already_set_up`: blocked, exit 3, no recovery action. A first-time setup's remote primary already holds a Manyhands configuration. It ends the setup. No fixture of the CLI produces it (a library test, `setup::publish_tests`, pins it).
+- `setup_unreadable` is a problem code of `repo inspect` and `repo list` (in `data.configuration.problems`), not a result code, as `operations_unreadable` is: a setup record that cannot be read degrades `setup` to null. `repo remove` clears it.
+
+**New verb.** `repo setup-cancel`: F2(`RepoSetupCancel`, `RepoSetupCancelInput { root }`), no JSON input, confirmed, with a local operation row whose action is the new `cancel_setup` (`operation list`, `operation show` and `operation abandon` name it). It stops at no safe point, so `request cancel` asks nothing of it. Its preview is `setup_cancel_preview` and its data is `setup_cancel`. Its codes are C2's, with `push_rejected` for a delete the server refused or lost and `recovery_required` for a setup the primary already holds. It is not gated.
+
+**Changed inputs.** `repo enable` gains optional `publication_remote`, `integration` and `forge`. `remote select` gains optional `integration` and `forge` (null removes the `[forge]` table). `repo create` is unchanged.
+
+**New data.** Mutation data `setup` (`setup_mutation`: the setup a pull-request `repo enable` or `remote select` recorded, with its state), `setup_poll` (a first-time setup's `poll once`) and `setup_cancel`; previews `setup_preview` and `setup_cancel_preview`; reads `repository_setup` (the `setup` of `repo list` and `repo inspect`, nullable) and `pull_request` (`source`, `target`, `forge`, `url`, nullable at the top level so Cycle 03 shares the file).
+
+**The gate.** One exhaustive table on the library's command type decides what a pending setup does to each command. A first call, an acceptance and a prepare are gated; a re-entry of the setup's own request is not. A complete setup (the local primary already holds it) refuses nothing and is finished first.
+
+| Gate | Verbs |
+| --- | --- |
+| Refused while any setup is pending | `ticket close`, `document promote`, `remote select`, `remote remove`, `repo enable` |
+| Refused while a first-time setup is pending | `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair`, `folder create`, `comment add`, `item sync`, `repo sync`, `item republish`, `item resolve-history`, `remote resolve-history`, `conflict resolve`, `context sync-local`, `context resolve-local` and the desktop's context prepare, release and retire |
+| Not gated | `repo create`, `repo remove`, `repo identity-set`, `repo setup-cancel`, `remote add`, the key and host verbs, `operation resume`, `operation abandon`, `poll once`, `poll configure`, `poll pause`, `poll resume`, `index refresh`, `index rebuild`, and every read |
+
+**What each verb newly answers.** The codes are additions to the verb's row, and each is an upper bound as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `repo enable` | `setup_pending`, `remote_primary_missing`, `remote_already_set_up`, `primary_has_local_commits`, `host_approval_required`, and its key, unlock, host-replacement, network, `busy`, `recovery_required` and `external_change` answers after the setup is recorded | A pull-request enable registers the repository as setup pending and then publishes, so it reaches the transport. A stop after recording is `partial`, exit 4, with the `setup` data, and the same request continues it. The three refusals end the setup. A second enable while a setup is pending is `setup_pending`, or `busy` first while the first holds the lease |
+| `remote select` | `setup_pending`, `remote_primary_missing`, `primary_has_local_commits`, `host_approval_required`, and the same transport and recovery answers; `external_change` also when a direct change meets a primary that turned pull-request mode under the lease | The setup path of a change of mode, forge or remote; `remote_already_set_up` is for a first-time setup only |
+| `remote remove` | `setup_pending` | Refused while any setup is pending |
+| `repo setup-cancel` | `host_approval_required`, the key, unlock and network stops, `push_rejected`, `busy`, `recovery_required`, `external_change`, `already_applied` | It connects only for a setup that was published; a setup with no commit needs no connection |
+| `repo remove` | no new code | It finishes an accepted setup request as `cancelled` (an accepted cancel as `already_applied`) and clears an unreadable record, with the root present or gone |
+| `host observe`, `host approve`, `host replace` | no new code | They take a setup's remote when the configuration has none; a setup's host stop offers `host.approve` and `host.replace` |
+| `poll once` | no new code | A first-time setup's poll answers `setup_poll` data, every outcome `ok` and final; the attempt is recorded in the polling state |
+| `operation resume` | no new code | A setup request's operation is `original_request_required`, naming the request |
+| C3's writing verbs, C4's `comment add`, `item sync`, `repo sync`, `item republish`, `conflict resolve`, C5's `ticket close`, `document promote`, `context sync-local`, `context resolve-local` | `setup_pending` | The gate; the unions and rows below hold it |
+
+### Wave 06 Cycle 03 refresh (2026-11-25)
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the pull-request close, the closing state and withdraw (ticket `01M87683QK8E34EYY8KS4VQG9Y`) add one verb and one result code, and amend the answers of `ticket close`, `item sync`, `operation resume` and the conflict verbs. The sources are the Cycle's design (`docs/plans/2026-11-25-wave-06-cycle-03-pull-request-close-design.md`, Parts A to H) and its execution ledger, which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New code.** `already_closing`: class none, exit 0, outcome `success`, no recovery action. The ticket's branch already holds a closure. It is appended after `already_applied`, and answered by a pull-request `ticket close` only; `ticket withdraw-closure` never answers it.
+
+**New verb.** `ticket withdraw-closure`: F2(`TicketWithdrawClosure`, `TicketWithdrawClosureInput { root, id }`), no JSON input, confirmed, delivered under the label `C5`, with an operation (a branch record of the ticket-closure lifecycle, listed by `operation list` as a `close`) that stops at safe points and finishes as a synchronization. Its row is in the C5 result-set table below, and the gate refuses it for any pending setup as it refuses `ticket close`.
+
+**What each verb newly answers.** Each is an upper bound, as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `ticket close` | `already_closing` | A pull-request close whose branch already holds a closure. Its data is `pull_request_closure`, and a blocked prepare may name the new blocker `remote_context_unmaterialized` |
+| `ticket withdraw-closure` | the codes of `ticket close` except `already_closing` | Its prepare answers `already_applied` for a ticket with no closure, `ticket_closed` when the primary holds it, `publication_remote_required` without a publication remote and `recovery_required` while a record holds the ticket |
+| `item sync` | no new code | A ticket context's synchronization of either mode answers `ticket_closed` for a head that lacks a closure the fetched primary holds, and in a pull-request repository answers with the data `pull_request_link` when it publishes or finds current a closing ticket's branch |
+| `operation resume` | `already_closing` | It gains the union of `ticket close`; a branch record that its accepted request holds answers `original_request_required` |
+| `conflict show`, `conflict resolve` | no new code | A branch record's ID maps to its current child, in either child slot |
+
+The C5 result-set table and the unions below are amended where the CLI audit tests read them (`tests/cli/recovery_tables.rs`, `tests/cli/collaboration_exits.rs`): the C5 union grows from 47 to 48 codes by `already_closing`, and the table has eleven verbs.
+
+### Wave 06 Cycle 04 refresh (2026-11-27)
+
+Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): the pull-request `document promote` (ticket `01M87684C9GM9BJP5QQ429KMAK`) adds no verb and no result code, and amends the answers of `document promote`, `item sync`, `document show`, `operation resume` and the two retirement verbs. The sources are the Cycle's design (`docs/plans/2026-11-26-wave-06-cycle-04-pull-request-promote-design.md`, Parts A to F) and its execution ledger (`docs/plans/2026-11-26-wave-06-cycle-04-pull-request-promote-execution.md`), which records the rulings where the delivered code differs from the design. The historical C2 to C5 rows keep their original scope otherwise.
+
+**New codes.** None. **New verb.** None.
+
+**What each verb newly answers.** Each is an upper bound, as the rows are.
+
+| Verb | Newly answers | Why |
+| --- | --- | --- |
+| `document promote` | no new code | In a pull-request repository: `already_applied` at prepare, with no data, for a document the primary holds; at confirm, with the same link, for a repeated promote, and with `primary_holds` for a document the primary came to hold; `remote_branch_deleted` and `recovery_required` (blocker `history_unresolved`) as finished answers, with the data `pull_request_promotion`; a child's stop with the synchronization's own code and data. Group Y already holds these codes, so the row's codes and count are unchanged |
+| `item sync` | no new code | A document context in a pull-request repository that has a link row, while the primary does not hold the document, answers with the data `pull_request_link` |
+| `document show` | no new code | `pull_request` is filled for a document read from its active context, while the primary does not hold it |
+| `operation resume` | no new code | A pull-request promote that its accepted request holds answers `original_request_required`; one that finishes answers with the data `pull_request_promotion` |
+| `context retire`, `poll once` | no new code | A document with an unfinished pull-request promote is refused by `context retire` with `recovery_required` and skipped by the poll's retirement |
+
+No union grows and the C5 table keeps its eleven verbs, so `tests/cli/recovery_tables.rs` and `tests/cli/collaboration_exits.rs`, which read them, need no edit.
+
+### Completed-context retirement delivery (2026-11-06)
+
+**Integration re-grounding, 2026-11-07 UTC:** the retirement branch now
+integrates approved/closed D5 from incoming main
+`1e5616af22630b08a84dc0fb42037135b385f81d`. Its lifecycle-only way-out API,
+unfinished-parent resume listing and four progress stages are preserved beside
+retirement's separate data/recovery routes and required-nullable abandon
+metadata. The audit checkpoint below remains historical at its named SHA;
+merge-delta reviews and final gates are still owed, and D6's Retire action is
+not delivered by either this integration or the generic abandon display.
+
+**Current source audit at `76a852a7d5d4fcd757a95451601cdbb407b99bcc`**, ticket
+`01M6KHVD6D0DB8KYT6VGQP10Y0`, main `79c3931b` already merged by the controller.
+This supersedes proposed-API/undelivered-binding claims for this follow-up, not
+the historical C2–C5 tables or their test scopes below. Owner D1–D14 were
+approved on 2026-11-04, D15 on 2026-11-06. The governing
+[Cycle](../Cycles/wave-03-completed-context-retirement.md),
+[design](../plans/2026-11-04-completed-context-retirement-design.md),
+[CLI contract](../RFC/cli-contract.md#completed-context-retirement) and
+[execution ledger](../plans/2026-11-04-completed-context-retirement-execution.md)
+retain the contract and evidence. This is **branch delivery**, not a claim that
+the follow-up is merged, final-gated, accepted or available in another checkout.
+
+Bounded implementation approvals: Task 3 ordinary/preserving recovery through
+`989a5807`; Task 4 production live pass and corrections through `c514d160`;
+Tasks 5–6 CLI/acceptance SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B` through
+`1619e100`, QUALITY `ses_e4d03572cffevY6wt8W3WDb3nC` through `37b64d17`
+(including the assertion-strengthening delta at `4df41831`). These do not
+approve the whole feature or complete the retained 44-row safety register.
+
+#### Actual exports and mutation consumers
+
+Public names below are exported through `manyhands::repository`
+(`src/repository.rs`, `context_retirement/mod.rs`, `mutation/mod.rs`). The
+shipping front-end boundary remains `RepositoryService::execute(MutationCall,
+credentials, progress, cancel) -> Envelope<MutationDataDto>`, not public receipt
+construction, direct SQL, or a second front-end cleanup engine.
+
+| Delivered interface / source | Contract and consumer |
+| --- | --- |
+| `Mutation::ContextRetire(ContextRetireInput)`; `ContextRetireInput { root: PathBuf, kind: AuthoringKind, id: ItemId }`; [bind/retire.rs](../../src/repository/mutation/bind/retire.rs) | `Command::ContextRetire`, `context retire`; ordinary unconfirmed, noncheckpoint, stoppable local operation. Kind/target/root bind intent. Stable final refusal/success replay, not release's run-as-new. Uses the configured selected-key session for fresh read-only Fetch observation; no supplied receipt/input/force. |
+| `Mutation::PollOnceRetiring(PollOnceInput { root })`; [bind/poll_retirement.rs](../../src/repository/mutation/bind/poll_retirement.rs) | Same `Command::PollOnce` / `poll once`, adds only `retire_completed=true` to opted-in digest. Ordinary `PollOnceInput`, default digest, `PollPublicationRemoteRequest` and automatic/default behavior unchanged. Original live poll supplies sealed private `handoff::InitialInput` to ordinary children. No public receipt/capability API or durable resumed loop. |
+| `RetireContextRequest { root, kind, item_id, operation_id }`; `RepositoryService::retire_context_authenticated<P>(&self, request, approval: Option<HostApproval>, session: &mut SessionCredentials<P>) -> Result<ContextRetirementOutcome, RepositoryError>`; [run.rs](../../src/repository/context_retirement/run.rs) | Existing domain fresh authenticated executor. Present or branch-only cleanup uses guarded `ContextCleanup`; standalone observation transfers no objects/refs and does not update primary. Front ends use F2 above for request ownership, cancellation and replay. |
+| `ReenterContextRetirementRequest { retirement: RetireContextRequest, expected_owner_epoch: i64 }`; `RepositoryService::reenter_context_retirement_authenticated<P>(…, approval, session)` with the same outcome/error; [reentry.rs](../../src/repository/context_retirement/reentry.rs) | Expected-epoch domain reentry does not bypass a request-bound fence. Original present worktree may reacquire fresh O/proof with exact nonce; surviving branch-only/tokenless state cannot be deleted after restart (R-7). Authoritative absence/M/index paths do no new deletion. |
+| `RepositoryService::retire_context(&self, RetireContextRequest) -> Result<ContextRetirementOutcome, RepositoryError>`; [execution.rs](../../src/repository/context_retirement/execution.rs) | Local initial-absence/authoritative index settlement only; **not** a nonauthenticated present-context cleanup entrypoint. Initial absence is `already_absent`, no owned-removal claim or network. |
+| `ContextRetirementOutcome::{Final(ContextRetirementReport), IndexPending, CleanupPending { worktree_removal, branch_removal }}`; `ContextRetirementReport`, `RetirementDisposition`, `RetirementRemoval` | Domain report exposes `code`, `outcome`, both removal flags and `materialization_settled`; disposition `already_absent`, `retired`, `refused`, `preserved`; removal `none`, `possible`, `observed`. The private report version is audited, not a new CLI field. |
+| Existing `OperationResume` / [bind/resume.rs](../../src/repository/mutation/bind/resume.rs), `retire::resume_handoff` | Destructive work names the ordinary original request through `original_request_required`; I-only handoff takes up that item's current F2/index claim. Never advances the old parent or resumes a batch. |
+| Existing confirmed `OperationAbandon` / [bind/abandon.rs](../../src/repository/mutation/bind/abandon.rs), [preserve.rs](../../src/repository/context_retirement/preserve.rs) | Retirement-specific preserving/index escape, retaining old request identity and all residual resources. Metadata preview/display only in existing CLI/desktop confirmation. Atomic receipt/journal/old result/exact Z before blocker release. No generic release of retirement's request ID and no completed-child whole-pass handle. |
+
+Private `request_scope.rs`/`progress.rs` bind exact current request attempt F2
+to the sole ordinary local operation. Local executor, remote-source and index
+epochs are independent. Initial pass association is provenance/report metadata,
+not part of the child digest or permanent parent ownership; child recovery
+after parent Final does not require original process capture/current P ownership.
+Accepted-but-proved-never-claimed settlement is metadata-only. A durably selected
+original present worktree is distinct and retains ordinary fresh-O recovery
+where lifetime/proof allow; missing companions never prove never-claimed.
+
+#### DTOs, CLI, effects and recovery
+
+- [mutation/dto.rs](../../src/repository/mutation/dto.rs) exports
+  `ContextRetirementMutationDto`, `ContextRetirementMutationType`,
+  `ContextRetirementState`, `PollRetirementMutationDto`,
+  `PollRetirementMutationType`, `PollRetirementCompletion`,
+  `PollRetirementItemDto`, `PollRetirementItemState`, `PollRetirementDebt`.
+  Their `MutationDataDto` variants are `ContextRetirement` and `PollRetirement`.
+  Closed tags are `context_retirement` and `poll_retirement`; ordinary
+  `PollMutationDto` remains the **untagged five-field** root. The
+  [CLI field table](../RFC/cli-contract.md#closed-output-data) gives every
+  required/nullable field and enum, checked against actual structs/decoders and
+  `schemas/v1/{context_retirement_mutation,poll_retirement_mutation}.schema.json`.
+  Separate roots, no optional old fields, `oneOf` or schema-interpreter change.
+- `OperationAbandonPreviewDto.retirement: Option<RetirementAbandonMetadata>`
+  serializes as required-nullable `details.retirement`; null on old generic
+  previews. The closed object contains old ordinary `request_id`, phase,
+  local/index epochs, removal flags, conservative retained-resource booleans
+  and `index_pending`. `request_released` is not a retirement preview effect.
+- CLI [retirement.rs](../../src/bin/manyhands-cli/retirement.rs) and
+  [polling.rs](../../src/bin/manyhands-cli/polling.rs) use the ordinary driver,
+  session/transport and safe-point Ctrl-C window. `context retire --repo --kind
+  ticket|document --id ULID` takes no input or force; common prepare/confirm is
+  `not_confirmable`/2. Flag default false. Catalog/inventory: **78 total,
+  42 mutating, 24 input-taking**, both prepare/release exemptions unchanged.
+- Result/action registries in `src/results.rs` are unchanged. Detailed removals
+  are `none`/`possible`/`observed`; generic write/checkpoint/integration/publication/
+  cleanup remain `not_requested`, commit OID null, discovery independently true
+  to observed progress. Non-none removal sets `local_change`; failure is exit
+  **4**, cancellation **130**, stable before-effect recovery refusal **3**,
+  busy/yield/transport **5** before effects, ordinary input error **2**, unexpected
+  internal failure **1**, settled success/no-op **0**. `ContextBranchReleased`,
+  `ContextRetirementAbsent` and `ContextRetirementPreserved` are **noncheckpoint**.
+  Materialization settlement is not discovery freshness or proof of removal.
+- A live failed-host opted-in poll may keep the existing
+  `SynchronizationMutationDto` host root, precise live error and sanitized
+  Approve/Replace recovery. The original boundary answer is retained; only its
+  genuine loss permits the coarse stored-journal-category fallback. No implicit
+  host approval or raw remote diagnostic is persisted. Standalone without host
+  data uses explicit `host observe`/trust actions and a new request after Final.
+- Parent `data` is an immutable as-of-cut report. Ordinary current child actions
+  can change without rewriting it. Human output preserves actual boundary action
+  order and action-owned operation ID/root (not frozen P/K or invocation-root
+  guesses); preserving guidance prepares first. The
+  [Q1 numeric/recovery table](../RFC/cli-contract.md#request-finality-numeric-exits-and-current-recovery)
+  distinguishes standalone Final replay, retryable/Owed item debt, destructive
+  original-request routing, M/I-only resume, original P recovery and new-pass
+  remainder. Wire poll `completed` alone is not discovery success: durable
+  original P phase **and** successful outcome are required after cut/copy loss.
+
+#### Production provenance, report and migration boundaries
+
+Task 4 is delivered, not a proposed producer. `source.rs`, `handoff.rs`,
+`pass.rs`/`pass_report.rs` and the opted-in binding capture the original report,
+fixed candidate image and reserved child IDs during owned original P finalization.
+Only its original live successful handoff grants initial input. Each child uses
+ordinary acceptance before effects and settles its index before the next;
+settled refusals continue, real item cleanup/index/integration debt stops later
+items, no prior success rolls back. Every selected same-pass success/refusal
+settled plus all handoffs settled gives mixed-complete exit 0, never a prefix
+with not-reached items. The parent may be Final stopped while a child is Owed.
+
+Stop revokes live starts/effects and atomically persists an immutable cut with
+child result/debt and not-reached snapshots before parent Final. Old selected
+parent recovery copies/settles only; it cannot observe, reselect, accept another
+child or restart cleanup. First no-cut reconciliation uses then-durable states;
+all-selected lost-final-copy completion requires original eligible handoff and
+no prior stopped cut. A new explicit pass handles the remainder. Shared-token
+or durable parent cancellation is checked even after the last child/empty image;
+a child-only cancellation does not automatically cancel P. Missing/corrupt
+companions refuse, never fall through into new P or reconstructed authority.
+
+The current exact catalog is marked `context_retirement_consumers_v1` with
+`context_retirement_preserving_v2` and the retained `context_retirement_v1`,
+`context_retirement_v2`, `context_retirement_index_v1` history. One P/source-epoch
+provenance has separate exact consumer receipts, unique by repository/consumer
+kind/operation/local epoch, not provenance alone. Immutable
+`poll_retirement_child_sources` proves initial pass membership/R_i/K_i/receipt
+lineage. Ordinary O-source request equality remains; initial poll children use
+that exact different lineage. Per-holder pin/release Z checks neither release
+another child/pass obligation nor repin settled history.
+
+`record.rs`, `consumer_migration.rs`, `historical.rs` and `preserve.rs` implement
+strict versioned catalog recognition and the audited whole known dependency
+closure migration, preserving original receipt IDs, references and supported
+history in one transaction. Frozen historical catalogs include the supported
+pre-consumer `preserving_v2`, not current DDL relabeled as old. Reopen validates
+the exact current consumers/preserving envelope. Synthetic published v1/v2/index
+and exact installed-**empty** obsolete-gap upgrades preserve data or roll back;
+unknown incoming FKs/catalog objects, partial/substituted envelopes, nonempty
+obsolete-gap authority and unsupported **unpublished preserving-v1** refuse
+unchanged. No automatic profile repair, deletion or authority reconstruction.
+No real application profile was opened for this audit.
+
+#### Evidence and remaining consumers
+
+The ledger keeps Tasks 3/4 exact tables and the original **19 distinct** Tasks
+5–6 exact results at their source SHAs, plus only changed render/SSH assertion
+reruns. Latest single SSH E2E `retirement_cli_authenticated_live_pass` passed at
+`4df41831` (**1 case, 42.31 s total**), with strict Clippy and clean serialized
+fmt there. The no-GPUI check stays at its original CLI chunk scope. Local
+table-driven API/draft/M/fault rows use disposable registries/Git and injected
+advertisements; binary replay/index/preserving rows prove their persisted
+boundary, not live file-transport authentication. One new SSH case connects
+authentication/trust/Fetch to both entrypoints, default preservation, corrected
+reads/readiness after retirement, no push/privacy and replay. It compares default
+and two-child opted-in Fetch's two upload-pack cost and proves ONE authoritative
+provenance/no child O, **not one total wire command or connection**.
+
+Task 7 prose/inventory checks do not rerun or promote that evidence. Task 8
+whole-tree static/fast/changed-path SSH gates, whole-feature SPEC/QUALITY and
+classification of essential remaining retained-44 fault/platform permutations
+against actual coverage are still owed. No blanket completion or waiver of
+uncovered required behavior, broad new test matrix, native Windows/macOS runtime
+claim or real second-machine cleanup follows. Native CI is post-merge and
+separately authorized.
+
+D6 still owes explicit desktop Retire, keyboard/recovery/editor/draft journeys;
+only existing generic abandonment metadata display shipped here. Reads retain
+own-worktree precedence; latest-copy ticket `01M6K04YQM2JF6SBGPB1ZT6R8T` remains
+open/separate, as does remote-deletion gap `01M6K06B7H8V7347SRM3XGV7CB`.
+Existing promotion/closure materialization-intent cleanup omission is neither
+fixed nor filed in this scope. No D6/sibling ticket/worktree change is implied.
+
 ### Closure Recovery Library Amendment (2026-10-27)
 
 Source-audited at **`03a27cbb7252062429aabfed31ae6c35e2f143fb`** on ticket
@@ -189,7 +448,11 @@ resolution artifacts and in-app conflict editing still need their owning adapter
 The library's explicit side-content DTO is an API, not an exported editable file
 or delivered UI. C4/D5 still owe remote-conflict wire bindings and C5/D5 lifecycle
 prepare/execute/expiry/schema/resume/made-ready reporting. C4/C5/D5 remain gated
-until this prerequisite is approved, closed and merged. Recorded execution is Linux
+until this prerequisite is approved, closed and merged. (Amended 2026-11-03 by
+C5: historical. The prerequisite merged at `a372edb`; C4 delivered the remote
+wire bindings, and C5 the local verbs and the lifecycle bindings, recorded in the
+[C5 delivery reconciliation](#c5-delivery-reconciliation-2026-11-03); D5
+consumes them.) Recorded execution is Linux
 x86_64; typed permission injections and a Windows lock-safe harness ordering fix
 are not native Windows ACL/macOS evidence. Native CI remains separately authorized
 post-merge work.
@@ -223,6 +486,170 @@ Resolution step 4):
   `request_id`, not `required_request_id`.
 - **Cancellation.** A remote cancellation is final, and a new request
   completes the work. The local operation keeps its Accepted requests.
+
+### Wave 03 Desktop Cycle D5 refresh (2026-11-04)
+
+Amended 2026-11-04 by D5. The [D5 Cycle](../Cycles/wave-03-desktop-05-recovery-and-completion.md)
+accepts this timing in **decision 17**: the rows below were drafted against
+C5's unmerged branch tip `f59aceb6` and re-checked on merged C5 (`2d912d10`
+on local main, merged into the D5 ticket branch as `cd2e922e`) on
+2026-11-04; every row stands. The governing contract is the Cycle and its
+[design](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-design.md#api-audit-refresh-entry-gate-item-3),
+whose Baseline Facts the rows cite. The three missing rows are D5's library
+part (L1–L3), an exception to track rules 5 and 6 (decision 2).
+
+| Audit row | D5 consumes | State on merged C5 (`cd2e922e`) |
+| --- | --- | --- |
+| Promotion/close preflight and cleanup bindings | `DocumentPromote`, `TicketClose`, prepare, execute | Delivered by C5 (Facts 2–6). |
+| Conflict inspection read, remote | `show_conflict`, `ConflictResolve` | On main (Facts 10–11). |
+| Conflict inspection read, local | observe, inspect, read, `LocalContextSync`, `LocalContextResolve` | On main (Fact 12). |
+| Republish | `ItemRepublish` | On main (Fact 13). |
+| Lifecycle way out | none | Missing: L1. |
+| Lifecycle resume listing | `list_operations` | Missing: L2. |
+| Lifecycle progress | `ProgressSink` | Missing: L3. |
+| Made-ready titles | ticket read | Existing read. |
+
+### Wave 03 CLI Cycle C5 refresh (2026-10-31)
+
+Task 0 source-inspected this refresh on **2026-10-31 UTC**, at
+`131bddf9c869a559e4bd891e85dc8520a966afe7` (the approved plan), with
+`origin/main` at `a52273ffe9b2b8e82b8e2c6e2d004e3a973cb8f7`, the planning merge
+`717b664d`'s main, and `git diff 717b664d 131bddf9` shows no change under `src/`,
+`tests/`, `schemas/`, `Cargo.toml`, `Cargo.lock`, `scripts/`, `.github/` or
+`devenv.nix`. Main moved to `87d87dea` during Task 0, in `docs/plans`,
+`packaging/windows` and `scripts/release` only, and that merge changes nothing here. The [C5 Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)
+accepts this timing in **owner question 4**: the audit refresh is Task 0, not
+before planning. The design's Baseline Facts 1–41 served as the planning audit,
+and this refresh updates the C5 rows of the inventory in place. Amended 2026-11-03
+by C5 (Task 14b): what C5 delivered, and where it differs from these rows, is
+the [delivery reconciliation](#c5-delivery-reconciliation-2026-11-03) below. These are Linux
+source reads and binary runs on disposable repositories, not native evidence.
+
+The governing contract is the Cycle and its
+[design](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md). The
+[execution ledger](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-execution.md)
+records the re-checks.
+
+**Source or design.** Nothing of C5's own is on main. `Command` has 37 variants,
+none for promotion, closure or polling, and the six verbs are
+`planned(.., "C5")` (`src/bin/manyhands-cli/catalog.rs:987-992`). Every symbol
+marked *planned* below is the design's. This section supersedes the old rows'
+"No request ID" and "F2 resume NotResumable" statements as what C5 delivers, not
+as what is on main today.
+
+#### C5 bindings and result-set key
+
+Paths are relative to `src/repository/`; `bind/` abbreviates `mutation/bind/`.
+**F2(V, I)**, as in C2–C4, means `Mutation::V(I)` passed to `prepare` and
+`execute`.
+
+| Verb | Binding | Confirmed | Stops at safe points; operation | Data or preview |
+| --- | --- | --- | --- | --- |
+| `document promote` | **planned** F2(`DocumentPromote`), new `bind/lifecycle.rs` (Tasks 2a–2c), over `preview_document_promotion` and `promote_document` (`promotion/mod.rs:380,361`) through a crate-private probe entry | **Yes**: `PreviewDetailsDto::Lifecycle`; refused previews through `PrepareDataDto::LifecycleBlocked` | Yes; has an operation; finishes as a synchronization | The lifecycle `MutationDataDto` |
+| `ticket close` | **planned** the same binding, over `preview_ticket_closure` and `close_ticket` (`closure/mod.rs:349,359`), `confirmed_identity: None` | **Yes**, as above, with `closed_by` and `record` or `existing` in the preview | Yes, as above | The lifecycle DTO with the made-ready report |
+| `poll once` | **planned** F2(`PollOnce`), new `bind/poll.rs` (Task 5b), over `poll_publication_remote` (`remote/poll.rs:1195`), `Explicit` invocation | No | Yes; has an operation; hands off to any refresh | `PollMutationDto` |
+| `poll configure` | **planned** F2(`PollConfigure`), `bind/poll.rs` (Task 5a), over a new `update_remote_polling` in the request's own transaction (decision 15) | No | No; no operation | Policy data |
+| `poll pause` | **planned** F2(`PollPause`), as above | No | No; no operation | Policy data |
+| `poll resume` | **planned** F2(`PollResume`), as above. Not `resume_remote_polling_after_recovery` (`remote/state.rs:6366`, decision 5) | No | No; no operation | Policy data |
+| `context observe-local` | existing read `observe_local_context_sync` (`local_sync/observe.rs:360`); CLI **planned** (Task 10a) | — (a read) | — | `local_context_sync_observation` |
+| `context show-local` | existing reads `inspect_local_context_sync` and `read_local_context_conflict` (`read/local_sync.rs:110,117`); CLI **planned** (Task 10a) | — (a read) | — | `local_context_sync_inspection`, or the token's `local_context_conflict_content` with `--json` only (R-15) |
+| `context sync-local` | existing F2(`LocalContextSync`, `LocalContextSyncInput`) (`bind/local_sync.rs:10`); CLI **planned** (Task 10a) | No | As the gate | `local_context_sync_mutation` |
+| `context resolve-local` | existing F2(`LocalContextResolve`, `LocalContextResolveInput`) (`bind/local_sync.rs`); CLI **planned** (Task 10b) | No | As the gate | `local_context_sync_mutation` |
+
+Variant names marked *planned* follow the design and may be settled by the task
+that binds them. Groups **S**, **M**, **P**, **R**, **U**, **C**, **I**, **T** and
+**Y** are the [C4 refresh's](#c4-signatures-inputs-and-result-set-key). Each row is
+an upper bound, not a promise that a fixture can force the path. C5 adds no
+`ResultCode`.
+
+| Verb | Codes | Count | Design anchor |
+| --- | --- | --- | --- |
+| `document promote` | M + R + C + I + T + Y + `setup_pending` | 42 | Answers table; Identity; Cache loss. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): in a pull-request repository the verb answers `already_applied` (at prepare with no data, and at confirm), the synchronization's own stops, and `recovery_required` with the blocker `history_unresolved` and `remote_branch_deleted` as finished answers with the data `pull_request_promotion`. Group Y already holds each of these codes, so the row's codes and its count of 42 do not change. |
+| `ticket close` | M + R + C + I + T + Y + `ticket_closed setup_pending already_closing` | 44 | The same, and Made-Ready Report. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `already_closing` is added: a pull-request close of a ticket whose branch already holds a closure answers it. |
+| `ticket withdraw-closure` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Wave 06 Cycle 03's design, Part E. Added 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the verb is new and answers `ticket close`'s codes except `already_closing`; `already_applied` (a ticket with no closure) and `publication_remote_required` are in the groups. |
+| `poll once` | M + R + U + T + `poll_yielding discovery_pending` | 30 | Polling Verbs, frozen table |
+| `poll configure` | S + R + U + `request_mismatch invalid_input already_applied` | 15 | Policy verbs |
+| `poll pause` | S + R + U + `request_mismatch already_applied` | 14 | Policy verbs |
+| `poll resume` | S + R + U + `request_mismatch already_applied` | 14 | Policy verbs |
+| `context observe-local` | S + P + `repository_not_registered item_not_found` | 11 | Local-Sync Verbs, required outcomes |
+| `context show-local` | S + P + `repository_not_registered operation_not_found invalid_input` | 12 | The same |
+| `context sync-local` | M + R + U + I + `already_applied discovery_pending invalid_input external_change worktree_not_clean identity_required recovery_required original_request_required setup_pending` | 24 | The same. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `context resolve-local` | M + R + U + `operation_not_found invalid_input external_change worktree_not_clean recovery_required original_request_required identity_required discovery_pending setup_pending` | 23 | The same. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+
+`operation resume` keeps its C4 row, and gains the union of the `document promote`
+and `ticket close` rows for the lifecycle routes (Task 3), with
+`original_request_required` and `already_applied` already in it. `command_unavailable`
+stays a CLI-only code with no reachable path once C5's last planned verb goes (R-8).
+
+#### C5 delivery reconciliation (2026-11-03)
+
+Amended 2026-11-03 by C5 (Task 14b). This reconciles the C5 rows above and
+the C5 inventory rows below with what Tasks 0–13b and decision 34 delivered
+on the ticket branch, which has merged main through `0dfd5a68`. Paths are
+relative to `src/repository/`. Every symbol marked **planned** above and in
+the inventory is delivered; the old rows' "on main" sentences describe the
+audit base, and the "No request ID" and "F2 resume NotResumable" statements
+no longer hold for C5's verbs.
+
+- **Entry points.**
+  - `document promote` and `ticket close`: `Mutation::DocumentPromote` and
+    `Mutation::TicketClose` in `mutation/bind/lifecycle.rs` (with
+    `lifecycle_verb.rs`), one `LifecycleBinding` for both (R-1). It reads the
+    parent record through the crate-private `lifecycle_parent`
+    (`promotion/mod.rs`), and calls the crate-private probe entries
+    `promote_document_observed` and `close_ticket_observed`, so public
+    signatures are unchanged. `confirm.rs` gains `Row::Unfinished` (R-19).
+    A cancelled parent releases a child with nothing to lose through
+    `release_promotion_child` (`remote/reservation.rs`, decision 18). The
+    preview is `PreviewDetailsDto::Lifecycle`; a blocked prepare is
+    `PrepareDataDto::LifecycleBlocked`.
+  - Made-ready: the crate-private `tickets_made_ready`
+    (`read/graph.rs`), stored with the request's answer.
+  - `poll once`, `poll configure`, `poll pause`, `poll resume`:
+    `Mutation::PollOnce` and the three policy variants in
+    `mutation/bind/poll.rs`; the policy verbs write through
+    `update_remote_polling` (`remote/state.rs`) in their request's own
+    transaction (decision 15). `set_remote_polling` keeps its test callers.
+  - `operation resume`: `mutation/bind/resume.rs` looks in the lifecycle
+    tables first (Task 3, R-30 to R-36, decision 19).
+  - `conflict show` and `conflict resolve` reach a lifecycle's context child
+    through `state::lifecycle_context_child` and `lifecycle_parent_of`
+    (`remote/state.rs`, decision 34).
+  - Identity: `select_committing_identity` (`remote/sync.rs`) treats an
+    unusable configured identity as none (decision 2, `01M5MK57`); local
+    synchronization and conflict resolution make the same check
+    (decisions 23 and 26). `remote select`'s index:
+    `set_publication_remote_recorded` (`src/repository.rs`), with one
+    `FailurePoint` variant (decisions 10 and 17, `01M669FJR2`).
+  - The CLI: `src/bin/manyhands-cli/lifecycle.rs`, `polling.rs` and
+    `local_sync.rs`, with the four `context` verbs added to the catalog
+    (decision 3). `Command` has 43 variants; the catalog has 77 verbs, none
+    planned.
+- **Schemas.** Output, under `schemas/v1/`: `lifecycle_preview`,
+  `lifecycle_blocked`, `lifecycle_mutation`, `poll_mutation` and
+  `poll_policy_mutation`, with additive values in `preview_effect`,
+  `polling_status`, `progress_event` and `synchronization_mutation`. Input,
+  under `schemas/input/v1/`: `poll_configure`, `context_sync_local` and
+  `context_resolve_local`, with examples under `tests/fixtures/cli_input_v1/`.
+- **Codes.** The result-set table above is unchanged: 46 library codes, 49
+  with the CLI's `usage_error`, `invalid_id` and `command_unavailable`.
+  `tests/cli/collaboration_exits.rs` reads it and asserts set equality
+  (Task 13b), and `tests/cli/recovery_tables.rs` reads its per-verb rows to
+  hold each recovery row's code to its verb. No `ResultCode` or
+  `RecoveryActionKind` was added.
+- **Behaviour the rows above did not state.** Each is in the C5 Cycle's
+  decisions or the design's rulings, dated 2026-10-31 to 2026-11-03:
+  - a lifecycle cancellation leaves the same request able to continue
+    (decision 8), and `request cancel` between automatic retries is honoured
+    (decision 12);
+  - a held item refuses a new prepare, naming its holder (decision 33);
+  - a stop reports what its child did (decision 25);
+  - a poll's fetch meeting a held lease is `busy` (decision 24); `poll once`
+    reports a remote branch whose tip primary holds as `current`, not
+    materialized (decision 28); a confirmed push advances an existing
+    tracking ref (decision 29);
+  - `poll resume` clears the pause and any stored deadline, and leaves the
+    recovery suspension (decisions 5 and 11).
 
 ### Wave 03 CLI Cycle C4 refresh (2026-10-28)
 
@@ -337,13 +764,13 @@ force the path. The groups are:
 
 | Verb | Codes | Count | Design anchor |
 | --- | --- | --- | --- |
-| `comment add` | M + R + U + I + T + Y + A | 41 | Comment Submission, required outcomes; Exit Statuses |
-| `item sync` | M + R + U + I + T + Y | 37 | Merging Synchronization, required outcomes |
-| `repo sync` | M + R + U + T + Y | 37 | the same table |
-| `item republish` | M + R + C + I + T + Y + `ticket_closed` | 42 | Republish, required outcomes; decision 17 |
+| `comment add` | M + R + U + I + T + Y + A + `setup_pending` | 42 | Comment Submission, required outcomes; Exit Statuses. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `item sync` | M + R + U + I + T + Y + `setup_pending` | 38 | Merging Synchronization, required outcomes. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `repo sync` | M + R + U + T + Y + `primary_has_local_commits setup_pending` | 39 | the same table. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): `primary_has_local_commits` is added. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `item republish` | M + R + C + I + T + Y + `ticket_closed setup_pending` | 43 | Republish, required outcomes; decision 17. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
 | `conflict show` | P + S + `repository_not_registered operation_not_found invalid_input` | 12 | Conflict Inspection, required outcomes; R-12 (`busy`). Amended 2026-10-30 by C4 (Task 0's review): this row read R and counted 13. A read answers a never-enabled root as `repository_not_registered` (`read/mod.rs`, `repository_error_code`), so `repository_not_enabled` is not one of its codes. The union is unchanged |
-| `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required` | 40 | Conflict Resolution steps 1–7; interrupted-resolution table |
-| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path` | 40 | Resume (R-20); `bind/resume.rs:104-483` |
+| `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required setup_pending` | 41 | Conflict Resolution steps 1–7; interrupted-resolution table. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup_pending` is added. |
+| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path primary_has_local_commits` | 41 | Resume (R-20); `bind/resume.rs:104-483`. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the code is added, because a resume of a pull-only `repo sync` can answer it. |
 | `operation abandon` | M + R + C + `operation_not_found invalid_input already_applied recovery_required invalid_path` | 23 | `bind/abandon.rs:104-413` (unchanged); decision 6 |
 
 Notes on the sets, from the source:
@@ -388,12 +815,12 @@ operation's *local* row, not by its publication:
 
 #### C4 exit-coverage union
 
-The eight row sets expand to these **48 library codes**. `tests/cli/collaboration_exits.rs`
+The eight row sets expand to these **48 library codes** (49 since 2026-11-24, 50 since 2026-11-25; see the amendments below the block). `tests/cli/collaboration_exits.rs`
 (Task 13) asserts set equality with this block (R-27), mapping each code to a
 binary row or to an individually justified reason that no fixture reaches it.
 
 ```text
-already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding primary_has_local_commits publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch setup_pending ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
 ```
 
 Three exclusions, each deliberate:
@@ -409,10 +836,14 @@ Three exclusions, each deliberate:
 - **`host_mismatch`, `request_not_found` and the key-registry codes.** Only the
   host-approval, request-read and key bindings return them.
 
+Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): `repo sync` can answer the new code `primary_has_local_commits` in a pull-request repository, so the block above now holds it, and the union is **49 library codes** and **51 CLI-inclusive codes**. `tests/cli/collaboration_exits.rs` counts 49 and 51, and records the code with a reason, because the C4 binary table has no pull-request repository. The code's golden is `tests/fixtures/mutation_v1/repo_sync_primary_has_local_commits.json`, and the CLI contract's recovery tables hold its row.
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `comment add`, `item sync`, `repo sync`, `item republish` and `conflict resolve` answer `setup_pending` while a first-time setup of their repository has not merged, so the block holds it: the union is **50 library codes** and **52 CLI-inclusive codes**, and `tests/cli/collaboration_exits.rs` counts 50 and 52, with a binary row for it (`a_pull_request_enable_without_a_key_stops_with_no_selected_key`, which sends `repo sync` to a repository whose setup is recorded). `operation resume` and `operation abandon` are not gated.
+
 The CLI-only additions are unchanged from C3: `usage_error`, `invalid_input`,
 `invalid_id`, `invalid_path`, `cancelled` and `internal_error`. Only
 `usage_error` and `invalid_id` extend the library union, giving **50
-CLI-inclusive codes**. The C5 verbs still answer `command_unavailable`, a
+CLI-inclusive codes** (52 since 2026-11-25, with the code above). The C5 verbs still answer `command_unavailable`, a
 C2 code that C4 neither adds nor removes. `noop` is an outcome, not a code: its
 code is `already_applied`.
 
@@ -460,7 +891,8 @@ relative to `src/repository/`.
   `schemas/input/v1/`: `comment_add` and `conflict_resolve`, with examples
   under `tests/fixtures/cli_input_v1/`.
 - **Codes.** The union above is unchanged: 48 library codes, 50 with the
-  CLI's own. `tests/cli/collaboration_exits.rs` reads it and asserts set
+  CLI's own (49 and 51 since 2026-11-24, as the amendment after the union
+  says). `tests/cli/collaboration_exits.rs` reads it and asserts set
   equality. Each code is reached through the binary by a C4 verb, or has a
   reason: `remote_unavailable` and `confirmation_expired`, and off Unix also
   `unlock_failed` and `original_request_required`.
@@ -656,19 +1088,22 @@ are unchanged.
 #### C3 exit-coverage union
 
 The thirteen row sets expand to these **40 F1/F2 codes**, unchanged from
-Task 0. `tests/cli/authoring_exits.rs` covers this exact set plus CLI_ONLY
+Task 0 (41 since 2026-11-25; see the amendment below the block).
+`tests/cli/authoring_exits.rs` covers this exact set plus CLI_ONLY
 with **39 binary rows / 3 individually justified reasons** on Unix (38/4
-otherwise). The Unix reasons are `discovery_pending`, `registration_pending`
+otherwise); the 41st code is a 40th binary row on Unix. The Unix reasons are `discovery_pending`, `registration_pending`
 and `confirmation_expired`; non-Unix also retains prompt cancellation as a
 reason. C2's audit block and tests are unchanged.
 
 ```text
-already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change identity_ambiguous identity_required index_unavailable initials_required internal_error invalid_configuration invalid_input invalid_path invalid_relationship invalid_slug_configuration item_not_found not_confirmable not_repairable not_repository not_repository_root occupied_path ok path_not_found recovery_required registration_pending relationship_cycle repository_inaccessible repository_not_enabled repository_not_registered request_mismatch slug_already_assigned ticket_closed worktree_not_clean wrong_branch
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change identity_ambiguous identity_required index_unavailable initials_required internal_error invalid_configuration invalid_input invalid_path invalid_relationship invalid_slug_configuration item_not_found not_confirmable not_repairable not_repository not_repository_root occupied_path ok path_not_found recovery_required registration_pending relationship_cycle repository_inaccessible repository_not_enabled repository_not_registered request_mismatch setup_pending slug_already_assigned ticket_closed worktree_not_clean wrong_branch
 ```
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): every authoring verb that writes (`folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign` and `ticket repair`) answers `setup_pending` while a first-time setup of its repository has not merged, so the block above holds it: the union is **41 F1/F2 codes** and **43 CLI-inclusive codes**, and `tests/cli/authoring_exits.rs` counts 41 and 43 with `setup_pending` as a binary row (`tests/cli/repository.rs`, `a_pull_request_enable_without_a_key_stops_with_no_selected_key`, which sends `ticket create` to a repository whose setup is recorded). `index refresh` and `index rebuild` are not gated. The answer is the gate's, before the verb reads anything, and it writes nothing.
 
 The design's explicit `CLI_ONLY` inventory is `usage_error invalid_input
 invalid_id invalid_path cancelled internal_error`. Only `usage_error` and
-`invalid_id` extend the library union, giving **42 CLI-inclusive codes**.
+`invalid_id` extend the library union, giving **42 CLI-inclusive codes** (43 since 2026-11-25).
 `noop` is an outcome, not a code: its code is `already_applied`.
 Partial-outcome precedence is authoritative (`src/results.rs:273–288`):
 the interrupted repair's `internal_error` with `partial` maps to **exit 4**,
@@ -925,7 +1360,7 @@ unpinned observation stops at host verification, before any unlock prompt.
 
 #### C2 exit-coverage union
 
-The eighteen F2 row sets expand to the following **49 codes**. C2's exit
+The eighteen F2 row sets expand to the following **49 codes** (54 since 2026-11-25; see the amendment below the block). C2's exit
 table plus its individually justified `REASONS` account for this union;
 SSH cases may supply the designated coverage. A code's inclusion is not a
 claim that a normal CLI fixture can force every defensive/race/backend path.
@@ -934,22 +1369,26 @@ claim that a normal CLI fixture can force every defensive/race/backend path.
 already_applied bare_repository busy cancelled
 confirmation_expired confirmation_mismatch confirmation_not_found
 confirmation_required confirmation_used discovery_pending external_change
-host_mismatch host_replacement_required identity_required index_unavailable
+host_approval_required host_mismatch host_replacement_required identity_required index_unavailable
 internal_error invalid_configuration invalid_input invalid_path invalid_remote
 key_not_deletable
 key_not_found key_rejected key_unavailable no_selected_key not_confirmable
-not_repository not_repository_root occupied_path ok publication_remote_in_use
+not_repository not_repository_root occupied_path ok primary_has_local_commits
+publication_remote_in_use
 publication_remote_required push_rejected recovery_required registration_pending
-remote_name_conflict remote_unavailable repository_inaccessible
+remote_already_set_up remote_name_conflict remote_primary_missing remote_unavailable
+repository_inaccessible
 repository_not_enabled repository_not_registered request_mismatch request_not_found
-selected_key_in_use transport_unavailable unlock_failed unlock_required
+selected_key_in_use setup_pending transport_unavailable unlock_failed unlock_required
 worktree_conflicted worktree_not_clean wrong_branch
 ```
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): the block above now holds five codes that C2's verbs answer on a setup branch: `host_approval_required`, `primary_has_local_commits`, `remote_already_set_up`, `remote_primary_missing` and `setup_pending`, so the union is **54 codes** and **57 CLI-inclusive codes**, and `tests/cli/exits.rs` counts 54 and 57. `repo enable` and `remote select` answer all of them but `remote_already_set_up`, which only a first-time setup meets; `remote remove` answers `setup_pending`; and `repo setup-cancel`, which C2's tests list among its verbs, answers `host_approval_required` when it must connect. The exclusion of `host_approval_required` from C2 held while no C2 verb connected for anything but a host verification, whose observe answers a missing pin as data. The exit table records the five with their reasons, because its fixtures hold no pending setup and no SSH server; the CLI contract's recovery tables hold their rows and reasons.
 
 Additionally, the CLI owns the eight codes in design R-6: `usage_error`,
 `command_unavailable`, `invalid_path`, `invalid_input`, `invalid_id`,
 `cancelled`, `unlock_required`, `internal_error`. Their union with the F2 set
-is **52 codes**. Keep the three CLI-only additions explicit when building the
+is **52 codes** (57 since 2026-11-25). Keep the three CLI-only additions explicit when building the
 coverage table: `command_unavailable` covers the pre-delivery catalog guard,
 not a delivered C2 F2 call. Startup errors remain C1's. Library cancellation
 and prompt cancellation have different origins but share exit 130; a
@@ -1513,7 +1952,10 @@ Line anchors identify inspected definitions at the recorded HEAD.
 
 ## CLI inventory — exactly one row per verb or invocation
 
-C0–C4 apply to every CLI row; references in cells specialize them. All mutation
+C0–C4 apply to every CLI row; references in cells specialize them.
+Amended 2026-11-03 by C5: the C5 rows' **planned** entries are delivered, as
+the [C5 delivery reconciliation](#c5-delivery-reconciliation-2026-11-03)
+records; their "on main" text describes the C5 refresh's base. All mutation
 rows require R-adapter even where only an admin/author/domain re-audit is listed.
 Read rows have no mutation request identity/confirmation requirement, but reads
 may have the application-local bookkeeping effects explicitly recorded in C0.
@@ -1523,14 +1965,14 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `repo list` — C1/D1 | F1 `list_repositories() -> R<RepositoryListDto>` (`read/admin.rs:210`); codes S | All registrations ordered by root; stored accessibility/configuration/index state | Read session: yes; registry loss cannot infer unknown registrations | No consent/refresh; complete stored list | Fixed problems; no unlock or network | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo inspect` — C1/D1 | F1 `inspect_repository(path: &Path) -> R<RepositoryInspectionDto>` (`read/admin.rs:273`); codes S + P | Exact root or linked worktree owner; registration optional; no separate resolver | Read session: yes, registration lookup; Git inspection itself needs none; no enable/scan | No consent, progress or cancellation | Remotes redacted by F1; fixed errors | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo create` — C2 | F2(RepoCreate, RepoCreateInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:76–86` | Empty/absent root; **codes M + C + P0 +** `already_applied, invalid_input, occupied_path, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Request digest, preview observation, init/config/index/registration; replay checks commit reachability; create delegates enablement after initialization | Yes; `prepare` is local and initializes nothing | Supplied/effective identity, repository-local writes; no SSH; input `ticket_slug_prefix` maps to `slug_prefix` | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5–6, 11; R-admin |
-| `repo enable` — C2 | F2(RepoEnable, RepoEnableInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:91–101` | Existing root; **codes M + C + P0 +** `already_applied, invalid_input, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Exact preview and request digest; registration-only path from `01M5CVB2`; configuration index from `01M5B0Z6`; no second commit on replay | Yes; identity required if preview has none to display, even registration-only | No global identity write; no SSH; prefix checked by library | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 6, 11; R-admin |
+| `repo enable` — C2 | F2(RepoEnable, RepoEnableInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:91–101` | Existing root; **codes M + C + P0 +** `already_applied, invalid_input, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Exact preview and request digest; registration-only path from `01M5CVB2`; configuration index from `01M5B0Z6`; no second commit on replay | Yes; identity required if preview has none to display, even registration-only | No global identity write; no SSH; prefix checked by library | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 6, 11; R-admin Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): input and codes are in the [Wave 06 Cycle 02 refresh](#wave-06-cycle-02-refresh-2026-11-25). |
 | `repo remove` — C2 | F2(RepoRemove, RepoRemoveInput); `root: PathBuf`; `mutation/bind/repo_remove.rs:30–32` | Exact stored root also supports missing directory/`.git`; **codes M + C + P +** `already_applied, recovery_required` | Guarded registration removal; receipts survive; matching replay works without disk; files/drafts/key/trust state preserved | Yes; registry-only cleanup; binding `73–115,139–187,209–239` | No SSH or key access; fixed public errors | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 6, 11; [missing-root evidence](../plans/2026-10-19-missing-repository-registration-removal-execution.md); R-admin |
 | `repo identity` — C1/D1 | F1 `repository_identity(repo: &ResolvedRepository) -> R<IdentityDto>` (`read/admin.rs:325`); `ok`, `repository_inaccessible`, `internal_error` | Resolved repository; effective name/email/source/initials | Read session: no in method; yes in CLI resolution; no identity write | No consent/progress | Non-secret Git identity, not SSH identity | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo identity-set` — C2 | F2(RepoIdentitySet, RepoIdentitySetInput); `root: PathBuf, name: String, email: String, initials: InitialsChange`; `mutation/bind/repo_identity.rs:74–81` | Root need not be registered; **codes M + C + P +** `already_applied, invalid_input, recovery_required` | Exact local identity observation; atomic local config replacement; no operation journal; `InitialsChange::{Unchanged, Clear, Set(String)}` | Yes; `observe`, `call`, `preview` at `182–209,239–274,420–459` | Non-secret identity only; never global Git config | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/prompts.rs`, `tests/cli/human.rs` | F2; C2 Tasks 5, 11; R-admin |
 | `remote list` — C1/D1 | F1 `list_remotes_redacted(repo: &ResolvedRepository) -> R<RemoteListDto>` (`read/admin.rs:360`); `ok`, `repository_inaccessible`, `internal_error` | Resolved root; sorted names, selection and publication eligibility | Read session: no in method; yes in CLI resolution; local Git/config only | No consent/refresh | F1 redacts URLs and whole remote-helper locations | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `remote add` — C2 | F2(RemoteAdd, RemoteAddInput); `root: PathBuf, name: String, url: String`; `mutation/bind/remote.rs:50–54` | Registered root and valid name/URL; **codes M + U + R +** `already_applied, invalid_remote, remote_name_conflict, recovery_required, external_change, discovery_pending` | Request binds raw URL digest; config change and index handoff; no implicit select; `167–175,212–249,294–307,320–398` | No; prepare/confirmation supplied answer `not_confirmable` | No network; DTO location redacted, no backend text | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/remotes.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5, 11; R-admin |
 | `remote remove` — C2 | F2(RemoteRemove, RemoteRemoveInput); `root: PathBuf, name: String`; `mutation/bind/remote.rs:757–760` | Registered root; **codes M + C + R +** `already_applied, invalid_remote, publication_remote_in_use, recovery_required, discovery_pending` | Preview covers remote/tracking refs/upstreams; publication remote refused; `923–1211,1232–1270,1384–1556` | Yes; preview's `publication_affected` remains false | No network; preserves unrelated refs/config under F2's removal rules | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 7, 11; R-admin; existing removal defect remains separate |
-| `remote select` — C2 | F2(RemoteSelect, RemoteSelectInput); `root: PathBuf, name: Option<String>`; `mutation/bind/remote.rs:410–413` | Registered root, primary, clean configuration, eligible SSH endpoints; **codes M + U + R +** `already_applied, invalid_remote, identity_required, wrong_branch, worktree_not_clean, invalid_configuration, recovery_required, external_change, registration_pending, discovery_pending` | `None` clears selection; configuration checkpoint and registration/index handoff; shared `bind/save.rs`; `468–475,522–560,678–704` | No; prepare answers `not_confirmable` | Commit identity required, no SSH unlock/network | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 7, 11; R-admin |
+| `remote select` — C2 | F2(RemoteSelect, RemoteSelectInput); `root: PathBuf, name: Option<String>`; `mutation/bind/remote.rs:410–413` | Registered root, primary, clean configuration, eligible SSH endpoints; **codes M + U + R +** `already_applied, invalid_remote, identity_required, wrong_branch, worktree_not_clean, invalid_configuration, recovery_required, external_change, registration_pending, discovery_pending` | `None` clears selection; configuration checkpoint and registration/index handoff; shared `bind/save.rs`; `468–475,522–560,678–704` | No; prepare answers `not_confirmable` | Commit identity required, no SSH unlock/network | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 7, 11; R-admin Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): input and codes are in the [Wave 06 Cycle 02 refresh](#wave-06-cycle-02-refresh-2026-11-25). |
 | `key list` — C1/D1 | F1 `list_keys() -> R<KeyListDto>` (`read/credentials.rs:190`); codes S | Application-global registrations, selection, ownership, fingerprint and source states | Read session: yes; stored metadata only | No consent/progress | Opens no key file; public DTO fields only | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `key show` — C1/D1 | F1 `show_key(id: SharedKeyId) -> R<KeyDto>` (`read/credentials.rs:203`); codes S + `key_not_found` | Exact canonical key ULID; application-global | Read session: yes; stored registration only | No consent/progress | No private-key parsing or bytes | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `key generate` — C2 | F2(KeyGenerate, KeyGenerateInput); `store: KeyStore, label: String, protection: KeyProtection`; `mutation/bind/key.rs:610–614` | Application-global; **codes M + U +** `invalid_input, key_unavailable, key_not_found, key_not_deletable, external_change, recovery_required` | Request binds label/protection mode, never passphrase; own completed generation reports `ok`, not `already_applied`; `776–859,906–991`; material/storage errors via `outcome.rs:157–190` | No; prepare reads no protection, answers `not_confirmable` | Protected generation requires terminal in C2 (`unlock_required` is CLI-built); key-file tests Unix-only; no secret persisted | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/prompts.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 9, 11; R-admin |
@@ -1573,16 +2015,20 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `item sync` — W3-05/10; C4 | Existing F2(`ItemSync`, `ItemSyncInput { root, kind, id }`, `bind/sync.rs`). Since Task 1 it passes `MERGING` (`refuse_divergence: false`), so it merges. Not confirmed. Data `SynchronizationMutationDto`, or `SynchronizationConflictMutationDto` on a conflict. Codes: C4 key, 37 (M + R + U + I + T + Y) | Exact item, shared context, remote and ref observations; never unsaved caller input; `--id` kind by one read | Fetch, fast-forward, merge (remote context, then primary), push, discovery; a conflict is `recovery_required` with `conflict: {operation_id, next_action}` in data (decision 8); no body or source recorded | No consent; C2 progress; safe-point cancel; Ctrl-C window; republishing a deleted branch is the separate confirmed `item republish` (decision 7) | Selected-key and host trust per C3; fixed messages | delivered-C4 on the ticket branch: the binding merges, and the CLI verb is available; two-clone SSH journeys in `tests/cli_remote/collaboration.rs` and `conflicts.rs` | C4 Task 1 (library) and 7 (CLI); journeys in Tasks 12a, 12b; R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
 | `repo sync` — W3-05/10; C4 | Existing F2(`RepoSync`, `RepoSyncInput { root }`, `bind/sync.rs`), merging since Task 1, as `item sync`. Not confirmed. Data as `item sync`. Codes: C4 key, 37 (M + R + U + T + Y) | Exact primary and remote, clean-primary observations | Fetch, fast-forward, merge, push, discovery; not polling; replay stores the result | No consent; C2 progress; safe-point cancel; Ctrl-C window; no inferred publication intent | Selected-key and host trust per C3 | delivered-C4 on the ticket branch: the binding merges, and the CLI verb is available; two-clone SSH journeys in `tests/cli_remote/collaboration.rs` and `conflicts.rs` | C4 Task 1 (library) and 7 (CLI); R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
 | `item republish` — C4 (decisions 4, 7, 11, 17); added to the inventory | F2(`ItemRepublish`, `ItemRepublishInput { root, kind, id }`), `bind/republish.rs`, over the crate-private `Session::republish` and `RepositoryService::republish_context` (Task 5). **Confirmed**: `ItemRepublishPreviewDto`, effect `branch_republished`; the no-op preview is `already_applied`. Data null. Codes: C4 key, 42 (M + R + C + I + T + Y + `ticket_closed`) | Exact item, branch, remote, `last_published_oid` and `local_oid`; the preview reads stored evidence, with no reservation (fact 55) | Push-only: pushes exactly the previewed local tip and integrates nothing (decision 11, R-18); `external_change` if the context was advertised again or the tip moved; `ticket_closed` for a lifecycle-closed ticket; `external_change` and `push_rejected` finish the record, and the refused republish ends its operation `cancelled`; replay stores the result and pushes nothing twice | Consent through prepare and confirm (600 s); C2 progress; safe-point cancel; Ctrl-C at the prompt is exit 130 before execution; a cancellation is final and a new prepare follows | Selected-key and host trust per C3; the preview and results carry IDs and OIDs only | delivered-C4 on the ticket branch: binding, preview, CLI verb and the desktop arm; two-clone SSH journeys in `tests/cli_remote/conflicts.rs` | C4 Task 5 (library) and 10 (CLI); one desktop arm (decision 10); R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
-| `document promote` — W3-06/11 | Delivered headless `preview_document_promotion`, `promote_document`, `cancel_document_promotion`; Task 6 reviewed complete: SPEC PASS, QUALITY FINAL APPROVE, no findings | Exact item + whole branch/primary/remote/OIDs/paths/cleanup; local read-only Ready(preview/expectation) or Blocked | Complete(outcome) or IndexPending(same outcome); separate integration/publication/cleanup; identical-ID retry only unfinished work, completed replay no transport/deletion; completed publication wins over cancellation/lost return; accepted concurrency fence and approved T6-1 exception | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema and accepted-consent adapters pending; current F2 resume NotResumable | Local confirmed identity + selected-key/trust if remote; NoPublicationRemote still permits local cleanup | headless domain delivered/reviewed; 188 targeted tests GREEN; frontend pending | W2-09 Task 7/8 gates + C5/D5; R-domain |
-| `ticket close` — W3-06/11 | Delivered headless (W2-10, 2026-10-18): `preview_ticket_closure`, `close_ticket`, `cancel_ticket_closure` | Exact ticket + whole branch incl. code; local read-only Ready(preview/expectation binding `closed_by`) or every Blocked category | `Close ticket` checkpoint + `Integrate closed ticket` merge in one lease, publication, guarded cleanup; Complete(outcome) or IndexPending(same outcome); same-ID retry only unfinished work; contained-and-closed cleanup-only replay | C5/D5 F2 prepare/execute binding, ten-minute expiry, preview schema values and ready-ticket report pending; F2 resume `Close` stays NotResumable | Effective or confirmed Git identity (bound in the digest) + selected-key/trust if remote | headless domain delivered; frontend pending | W2-10 + C5/D5; R-domain |
+| `document promote` — W3-06/11; C5 (D5 consumes) | On main: headless `preview_document_promotion`, `promote_document`, `cancel_document_promotion` (`promotion/mod.rs:380,361,368`); **planned** F2 binding `bind/lifecycle.rs`; codes in the C5 refresh, 41 | `--repo`, `--id`, no input; exact item + whole branch/primary/remote/OIDs/paths/cleanup; `PreviewDetailsDto::Lifecycle` or `LifecycleBlocked` | Request ID + operation ID; Complete(outcome) or IndexPending(same outcome); integration, publication and cleanup reported separately; same request continues an unfinished parent, completed replay no transport or deletion; cache loss recovers through a new prepare | Confirmed, ten-minute consent; on main cancellation reaches only `cancel_document_promotion`, the probe and `cancel_request` link are planned (decision 8); same-request continuation after `cancelled`; resume route planned, F2 resume is `NotResumable` until Task 3 | Configured identity only (decision 6), selected key and trust if remote; `NoPublicationRemote` exits 0 with publication pending | Domain delivered/reviewed; boundary and CLI planned | C5 Tasks 2a–3, 6, 7, 12a–13b; D5 consumes |
+| `ticket close` — W3-06/11; C5 (D5 consumes) | On main: headless `preview_ticket_closure`, `close_ticket`, `cancel_ticket_closure` (`closure/mod.rs:349,359`); **planned** shared `bind/lifecycle.rs` and `tickets_made_ready`; codes in the C5 refresh, 42 | `--repo`, `--id`, no input; exact ticket + whole branch incl. code; preview binds `closed_by`; every blocker named | Same as `document promote`; `Close ticket` checkpoint + `Integrate closed ticket` merge in one lease; contained-and-closed cleanup-only replay; made-ready stored in the finished envelope with `{id, slug}` and no title; `closed_at` and `closed_by` keep first values | Confirmed, ten-minute consent; same cancellation and resume status as `document promote`; a refused checkpoint merge routes to the `context *-local` verbs | Configured identity only (`identity_required`, R-21), selected key and trust if remote; `closed_by` only in preview, canonical content, index and Git; request and confirmation records hold no `closed_by`, though a confirmation's digest hashes it | Domain delivered; boundary and CLI planned | C5 Tasks 2a–4, 6, 7, 12a–13b; D5 consumes |
 | `index status` — C1/D1 | F1 `index_status(repo: &ResolvedRepository) -> R<IndexStatusDto>` (`read/status.rs:657`); `ok`, `busy`, `internal_error`, `repository_not_registered`; own `index_unavailable` becomes DTO | Resolved root; freshness, counts, problems and pending local work; CLI resolution adds `index_unavailable` (R-2) | Read session: yes; no fetch/refresh | No consent; stale/unavailable explicit | Fixed problem guidance, no backend text | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `index refresh` — C3 | F2(IndexRefresh, IndexRefreshInput); `mutation/bind/index.rs:36–38,114–166`; CLI `authoring.rs::index_refresh` | `--repo` registered root; no input payload or item selector | Explicit local scan/cache/journal; data null; codes **C3-M + C3-R + C3-U + recovery_required external_change**; success ok/discovery current, no noop | Unconfirmed; request ID required in JSON/noninteractive mode; bound progress/cancellation interface, no post-acceptance stop | No SSH/fetch/publication or canonical rewrite | Available; Linux binary evidence: `tests/cli/index.rs`, `authoring_exits.rs` (C3 refresh itself proves index_unavailable) | F2 index binding + C3 adapter; R-author |
 | `index rebuild` — C3 | F2(IndexRebuild, IndexRebuildInput); `mutation/bind/index.rs:43–45,148–159,213–244`; CLI `authoring.rs::index_rebuild` | Explicit `--repo`, possibly unregistered; no input/item selector; never-enabled refused; owner-approved root-selection exception above | Restore unavailable cache before acceptance, then rebuild; data null; codes **C3-M + C3-P0 + C3-U + repository_not_registered repository_not_enabled recovery_required external_change**; success ok, no noop | Unconfirmed; request ID required in JSON/noninteractive mode; partial-page damage remains decision-1 limit | No SSH/fetch or canonical/Git rewrite; trust/history-loss fences preserved | Available; Linux binary evidence: `tests/cli/index.rs`, `authoring_exits.rs`; linked-root behavior source-inspected only | F2 index binding + C3 adapter; no root workaround |
 | `poll status` — C1/D6 | F1 `polling_status(repo: &ResolvedRepository) -> R<PollingStatusDto>` (`read/status.rs:706`); codes SR | Stored policy, latest outcome/time, active operation and next eligibility | Read session: yes; no network or process discovery | No consent; no resident-worker claim | Fixed categories; no unlock | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `poll configure` — W3-06/12 | `set_remote_polling` E-policy; interval 60–3600 | Exact registered root/policy; no observation token | No request ID; durable enabled/paused/interval transaction; future due logic C6 | C2 request/progress mapping absent, no scheduling now | No unlock; C0/C3 | partially-present | W2-04/08 policy; W3-02/06; R-adapter + R-domain |
-| `poll pause` — W3-06/12 | `set_remote_polling` E-policy updates tuple, no isolated pause request | Policy observation, preserve interval/enabled/backoff/unlock distinction | No request ID; caller must avoid overwriting newer tuple C6 | C2; active operation safe stop adapter missing | No unlock/prompt; pause not authentication block | partially-present | W2-04/08; W3-02/06; R-adapter + R-domain |
-| `poll resume` — W3-06/12 | `set_remote_polling` E-policy; recovery resume is **different** | Clear explicit pause, due eligibility; preserve unlock/recovery/history states | No request ID; full due semantics absent; not resume_remote_polling_after_recovery | C2; deliberate recovery authorization separate | No implicit unlock/host approval C3/C6 | partially-present | W2-04/08; W3-02/06; R-adapter + R-domain |
-| `poll once` — W3-06/12 | `poll_publication_remote(PollPublicationRemoteRequest, session)` → Complete/IndexPending of NotEligible or Polled(RemotePollReport); automatic_poll_eligibility | Root/op ID/invocation/approval/restart; frozen derived refs/endpoints/key, local re-observation | Authenticated fetch/clean FF/materialization/index once; latest report replay, older terminal outcome with empty targets; no push/checkpoint/merge/cleanup C4 | Durable yield/cancel at safe points and bounded read-only transfer probes; partial report preserves changes; no resident worker | Caller-owned selected-key session/host re-observation C3; request has no Debug, reports fixed metadata | domain-delivered; whole-poll SSH/native acceptance pending | W2-08 Tasks 1–6; W3-02/06 adapter and W3-12 scheduling remain; R-domain |
+| `poll configure` — W3-06/12; C5 (D6 consumes) | On main: `set_remote_polling` (`remote/state.rs:6384`), test callers only, overwrites the tuple; **planned** F2 binding and `update_remote_polling`; codes in the C5 refresh, 15 | `--repo`, `--input {interval_seconds}`, 60–3600, closed schema; no observation token (decision 15) | Request ID with the record finished in the policy transaction: a committed request replays; a never-committed resend is a new write (last commit wins, owner question 6) | Not confirmed; no safe points; pausing or configuring doesn't touch a running poll; `state::configure` leaves `paused`, `enabled`, `interval_seconds` and `next_eligible_at` alone | No unlock; no prompt | Policy store delivered; boundary and CLI planned | C5 Tasks 5a, 8; D6 consumes |
+| `poll pause` — W3-06/12; C5 (D6 consumes) | On main: no isolated pause, only `set_remote_polling`'s tuple; **planned** F2 binding and `update_remote_polling`; codes in the C5 refresh, 14 | `--repo`, no input; writes `paused` alone | As `poll configure`; already paused is `already_applied`, 0 | Not confirmed; applies to the next automatic poll, doesn't stop a running one | No unlock; a pause is no authentication block | Policy store delivered; boundary and CLI planned | C5 Tasks 5a, 8; D6 consumes |
+| `poll resume` — W3-06/12; C5 (D6 consumes) | On main: `set_remote_polling`'s tuple; `resume_remote_polling_after_recovery` (`remote/state.rs:6366`) is **different** and gets no verb (decision 5); **planned** F2 binding and `update_remote_polling`; codes in the C5 refresh, 14 | `--repo`, no input; clears `paused` and `next_eligible_at`, making an eligible poll due (decision 11); leaves `recovery_suspended`, `enabled` and the stored backoff | As `poll configure`; not paused is `already_applied`, 0, nothing written | Not confirmed; human output names a recovery suspension when set | No implicit unlock or host approval | Policy store delivered; boundary and CLI planned | C5 Tasks 5a, 8; D6 consumes |
+| `poll once` — W3-06/12; C5 (D6 consumes) | `poll_publication_remote` (`remote/poll.rs:1195`), no production caller on main; Complete/IndexPending of NotEligible or Polled(RemotePollReport); **planned** F2 binding `bind/poll.rs` and `PollMutationDto`; codes in the C5 refresh, 30 | `--repo`, no input; `Explicit` skips eligibility, so it runs paused or disabled (`:1241`; tests `review_explicit_restart_..._bypasses_policy_gates`, `task6_missing_remote_and_explicit_bypass_...`); missing remote refused with nothing written | Authenticated fetch, clean fast-forward, materialization, index once; transport stop is final and a new request polls again (R-18); `Interrupted` continues the same request with `restart`; no push, checkpoint, merge or cleanup | Not confirmed; safe-point cancellation with a planned probe; a restart reports its own pass; no resident worker | Selected key and host re-observation; report holds fixed metadata; no slug (R-17) | Domain delivered; boundary and CLI planned | C5 Tasks 5b, 9, 12b, 13a; D6 consumes |
+| `context observe-local` — C5 (decision 3) | `observe_local_context_sync` (`local_sync/observe.rs:360`); CLI **planned**; codes in the C5 refresh, 11 | `--repo`, `--id`; the item's kind from the item | Read session; issues the observation; no context is created (gate A4) | Read; no confirmation | No credentials; no network | Library delivered; CLI planned | C5 Task 10a; D5 consumes the boundary |
+| `context show-local` — C5 (decision 3) | `inspect_local_context_sync`, `read_local_context_conflict` (`read/local_sync.rs:110,117`); CLI **planned**; codes in the C5 refresh, 12 | `--repo`, `--operation-id`, optional `--token`; tampered tokens checked by the library (gate A10) | Read session | Read; `--token` is JSON only (R-15) | Source only in the content DTO; no network | Library delivered; CLI planned | C5 Task 10a |
+| `context sync-local` — C5 (decision 3) | F2(`LocalContextSync`) (`bind/local_sync.rs`); CLI **planned**; codes in the C5 refresh, 23 | `--repo`, `--id`, `--input {observation}` | Request ID + operation ID; `already_applied` when equal or contained; frozen parents; primary untouched | Unconfirmed; Ctrl-C window joined (Task 10a); `original_request_required` resend | No network, no credentials; source stays out of records | Library delivered; CLI planned | C5 Tasks 10a, 13a |
+| `context resolve-local` — C5 (decision 3) | F2(`LocalContextResolve`) (`bind/local_sync.rs`); CLI **planned**; codes in the C5 refresh, 22 | `--repo`, `--operation-id`, `--input {observation, resolutions}` | Request ID; complete sources against issued tokens; partial acceptance answers `original_request_required` | Unconfirmed; Ctrl-C window joined (Task 10b) | No network; source and tokens never in diagnostics | Library delivered; CLI planned | C5 Tasks 10b, 13a |
 | `operation list` — C1/D1 | F1 `list_operations(repo: &ResolvedRepository) -> R<OperationListDto>` (`read/status.rs:755`); codes SR | Outstanding local/remote/promotion/closure and application key-material records; ID order | Read session: yes; stored state only, not writable legacy recovery listing | No consent/resume/reconciliation | Fixed fields; no original body or key material | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `operation show` — C1/D1 | F1 `show_operation(repo: &ResolvedRepository, id: OperationId) -> R<OperationDto>` (`read/status.rs:799`); codes SR + `operation_not_found` | Exact canonical operation ID; includes finished records | Read session: yes; stored state, no live re-observation | No consent/resume inferred | Fixed fields; no original input reconstruction | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `request show` — C2 | `show_request(&self, request_id: RequestId) -> Envelope<RequestDto>`; `mutation/mod.rs:367–377` | Application-level canonical request ID; **codes S +** `request_not_found` | Reads record only; stored result has its own nested code, not this read's code; no replay/resume | None; `--request-id` selector, no `--repo` | No credential or network access | CLI evidence closed: `tests/cli/requests.rs`, `tests/cli/human.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 5, 11 |
@@ -1630,8 +2076,8 @@ that capability. Catalog evidence is adjacent domain evidence, never UI proof.
 | D22 drafts survive removed/inaccessible repository or vanished context — W3-08 | E-remove/index do not implement draft store/tests | Persisted draft accessible independent of registration/context/cache | Preserve recovery/export on remove/rebuild; no auto worktree recreation | Explicit recover/discard, no hidden age cleanup | Owner-protected store separate C5 | absent | W3-08 over W3-01/02/03; R-draft |
 | D23 rich/source recoverable comment/reply composer — W3-10 | E-comment local checkpoint only; missing composer/draft/editor | Item/parent/comment IDs, body/base observation | One submission ID, do not include unsaved item draft; same fidelity as D07–D19 | Post and sync vs Save locally labels; partial publication retry | Local identity + future selected-key/trust C3/C4 | absent | W3-08/09 editor, W2-07 domain, W3-10; R-draft + R-domain |
 | D24 saved comment shown once; retry publication only — W3-10 | Amended 2026-10-30 by C4, replacing "E-comment exact local replay; missing compound outcome": Wave 02 Cycle 07 delivered the compound outcome (`CommentSubmissionOutcome`) and the publication-only retry, and C4 delivers the F2 `comment add` binding. A retry of the same request publishes without writing the comment again, and `operation resume` publishes a pending publication, with `CommentMutationDto` data. The desktop UI and its tests are missing (D4). Amended 2026-11-02 by D4: C4 is merged to main (`89c8383b`), so the binding is delivered on main; D4's approved plan consumes it unchanged, with the saved comment shown once and Retry sharing reusing the comment's request | Retained comment/request/operation ID and original shared context | No new file/checkpoint/timestamp on publication retry C4 | Show completed/local saved and remaining publication; deliberate resume | Same session/trust boundary; redacted partial effects | library boundary delivered-C4 on the ticket branch; UI absent | W2-07 + C4's `comment add` binding, then D4; R-domain |
-| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog. Amended 2026-11-02 by D4 (decision 9): D4 has no Share dialog; Share's scope is stated in its tooltip and operation entry. Completion dialogs remain D5's | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
-| D26 canonical conflict base/local/remote/result editing — W3-11 | Amended 2026-10-30 by C4, replacing "Missing W2-06 public resolution/read": Wave 02 Cycle 06 delivered resolution, and C4 delivers the public read `show_conflict` (`ConflictDto`, with each path's string token, and an item path's base/local/incoming sides when the library reads them as UTF-8 text, as `content_available` says) and the F2 `conflict resolve` binding (`{observation, resolutions: [{token, source}]}`), for remote synchronizations. The desktop UI and its tests are missing (D5) | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Mark resolved, no automatic side choice; resolution stays set-wide (C4 decision 12) | Requested source vs redacted progress C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 + C4's boundary, then D5 through D4; R-domain |
+| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog. Amended 2026-11-02 by D4 (decision 9): D4 has no Share dialog; Share's scope is stated in its tooltip and operation entry. Completion dialogs remain D5's | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending. Amended 2026-11-03 by C5: the boundary binding, expiry, preview schema and resume route are delivered on C5's branch ([reconciliation](#c5-delivery-reconciliation-2026-11-03)); the dialog stays D5's | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
+| D26 canonical conflict base/local/remote/result editing — W3-11 | Amended 2026-10-30 by C4, replacing "Missing W2-06 public resolution/read": Wave 02 Cycle 06 delivered resolution, and C4 delivers the public read `show_conflict` (`ConflictDto`, with each path's string token, and an item path's base/local/incoming sides when the library reads them as UTF-8 text, as `content_available` says) and the F2 `conflict resolve` binding (`{observation, resolutions: [{token, source}]}`), for remote synchronizations. The desktop UI and its tests are missing (D5) | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Save resolution (named so by D5, decision 4; formerly Mark resolved), no automatic side choice; resolution stays set-wide (C4 decision 12) | Requested source vs redacted progress C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 + C4's boundary, then D5 through D4; R-domain |
 | D27 noncanonical external recovery/recheck guidance — W3-11 | Amended 2026-10-30 by C4, replacing "Missing public conflict/re-observe DTO": C4's `ConflictDto` gives each path's kind and structure, `next_action: external_repair` for a set that is not all canonical, and the states `repaired` and `repair_refused` after an outside repair; `operation resume` continues an accepted repair. The desktop UI is missing (D5); private Git is not a frontend API | Code/binary/rename/delete/structural conflicts preserved | Open location deliberate; recheck actual Git, never arbitrary staging/publish | Explicit operation resume after real repair; no marker-only inference | Owned redacted recovery arguments C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 observations + C4's boundary, then D5 through D4; R-domain |
 | D28 keyboard focus/dialog Escape/action activation — W3-07…12 | Missing full control/focus contract/tests; Button scaffold only | Every core action labeled/focusable, tab order/visible focus/focus return | UI state only, color not sole state signal | Escape cancellation at dialog/request safe boundary | No secret text in UI diagnostics | absent | W3-07 shell, each feature, W3-13 gate; R-shell |
 | D29 native IME/Unicode/accessibility/high-DPI evidence — W3-09/13 | Missing native editor/control evidence; scaffold not proof | Supported OS/architecture native inputs, composition/selection | Preserve exact draft/source including bidi/combining/non-BMP | Keyboard minimum != screen-reader conformance | Synthetic redacted fixtures/evidence | absent | W3-09 editor, W3-13 native matrix; R-editor + R-shell |

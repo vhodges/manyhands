@@ -22,7 +22,8 @@ use crate::{
     catalog::CommandSpec,
     fill,
     human_collaboration::{self, Seen},
-    mutate::{self, Driven, Extras, MutationFlags, Plan, Session},
+    human_lifecycle,
+    mutate::{self, Extras, MutationFlags, Session},
     render::{self, Output},
 };
 
@@ -189,28 +190,42 @@ pub(crate) fn run(
     named: Option<OperationId>,
     build: &mut dyn FnMut(&Extras) -> Mutation,
 ) -> Output {
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
-    };
-    match mutate::drive(
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        mutate::RETRYING,
         build,
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Executed { envelope, supplied } if session.json => {
-            render::mutation_output(true, &envelope, supplied)
-        }
-        Driven::Executed { envelope, supplied } => {
-            let seen = seen(service, &envelope, named);
-            human_collaboration::output(&envelope, supplied, &seen)
-        }
-    }
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| {
+            // An `operation resume` that continued a promotion or a closure.
+            if continued_a_lifecycle(envelope) {
+                return human_lifecycle::output(envelope, supplied);
+            }
+            let seen = seen(service, envelope, named);
+            human_collaboration::output(envelope, supplied, &seen)
+        },
+    )
+}
+
+/// Whether the result is that of a promotion or a closure an `operation
+/// resume` continued: its data is the lifecycle's, or a branch record's, of
+/// a closure or of a pull-request promotion.
+pub(crate) fn continued_a_lifecycle(envelope: &Envelope<MutationDataDto>) -> bool {
+    matches!(
+        envelope.data,
+        Some(
+            MutationDataDto::Lifecycle(_)
+                | MutationDataDto::PullRequestClosure(_)
+                | MutationDataDto::PullRequestPromotion(_)
+        )
+    )
 }
 
 /// What human output needs that the envelope does not say, from the

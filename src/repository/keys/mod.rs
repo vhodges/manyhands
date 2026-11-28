@@ -6,6 +6,7 @@ mod deletion;
 pub use deletion::GeneratedKeyDeletionReview;
 mod generation;
 mod inspection;
+pub(crate) use inspection::source_may_need_passphrase;
 mod registry;
 pub mod session;
 pub use session::{

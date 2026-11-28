@@ -6,6 +6,16 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/c5_cancel.rs"]
+mod c5_cancel;
+#[path = "mutation_remote/c5_lifecycle.rs"]
+mod c5_lifecycle;
+#[path = "mutation_remote/c5_made_ready.rs"]
+mod c5_made_ready;
+#[path = "mutation_remote/c5_poll.rs"]
+mod c5_poll;
+#[path = "mutation_remote/c5_resume.rs"]
+mod c5_resume;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -14,11 +24,17 @@ mod comment_domain;
 mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
+#[path = "mutation_remote/context_retirement.rs"]
+mod context_retirement;
+#[path = "mutation_remote/d5_progress.rs"]
+mod d5_progress;
 #[allow(dead_code)]
 #[path = "support/golden.rs"]
 mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[path = "support/lifecycle_world.rs"]
+mod lifecycle_world;
 #[path = "mutation_remote/merging.rs"]
 mod merging;
 #[allow(dead_code)]
@@ -59,11 +75,19 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(context_retirement::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
         .chain(resume::CASES)
         .chain(republish::CASES)
+        .chain(c5_lifecycle::CASES)
+        .chain(c5_resume::CASES)
+        .chain(c5_cancel::CASES)
+        .chain(c5_cancel::CHILD_CONFLICT)
+        .chain(c5_made_ready::CASES)
+        .chain(c5_poll::CASES)
+        .chain(d5_progress::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -347,6 +371,14 @@ const CASES: &[ssh_harness::Case] = &[
     ),
     ("c4_conformance_item_sync", c4_conformance_item_sync),
     ("c4_conformance_repo_sync", c4_conformance_repo_sync),
+    (
+        "a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits",
+        a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits,
+    ),
+    (
+        "a_setup_branch_is_published_activated_changed_and_cancelled",
+        a_setup_branch_is_published_activated_changed_and_cancelled,
+    ),
     ("c4_conformance_comment_add", c4_conformance_comment_add),
 ];
 
@@ -760,16 +792,22 @@ fn call_before_the_stores_hold_anything(
     // A resume that took up a synchronization carries that
     // synchronization's data: a host's, or a conflict's, by its tag. One
     // that took up a comment's publication carries the comment's, and one
-    // of a local-context sync the gate's (R-20).
+    // of a local-context sync the gate's (R-20). One refused for another
+    // operation's unfinished row names that operation instead. A pull-only
+    // refusal carries the local commits it lists.
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
         let data_schema = match value["data"]["type"].as_str() {
+            _ if value["data"]["blocker"].is_object() => BLOCKED_SCHEMA,
             Some("synchronization_conflict") => CONFLICT_SCHEMA,
             Some("comment") => COMMENT_SCHEMA,
             Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
+            Some("primary_local_commits") => PRIMARY_LOCAL_COMMITS_SCHEMA,
+            Some("pull_request_closure") => PULL_REQUEST_CLOSURE_SCHEMA,
+            Some("pull_request_link") => PULL_REQUEST_LINK_SCHEMA,
             _ => SYNCHRONIZATION_SCHEMA,
         };
         schema::check_published(data_schema, &value["data"])
@@ -796,7 +834,10 @@ const SYNCHRONIZATION_SCHEMA: &str = "synchronization_mutation.schema.json";
 const CONFLICT_SCHEMA: &str = "synchronization_conflict_mutation.schema.json";
 const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
 const LOCAL_CONTEXT_SYNC_SCHEMA: &str = "local_context_sync_mutation.schema.json";
+const PRIMARY_LOCAL_COMMITS_SCHEMA: &str = "primary_local_commits.schema.json";
 const HOST_SCHEMA: &str = "host_mutation.schema.json";
+const PULL_REQUEST_CLOSURE_SCHEMA: &str = "pull_request_closure_mutation.schema.json";
+const PULL_REQUEST_LINK_SCHEMA: &str = "pull_request_link.schema.json";
 
 /// Checks an envelope against its golden fixture under
 /// `tests/fixtures/mutation_v1`, as every target of the boundary does.
@@ -804,7 +845,8 @@ const HOST_SCHEMA: &str = "host_mutation.schema.json";
 /// carries none.
 ///
 /// What differs from run to run is replaced: the root, the operation, the
-/// commit, the server's address and the fingerprints of the keys in play.
+/// commit, the local commits a pull-only refusal lists, the server's
+/// address and the fingerprints of the keys in play.
 /// The server's port is also a number of the data, which no placeholder
 /// replaces: it is checked to be the server's, and the fixture holds 0.
 fn assert_golden(
@@ -1235,9 +1277,32 @@ const LOCAL_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ2";
 /// same path, and the synchronization of primary into the ticket's branch
 /// stops on the two. It is unfinished, which refuses every remote
 /// reservation of the repository (fact 80, R-38). Returns its operation.
+///
+/// The world commits its `publication_remote` outside Manyhands after
+/// `repo enable` indexed the primary, and a create indexes only its new
+/// context (decision 2), so the observation first refuses on the stored
+/// configuration; an `index refresh`, as a person runs after an outside
+/// change (decision 7), lets it seal (named edit E-61).
 fn leave_local_sync_conflict(w: &World) -> OperationId {
     let created = execute(w, LOCAL_SYNC_CREATE, create_other(w));
     assert_eq!(created.code, ResultCode::Ok);
+    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
+    let repository = w.service.resolve_repository(&w.root).unwrap();
+    assert_eq!(
+        w.service
+            .observe_local_context_sync(&repository, AuthoringKind::Ticket, &id)
+            .unwrap_err()
+            .code(),
+        ResultCode::ExternalChange,
+        "the create left the primary's outside configuration commit unindexed"
+    );
+    assert!(matches!(
+        w.service.refresh_repository(RefreshRepositoryRequest {
+            root: w.root.clone(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\n\
          title: Primary\ntype: task\nstatus: open\n---\nBody of Primary.\n"
@@ -1249,7 +1314,6 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
         source.as_bytes(),
     )
     .expect("a commit on primary");
-    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
     let observed = w
         .service
         .observe_local_context_sync(
@@ -1271,6 +1335,21 @@ fn leave_local_sync_conflict(w: &World) -> OperationId {
     assert_eq!(stopped.code, ResultCode::RecoveryRequired);
     OperationId::parse(stopped.operation_id.as_deref().expect("its operation"))
         .expect("an operation ID")
+}
+
+/// The data of an answer refused for another operation's unfinished row.
+const BLOCKED_SCHEMA: &str = "blocked.schema.json";
+
+/// Asserts that `envelope` was refused for the local synchronization
+/// `operation` that `leave_local_sync_conflict` left: its data names that
+/// operation, which no call is at work under, in place of the command's
+/// own.
+fn assert_blocked_by_local_sync(envelope: &Envelope<MutationDataDto>, operation: OperationId) {
+    let data = serde_json::to_value(envelope).expect("an envelope serializes")["data"].clone();
+    schema::check_published(BLOCKED_SCHEMA, &data).expect("the blocked schema");
+    assert_eq!(data["blocker"]["operation_id"], operation.to_string());
+    assert_eq!(data["blocker"]["family"], "local");
+    assert_eq!(data["blocker"]["live"], false);
 }
 
 /// A synchronization that stops with an error after it reserved.
@@ -1378,10 +1457,21 @@ fn pin_a_held_reservation(
         assert!(record(w, REQUEST_2).is_none());
     }
 
-    // Another synchronization.
+    // Another synchronization, which names the operation that holds the
+    // reservation.
     let other = execute(w, REQUEST_3, repo_sync(w));
     assert_eq!(other.code, ResultCode::Busy);
-    assert_eq!(actions(&other), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        actions(&other),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::OperationShow
+        ]
+    );
+    assert_eq!(
+        other.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(record(w, REQUEST_3).is_none());
 
     // The same request, with the cause still there.
@@ -2398,14 +2488,16 @@ fn an_interrupted_synchronization_is_cancelled_only_when_its_row_says_so()
     let operation = OperationId::parse(interrupted.operation_id.as_deref().ok_or(FixtureError)?)
         .map_err(|_| FixtureError)?;
     assert_eq!(phase(&w, operation)?, "interrupted");
-    // Interrupted, and not cancelled: the row is what says which.
+    // Interrupted, and not cancelled: the row is what says which. The
+    // same request is the way on, and the abandon the way out.
     assert_eq!(interrupted.code, ResultCode::RecoveryRequired);
     assert_eq!(interrupted.outcome, Outcome::Blocked);
     assert_eq!(
         actions(&interrupted),
         [
             RecoveryActionKind::RequestRetry,
-            RecoveryActionKind::RepoInspect
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
         ]
     );
     assert_eq!(accepted(&w.server), pushes);
@@ -3105,7 +3197,8 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
     let opened = connections(&w);
 
     // The push may have been taken. Nothing says it was, and nothing
-    // says it was not: the answer is neither.
+    // says it was not: the answer is neither, and the person, who can
+    // look, is offered the abandon.
     let fenced = execute(&w, REQUEST_1, repo_sync(&w));
     assert_eq!(fenced.code, ResultCode::RecoveryRequired);
     assert_eq!(fenced.outcome, Outcome::Blocked);
@@ -3116,7 +3209,14 @@ fn a_synchronization_fenced_with_its_push_unaccounted_for_is_not_confirmed()
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&fenced), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&fenced),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(fenced.recovery[1].operation_id, lost.operation_id);
     assert_eq!(fenced.operation_id, lost.operation_id);
     assert_eq!(connections(&w), opened);
     assert_final(&w, REQUEST_1, &fenced)
@@ -3196,7 +3296,9 @@ fn a_row_cancelled_as_its_push_returns_says_the_push_returned() -> Result<(), Fi
 /// The final answer of a request that was stopped, or fenced, with a
 /// push intended and nothing known of it: not confirmed, which is
 /// neither published nor not published. It offers a look at the
-/// repository and not the same request, and replays as it is.
+/// repository and, since no call is at work under the operation, its
+/// abandon, the person's way out; not the same request. It replays as it
+/// is.
 fn assert_not_confirmed(
     w: &World,
     id: &str,
@@ -3211,7 +3313,14 @@ fn assert_not_confirmed(
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(answer), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(answer),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(answer.recovery[1].operation_id, answer.operation_id);
     assert_final(w, id, answer)
 }
 
@@ -3940,12 +4049,22 @@ fn a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up() -> Result
     assert_eq!(accepted(&w.server), pushes);
     // A cancelled operation is never taken up again. Its row says that
     // Git may hold something of what it began, so the repository is
-    // what is looked at.
+    // what is looked at, and its abandon lets that go.
     let opened = connections(&w);
     let left = execute(&w, REQUEST_3, resume(&w, &operation));
     assert_eq!(left.outcome, Outcome::Blocked);
     assert_eq!(left.code, ResultCode::RecoveryRequired);
-    assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
+    assert_eq!(
+        actions(&left),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        left.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert_no_record_of(&w, REQUEST_3, &left);
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4196,7 +4315,18 @@ fn a_resume_cancelled_with_the_remote_unreachable_confirms_nothing_and_is_replay
             ..Effects::not_requested()
         }
     );
-    assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+    // No call is at work under it: its abandon is offered.
+    assert_eq!(
+        actions(&ended),
+        [
+            RecoveryActionKind::RepoInspect,
+            RecoveryActionKind::OperationAbandon
+        ]
+    );
+    assert_eq!(
+        ended.recovery[1].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
     assert!(!reserved(&w));
     assert_eq!(
         phase(&w, OperationId::parse(&operation).unwrap())?,
@@ -4668,7 +4798,7 @@ fn conforming(
 /// need a finished request each make a conflict to resolve, and that of
 /// `item republish` is `republish::c4_republish_conformance`, whose rules
 /// each make a deleted branch to republish.
-const CONFORMANCE: [conformance::Row; 5] = [
+const CONFORMANCE: [conformance::Row; 8] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4741,6 +4871,24 @@ const CONFORMANCE: [conformance::Row; 5] = [
         "confirmation_not_found",
         republish::conforming,
     ),
+    conformance::Row::new(
+        "document promote",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_promote,
+    ),
+    conformance::Row::new(
+        "ticket close",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_close,
+    ),
+    conformance::Row::new(
+        "poll once",
+        false,
+        "not_repository",
+        c5_poll::conforming_once,
+    ),
 ];
 
 /// Drives the row of `command` alone. Every other row of this target,
@@ -4777,4 +4925,670 @@ fn c4_conformance_repo_sync() -> Result<(), FixtureError> {
 
 fn c4_conformance_comment_add() -> Result<(), FixtureError> {
     conformance_row("comment add")
+}
+
+/// A pull-request repository's `repo sync` only fetches and fast-forwards
+/// its primary (design Part D, O1, O2, O3 and O5), and a refusal of local
+/// commits holds nothing (decision 5). No non-SSH publication remote can be
+/// selected, and the property is that nothing reaches the server and
+/// nothing is held.
+fn a_pull_only_repo_sync_fast_forwards_then_refuses_local_commits() -> Result<(), FixtureError> {
+    const DIRECT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW1";
+    const EQUAL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW2";
+    const BEHIND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW3";
+    const AHEAD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW4";
+    const ITEM_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FW5";
+    const MAIN: &str = "refs/heads/main";
+    let mut w = World::plain_key()?;
+    approve(&w)?;
+    let repo = w.repo()?;
+    let served = |w: &World| fixed(w.bare()?.refname_to_id(MAIN));
+    // Whether the journal stored the operation of an answer as pull-only.
+    let pull_only = |w: &World, envelope: &Envelope<MutationDataDto>| {
+        let operation = envelope.operation_id.as_deref().ok_or(FixtureError)?;
+        fixed(w.db()?.query_row(
+            "SELECT pull_only FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation],
+            |row| row.get::<_, bool>(0),
+        ))
+    };
+
+    // The peer commits a pull-request configuration, the serializer's
+    // output, and pushes it; a direct-mode sync brings primary up to it, as
+    // a repository reaches pull-request mode (K-2).
+    let workdir = w.peer.workdir().ok_or(FixtureError)?;
+    let mut config = fixed(canonical::parse_repository_config(&fixed(
+        std::fs::read_to_string(workdir.join(".manyhands/config.toml")),
+    )?))?;
+    config.unknown.insert(
+        "integration".into(),
+        toml::Value::String("pull_request".into()),
+    );
+    let source = fixed(canonical::serialize_repository_config(&config))?;
+    let base = fixed(w.peer.refname_to_id(MAIN))?;
+    let configured = commit_path(&w.peer, base, ".manyhands/config.toml", source.as_bytes())?;
+    fixed(w.peer.reference(MAIN, configured, true, "fixture"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    let direct = execute(&w, DIRECT, repo_sync(&w));
+    assert_current(&direct);
+    assert!(!pull_only(&w, &direct)?);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, configured);
+
+    // O1: equal to the remote, the sync is current and holds nothing.
+    let updates = w.server.receive_updates().len();
+    let equal = execute(&w, EQUAL, repo_sync(&w));
+    assert_current(&equal);
+    assert!(pull_only(&w, &equal)?);
+    assert!(equal.data.is_none());
+    assert!(equal.recovery.is_empty());
+    assert!(!reserved(&w));
+
+    // O2: behind the remote, primary fast-forwards and nothing is pushed.
+    let incoming = commit_path(&w.peer, configured, "remote-ahead", b"remote-ahead")?;
+    fixed(w.peer.reference(MAIN, incoming, true, "fixture"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    // The peer's push is the one update since O1: O1 sent none.
+    let updates = updates + 1;
+    assert_eq!(w.server.receive_updates().len(), updates);
+    let forwarded = execute(&w, BEHIND, repo_sync(&w));
+    assert_current(&forwarded);
+    assert!(pull_only(&w, &forwarded)?);
+    assert!(forwarded.data.is_none());
+    assert!(forwarded.recovery.is_empty());
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, incoming);
+    assert_eq!(served(&w)?, incoming);
+    assert_eq!(w.server.receive_updates().len(), updates);
+    assert!(!reserved(&w));
+
+    // O3: ahead of the remote, the sync refuses and names the commit. The
+    // item synchronized last is made first, from primary as the server
+    // holds it.
+    w.context()?;
+    let local = commit_in(&w.root, MAIN, "local-ahead", b"local-ahead")?;
+    let refused = execute(&w, AHEAD, repo_sync(&w));
+    assert_eq!(refused.command, "repo sync");
+    assert_eq!(refused.request_id.as_deref(), Some(AHEAD));
+    assert_eq!(refused.code, ResultCode::PrimaryHasLocalCommits);
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert!(refused.recovery.is_empty());
+    assert_eq!(
+        refused.data,
+        Some(MutationDataDto::PrimaryLocalCommits(
+            PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: vec![LocalCommitDto {
+                    oid: local.to_string(),
+                    summary: "owned fixture child".into(),
+                }],
+                complete: true,
+            }
+        ))
+    );
+    // Nothing reached the server, primary stayed where it was, and the
+    // operation is ended: nothing is held.
+    assert_eq!(served(&w)?, incoming);
+    assert_eq!(w.server.receive_updates().len(), updates);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, local);
+    assert!(pull_only(&w, &refused)?);
+    let operation = fixed(OperationId::parse(
+        refused.operation_id.as_deref().ok_or(FixtureError)?,
+    ))?;
+    assert_eq!(phase(&w, operation)?, "cancelled");
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, AHEAD).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+
+    // O5: the same request is answered from its record, with no transport.
+    let opened = connections(&w);
+    assert_eq!(execute(&w, AHEAD, repo_sync(&w)), refused);
+    assert_eq!(connections(&w), opened);
+
+    // Decision 5: the next synchronization is not busy, and runs.
+    let item = execute(&w, ITEM_SYNC, item_sync(&w));
+    assert_ne!(item.code, ResultCode::Busy);
+    assert_eq!(item.code, ResultCode::Ok);
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id(CONTEXT))?,
+        fixed(repo.refname_to_id(CONTEXT))?
+    );
+    assert_eq!(served(&w)?, incoming);
+
+    assert_golden(
+        &w,
+        "repo_sync_primary_has_local_commits",
+        Some(PRIMARY_LOCAL_COMMITS_SCHEMA),
+        &refused,
+    );
+    Ok(())
+}
+
+/// One call of the setup case: the envelope is scanned for the world's
+/// private material, checked against the published schemas of the data it
+/// carries, and what the registry holds after it is scanned too. It is
+/// not `call`, which scans the journal's rows and so needs the stores to
+/// hold some, and which a first `repo enable` of a clone nothing is
+/// enabled in has not yet given them.
+fn setup_call(
+    w: &World,
+    id: &str,
+    confirmation: Option<&str>,
+    mutation: Mutation,
+) -> Envelope<MutationDataDto> {
+    let envelope = w.service.execute(
+        MutationCall {
+            request_id: request(id),
+            confirmation: confirmation.map(|id| ConfirmationId::parse(id).unwrap()),
+            mutation,
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    let value = serde_json::to_value(&envelope).expect("an envelope serializes");
+    ssh_privacy::clean(&serde_json::to_vec(&value).unwrap(), &w.probes).expect("redacted envelope");
+    ssh_privacy::clean(format!("{envelope:?}").as_bytes(), &w.probes).expect("redacted envelope");
+    schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
+    let data_schema = match value["data"]["type"].as_str() {
+        Some("setup") => Some("setup_mutation.schema.json"),
+        Some("setup_poll") => Some("setup_poll.schema.json"),
+        Some("setup_cancel") => Some("setup_cancel.schema.json"),
+        _ => None,
+    };
+    if let Some(data_schema) = data_schema {
+        schema::check_published(data_schema, &value["data"]).expect("the setup data schema");
+    }
+    setup_privacy(w);
+    envelope
+}
+
+/// What the world's stores hold, scanned for its private material.
+fn setup_privacy(w: &World) {
+    ssh_privacy::save(&w.probes).expect("the probes");
+    ssh_privacy::scan(&w.data(), &w.probes).expect("redacted durable state");
+}
+
+/// The confirmation of the preview of `mutation`.
+fn setup_confirmation(w: &World, mutation: &Mutation) -> String {
+    let prepared = w.service.prepare(mutation);
+    let value = serde_json::to_value(&prepared).expect("an envelope serializes");
+    // A preview of an enable shows the remote it is to publish to, as the
+    // library redacts it: the one field of it that holds the world's private
+    // material, and the one a person is asked to consent to. It is taken out
+    // after it is checked, and everything else is scanned for every probe.
+    let mut value = value;
+    if let Some(details) = value
+        .pointer_mut("/data/details")
+        .and_then(|details| details.as_object_mut())
+        && let Some(location) = details.remove("remote_location")
+    {
+        assert_eq!(
+            location.as_str(),
+            Some(results::redact_url(&w.server.url()).as_str())
+        );
+    }
+    ssh_privacy::clean(&serde_json::to_vec(&value).unwrap(), &w.probes).expect("redacted preview");
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    prepared
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .expect("a preview")
+        .confirmation_id
+        .clone()
+}
+
+/// The data of a setup answer, as the JSON the boundary publishes.
+fn setup_data(envelope: &Envelope<MutationDataDto>) -> serde_json::Value {
+    serde_json::to_value(&envelope.data).expect("data serializes")
+}
+
+/// The goldens' placeholders for a setup: its ID and its branch.
+fn setup_placeholders(id: &str) -> (String, String) {
+    (id.to_owned(), format!("manyhands/setup/{id}"))
+}
+
+/// A setup branch is published, activated, changed and cancelled over SSH.
+///
+/// Why SSH: no non-SSH publication remote can be selected, and the property
+/// is a real push and guarded delete of the setup ref with the server's
+/// primary untouched. Every edge of the decisions, each of which a library
+/// test pins, is left to those; this case checks that the pieces connect:
+/// the host stop and its approval, the refusal of a server with no primary,
+/// the push of the setup ref and its replay with no second push, the gate,
+/// the activation by a squash the setup poll sees, a change, a cancel that
+/// keeps a branch somebody else pushed to and one that deletes the branch
+/// it made.
+fn a_setup_branch_is_published_activated_changed_and_cancelled() -> Result<(), FixtureError> {
+    const MAIN: &str = "refs/heads/main";
+    const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
+    const APPROVE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX2";
+    const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX3";
+    const REJECTED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+    const POLL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+    const CHANGE_ONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX7";
+    const CANCEL_ONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
+    const CHANGE_TWO: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX9";
+    const CANCEL_TWO: &str = "01ARZ3NDEKTSV4RRFFQ69G5FXA";
+    const AFTER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FXB";
+    const TICKET_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
+    const LATER_TICKET_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FE2";
+
+    let w = World::plain_key_unenabled()?;
+    let repo = w.repo()?;
+    let bare = w.bare()?;
+    let enable = || {
+        Mutation::RepoEnable(RepoEnableInput {
+            root: w.root.clone(),
+            primary_branch: "main".into(),
+            identity: None,
+            slug_prefix: None,
+            publication_remote: Some("origin".into()),
+            integration: Some(canonical::Integration::PullRequest),
+            forge: None,
+        })
+    };
+    let ticket = |request_id: &str, id: &str| {
+        setup_call(
+            &w,
+            request_id,
+            None,
+            Mutation::TicketCreate(TicketCreateInput {
+                root: w.root.clone(),
+                id: id.parse().unwrap(),
+                draft: TicketDraft {
+                    title: "A ticket".into(),
+                    body: "Body.\n".into(),
+                    ticket_type: "task".into(),
+                    status: "open".into(),
+                    project: None,
+                    team: None,
+                },
+                deps: Vec::new(),
+                parent: None,
+                initials: None,
+            }),
+        )
+    };
+    let change = |request_id: &str, forge: canonical::ForgeKind| {
+        setup_call(
+            &w,
+            request_id,
+            None,
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root: w.root.clone(),
+                name: Some("origin".into()),
+                integration: None,
+                forge: Some(Some(canonical::ForgeSetting {
+                    kind: Some(forge),
+                    web_url: None,
+                    pull_request_url: None,
+                })),
+            }),
+        )
+    };
+    let cancel = |request_id: &str| {
+        let mutation = || {
+            Mutation::RepoSetupCancel(RepoSetupCancelInput {
+                root: w.root.clone(),
+            })
+        };
+        let confirmation = setup_confirmation(&w, &mutation());
+        setup_call(&w, request_id, Some(&confirmation), mutation())
+    };
+    let served = |reference: &str| bare.refname_to_id(reference).ok();
+    let setup_ref = |id: &str| format!("refs/heads/manyhands/setup/{id}");
+    let inspected = || fixed(w.service.inspect_repository(&w.root));
+    let primary = fixed(bare.refname_to_id(MAIN))?;
+    let authority = format!("127.0.0.1:{}", w.server.address().port());
+
+    // 1. The first call stops at the host, with the setup recorded.
+    let confirmation = setup_confirmation(&w, &enable());
+    let stopped = setup_call(&w, FIRST, Some(&confirmation), enable());
+    assert_eq!(stopped.code, ResultCode::HostApprovalRequired);
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::HostApprove,
+            RecoveryActionKind::RequestRetry
+        ]
+    );
+    assert_eq!(
+        stopped.recovery[0]
+            .arguments
+            .get("authority")
+            .and_then(|value| value.as_str()),
+        Some(authority.as_str())
+    );
+    let data = setup_data(&stopped);
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "recorded");
+    assert_eq!(data["kind"], "enable");
+    assert_eq!(data["integration"], "pull_request");
+    assert_eq!(
+        record(&w, FIRST).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    assert_eq!(
+        inspected()?.setup.map(|setup| setup.state),
+        Some("recorded".to_owned())
+    );
+    // Nothing was pushed: the stop was before any key was offered.
+    assert_eq!(w.server.receive_updates().len(), 0);
+    assert_eq!(served(MAIN), Some(primary));
+
+    // The host is observed and approved on the pending repository.
+    let observed = w
+        .service
+        .observe_host(&w.root, None, &mut SessionCredentials::new(Provider));
+    assert_eq!(observed.code, ResultCode::Ok, "{}", observed.message);
+    let presented = observed.data.ok_or(FixtureError)?;
+    assert_eq!(presented.pinned_fingerprint, None);
+    let approve = Mutation::HostApprove(HostApproveInput {
+        root: w.root.clone(),
+        authority: SshAuthority {
+            host: "127.0.0.1".into(),
+            port: w.server.address().port(),
+        },
+        algorithm: presented.presented_algorithm,
+        fingerprint: presented.presented_fingerprint,
+    });
+    let consent = setup_confirmation(&w, &approve);
+    let approved = setup_call(&w, APPROVE, Some(&consent), approve);
+    assert_eq!(approved.code, ResultCode::Ok, "{}", approved.message);
+
+    // The server has lost its primary: the same request ends the setup, and
+    // nothing is registered or recorded.
+    fixed(fixed(bare.find_reference(MAIN))?.delete())?;
+    let missing = setup_call(&w, FIRST, Some(&confirmation), enable());
+    assert_eq!(missing.code, ResultCode::RemotePrimaryMissing);
+    assert_eq!(missing.outcome, Outcome::Blocked);
+    // Nothing reached the server: it still has no primary and no push was
+    // made, which the restore below would hide.
+    assert_eq!(served(MAIN), None);
+    assert_eq!(w.server.receive_updates().len(), 0);
+    // The answer names the setup that ended, as it stood.
+    let ended = setup_data(&missing);
+    assert_eq!(ended["type"], "setup");
+    assert_eq!(ended["state"], "recorded");
+    assert_eq!(ended["request_id"], FIRST);
+    assert_eq!(
+        record(&w, FIRST).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_eq!(fixed(w.service.list_repositories())?.items.len(), 0);
+    assert_eq!(
+        fixed(
+            w.db()?
+                .query_row("SELECT COUNT(*) FROM repository_setups", [], |row| row
+                    .get::<_, i64>(0))
+        )?,
+        0
+    );
+    let ended_id = ended["id"].as_str().ok_or(FixtureError)?.to_owned();
+    let (ended_setup, ended_branch) = setup_placeholders(&ended_id);
+    assert_setup_golden(
+        &w,
+        "repo_enable_remote_primary_missing",
+        "setup_mutation.schema.json",
+        &[
+            (ended_setup.as_str(), "<setup>"),
+            (ended_branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &missing,
+    );
+
+    // 2. The primary is restored, and a new enable publishes the setup.
+    fixed(bare.reference(MAIN, primary, true, "restore the primary"))?;
+    let updates = w.server.receive_updates().len();
+    let confirmation = setup_confirmation(&w, &enable());
+    let published = setup_call(&w, SECOND, Some(&confirmation), enable());
+    assert_eq!(published.code, ResultCode::Ok, "{}", published.message);
+    assert_eq!(published.outcome, Outcome::Success);
+    let data = setup_data(&published);
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "published");
+    assert_eq!(data["kind"], "enable");
+    assert_eq!(data["request_id"], SECOND);
+    let id = data["id"].as_str().ok_or(FixtureError)?.to_owned();
+    assert_eq!(data["branch"], format!("manyhands/setup/{id}"));
+    assert_eq!(
+        data["pull_request"]["source"],
+        format!("manyhands/setup/{id}")
+    );
+    assert_eq!(data["pull_request"]["target"], "main");
+    // The server's primary is as it was, and its setup ref holds one commit
+    // on it that changes the configuration only.
+    assert_eq!(served(MAIN), Some(primary));
+    let tip = served(&setup_ref(&id)).ok_or(FixtureError)?;
+    let setup_commit = fixed(bare.find_commit(tip))?;
+    assert_eq!(setup_commit.parent_ids().collect::<Vec<_>>(), [primary]);
+    let configuration = fixed(
+        setup_commit
+            .tree()
+            .and_then(|tree| tree.get_path(std::path::Path::new(".manyhands/config.toml"))),
+    )?;
+    let configuration = fixed(bare.find_blob(configuration.id()))?;
+    let configuration = String::from_utf8_lossy(configuration.content()).into_owned();
+    assert!(
+        configuration.contains("integration = \"pull_request\""),
+        "{configuration}"
+    );
+    let pushes = w.server.receive_updates();
+    assert_eq!(pushes.len(), updates + 1);
+    assert_eq!(
+        pushes[updates],
+        ReceiveUpdate {
+            reference: setup_ref(&id),
+            old_oid: git2::Oid::zero(),
+            new_oid: tip,
+            accepted: true,
+        }
+    );
+    let (setup_id, setup_branch) = setup_placeholders(&id);
+    let placeholders = [
+        (setup_id.as_str(), "<setup>"),
+        (setup_branch.as_str(), "manyhands/setup/<setup>"),
+    ];
+    assert_setup_golden(
+        &w,
+        "repo_enable_setup",
+        "setup_mutation.schema.json",
+        &placeholders,
+        &published,
+    );
+    // The same request again answers the same envelope, with no connection
+    // and no second push.
+    let opened = connections(&w);
+    assert_eq!(
+        setup_call(&w, SECOND, Some(&confirmation), enable()),
+        published
+    );
+    assert_eq!(connections(&w), opened);
+    assert_eq!(w.server.receive_updates().len(), updates + 1);
+
+    // 3. A gated write waits for the setup.
+    let waiting = ticket(REJECTED, TICKET_ID);
+    assert_eq!(waiting.code, ResultCode::SetupPending);
+
+    // 4. The pull request is squashed on the server: the next poll
+    // activates the setup.
+    let squash = {
+        let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+        let parent = fixed(bare.find_commit(primary))?;
+        fixed(bare.commit(
+            None,
+            &signature,
+            &signature,
+            "Squash the setup",
+            &fixed(setup_commit.tree())?,
+            &[&parent],
+        ))?
+    };
+    fixed(bare.reference(MAIN, squash, true, "squash merge"))?;
+    let polled = setup_call(
+        &w,
+        POLL,
+        None,
+        Mutation::PollOnce(PollOnceInput {
+            root: w.root.clone(),
+        }),
+    );
+    assert_eq!(polled.code, ResultCode::Ok, "{}", polled.message);
+    let data = setup_data(&polled);
+    assert_eq!(data["type"], "setup_poll");
+    assert_eq!(data["setup_id"], id);
+    assert_eq!(data["outcome"], "activated");
+    assert_eq!(data["integration"], "pull_request");
+    assert_setup_golden(
+        &w,
+        "poll_once_setup_activated",
+        "setup_poll.schema.json",
+        &placeholders,
+        &polled,
+    );
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, squash);
+    let activated = inspected()?;
+    assert_eq!(
+        activated.configuration.integration.as_deref(),
+        Some("pull_request")
+    );
+    assert_eq!(activated.setup, None);
+    assert!(repo.find_reference(&setup_ref(&id)).is_err());
+    let created = ticket(AFTER, TICKET_ID);
+    assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+
+    // 5. A change in the activated repository publishes its own setup.
+    let before = w.server.receive_updates().len();
+    let changed = change(CHANGE_ONE, canonical::ForgeKind::Github);
+    assert_eq!(changed.code, ResultCode::Ok, "{}", changed.message);
+    let data = setup_data(&changed);
+    assert_eq!(data["type"], "setup");
+    assert_eq!(data["state"], "published");
+    assert_eq!(data["kind"], "change");
+    let first = data["id"].as_str().ok_or(FixtureError)?.to_owned();
+    assert_ne!(first, id);
+    assert_eq!(served(MAIN), Some(squash));
+    let first_tip = served(&setup_ref(&first)).ok_or(FixtureError)?;
+    assert_eq!(w.server.receive_updates().len(), before + 1);
+    let (first_id, first_branch) = setup_placeholders(&first);
+    assert_setup_golden(
+        &w,
+        "remote_select_setup",
+        "setup_mutation.schema.json",
+        &[
+            (first_id.as_str(), "<setup>"),
+            (first_branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &changed,
+    );
+    // Closing a ticket waits for the setup too.
+    let prepared = w.service.prepare(&Mutation::TicketClose(TicketCloseInput {
+        root: w.root.clone(),
+        id: TICKET_ID.parse().unwrap(),
+    }));
+    assert_eq!(prepared.code, ResultCode::SetupPending);
+
+    // Somebody pushes to the setup branch: its cancel keeps the remote
+    // branch, and deletes the local one.
+    let theirs = {
+        let mut fetch = git2::FetchOptions::new();
+        fetch.remote_callbacks(callbacks(&w.server));
+        let spec = format!("+{0}:{0}", setup_ref(&first));
+        fixed(fixed(w.peer.find_remote("origin"))?.fetch(&[spec], Some(&mut fetch), None))?;
+        let theirs = commit(&w.peer, first_tip, "peer-note", b"peer-note")?;
+        fixed(
+            w.peer
+                .reference(&setup_ref(&first), theirs, true, "peer push"),
+        )?;
+        push_peer(&w.peer, &w.server, &setup_ref(&first))?;
+        assert_eq!(served(&setup_ref(&first)), Some(theirs));
+        theirs
+    };
+    let pushed = w.server.receive_updates().len();
+    let kept = cancel(CANCEL_ONE);
+    assert_eq!(kept.code, ResultCode::Ok, "{}", kept.message);
+    let data = setup_data(&kept);
+    assert_eq!(data["type"], "setup_cancel");
+    assert_eq!(data["setup_id"], first);
+    assert_eq!(data["kind"], "change");
+    assert_eq!(data["remote_branch"], "kept");
+    assert_eq!(data["local_branch"], "deleted");
+    assert_eq!(data["unregistered"], false);
+    // The branch is at another commit than the one the setup published, so
+    // no delete was sent: the server's ref and its log are as they were.
+    assert_eq!(served(&setup_ref(&first)), Some(theirs));
+    assert_eq!(w.server.receive_updates().len(), pushed);
+    assert!(repo.find_reference(&setup_ref(&first)).is_err());
+    assert_eq!(inspected()?.setup, None);
+    assert_eq!(fixed(w.service.list_repositories())?.items.len(), 1);
+    assert_eq!(served(MAIN), Some(squash));
+
+    // 6. A second change is cancelled: its branch is deleted on the server.
+    let changed = change(CHANGE_TWO, canonical::ForgeKind::Gitlab);
+    assert_eq!(changed.code, ResultCode::Ok, "{}", changed.message);
+    let data = setup_data(&changed);
+    assert_eq!(data["state"], "published");
+    let second = data["id"].as_str().ok_or(FixtureError)?.to_owned();
+    assert_ne!(second, first);
+    let second_tip = served(&setup_ref(&second)).ok_or(FixtureError)?;
+    let before_cancel = w.server.receive_updates().len();
+    let deleted = cancel(CANCEL_TWO);
+    assert_eq!(deleted.code, ResultCode::Ok, "{}", deleted.message);
+    let data = setup_data(&deleted);
+    assert_eq!(data["type"], "setup_cancel");
+    assert_eq!(data["setup_id"], second);
+    assert_eq!(data["remote_branch"], "deleted");
+    assert_eq!(data["local_branch"], "deleted");
+    assert_eq!(served(&setup_ref(&second)), None);
+    // One delete went over the wire, guarded by the tip the setup published.
+    let updates = w.server.receive_updates();
+    assert_eq!(updates.len(), before_cancel + 1);
+    assert_eq!(
+        updates[before_cancel],
+        ReceiveUpdate {
+            reference: setup_ref(&second),
+            old_oid: second_tip,
+            new_oid: git2::Oid::zero(),
+            accepted: true,
+        }
+    );
+    assert_eq!(inspected()?.setup, None);
+    assert_eq!(served(MAIN), Some(squash));
+    let (second_id, second_branch) = setup_placeholders(&second);
+    assert_setup_golden(
+        &w,
+        "repo_setup_cancel",
+        "setup_cancel.schema.json",
+        &[
+            (second_id.as_str(), "<setup>"),
+            (second_branch.as_str(), "manyhands/setup/<setup>"),
+        ],
+        &deleted,
+    );
+    // The repository works again.
+    let later = ticket("01ARZ3NDEKTSV4RRFFQ69G5FXC", LATER_TICKET_ID);
+    assert_eq!(later.code, ResultCode::Ok, "{}", later.message);
+    Ok(())
+}
+
+/// `assert_golden`, with the setup's ID and branch replaced as well.
+fn assert_setup_golden(
+    w: &World,
+    name: &str,
+    data_schema: &str,
+    replaced: &[(&str, &str)],
+    envelope: &Envelope<MutationDataDto>,
+) {
+    let value = serde_json::to_value(envelope).unwrap();
+    let root = w.root.canonicalize().unwrap();
+    mutation_golden::assert_contract_at(
+        name,
+        root.to_str().unwrap(),
+        Some(data_schema),
+        replaced,
+        &value,
+    );
 }

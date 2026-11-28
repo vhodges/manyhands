@@ -687,7 +687,7 @@ fn c4_merging_unfinished_local_sync() -> Result<(), FixtureError> {
     for branch in BOTH {
         let s = Synced::new(branch)?;
         let (local, incoming) = s.diverge()?;
-        leave_local_sync_conflict(&s.w);
+        let local_sync = leave_local_sync_conflict(&s.w);
         let local = if branch == Branch::Primary {
             // The other item's conflict is made on primary.
             s.local_tip()?
@@ -700,8 +700,15 @@ fn c4_merging_unfinished_local_sync() -> Result<(), FixtureError> {
         assert_eq!(refused.code, ResultCode::RecoveryRequired);
         assert_eq!(refused.outcome, Outcome::Blocked);
         assert_eq!(refused.effects, Effects::not_requested());
-        assert!(refused.data.is_none());
-        assert_eq!(actions(&refused), [RecoveryActionKind::RepoInspect]);
+        // The local synchronization in its way is named, and offered to show.
+        assert_blocked_by_local_sync(&refused, local_sync);
+        assert_eq!(
+            actions(&refused),
+            [
+                RecoveryActionKind::RepoInspect,
+                RecoveryActionKind::OperationShow
+            ]
+        );
         assert!(record(&s.w, REQUEST_1).is_none());
         assert!(!reserved(&s.w));
         assert_eq!(connections(&s.w), opened);
@@ -1173,7 +1180,15 @@ fn c4_merging_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
         assert_eq!(ended.outcome, Outcome::Partial);
         assert_eq!(ended.effects, merged(publication_pending(), merge));
         assert!(ended.data.is_none());
-        assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
+        // No call is at work under it: its abandon is offered.
+        assert_eq!(
+            actions(&ended),
+            [
+                RecoveryActionKind::RepoInspect,
+                RecoveryActionKind::OperationAbandon
+            ]
+        );
+        assert_eq!(ended.recovery[1].operation_id, lost.operation_id);
         assert_eq!(ended.operation_id, lost.operation_id);
         assert!(!reserved(&s.w));
         assert_eq!(

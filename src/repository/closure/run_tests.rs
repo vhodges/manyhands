@@ -4,7 +4,7 @@
 //! exact delete, the boundary hooks and the effect counters are promotion's
 //! (`promotion::run_tests`), called, not copied.
 use super::{
-    lifecycle::{TicketClosureLifecycle, lifecycle_request},
+    lifecycle::{TicketClosureLifecycle, TicketWithdrawLifecycle, lifecycle_request},
     observe::closed_ticket_bytes,
     record::{self, ClosureKind, ClosureRecord, ClosureStep},
     test_support::{self as support, ID, checkout, commit, id, parse_ticket, read, ticket, write},
@@ -22,13 +22,18 @@ use crate::repository::{
         lifecycle::LifecycleError,
         record::ChildExecution,
         run::{self, PromotionIo},
-        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS},
+        run_tests::{
+            COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, PreviewCount, TRACKING_HOOKS, Told,
+        },
     },
     remote::{observation::ObservationConfiguration, reservation::RemoteReservation, state},
     transport::{DeleteObservation, VerifySshTransportRequest},
 };
 use git2::Oid;
 use std::{cell::RefCell, fs, path::Path, rc::Rc};
+
+#[path = "run_pull_request_tests.rs"]
+mod pull_request;
 
 const CLOSED_BY: &str = "Fixture <fixture@example.invalid>";
 
@@ -40,6 +45,9 @@ fn tracking_context_ref() -> String {
 }
 fn close_subject() -> String {
     format!("Close ticket {ID}")
+}
+fn withdraw_subject() -> String {
+    format!("Withdraw closure of ticket {ID}")
 }
 fn merge_subject() -> String {
     format!("Integrate closed ticket {ID}")
@@ -249,6 +257,9 @@ fn authoritative(result: TicketClosureResult) -> TicketClosureOutcome {
     match result {
         TicketClosureResult::Complete(o) => o,
         TicketClosureResult::IndexPending(p) => p.authoritative,
+        TicketClosureResult::Branch(_) | TicketClosureResult::BranchIndexPending(_) => {
+            panic!("a direct close answered as a branch record")
+        }
     }
 }
 /// Every ref and its target.
@@ -730,6 +741,51 @@ fn checkpoint_seams_finish_once_with_the_same_id_and_a_new_id_is_busy() {
     }
 }
 
+/// A closure's checkpoint is reported as `recording` by every call that
+/// writes it: the first, and the resend of a request another process broke
+/// after recording `closing` (the record then names its checkpoint, so the
+/// run cannot tell a new closure by that alone). A resend past the
+/// checkpoint's write reports the integration only.
+#[test]
+fn a_resend_that_writes_the_checkpoint_reports_recording() {
+    let told = |service: &RepositoryService, req: &CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(req.clone()),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let writing = [run::RunEvent::Recording, run::RunEvent::Integrating];
+    // The first call writes the checkpoint.
+    let f = Fixture::new();
+    let first = told(&f.service, &f.request());
+    assert_eq!(&first[..2], writing, "{first:?}");
+    // Broken after `closing` was recorded, nothing yet moved: the resend
+    // writes the checkpoint.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(
+        &f.failing(FailurePoint::ClosureAfterClosingRecorded),
+        req.clone(),
+    );
+    assert!(f.stored(req.operation_id).closure_oid.is_some());
+    let resent = told(&f.reopened(), &req);
+    assert_eq!(&resent[..2], writing, "{resent:?}");
+    // Broken at `integrating`, the checkpoint long written: nothing is
+    // recorded again.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone());
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Integrating);
+    let resent = told(&f.reopened(), &req);
+    assert!(!resent.contains(&run::RunEvent::Recording), "{resent:?}");
+}
+
 /// "Exit after `closing` recorded, before checkout": consent is re-checked
 /// and a refusal abandons, with nothing referenced. Collaborator content on
 /// the primary changes the consent (no remote: the local OIDs are bound).
@@ -1049,6 +1105,16 @@ const EXITS: [FailurePoint; 15] = [
 ];
 const F10_SEAM: usize = 15;
 const F11_SEAM: usize = 16;
+/// A new branch's own boundaries, from `NEW_BRANCH_EXIT_BASE` in the exit
+/// child's point: its commit recorded and held, then its branch and its
+/// worktree about to be made.
+const NEW_BRANCH_EXITS: [FailurePoint; 4] = [
+    FailurePoint::NewBranchCommitRecorded,
+    FailurePoint::NewBranchCommitHeld,
+    FailurePoint::BeforeContextBranchCreation,
+    FailurePoint::BeforeWorktreeCreation,
+];
+const NEW_BRANCH_EXIT_BASE: usize = 100;
 
 #[test]
 fn closure_exit_child() {
@@ -1066,7 +1132,13 @@ fn closure_exit_child() {
         .split(',')
         .map(|v| v.parse().unwrap())
         .collect();
-    let service = if point < EXITS.len() {
+    let service = if point >= NEW_BRANCH_EXIT_BASE {
+        RepositoryService::open_at_with_exit_point_for_testing(
+            Path::new(&data),
+            NEW_BRANCH_EXITS[point - NEW_BRANCH_EXIT_BASE],
+        )
+        .unwrap()
+    } else if point < EXITS.len() {
         RepositoryService::open_at_with_exit_point_for_testing(Path::new(&data), EXITS[point])
             .unwrap()
     } else {
@@ -1091,17 +1163,31 @@ fn closure_exit_child() {
         approval: None,
         confirmed_identity: None,
     };
-    let _ = run::run_with_io(
-        &TicketClosureLifecycle,
-        &service,
-        lifecycle_request(request),
-        &mut FakeIo::default(),
-    );
+    // The verb the child runs: a close, or a withdraw.
+    let _ = match std::env::var("MANYHANDS_CLOSURE_EXIT_VERB").as_deref() {
+        Ok("withdraw") => run::run_with_io(
+            &TicketWithdrawLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+        _ => run::run_with_io(
+            &TicketClosureLifecycle,
+            &service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+        ),
+    };
     panic!("exit point was not reached")
 }
 
 /// Runs the closure in a child process that exits at `point`.
 fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
+    exit_at_with(f, req, point, "close");
+}
+
+/// `exit_at` for the verb the child runs: `close` or `withdraw`.
+fn exit_at_with(f: &Fixture, req: &CloseTicketRequest, point: usize, verb: &str) {
     // `module_path!` names this module inside whichever test crate holds it.
     let module = module_path!().split_once("::").unwrap().1;
     let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1110,6 +1196,7 @@ fn exit_at(f: &Fixture, req: &CloseTicketRequest, point: usize) {
         .env("MANYHANDS_CLOSURE_EXIT_DATA", f.data.path())
         .env("MANYHANDS_CLOSURE_EXIT_POINT", point.to_string())
         .env("MANYHANDS_CLOSURE_EXIT_OP", req.operation_id.to_string())
+        .env("MANYHANDS_CLOSURE_EXIT_VERB", verb)
         .env(
             "MANYHANDS_CLOSURE_EXIT_EXPECTATION",
             req.expected
@@ -1206,6 +1293,89 @@ fn process_exit_at_every_boundary_reopens_without_repeated_effects() {
         );
         assert_eq!(io.calls.borrow().children.len(), children);
     }
+}
+
+/// The final review's F-1 (Review Focus 2, decision 8), for a close: what
+/// a lost process had moved reads owed an indexing until an indexing
+/// stores it, so `index status` reads stale, and the same request, sent
+/// again, finishes and indexes it. The checkpoint marks the ticket's
+/// context before its checkout and ref move, and the merge marks the
+/// primary before it moves main, each under the integration's lease. The
+/// merge's mark is its own: a close whose checkpoint's marks a refresh
+/// cleared between two of its attempts, and whose later attempt is lost
+/// once its merge has moved main, still leaves the primary owed. With no
+/// publication remote, so a cleanup that reserves nothing.
+#[test]
+fn a_close_lost_after_its_checkout_or_its_merge_leaves_what_it_moved_owed_until_it_is_sent_again() {
+    use crate::repository::{
+        IndexStatusState, RefreshOutcome, RefreshRepositoryRequest, discovery::ContextKey,
+    };
+    let refresh = |f: &Fixture| {
+        let refreshed = f.service.refresh_repository(RefreshRepositoryRequest {
+            root: f.root().into(),
+            operation_id: OperationId::new(),
+        });
+        assert!(
+            matches!(refreshed, Ok(RefreshOutcome::Refreshed { .. })),
+            "{refreshed:?}"
+        );
+    };
+    let status = |f: &Fixture, service: &RepositoryService| {
+        service
+            .index_status(&service.resolve_repository(f.root()).unwrap())
+            .unwrap()
+            .state
+    };
+    let mut wrong = Vec::new();
+    // (where the process is lost, its index in `EXITS`, whether an earlier
+    // attempt stopped before the merge and a refresh indexed its checkpoint,
+    // what then reads owed)
+    for (lost, point, stopped_first, owed) in [
+        ("during the checkpoint's checkout", 3, false, [false, true]),
+        ("after the merge, sent again", 6, true, [true, false]),
+    ] {
+        let f = Fixture::new();
+        refresh(&f);
+        let req = f.request();
+        if stopped_first {
+            assert!(
+                f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone())
+                    .is_err(),
+                "{lost}"
+            );
+            assert_eq!(
+                f.stored(req.operation_id).step,
+                ClosureStep::Integrating,
+                "{lost}"
+            );
+            refresh(&f);
+        }
+        assert_eq!(status(&f, &f.service), IndexStatusState::Current, "{lost}");
+        exit_at(&f, &req, point);
+        let reopened = f.reopened();
+        let read = [ContextKey::Primary, ContextKey::Item(id())]
+            .map(|context| !reopened.contexts_indexed(f.root(), &[context]));
+        if read != owed {
+            wrong.push(format!("{lost}: [primary, ticket] read owed {read:?}"));
+        }
+        if status(&f, &reopened) != IndexStatusState::Stale {
+            wrong.push(format!("{lost}: index status {:?}", status(&f, &reopened)));
+        }
+        let retried = f.run_io(&reopened, req, &mut FakeIo::default());
+        if !matches!(&retried, Ok(TicketClosureResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete)
+        {
+            wrong.push(format!("{lost}: sent again, it ended as {retried:?}"));
+        }
+        if !reopened.lifecycle_indexed(f.root(), &id())
+            || status(&f, &reopened) != IndexStatusState::Current
+        {
+            wrong.push(format!(
+                "{lost}: sent again, index status {:?}",
+                status(&f, &reopened)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// The adopted context through the F10 and F11 seams: the retirement and
@@ -1407,6 +1577,7 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
                     .unwrap()
             ),
             closed_by: Some(CLOSED_BY.into()),
+            publication: None,
         })
     );
     let listed = f
@@ -1528,6 +1699,44 @@ fn contained(tracking: bool) -> Fixture {
             .unwrap();
     }
     f
+}
+
+/// What a stop's made-ready report reads from the parent: a merge is not a
+/// context primary already held.
+#[test]
+fn the_parent_view_says_how_the_operation_reached_primary() {
+    use crate::repository::promotion::record::IntegrationKind;
+    let kind = |f: &Fixture, request: &CloseTicketRequest| {
+        crate::repository::promotion::lifecycle_parent::<record::ClosureRecord, _>(
+            &f.service,
+            f.root(),
+            request.operation_id,
+        )
+        .unwrap()
+        .unwrap()
+        .integration_kind
+    };
+    let merged = Fixture::new();
+    let request = merged.request();
+    let _ = merged.close(&merged.service, request.clone());
+    assert_eq!(kind(&merged, &request), Some(IntegrationKind::Merged));
+
+    let held = Fixture(support::Fixture::new(false));
+    checkout(&held.repo, held.context_oid());
+    let closed = closed_ticket_bytes(
+        &read(&held.repo, &ticket()),
+        support::at(1_800_000_000),
+        "Earlier <earlier@example.invalid>",
+    )
+    .unwrap();
+    write(&held.repo, &ticket(), closed);
+    commit(&held.repo);
+    let request = held.request();
+    let _ = held.close(&held.service, request.clone());
+    assert_eq!(
+        kind(&held, &request),
+        Some(IntegrationKind::AlreadyContained)
+    );
 }
 
 /// (b) No context child ran: the pre-checkpoint tracking OID guards it.
@@ -1806,6 +2015,75 @@ fn poll(f: &Fixture, advertised: Vec<(String, Oid)>) -> crate::repository::Remot
     }
 }
 
+/// A mutation through the production boundary, as the envelope's JSON reads.
+fn execute(f: &Fixture, mutation: crate::repository::Mutation) -> serde_json::Value {
+    use crate::repository::{CancellationToken, MutationCall, NoProgress, RequestId};
+    let envelope = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: None,
+            mutation,
+        },
+        &mut SessionCredentials::new(NoCredentials),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    serde_json::to_value(&envelope).unwrap()
+}
+
+/// A retiring poll (`PollOnceRetiring`) after a fetch that advertised only
+/// the primary, at `primary`. The ticket context's remote branch, which an
+/// earlier fetch saw published at its tracking tip, is gone from the
+/// advertisement. The poll observes the context `Closed` when the local
+/// primary holds the ticket's closure, and its retirement pass meets that
+/// candidate. Returns the envelope.
+fn retiring_poll(f: &Fixture, primary: Oid) -> serde_json::Value {
+    use crate::repository::{Mutation, PollOnceInput, RemoteRefObservation};
+    let plan = f.configure_endpoints();
+    let tip = f.repo.refname_to_id(&tracking_context_ref()).unwrap();
+    state::with_transaction(&f.service, f.root(), |tx, rid| {
+        let prior = RemoteRefObservation::from_advertisement(
+            &plan,
+            plan.context(AuthoringKind::Ticket, &id()).remote_ref(),
+            tip,
+            Some(tip),
+        )
+        .unwrap();
+        let generation = state::generation(tx, rid)?;
+        state::persist_complete_advertisement(tx, rid, &plan, generation, &[prior], 1)?;
+        Ok(())
+    })
+    .unwrap();
+    f.repo
+        .reference("refs/remotes/origin/main", primary, true, "fixture fetch")
+        .unwrap();
+    crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+    execute(
+        f,
+        Mutation::PollOnceRetiring(PollOnceInput {
+            root: f.root().into(),
+        }),
+    )
+}
+
+/// The retirement candidate a poll stored for the ticket's context was
+/// refused when it was captured, before any resource was selected for it.
+fn assert_candidate_refused(f: &Fixture) {
+    let candidates: Vec<String> = f
+        .db()
+        .prepare("SELECT candidate FROM poll_retirement_candidates")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    let candidate: serde_json::Value = serde_json::from_str(&candidates[0]).unwrap();
+    assert_eq!(candidate["item_id"], ID);
+    assert_eq!(candidate["refusal"], "recovery_required", "{candidate}");
+    assert_eq!(candidate["resources"], "invalid", "{candidate}");
+}
+
 /// R-T6-4, the brief's "collaborator content arriving" with a remote: a
 /// poll in the `closing` window updates tracking but never fast-forwards the
 /// ticket context, so the same ID re-checks consent and abandons with
@@ -1954,6 +2232,62 @@ fn a_poll_never_rebuilds_the_context_while_closure_cleanup_is_unfinished() {
         pushed
     );
     f.assert_cleaned();
+}
+
+/// R-17 for a direct record (rulings 22 and 26): the poll's retirement meets
+/// every record the fence holds. A direct close whose primary child
+/// completed and whose cleanup was then cancelled sits at `published` with
+/// no reservation held. The context is remotely gone and the local primary
+/// holds the closure, so the poll observes the context `Closed`, and its
+/// retirement must leave the context alone while the fence holds. The same
+/// request then completes.
+#[test]
+fn a_poll_does_not_retire_a_context_a_direct_closure_holds() {
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = CancelAfterPrimary {
+        inner: FakeIo::default(),
+        parent: req.operation_id,
+    };
+    let first = authoritative(f.run_io(&f.service, req.clone(), &mut io).unwrap());
+    assert_eq!(
+        first.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::Cancelled
+        }
+    );
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.step, ClosureStep::Published);
+    assert_eq!(
+        r.cleanup,
+        Some(crate::repository::promotion::record::CleanupCategory::Cancelled)
+    );
+    assert_eq!(close_reservations(&f, req.operation_id), 0);
+    let (context, worktree) = (
+        f.context_oid(),
+        f.root().join(".manyhands/worktrees").join(ID),
+    );
+    assert!(worktree.exists());
+    let value = retiring_poll(&f, f.primary());
+    let target = value["data"]["poll"]["targets"]
+        .as_array()
+        .and_then(|targets| targets.iter().find(|t| t["item_id"] == ID))
+        .unwrap_or_else(|| panic!("the ticket context is a poll target: {value}"));
+    assert_candidate_refused(&f);
+    assert_eq!(target["disposition"], "closed", "{value}");
+    assert_eq!(
+        f.repo.refname_to_id(&context_ref()).ok(),
+        Some(context),
+        "{value}"
+    );
+    assert!(worktree.exists(), "{value}");
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Published);
+    let finished = authoritative(
+        f.run_io(&f.service, req.clone(), &mut FakeIo::default())
+            .unwrap(),
+    );
+    assert_eq!(finished.cleanup(), PromotionCleanup::Complete);
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Complete);
 }
 
 /// Obligation 9, restart: a manual context synchronization interrupted
@@ -2137,4 +2471,337 @@ fn a_closed_ticket_with_its_context_kept_lists_one_closed_copy() {
     let primary = f.primary_ticket();
     assert!(primary.closed_at.is_some());
     assert_eq!(primary.status, "open");
+}
+
+/// D5 decision 11, R-16: a closure tells its observer only the steps that
+/// run, in the order they run, `recording` before the merge. With no
+/// publication remote nothing is synchronized or published; a request sent
+/// again past its context's synchronization starts no context child but
+/// still writes the checkpoint it has not written. (Promotion's own order,
+/// and a context primary already holds, are
+/// `promotion::run_tests::a_promotion_tells_its_observer_only_the_steps_that_run`;
+/// a closure already recorded is told as `recording` and not reported as one
+/// at the boundary, `a_runs_steps_are_reported_as_stages`.)
+#[test]
+fn a_closure_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request: CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Recording, E::Integrating, E::CleaningUp]
+    );
+    let f = Fixture::remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [
+            context,
+            E::Recording,
+            E::Integrating,
+            primary,
+            E::CleaningUp
+        ]
+    );
+    let f = Fixture::remote();
+    let request = f.request();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterContextSync),
+        request.clone(),
+        &mut FakeIo::default(),
+    );
+    assert_eq!(
+        told(&f.reopened(), request),
+        [E::Recording, E::Integrating, primary, E::CleaningUp]
+    );
+}
+
+/// The stages a close reports through the mutation boundary.
+#[derive(Default)]
+struct Stages(Vec<crate::repository::ProgressStage>);
+impl crate::repository::ProgressSink for Stages {
+    fn event(&mut self, event: &crate::repository::ProgressEvent) {
+        self.0.push(event.stage);
+    }
+}
+
+/// R-15, D5 decision 11: a closure the ticket already holds is not recorded
+/// again, and so is not reported as `recording`. The binding sets this from
+/// what the request observed, at its prepare and again at a re-entry, so the
+/// stages come from a real prepare and execute of `ticket close`. Contained
+/// in the primary as well, only the tidy-up is left (R-14).
+#[test]
+fn a_closure_the_ticket_holds_is_not_reported_as_recording() {
+    use crate::repository::{
+        CancellationToken, ConfirmationId, Mutation, MutationCall, PrepareDataDto,
+        ProgressStage as S, RequestId, TicketCloseInput,
+    };
+    let stages_of = |contained: bool, interrupted: bool| {
+        let f = Fixture::new();
+        let closed = closed_ticket_bytes(
+            &read(&f.context, &ticket()),
+            support::at(1_800_000_000),
+            "Earlier <earlier@example.invalid>",
+        )
+        .unwrap();
+        write(&f.context, &ticket(), closed);
+        commit(&f.context);
+        if contained {
+            checkout(&f.repo, f.context_oid());
+        }
+        let mutation = || {
+            Mutation::TicketClose(TicketCloseInput {
+                root: f.root().to_owned(),
+                id: id(),
+            })
+        };
+        let prepared = f.service.prepare(&mutation());
+        let confirmation = prepared
+            .data
+            .as_ref()
+            .and_then(PrepareDataDto::preview)
+            .expect("a preview")
+            .confirmation_id
+            .clone();
+        let request_id = RequestId::new();
+        let call = || MutationCall {
+            request_id,
+            confirmation: Some(ConfirmationId::parse(&confirmation).unwrap()),
+            mutation: mutation(),
+        };
+        if interrupted {
+            // The process died after the request was accepted and before
+            // its domain call: the same request enters again.
+            let dying = f.failing(FailurePoint::BeforeRequestDomainCall);
+            let died = dying.execute(
+                call(),
+                &mut SessionCredentials::new(NoCredentials),
+                &mut Stages::default(),
+                &CancellationToken::new(),
+            );
+            assert_eq!(died.code, crate::results::ResultCode::InternalError);
+        }
+        let service = f.reopened();
+        let mut sink = Stages::default();
+        let done = service.execute(
+            call(),
+            &mut SessionCredentials::new(NoCredentials),
+            &mut sink,
+            &CancellationToken::new(),
+        );
+        assert_eq!(done.code, crate::results::ResultCode::Ok, "{:?}", done.data);
+        sink.0
+    };
+    assert_eq!(
+        stages_of(false, false),
+        [S::Accepted, S::Observing, S::Integrating, S::CleaningUp]
+    );
+    assert_eq!(
+        stages_of(true, false),
+        [S::Accepted, S::Observing, S::CleaningUp]
+    );
+    // The same request entered again, no `accepted` to report twice.
+    assert_eq!(
+        stages_of(false, true),
+        [S::Observing, S::Integrating, S::CleaningUp]
+    );
+}
+
+/// Task 21 (design, "Two previews per attempt"): a confirmed close previews
+/// once against the consent digest and once at integration, and no preview
+/// observes the whole repository. With a remote, the context child runs
+/// between the two.
+#[test]
+fn a_confirmed_close_takes_at_most_two_previews_and_no_whole_repository_observation() {
+    for remote in [false, true] {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let count = PreviewCount::start(f.root());
+        let mut io = FakeIo::default();
+        let result = if remote {
+            f.run_io(&f.service, req, &mut io)
+        } else {
+            f.close(&f.service, req)
+        };
+        outcome(result.unwrap());
+        let children = io.calls.borrow().children.len();
+        assert_eq!(children, if remote { 2 } else { 0 }, "remote: {remote}");
+        assert_eq!(count.taken(), (2, 0), "remote: {remote}");
+    }
+}
+
+/// Task 21 (design, "Two previews per attempt"): a resumed attempt has no
+/// consent preview and re-checks under the integration lease. Stopped before
+/// its context synchronized, it previews at integration only, and with a
+/// remote once more, to decide whether a context child runs. Stopped after,
+/// it previews at integration only, and that preview's revalidation under
+/// the lease still refuses a context changed meanwhile. With its checkpoint
+/// written it takes no preview: the written effect resumes under the lease,
+/// and only a `closing` record whose checkpoint moved nothing observes, as
+/// it is not resumed. No preview observes the whole repository.
+#[test]
+fn a_resumed_attempt_rechecks_under_the_lease_without_a_consent_preview() {
+    // (stopped at, with a remote, the context made dirty while stopped,
+    // previews of the resumed attempt)
+    let rows = [
+        (FailurePoint::AfterConfirmed, false, false, 1),
+        (FailurePoint::AfterConfirmed, true, false, 2),
+        (FailurePoint::AfterContextSync, false, false, 1),
+        (FailurePoint::AfterContextSync, false, true, 1),
+        (FailurePoint::ClosureAfterClosingRecorded, false, false, 1),
+        (FailurePoint::AfterClosureCheckpoint, false, false, 0),
+        (FailurePoint::BeforeIntegrationRef, false, false, 0),
+    ];
+    for (stop, remote, dirty, previews) in rows {
+        let f = if remote {
+            Fixture::remote()
+        } else {
+            Fixture::new()
+        };
+        let req = f.request();
+        let mut io = FakeIo::default();
+        assert!(
+            f.run_io(&f.failing(stop), req.clone(), &mut io).is_err(),
+            "{stop:?}"
+        );
+        if dirty {
+            write(&f.context, "draft.txt", "draft\n");
+        }
+        let count = PreviewCount::start(f.root());
+        let result = f.run_io(&f.reopened(), req.clone(), &mut io);
+        if dirty {
+            assert!(
+                matches!(result, Err(TicketClosureError::ReconfirmationRequired)),
+                "{stop:?}: {result:?}"
+            );
+            let r = f.stored(req.operation_id);
+            assert_eq!(r.step, ClosureStep::Abandoned, "{stop:?}");
+            assert_eq!(r.refusal, Some(record::Refusal::ReconfirmationRequired));
+        } else {
+            outcome(result.unwrap());
+        }
+        assert_eq!(
+            count.taken(),
+            (previews, 0),
+            "{stop:?}, remote {remote}, dirty {dirty}"
+        );
+    }
+}
+
+/// Decision 34 (design; it supersedes R-SDD-46), for a close: behind its own
+/// ticket's live synchronization hand-off, which its context child meets,
+/// or the primary's, which its primary child meets, it waits as the other
+/// per-item writers wait (vh-bhepg), holding nothing, and once the hand-off
+/// ends within the wait goes on as it would have had the hand-off been
+/// gone. Still live when the wait is spent, it answers `busy`, naming it; a
+/// stale hand-off is answered at once, `recovery_required`. The same
+/// request finishes once the hand-off is done. The cleanup's own wait is
+/// the runner's, shared with promotion, and tested there.
+#[test]
+fn a_close_or_promotion_behind_a_live_hand_off_waits() {
+    use crate::repository::promotion::run_tests::{
+        HandOff::{self, *},
+        SPENT_WAIT, begin_hand_off, behind_hand_off, end_hand_off, names_hand_off,
+    };
+    use crate::repository::{PromotionSynchronizationCategory, RepositoryService};
+    let mut wrong = Vec::new();
+    for item in [true, false] {
+        for holder in [Released, Live, Stale] {
+            let case = format!("item {item}, {holder:?}");
+            let f = Fixture::remote();
+            let req = f.request();
+            let hand_off = OperationId::new();
+            let (service, time, at): (RepositoryService, _, _) =
+                behind_hand_off(f.data.path(), hand_off, holder);
+            let of = if item {
+                SynchronizationTarget::Context {
+                    kind: AuthoringKind::Ticket,
+                    item_id: id(),
+                }
+            } else {
+                SynchronizationTarget::Primary
+            };
+            begin_hand_off(f.data.path(), hand_off, &of, f.primary(), holder, at);
+            let mut io = FakeIo::default();
+            let result = f.run_io(&service, req.clone(), &mut io);
+            let sleeps = match holder {
+                Released => 2,
+                Live => SPENT_WAIT,
+                Stale => 0,
+            };
+            if time.slept() != sleeps {
+                wrong.push(format!("{case}: slept {}, not {sleeps}", time.slept()));
+            }
+            let busy = holder == HandOff::Live;
+            let ended = match (item, holder, &result) {
+                (_, Released, Ok(TicketClosureResult::Complete(o))) => {
+                    o.cleanup() == PromotionCleanup::Complete
+                        && matches!(o.publication(), PromotionPublication::Published { .. })
+                        && io.calls.borrow().children.len() == 2
+                        && io.calls.borrow().deletes == 1
+                }
+                (true, Live | Stale, Err(TicketClosureError::ContextSynchronization(e))) => {
+                    let kind = if busy {
+                        RepositoryErrorKind::RepositoryBusy
+                    } else {
+                        RepositoryErrorKind::RecoveryRequired
+                    };
+                    names_hand_off(e, kind, hand_off, busy)
+                        && f.db()
+                            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| {
+                                r.get::<_, i64>(0)
+                            })
+                            .unwrap()
+                            == 0
+                }
+                (false, Live | Stale, Ok(result)) => {
+                    let o = authoritative(result.clone());
+                    let category = if busy {
+                        PromotionSynchronizationCategory::Busy
+                    } else {
+                        PromotionSynchronizationCategory::RecoveryRequired
+                    };
+                    o.publication()
+                        == PromotionPublication::Pending {
+                            reason: PromotionPublicationPending::Synchronization(category),
+                        }
+                        && o.cleanup()
+                            == PromotionCleanup::Pending {
+                                reason: PromotionCleanupPending::AwaitingPublication,
+                            }
+                }
+                _ => false,
+            };
+            if !ended {
+                wrong.push(format!("{case}: ended as {result:?}"));
+            }
+            if holder != Released {
+                end_hand_off(f.data.path(), hand_off);
+                let finished = f.run_io(&f.service, req, &mut io);
+                if !matches!(&finished, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Complete)
+                {
+                    wrong.push(format!("{case}: its retry ended as {finished:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

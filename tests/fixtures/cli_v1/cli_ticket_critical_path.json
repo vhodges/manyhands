@@ -15,6 +15,7 @@
         "closure": {
           "closed_at": null,
           "closed_by": null,
+          "publication": null,
           "state": "open"
         },
         "context": {
@@ -40,6 +41,7 @@
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR1/ticket.md",
         "problems": [],
         "project": null,
+        "pull_request": null,
         "readiness": {
           "reasons": [],
           "state": "ready"
@@ -59,6 +61,7 @@
         "closure": {
           "closed_at": null,
           "closed_by": null,
+          "publication": null,
           "state": "open"
         },
         "context": {
@@ -87,6 +90,7 @@
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR2/ticket.md",
         "problems": [],
         "project": null,
+        "pull_request": null,
         "readiness": {
           "reasons": [
             {

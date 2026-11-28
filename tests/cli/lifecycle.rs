@@ -1,0 +1,2076 @@
+//! `document promote` and `ticket close` through the binary, in a repository
+//! with no publication remote. What needs one is `tests/cli_remote.rs`'s: a
+//! publication, a refused push or deletion, and a child's deleted branch. Their human lines
+//! are pinned by `src/bin/manyhands-cli/lifecycle_tests.rs`, and the library's
+//! own tables pin the answers (`tests/mutation_remote/c5_lifecycle.rs`).
+
+use std::{fs, path::Path, process::Command};
+
+use manyhands::{
+    repository::{FailurePoint, Mutation, TicketCloseInput},
+    results::ResultCode,
+};
+use rusqlite::types::ValueRef;
+use serde_json::Value;
+
+use super::{c4_support::environment, mutation};
+use crate::support::{
+    self, FailOnce,
+    cli::{self, CliEnv, CliRun, stderr, stdout},
+    items,
+    mutation::{
+        DOCUMENT_NEW, DOCUMENT_NEW_PATH, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_CLOSED,
+        TITLE, World, execute_confirmed,
+    },
+};
+
+const SAVE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX8";
+const SLUG: &str = "mh-vh-k9x2b";
+const BLOCKED: &str = "lifecycle_blocked.schema.json";
+const PREVIEW: &str = "lifecycle_preview.schema.json";
+const PULL_REQUEST_PREVIEW: &str = "pull_request_closure_preview.schema.json";
+const PULL_REQUEST_PROMOTION_PREVIEW: &str = "pull_request_promotion_preview.schema.json";
+const KEY_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR7";
+const SELECT_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR8";
+const ENDING_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR9";
+const MUTATION: &str = "lifecycle_mutation.schema.json";
+const CLOSED_BY_NAME: &str = "SENTINEL-CLOSED-BY-5e1d";
+const CLOSED_BY_EMAIL: &str = "sentinel-closed-by-5e1d@example.invalid";
+
+#[derive(Clone, Copy)]
+struct Verb {
+    resource: &'static str,
+    name: &'static str,
+    id: &'static str,
+    golden: &'static str,
+}
+
+const PROMOTE: Verb = Verb {
+    resource: "document",
+    name: "promote",
+    id: DOCUMENT_NEW,
+    golden: "document_promote",
+};
+const CLOSE: Verb = Verb {
+    resource: "ticket",
+    name: "close",
+    id: items::TICKET_A,
+    golden: "ticket_close",
+};
+const WITHDRAW: Verb = Verb {
+    resource: "ticket",
+    name: "withdraw-closure",
+    id: items::TICKET_A,
+    golden: "ticket_withdraw_closure",
+};
+const BOTH: [Verb; 2] = [PROMOTE, CLOSE];
+
+impl Verb {
+    fn command(self) -> String {
+        format!("{} {}", self.resource, self.name)
+    }
+
+    fn branch(self) -> String {
+        if self.resource == "document" {
+            World::document_branch(self.id)
+        } else {
+            World::branch(self.id)
+        }
+    }
+
+    fn file(self) -> String {
+        if self.resource == "document" {
+            DOCUMENT_NEW_PATH.to_owned()
+        } else {
+            items::ticket_path(self.id)
+        }
+    }
+}
+
+/// The verb's item with an editing context primary does not hold.
+fn saved(world: &World, verb: Verb) {
+    let mutation = if verb.resource == "document" {
+        world.document_create(verb.id, DOCUMENT_NEW_PATH)
+    } else {
+        let token = world.token(verb.id);
+        world.save(verb.id, &token)
+    };
+    let answer = world.execute(SAVE, mutation);
+    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+}
+
+struct Case {
+    world: World,
+    env: CliEnv,
+    verb: Verb,
+}
+
+impl Case {
+    fn new(verb: Verb) -> Self {
+        let world = World::new();
+        saved(&world, verb);
+        let env = environment(world.data.path());
+        Self { world, env, verb }
+    }
+
+    fn root(&self) -> &str {
+        self.world.root.to_str().unwrap()
+    }
+
+    fn args<'a>(&'a self, id: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+        let mut args = vec![
+            self.verb.resource,
+            self.verb.name,
+            "--repo",
+            self.root(),
+            "--id",
+            id,
+        ];
+        args.extend_from_slice(extra);
+        args
+    }
+
+    fn json(&self, extra: &[&str], status: i32, code: &str, schema: Option<&str>) -> Value {
+        let mut args = self.args(self.verb.id, extra);
+        args.push("--json");
+        let value = mutation::checked(&args, &self.env, &[], status, code, schema);
+        assert_eq!(value["command"], self.verb.command());
+        value
+    }
+
+    fn json_of(&self, resource: &str, verb: &str, extra: &[&str]) -> Value {
+        let mut args = vec![resource, verb, "--repo", self.root()];
+        args.extend_from_slice(extra);
+        args.push("--json");
+        mutation::checked(&args, &self.env, &[], 0, "ok", None)
+    }
+
+    fn text(&self, extra: &[&str]) -> CliRun {
+        mutation::run(&self.args(self.verb.id, extra), &self.env, &[])
+    }
+
+    fn prepared(&self) -> Value {
+        self.json(&["--prepare"], 0, "ok", Some(PREVIEW))
+    }
+
+    fn confirmation(&self) -> String {
+        self.prepared()["data"]["confirmation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn confirmed(&self, request: &str, status: i32, code: &str, schema: Option<&str>) -> Value {
+        let confirmation = self.confirmation();
+        self.json(
+            &["--request-id", request, "--confirm", &confirmation],
+            status,
+            code,
+            schema,
+        )
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        let mut command = Command::new("git");
+        cli::cli_environment(&mut command, &self.env);
+        let output = command
+            .arg("-C")
+            .arg(&self.world.root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn refs(&self) -> String {
+        self.git(&["for-each-ref", "refs/"])
+    }
+
+    fn merges(&self) -> usize {
+        self.git(&["rev-list", "--merges", "main"]).lines().count()
+    }
+
+    fn forget_identity(&self) {
+        let repository = git2::Repository::open(&self.world.root).unwrap();
+        let config = repository.config().unwrap();
+        let mut local = config.open_level(git2::ConfigLevel::Local).unwrap();
+        local.remove("user.name").unwrap();
+        local.remove("user.email").unwrap();
+    }
+
+    /// A commit on primary that changes the verb's file, as a peer's would.
+    fn primary_moved(&self, source: &str) {
+        items::write(&self.world.root, &self.verb.file(), source);
+        items::commit(
+            &self.world.fixture,
+            &[&self.verb.file()],
+            items::COMMITTED_AT + 60,
+        );
+    }
+
+    /// Primary moved to the item's branch, as a merge outside Manyhands would.
+    fn primary_holds_the_branch(&self) {
+        self.git(&["merge", "--ff-only", "--quiet", &self.verb.branch()]);
+    }
+}
+
+/// What a JSON golden replaces: the root and everything a run makes up.
+fn golden(name: &str, value: &Value, root: &Path) {
+    let mut replacements = vec![(
+        fs::canonicalize(root).unwrap().to_str().unwrap().to_owned(),
+        "<repository>",
+    )];
+    for (pointer, label) in [
+        ("/operation_id", "<operation-id>"),
+        ("/data/confirmation_id", "<confirmation-id>"),
+        ("/data/expires_at", "<expires-at>"),
+        ("/data/details/context_oid", "<context-oid>"),
+        ("/data/details/primary_oid", "<primary-oid>"),
+        (
+            "/data/details/tracking_primary_oid",
+            "<tracking-primary-oid>",
+        ),
+        ("/data/checkpoint_oid", "<checkpoint-oid>"),
+        ("/data/integration_oid", "<commit-oid>"),
+        ("/effects/commit_oid", "<commit-oid>"),
+    ] {
+        if let Some(text) = value.pointer(pointer).and_then(Value::as_str)
+            && !replacements.iter().any(|(known, _)| known == text)
+        {
+            replacements.push((text.into(), label));
+        }
+    }
+    cli::assert_cli_golden(
+        name,
+        value,
+        &replacements
+            .iter()
+            .map(|(value, label)| (value.as_str(), *label))
+            .collect::<Vec<_>>(),
+    );
+}
+
+fn fixed_id(token: &str) -> bool {
+    [
+        items::TICKET_A,
+        items::TICKET_C,
+        DOCUMENT_NEW,
+        REQUEST_1,
+        REQUEST_2,
+        REQUEST_3,
+    ]
+    .contains(&token)
+}
+
+fn ulid(token: &str) -> bool {
+    token.len() == 26
+        && token
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+}
+
+fn scrubbed_token(token: &str) -> String {
+    if token.len() == 40 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        "<oid>".into()
+    } else if ulid(token) && !fixed_id(token) {
+        "<id>".into()
+    } else if token.len() >= 20 && token.contains('T') && token.contains(':') {
+        "<time>".into()
+    } else {
+        token.to_owned()
+    }
+}
+
+/// Human output with what a run makes up replaced: commits, the IDs no
+/// fixture fixes, the times, and the root.
+fn text_golden(name: &str, run: &CliRun, root: &Path) {
+    let root = root.canonicalize().unwrap();
+    cli::text_golden_scrubbed(
+        name,
+        run,
+        &[(root.to_str().unwrap(), "<repository>")],
+        &['-', ':', '.', '+'],
+        scrubbed_token,
+    );
+}
+
+#[test]
+fn a_preview_shows_every_effect_and_changes_nothing() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let refs = case.refs();
+        let preview = case.prepared();
+        assert_eq!(preview["data"]["details"]["remote"], Value::Null);
+        assert_eq!(
+            preview["data"]["details"]["publication"],
+            "pending_no_remote"
+        );
+        golden(
+            &format!("{}_preview", verb.golden),
+            &preview,
+            &case.world.root,
+        );
+        assert_eq!(case.refs(), refs);
+
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 0, "{}", stderr(&human));
+        let text = stdout(&human);
+        for line in [
+            "Slug: none\n",
+            "Will merge the editing branch into primary.\n",
+            "Will remove the editing worktree.\n",
+            "Will delete the local editing branch.\n",
+            "Confirmation: ",
+            "--confirm ",
+        ] {
+            assert!(text.contains(line), "{line}: {text}");
+        }
+        assert_eq!(
+            text.contains("Will record the closure on the editing branch.\n"),
+            verb.name == "close",
+            "{text}"
+        );
+        assert!(!text.contains("Will publish primary"), "{text}");
+        text_golden(
+            &format!("{}_preview_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_preview_of_a_ticket_with_a_slug_shows_it() {
+    let world = World::new();
+    items::write(
+        &world.root,
+        &items::ticket_path(items::TICKET_C),
+        &items::ticket_source(items::TICKET_C, "Slugged", &format!("slug: {SLUG}\n")),
+    );
+    items::commit(
+        &world.fixture,
+        &[&items::ticket_path(items::TICKET_C)],
+        items::COMMITTED_AT + 1,
+    );
+    items::refresh_completely(&world.service, &world.root);
+    let token = world.token(items::TICKET_C);
+    let answer = world.execute(SAVE, world.save(items::TICKET_C, &token));
+    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+    let env = environment(world.data.path());
+    let root = world.root.to_str().unwrap();
+    let args = [
+        "ticket",
+        "close",
+        "--repo",
+        root,
+        "--id",
+        items::TICKET_C,
+        "--prepare",
+    ];
+    let human = mutation::run(&args, &env, &[]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert!(
+        stdout(&human).contains(&format!("Slug: {SLUG}\n")),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
+fn local_only_completion_is_ok_with_publication_pending() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let done = case.confirmed(REQUEST_1, 0, "ok", Some(MUTATION));
+        assert_eq!(done["outcome"], "success");
+        assert_eq!(done["recovery"], serde_json::json!([]));
+        assert_eq!(done["effects"]["publication"], "pending");
+        assert_eq!(done["effects"]["integration"], "complete");
+        assert_eq!(done["effects"]["cleanup"], "complete");
+        assert_eq!(done["data"]["publication_pending"], "no_publication_remote");
+        assert_eq!(done["data"]["integration"], "merged");
+        golden(
+            &format!("{}_local_only", verb.golden),
+            &done,
+            &case.world.root,
+        );
+
+        // The verb's effects on Git: one merge, and no context left.
+        assert_eq!(case.merges(), 1);
+        assert!(!case.refs().contains(&verb.branch()));
+        assert!(!case.world.worktree(verb.id).exists());
+        let source = fs::read_to_string(case.world.root.join(verb.file())).unwrap();
+        assert_eq!(
+            source.contains("\nclosed_at: "),
+            verb.name == "close",
+            "{source}"
+        );
+        if verb.name == "close" {
+            assert!(
+                source.contains("closed_by: Manyhands Test <manyhands-test@example.invalid>"),
+                "{source}"
+            );
+        }
+
+        // The same request gives the same answer, and nothing happens twice.
+        let again = case.json(&["--request-id", REQUEST_1], 0, "ok", Some(MUTATION));
+        assert_eq!(again, done);
+        assert_eq!(case.merges(), 1);
+    }
+}
+
+#[test]
+fn local_only_completion_in_text_says_what_is_pending() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let confirmation = case.confirmation();
+        let human = case.text(&["--request-id", REQUEST_1, "--confirm", &confirmation]);
+        assert_eq!(human.status, 0, "{}", stderr(&human));
+        assert!(stdout(&human).contains("Publication pending: no_publication_remote\n"));
+        assert!(stderr(&human).contains("repo sync"), "{}", stderr(&human));
+        text_golden(
+            &format!("{}_local_only_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_closure_names_what_it_made_ready_with_slugs() {
+    let world = World::new();
+    let dependent = items::ticket_path(items::TICKET_C);
+    items::write(
+        &world.root,
+        &dependent,
+        &items::ticket_source(
+            items::TICKET_C,
+            "Dependent",
+            &format!("slug: {SLUG}\ndeps: [{}]\n", items::TICKET_A),
+        ),
+    );
+    items::commit(&world.fixture, &[&dependent], items::COMMITTED_AT + 1);
+    items::refresh_completely(&world.service, &world.root);
+    saved(&world, CLOSE);
+    let env = environment(world.data.path());
+    let case = Case {
+        world,
+        env,
+        verb: CLOSE,
+    };
+    let confirmation = case.confirmation();
+    let human = case.text(&["--request-id", REQUEST_1, "--confirm", &confirmation]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert!(
+        stdout(&human).contains(&format!("made ready: {} {SLUG}\n", items::TICKET_C)),
+        "{}",
+        stdout(&human)
+    );
+    assert!(stdout(&human).contains("Made ready state: current\n"));
+    text_golden("ticket_close_made_ready_text", &human, &case.world.root);
+    let replay = case.json(&["--request-id", REQUEST_1], 0, "ok", Some(MUTATION));
+    assert_eq!(
+        replay["data"]["made_ready"],
+        serde_json::json!([{"id": items::TICKET_C, "slug": SLUG}])
+    );
+    golden("ticket_close_made_ready", &replay, &case.world.root);
+}
+
+#[test]
+fn a_dirty_primary_blocks_naming_the_blocker() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        fs::write(case.world.root.join("dirty-primary.txt"), b"dirty\n").unwrap();
+        let refs = case.refs();
+        let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+        assert_eq!(blocked["outcome"], "blocked");
+        assert_eq!(
+            blocked["data"]["blockers"],
+            serde_json::json!(["primary_dirty"])
+        );
+        golden(
+            &format!("{}_blocked", verb.golden),
+            &blocked,
+            &case.world.root,
+        );
+
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        assert!(human.stdout.is_empty());
+        assert!(
+            stderr(&human).contains("primary_dirty"),
+            "{}",
+            stderr(&human)
+        );
+        assert!(
+            stderr(&human).contains("next: repo.inspect"),
+            "{}",
+            stderr(&human)
+        );
+        text_golden(
+            &format!("{}_blocked_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+        assert_eq!(case.refs(), refs);
+    }
+}
+
+#[test]
+fn no_usable_identity_is_identity_required_with_its_action() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        case.forget_identity();
+        let refs = case.refs();
+        let refused = case.json(&["--prepare"], 3, "identity_required", Some(BLOCKED));
+        assert_eq!(refused["recovery"][0]["action"], "repo.identity_set");
+        assert!(refused["request_id"].is_null());
+        golden(
+            &format!("{}_identity_required", verb.golden),
+            &refused,
+            &case.world.root,
+        );
+
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        assert!(
+            stderr(&human).contains("next: repo.identity_set"),
+            "{}",
+            stderr(&human)
+        );
+        text_golden(
+            &format!("{}_identity_required_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+        assert_eq!(case.refs(), refs);
+    }
+}
+
+#[test]
+fn input_failures_are_usage_and_id_errors_with_nothing_done() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let refs = case.refs();
+        // No input, no ID, no request: the grammar's own answers.
+        let with_input = case.json(
+            &["--request-id", REQUEST_1, "--input", "-"],
+            2,
+            "usage_error",
+            None,
+        );
+        assert!(with_input["request_id"].is_null());
+        let args = [
+            verb.resource,
+            verb.name,
+            "--repo",
+            case.root(),
+            "--prepare",
+            "--json",
+        ];
+        let no_id = mutation::checked(&args, &case.env, &[], 2, "usage_error", None);
+        assert_eq!(no_id["command"], verb.command());
+        case.json(&[], 2, "usage_error", None);
+        for extra in [
+            vec!["--prepare", "--request-id", REQUEST_1],
+            vec!["--prepare", "--confirm", REQUEST_2],
+        ] {
+            case.json(&extra, 2, "usage_error", None);
+        }
+        // A malformed ID and confirmation.
+        let args = [
+            verb.resource,
+            verb.name,
+            "--repo",
+            case.root(),
+            "--id",
+            "not-a-ulid",
+            "--prepare",
+            "--json",
+        ];
+        let invalid = mutation::checked(&args, &case.env, &[], 2, "invalid_id", None);
+        assert!(invalid["request_id"].is_null());
+        golden(
+            &format!("{}_invalid_id", verb.golden),
+            &invalid,
+            &case.world.root,
+        );
+        case.json(
+            &["--request-id", REQUEST_1, "--confirm", "not-a-ulid"],
+            2,
+            "invalid_id",
+            None,
+        );
+        // Consent is the verb's: none given, and one no preview made.
+        case.json(
+            &["--request-id", REQUEST_1],
+            3,
+            "confirmation_required",
+            None,
+        );
+        case.json(
+            &["--request-id", REQUEST_1, "--confirm", REQUEST_2],
+            3,
+            "confirmation_not_found",
+            None,
+        );
+        // An item that isn't there, or isn't the verb's kind.
+        let other = if verb.name == "close" {
+            items::DOCUMENT_A
+        } else {
+            items::TICKET_A
+        };
+        for id in [items::TICKET_ABSENT, other] {
+            let mut args = case.args(id, &["--prepare"]);
+            args.push("--json");
+            let refused = mutation::checked(&args, &case.env, &[], 2, "item_not_found", None);
+            assert_eq!(refused["scope"]["item_id"], id);
+        }
+        let human = case.text(&["--prepare", "--request-id", REQUEST_1]);
+        assert_eq!(human.status, 2);
+        assert!(human.stdout.is_empty());
+        assert_eq!(case.refs(), refs);
+    }
+}
+
+#[test]
+fn a_context_primary_already_holds_is_only_cleaned_up() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        if verb.name == "close" {
+            // A closure already on the branch: nothing is left to record.
+            let path = verb.file();
+            let worktree = case.world.worktree(verb.id);
+            let source = fs::read_to_string(worktree.join(&path)).unwrap();
+            let closed = source.replacen(
+                "---\n",
+                "---\nclosed_at: 2027-01-15T08:00:00Z\nclosed_by: Manyhands Test <manyhands-test@example.invalid>\n",
+                1,
+            );
+            fs::write(worktree.join(&path), closed).unwrap();
+            let mut git = Command::new("git");
+            cli::cli_environment(&mut git, &case.env);
+            let status = git
+                .arg("-C")
+                .arg(&worktree)
+                .args([
+                    "-c",
+                    "user.name=Manyhands Test",
+                    "-c",
+                    "user.email=manyhands-test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--all",
+                    "--message",
+                    "closed outside",
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        case.primary_holds_the_branch();
+        let main = case.git(&["rev-parse", "main"]);
+        let preview = case.prepared();
+        assert_eq!(
+            preview["data"]["details"]["integration"],
+            "already_contained"
+        );
+        let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+        let human_preview = case.text(&["--prepare"]);
+        assert!(
+            !stdout(&human_preview).contains("Will merge the editing branch into primary.\n"),
+            "{}",
+            stdout(&human_preview)
+        );
+        let done = case.json(
+            &["--request-id", REQUEST_1, "--confirm", confirmation],
+            0,
+            "ok",
+            Some(MUTATION),
+        );
+        assert_eq!(done["recovery"], serde_json::json!([]));
+        assert_eq!(done["data"]["integration"], "already_contained");
+        golden(
+            &format!("{}_already_contained", verb.golden),
+            &done,
+            &case.world.root,
+        );
+        assert_eq!(case.git(&["rev-parse", "main"]), main, "no new commit");
+        assert_eq!(case.merges(), 0);
+        assert!(!case.refs().contains(&verb.branch()));
+    }
+}
+
+#[test]
+fn a_closed_ticket_is_ticket_closed_at_prepare() {
+    let case = Case::new(CLOSE);
+    case.confirmed(REQUEST_1, 0, "ok", Some(MUTATION));
+    let refused = case.json(&["--prepare"], 3, "ticket_closed", Some(BLOCKED));
+    assert_eq!(
+        refused["data"]["blockers"],
+        serde_json::json!(["already_closed"])
+    );
+}
+
+#[test]
+fn a_request_or_confirmation_for_another_item_is_a_mismatch() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let other = if verb.name == "close" {
+            items::TICKET_B
+        } else {
+            items::DOCUMENT_A
+        };
+        // A confirmation of this item, presented for another.
+        let confirmation = case.confirmation();
+        let mut args = case.args(
+            other,
+            &["--request-id", REQUEST_2, "--confirm", &confirmation],
+        );
+        args.push("--json");
+        mutation::checked(&args, &case.env, &[], 2, "confirmation_mismatch", None);
+
+        // A finished request, sent again for another item.
+        let done = case.confirmed(REQUEST_1, 0, "ok", Some(MUTATION));
+        let mut args = case.args(other, &["--request-id", REQUEST_1]);
+        args.push("--json");
+        let refused = mutation::checked(&args, &case.env, &[], 2, "request_mismatch", None);
+        assert_eq!(refused["recovery"], serde_json::json!([]));
+        golden(
+            &format!("{}_request_mismatch", verb.golden),
+            &refused,
+            &case.world.root,
+        );
+        let human = mutation::run(
+            &case.args(other, &["--request-id", REQUEST_1]),
+            &case.env,
+            &[],
+        );
+        assert_eq!(human.status, 2);
+        text_golden(
+            &format!("{}_request_mismatch_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+        // And the request still answers what it did.
+        let replay = case.json(&["--request-id", REQUEST_1], 0, "ok", Some(MUTATION));
+        assert_eq!(replay, done);
+    }
+}
+
+#[test]
+fn a_primary_moved_after_the_preview_is_external_change() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let confirmation = case.confirmation();
+        fs::write(case.world.root.join("moved.txt"), b"moved\n").unwrap();
+        items::commit(
+            &case.world.fixture,
+            &["moved.txt"],
+            items::COMMITTED_AT + 60,
+        );
+        let refused = case.json(
+            &["--request-id", REQUEST_1, "--confirm", &confirmation],
+            3,
+            "external_change",
+            None,
+        );
+        assert_eq!(case.merges(), 0, "{refused}");
+    }
+}
+
+#[test]
+fn a_blocked_prepare_offers_its_way_out() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let conflicting = if verb.resource == "document" {
+            items::document_source(verb.id, "Moved on primary", "")
+        } else {
+            items::ticket_source(verb.id, "Moved on primary", "")
+        };
+        case.primary_moved(&conflicting);
+        let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+        assert_eq!(
+            blocked["data"]["blockers"],
+            serde_json::json!(["integration_conflict"]),
+            "{blocked}"
+        );
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        let text = stderr(&human);
+        assert!(
+            text.contains("next: manyhands-cli context observe-local "),
+            "{text}"
+        );
+        assert!(text.contains("Then prepare again.\n"), "{text}");
+        text_golden(
+            &format!("{}_prepare_conflict_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_missing_context_names_the_save_that_makes_one() {
+    for (verb, save) in [(PROMOTE, "document save"), (CLOSE, "ticket save")] {
+        let case = Case::new(verb);
+        case.primary_holds_the_branch();
+        let worktree = case.world.worktree(verb.id);
+        case.git(&["worktree", "remove", "--force", worktree.to_str().unwrap()]);
+        case.git(&[
+            "branch",
+            "-D",
+            "--quiet",
+            verb.branch().trim_start_matches("refs/heads/"),
+        ]);
+        case.json_of("index", "refresh", &["--request-id", REQUEST_2]);
+        let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+        assert_eq!(
+            blocked["data"]["blockers"],
+            serde_json::json!(["context_missing"])
+        );
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        let text = stderr(&human);
+        assert!(
+            text.contains(&format!("next: manyhands-cli {save} ")),
+            "{text}"
+        );
+        assert!(text.contains("Then prepare again.\n"), "{text}");
+        text_golden(
+            &format!("{}_prepare_context_missing_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_no_op_in_text_says_what_it_found() {
+    let case = Case::new(PROMOTE);
+    case.primary_holds_the_branch();
+    let confirmation = case.confirmation();
+    let human = case.text(&["--request-id", REQUEST_1, "--confirm", &confirmation]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert!(
+        stdout(&human).contains("Integration: already_contained\n"),
+        "{}",
+        stdout(&human)
+    );
+    text_golden(
+        "document_promote_already_contained_text",
+        &human,
+        &case.world.root,
+    );
+}
+
+/// Every cell of application data that holds `sentinels`, as `table.column`.
+fn cells_holding(data: &Path, sentinels: &[&str]) -> Vec<String> {
+    let connection = items::index(data);
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(tables.iter().any(|table| table == "request_records"));
+    assert!(tables.iter().any(|table| table == "confirmation_records"));
+    assert!(tables.iter().any(|table| table == "ticket_closures"));
+    assert!(tables.iter().any(|table| table == "document_promotions"));
+    let mut found = Vec::new();
+    for table in tables {
+        let columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+            .unwrap()
+            .query_map([&table], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM \"{table}\""))
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            for (index, column) in columns.iter().enumerate() {
+                let bytes: Vec<u8> = match row.get_ref(index).unwrap() {
+                    ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.to_vec(),
+                    _ => continue,
+                };
+                let text = String::from_utf8_lossy(&bytes);
+                if sentinels.iter().any(|sentinel| text.contains(sentinel)) {
+                    found.push(format!("{table}.{column}"));
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Cycle 10: `closed_by` is in the preview, canonical content, the index and
+/// Git, and a title in content and the index. Nothing else keeps either. Each
+/// `expected` sentinel must be in the index, or the scan is reading nothing.
+fn assert_only_the_index_holds(data: &Path, expected: &[&str]) {
+    let all = [CLOSED_BY_NAME, CLOSED_BY_EMAIL, SENTINELS[0]];
+    let beyond: Vec<_> = cells_holding(data, &all)
+        .into_iter()
+        .filter(|cell| !cell.starts_with("discovered_items."))
+        .collect();
+    assert!(beyond.is_empty(), "{beyond:?}");
+    for sentinel in expected {
+        assert!(
+            cells_holding(data, &[sentinel])
+                .iter()
+                .any(|cell| cell.starts_with("discovered_items.")),
+            "the index holds no {sentinel}"
+        );
+    }
+}
+
+#[test]
+fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        case.world.set_local_config("user.name", CLOSED_BY_NAME);
+        case.world.set_local_config("user.email", CLOSED_BY_EMAIL);
+        let title = SENTINELS[0];
+        assert!(TITLE.contains(title));
+        let data = case.world.data.path();
+        let preview = case.prepared();
+        let shown = serde_json::to_string(&preview).unwrap();
+        assert_eq!(
+            shown.contains(CLOSED_BY_NAME),
+            verb.name == "close",
+            "{shown}"
+        );
+        assert!(!shown.contains(title), "{shown}");
+        assert_only_the_index_holds(data, &[title]);
+        let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+        let done = case.json(
+            &["--request-id", REQUEST_1, "--confirm", confirmation],
+            0,
+            "ok",
+            Some(MUTATION),
+        );
+        let answered = serde_json::to_string(&done).unwrap();
+        assert!(!answered.contains(CLOSED_BY_NAME), "{answered}");
+        assert!(!answered.contains(CLOSED_BY_EMAIL), "{answered}");
+        assert!(!answered.contains(title), "{answered}");
+        if verb.name == "close" {
+            assert_only_the_index_holds(data, &[title, CLOSED_BY_NAME, CLOSED_BY_EMAIL]);
+        } else {
+            assert_only_the_index_holds(data, &[title]);
+        }
+    }
+
+    // Pull-request mode: the preview consents to `closed_by`, and a confirm
+    // that stops at its context child records nothing of it anywhere.
+    let case = Case::pull_request_with_a_key(CLOSE);
+    case.world.set_local_config("user.name", CLOSED_BY_NAME);
+    case.world.set_local_config("user.email", CLOSED_BY_EMAIL);
+    let title = SENTINELS[0];
+    let data = case.world.data.path();
+    let preview = case.preview_of_the_record();
+    let shown = serde_json::to_string(&preview).unwrap();
+    assert!(shown.contains(CLOSED_BY_NAME), "{shown}");
+    assert!(!shown.contains(title), "{shown}");
+    assert_only_the_index_holds(data, &[title]);
+    let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+    let stopped = case.json(
+        &["--request-id", REQUEST_1, "--confirm", confirmation],
+        5,
+        "transport_unavailable",
+        None,
+    );
+    let answered = serde_json::to_string(&stopped).unwrap();
+    assert!(!answered.contains(CLOSED_BY_NAME), "{answered}");
+    assert!(!answered.contains(CLOSED_BY_EMAIL), "{answered}");
+    assert!(!answered.contains(title), "{answered}");
+    // The stored record and the data hold no `closed_by`, and nothing of the
+    // closure is in the index either: the context child never finished.
+    assert_only_the_index_holds(data, &[title]);
+}
+
+/// A closure stopped past its checkpoint, whose merge primary then refuses.
+struct Refused {
+    case: Case,
+    operation: String,
+}
+
+impl Refused {
+    fn new() -> Self {
+        Self::with_identity(None)
+    }
+
+    fn with_identity(identity: Option<(&str, &str)>) -> Self {
+        let mut world = World::with_service(|data| {
+            FailOnce::at(FailurePoint::AfterClosureCheckpoint).open_service(data)
+        });
+        saved(&world, CLOSE);
+        if let Some((name, email)) = identity {
+            world.set_local_config("user.name", name);
+            world.set_local_config("user.email", email);
+        }
+        let mutation = || {
+            Mutation::TicketClose(TicketCloseInput {
+                root: world.root.clone(),
+                id: items::item_id(items::TICKET_A),
+            })
+        };
+        let preview = world.service.prepare(&mutation());
+        let confirmation = preview
+            .data
+            .as_ref()
+            .and_then(|data| data.preview())
+            .unwrap()
+            .confirmation_id
+            .clone();
+        let stopped = execute_confirmed(&world.service, REQUEST_1, &confirmation, mutation());
+        assert_ne!(stopped.code, ResultCode::Ok, "{:?}", stopped.data);
+        let operation = stopped.operation_id.clone().unwrap();
+        world.reopen();
+        let env = environment(world.data.path());
+        let case = Case {
+            world,
+            env,
+            verb: CLOSE,
+        };
+        case.primary_moved(&items::ticket_source(
+            items::TICKET_A,
+            "Moved on primary",
+            "",
+        ));
+        Self { case, operation }
+    }
+}
+
+#[test]
+fn a_stop_past_the_checkpoint_keeps_closed_by_and_title_to_the_index() {
+    let refused = Refused::with_identity(Some((CLOSED_BY_NAME, CLOSED_BY_EMAIL)));
+    let case = &refused.case;
+    case.json(
+        &["--request-id", REQUEST_1],
+        4,
+        "recovery_required",
+        Some(MUTATION),
+    );
+    assert_only_the_index_holds(case.world.data.path(), &[SENTINELS[0]]);
+}
+
+#[test]
+fn a_refused_checkpoint_merge_says_how_to_repair_it_after_retrying() {
+    let refused = Refused::new();
+    let case = &refused.case;
+    let main = case.git(&["rev-parse", "main"]);
+    let answer = case.json(
+        &["--request-id", REQUEST_1],
+        4,
+        "recovery_required",
+        Some(MUTATION),
+    );
+    assert_eq!(answer["outcome"], "partial");
+    assert_eq!(answer["effects"]["checkpoint"], "committed");
+    assert_eq!(answer["effects"]["integration"], "not_requested");
+    assert_eq!(
+        answer["data"]["blockers"],
+        serde_json::json!(["integration_conflict"])
+    );
+    assert_eq!(answer["recovery"][0]["action"], "request.retry");
+    assert_eq!(answer["recovery"][1]["action"], "repo.inspect");
+    golden(
+        "ticket_close_checkpoint_merge_refused",
+        &answer,
+        &case.world.root,
+    );
+
+    let human = case.text(&["--request-id", REQUEST_1]);
+    assert_eq!(human.status, 4);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    // Named blockers won't change by themselves, so the driver doesn't repeat it.
+    assert_eq!(text.matches("progress: retrying\n").count(), 0, "{text}");
+    for verb in [
+        "context observe-local",
+        "context sync-local",
+        "context show-local",
+        "context resolve-local",
+    ] {
+        assert!(
+            text.contains(&format!("next: manyhands-cli {verb} ")),
+            "{verb}: {text}"
+        );
+    }
+    let repair = text.find("context resolve-local").unwrap();
+    let retry = text.find("next: request.retry").unwrap();
+    assert!(repair < retry, "the repair comes before the retry: {text}");
+    assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
+    text_golden(
+        "ticket_close_checkpoint_merge_refused_text",
+        &human,
+        &case.world.root,
+    );
+    assert_eq!(case.git(&["rev-parse", "main"]), main);
+    assert_eq!(case.merges(), 0);
+}
+
+/// Decision 33: while the stopped closure's request holds the ticket, a new
+/// prepare is refused and names that request, in JSON and in text.
+#[test]
+fn a_prepare_while_a_request_holds_the_item_names_the_request() {
+    let refused = Refused::new();
+    let case = &refused.case;
+    let held = case.json(&["--prepare"], 3, "recovery_required", None);
+    assert_eq!(held["data"], Value::Null);
+    assert_eq!(held["recovery"][0]["action"], "request.retry");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    assert_eq!(held["recovery"].as_array().unwrap().len(), 1, "{held}");
+    golden("ticket_close_prepare_held", &held, &case.world.root);
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    assert!(
+        text.contains(&format!("--request-id {REQUEST_1}\n")),
+        "{text}"
+    );
+    text_golden("ticket_close_prepare_held_text", &human, &case.world.root);
+    assert_eq!(case.merges(), 0);
+}
+
+/// `operation resume` of a parent a request holds: the conflict read
+/// `collaboration::seen` makes for a resume finds no conflict under a parent's
+/// ID, and adds nothing, in place of failing.
+#[test]
+fn a_resume_of_a_parent_a_request_holds_names_the_request_and_nothing_else() {
+    let refused = Refused::new();
+    let case = &refused.case;
+    let args = |json: bool| {
+        let mut args = vec![
+            "operation",
+            "resume",
+            "--repo",
+            case.root(),
+            "--operation-id",
+            refused.operation.as_str(),
+            "--request-id",
+            REQUEST_2,
+        ];
+        if json {
+            args.push("--json");
+        }
+        args
+    };
+    let value = mutation::checked(
+        &args(true),
+        &case.env,
+        &[],
+        3,
+        "original_request_required",
+        None,
+    );
+    assert_eq!(value["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    let human = mutation::run(
+        &{
+            let mut text = args(false);
+            text[7] = REQUEST_3;
+            text
+        },
+        &case.env,
+        &[],
+    );
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    assert!(
+        text.contains(&format!(
+            "next: send request {REQUEST_1} again with its original command and input\n"
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains("note:"),
+        "no supersede note, no read's failure: {text}"
+    );
+    assert!(!text.contains("internal"), "{text}");
+    // Nothing was continued.
+    assert_eq!(case.merges(), 0);
+}
+
+#[test]
+fn a_repository_never_enabled_is_refused() {
+    for verb in BOTH {
+        let temp = tempfile::tempdir().unwrap();
+        let env = CliEnv::new(temp.path().join("absent-data"));
+        let unregistered = support::born_repository();
+        let root = unregistered.root.to_str().unwrap();
+        let args = [
+            verb.resource,
+            verb.name,
+            "--repo",
+            root,
+            "--id",
+            verb.id,
+            "--prepare",
+            "--json",
+        ];
+        let value = mutation::checked(&args, &env, &[], 2, "repository_not_enabled", None);
+        assert_eq!(value["command"], verb.command());
+    }
+}
+
+// ---------------------------------------------------------------- Cycle 03
+//
+// `ticket close` and `ticket withdraw-closure` in a pull-request repository,
+// through the binary. Nothing here reaches a server: the publication remote is
+// an SSH address nothing listens on, so a prepare reads local state only and a
+// confirm stops at its context child.
+
+/// A port nothing listens on, so a connection would be refused.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Imports the fixture's private key and selects it, so a confirm gets as far
+/// as connecting.
+fn usable_key(env: &CliEnv) {
+    fs::write(
+        env.home.path().join("imported"),
+        support::credentials::private_fixture_bytes(),
+    )
+    .unwrap();
+    let input = serde_json::to_vec(
+        &serde_json::json!({"label": "Selected", "private_key_path": "imported"}),
+    )
+    .unwrap();
+    let imported = mutation::checked(
+        &[
+            "key",
+            "import",
+            "--input",
+            "-",
+            "--request-id",
+            KEY_REQUEST,
+            "--json",
+        ],
+        env,
+        &input,
+        0,
+        "ok",
+        None,
+    );
+    mutation::checked(
+        &[
+            "key",
+            "select",
+            "--key-id",
+            imported["data"]["id"].as_str().unwrap(),
+            "--request-id",
+            SELECT_REQUEST,
+            "--json",
+        ],
+        env,
+        &[],
+        0,
+        "ok",
+        None,
+    );
+}
+
+impl Case {
+    /// The case in a pull-request repository: the version 2 configuration
+    /// committed on primary (as `closure/run_pull_request_tests.rs` commits
+    /// it; turning the mode on through `repo enable` would record a pending
+    /// setup), a publication remote nothing listens on, and the tracking
+    /// primary where primary is.
+    fn pull_request(verb: Verb) -> Self {
+        let case = Self::new(verb);
+        let repository = &case.world.fixture.repository;
+        repository
+            .remote(
+                "origin",
+                &format!("ssh://git@127.0.0.1:{}/repository.git", closed_port()),
+            )
+            .unwrap();
+        let configuration = manyhands::canonical::parse_repository_config(
+            "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        support::commit_tracked_configuration(
+            &case.world.fixture,
+            &manyhands::canonical::serialize_repository_config(&configuration).unwrap(),
+        );
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&case.world.service, &case.world.root);
+        case
+    }
+
+    /// The same, with a selected key: a confirm reaches its context child.
+    fn pull_request_with_a_key(verb: Verb) -> Self {
+        let case = Self::pull_request(verb);
+        usable_key(&case.env);
+        case
+    }
+
+    /// The ticket's context holds a closure of its own, committed.
+    fn context_closed(&self) {
+        let worktree = self.world.worktree(self.verb.id);
+        let path = self.verb.file();
+        let source = fs::read_to_string(worktree.join(&path)).unwrap();
+        fs::write(
+            worktree.join(&path),
+            source.replacen("---\n", &format!("---\n{}", items::CLOSURE), 1),
+        )
+        .unwrap();
+        let mut git = Command::new("git");
+        cli::cli_environment(&mut git, &self.env);
+        let status = git
+            .arg("-C")
+            .arg(&worktree)
+            .args([
+                "-c",
+                "user.name=Manyhands Test",
+                "-c",
+                "user.email=manyhands-test@example.invalid",
+                "commit",
+                "--quiet",
+                "--all",
+                "--message",
+                "closed on the branch",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        items::refresh_completely(&self.world.service, &self.world.root);
+    }
+
+    /// The remote's copy of the ticket's branch is evidenced deleted, as
+    /// `closure/observe_tests.rs` writes it: a push that was observed, and a
+    /// poll that then found the branch gone.
+    fn remote_branch_deleted(&self) {
+        let tip = self.world.branch_tip(self.verb.id).unwrap();
+        items::index(self.world.data.path())
+            .execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at,last_advertised_oid) SELECT id,?1,?2,'ticket',?3,'observed_published','remotely_deleted',0,?4 FROM repositories",
+                rusqlite::params![
+                    format!("refs/heads/manyhands/ticket/{}", self.verb.id),
+                    format!("refs/remotes/origin/manyhands/ticket/{}", self.verb.id),
+                    self.verb.id,
+                    tip.to_string(),
+                ],
+            )
+            .unwrap();
+    }
+
+    fn preview_of_the_record(&self) -> Value {
+        self.json(&["--prepare"], 0, "ok", Some(PULL_REQUEST_PREVIEW))
+    }
+
+    fn effects(preview: &Value) -> Vec<&str> {
+        preview["data"]["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|effect| effect["effect"].as_str().unwrap())
+            .collect()
+    }
+}
+
+#[test]
+fn pull_request_close_prepare_previews_the_record() {
+    let case = Case::pull_request(CLOSE);
+    let refs = case.refs();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["type"], "pull_request_closure_preview");
+    assert_eq!(details["action"], "close");
+    assert_eq!(details["closure"]["recording"], "record");
+    assert_eq!(details["retired_context"], Value::Null);
+    assert_eq!(details["unheld"], serde_json::json!([]));
+    assert!(details["remote"] == "origin", "{details}");
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "context_synchronized",
+            "closure_recorded",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+    golden(
+        "ticket_close_pull_request_preview",
+        &preview,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs, "a preview changes nothing");
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    for line in [
+        "Will synchronize the editing branch with the remote.\n",
+        "Will record the closure on the editing branch.\n",
+        "Will publish the editing branch.\n",
+        "Will record the pull request link.\n",
+    ] {
+        assert!(stdout(&human).contains(line), "{line}: {}", stdout(&human));
+    }
+    assert!(
+        !stdout(&human).contains("Will merge the editing branch into primary.\n"),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
+fn pull_request_close_prepare_previews_an_existing_closure() {
+    let case = Case::pull_request(CLOSE);
+    case.context_closed();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["action"], "close");
+    assert_eq!(details["closure"]["recording"], "existing");
+    assert_eq!(
+        Case::effects(&preview),
+        ["context_synchronized", "pull_request_link"]
+    );
+}
+
+#[test]
+fn pull_request_close_prepare_previews_the_new_branch() {
+    let case = Case::pull_request(CLOSE);
+    case.remote_branch_deleted();
+    let preview = case.preview_of_the_record();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["action"], "new_branch");
+    assert_eq!(details["closure"]["recording"], "record");
+    assert_eq!(
+        details["retired_context"],
+        case.world.branch_tip(CLOSE.id).unwrap().to_string()
+    );
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "worktree_removed",
+            "branch_deleted",
+            "context_created",
+            "closure_recorded",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+}
+
+#[test]
+fn withdraw_of_a_closure_the_primary_holds_is_ticket_closed() {
+    let case = Case::pull_request(WITHDRAW);
+    let refs = case.refs();
+    // The world's closed ticket is closed on primary, and has no context: the
+    // closed primary alone decides.
+    let mut args = case.args(TICKET_CLOSED, &["--prepare"]);
+    args.push("--json");
+    let blocked = mutation::checked(&args, &case.env, &[], 3, "ticket_closed", Some(BLOCKED));
+    assert_eq!(blocked["command"], "ticket withdraw-closure");
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["already_closed"])
+    );
+    golden(
+        "ticket_withdraw_closure_ticket_closed",
+        &blocked,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+impl Case {
+    /// A confirm of the preview, under `request`, that stops at the context
+    /// child: the remote refuses the connection.
+    fn stopped_at_the_context_child(&self, request: &str) -> Value {
+        let preview = self.preview_of_the_record();
+        let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+        self.json(
+            &["--request-id", request, "--confirm", confirmation],
+            5,
+            "transport_unavailable",
+            None,
+        )
+    }
+}
+
+#[test]
+fn pull_request_close_stops_at_the_context_child() {
+    let case = Case::pull_request_with_a_key(CLOSE);
+    let refs = case.refs();
+    let source = case.world.worktree_source(CLOSE.id);
+    let stopped = case.stopped_at_the_context_child(REQUEST_1);
+    assert_eq!(stopped["outcome"], "error", "{stopped}");
+    // Nothing is written: no commit, no pending ref, no change to the file.
+    assert_eq!(stopped["effects"]["write"], "not_requested");
+    assert_eq!(stopped["effects"]["checkpoint"], "not_requested");
+    assert_eq!(stopped["effects"]["publication"], "not_requested");
+    assert_eq!(case.refs(), refs);
+    assert_eq!(case.world.worktree_source(CLOSE.id), source);
+    // The same request is what continues it.
+    assert_eq!(stopped["recovery"][0]["action"], "request.retry");
+    assert_eq!(stopped["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    // A stop of the child, and no closure: the ticket is still open.
+    assert_eq!(case.merges(), 0);
+}
+
+/// A stopped pull-request close and withdraw are held by the same record:
+/// `request cancel` of either is answered by the same request as `cancelled`,
+/// which leaves the record and lets the next call continue it.
+#[test]
+fn request_cancel_of_a_stopped_withdraw_is_cancelled_and_the_same_request_continues() {
+    let case = Case::pull_request_with_a_key(WITHDRAW);
+    case.context_closed();
+    let preview = case.preview_of_the_record();
+    assert_eq!(preview["data"]["details"]["action"], "withdraw");
+    assert_eq!(preview["data"]["details"]["pull_request"], Value::Null);
+    let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
+    case.json(
+        &["--request-id", REQUEST_1, "--confirm", confirmation],
+        5,
+        "transport_unavailable",
+        None,
+    );
+
+    let cancel = ["request", "cancel", "--request-id", REQUEST_1, "--json"];
+    let asked = mutation::checked(&cancel, &case.env, &[], 0, "ok", None);
+    assert_eq!(asked["data"]["requested"], true, "{asked}");
+
+    // The request, sent again, answers `cancelled` and keeps its record.
+    let cancelled = case.json(&["--request-id", REQUEST_1], 130, "cancelled", None);
+    assert_eq!(
+        cancelled["recovery"][0]["action"], "request.retry",
+        "{cancelled}"
+    );
+    // Sent once more, it continues: the child is tried again.
+    case.json(
+        &["--request-id", REQUEST_1],
+        5,
+        "transport_unavailable",
+        None,
+    );
+}
+
+/// D20's binding half: a resume takes up no unfinished branch record that a
+/// request holds. The answer names that request, whatever the record's action.
+#[test]
+fn operation_resume_of_an_unfinished_branch_record_is_original_request_required() {
+    for verb in [CLOSE, WITHDRAW] {
+        let case = Case::pull_request_with_a_key(verb);
+        if verb.name == "withdraw-closure" {
+            case.context_closed();
+        }
+        let stopped = case.stopped_at_the_context_child(REQUEST_1);
+        let operation = stopped["operation_id"].as_str().unwrap();
+        let resumed = mutation::checked(
+            &[
+                "operation",
+                "resume",
+                "--repo",
+                case.root(),
+                "--operation-id",
+                operation,
+                "--request-id",
+                REQUEST_2,
+                "--json",
+            ],
+            &case.env,
+            &[],
+            3,
+            "original_request_required",
+            None,
+        );
+        assert_eq!(
+            resumed["recovery"][0]["arguments"]["request_id"], REQUEST_1,
+            "{}: {resumed}",
+            verb.name
+        );
+    }
+}
+
+/// A branch record no request holds is continued by a resume, as a direct
+/// close's is, with the input its action rebuilds: a withdraw's resume takes
+/// up the withdraw, whose child stops again at the closed port.
+#[test]
+fn operation_resume_of_an_unheld_withdraw_continues_it_as_a_withdraw() {
+    let case = Case::pull_request_with_a_key(WITHDRAW);
+    case.context_closed();
+    let stopped = case.stopped_at_the_context_child(REQUEST_1);
+    let operation = stopped["operation_id"].as_str().unwrap();
+    // The request that held it is gone.
+    items::index(case.world.data.path())
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid = ?1",
+            [REQUEST_1],
+        )
+        .unwrap();
+    let resumed = mutation::checked(
+        &[
+            "operation",
+            "resume",
+            "--repo",
+            case.root(),
+            "--operation-id",
+            operation,
+            "--request-id",
+            REQUEST_2,
+            "--json",
+        ],
+        &case.env,
+        &[],
+        5,
+        "transport_unavailable",
+        None,
+    );
+    assert_eq!(resumed["command"], "operation resume");
+    // A resume that continues a branch record names the ticket's branch and
+    // its worktree, as the record's own request does (decision 17).
+    assert_eq!(
+        resumed["scope"]["branch"],
+        format!("manyhands/ticket/{}", WITHDRAW.id),
+        "{resumed}"
+    );
+    assert_eq!(resumed["scope"]["item_id"], WITHDRAW.id, "{resumed}");
+    assert_eq!(
+        resumed["scope"]["worktree"],
+        std::path::Path::new(case.root())
+            .join(".manyhands")
+            .join("worktrees")
+            .join(WITHDRAW.id)
+            .to_str()
+            .unwrap(),
+        "{resumed}"
+    );
+    // It was taken up as the withdraw it is: its record is still the one
+    // withdraw record, unfinished and at its first step, and nothing was
+    // written to the branch.
+    let step: (String, String) = items::index(case.world.data.path())
+        .query_row(
+            "SELECT action, step FROM ticket_closures WHERE operation_id = ?1",
+            [operation],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(step, ("withdraw".to_owned(), "confirmed".to_owned()));
+}
+
+/// W12 and W4, in the order the binding answers them: no publication remote
+/// is answered before the hold, which names the unfinished close's request.
+#[test]
+fn withdraw_prepare_answers_publication_remote_required_ahead_of_the_hold() {
+    // No publication remote at all.
+    let bare = Case::new(WITHDRAW);
+    let refused = bare.json(&["--prepare"], 3, "publication_remote_required", None);
+    assert_eq!(refused["outcome"], "blocked", "{refused}");
+    golden(
+        "ticket_withdraw_closure_publication_remote_required",
+        &refused,
+        &bare.world.root,
+    );
+
+    // An unfinished close holds the ticket: the withdraw is held, naming it.
+    let case = Case::pull_request_with_a_key(CLOSE);
+    case.stopped_at_the_context_child(REQUEST_1);
+    let withdraw = Case {
+        verb: WITHDRAW,
+        ..case
+    };
+    let held = withdraw.json(&["--prepare"], 3, "recovery_required", None);
+    assert_eq!(held["recovery"][0]["action"], "request.retry", "{held}");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    // The human line sends the holder's request again under the holder's own
+    // command: the request ID is refused under any other.
+    let human = withdraw.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(
+        stderr(&human).contains(&format!(
+            "next: manyhands-cli ticket close --repo '{}' --id {} --request-id {REQUEST_1}\n",
+            withdraw.root(),
+            items::TICKET_A
+        )),
+        "{}",
+        stderr(&human)
+    );
+
+    // And with the remote gone from the configuration, the configuration's
+    // answer comes first.
+    let configuration = manyhands::canonical::parse_repository_config(
+        "format_version = 1\nprimary_branch = \"main\"\n",
+    )
+    .unwrap();
+    support::commit_tracked_configuration(
+        &withdraw.world.fixture,
+        &manyhands::canonical::serialize_repository_config(&configuration).unwrap(),
+    );
+    withdraw.json(&["--prepare"], 3, "publication_remote_required", None);
+}
+
+// A pull-request promote (Wave 06 Cycle 04, design Parts B to D): the same
+// repository as above, where the verb is `document promote`.
+
+impl Case {
+    /// The preview of a pull-request promote.
+    fn promotion_preview(&self) -> Value {
+        self.json(
+            &["--prepare"],
+            0,
+            "ok",
+            Some(PULL_REQUEST_PROMOTION_PREVIEW),
+        )
+    }
+
+    /// A confirm of a promote's preview, under `request`, that stops at the
+    /// context child: the remote refuses the connection.
+    fn stopped_promote(&self, request: &str) -> Value {
+        let confirmation = self.promotion_preview()["data"]["confirmation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.json(
+            &["--request-id", request, "--confirm", &confirmation],
+            5,
+            "transport_unavailable",
+            None,
+        )
+    }
+
+    /// The document's editing context goes, outside Manyhands: its worktree
+    /// and its branch.
+    fn context_removed(&self) {
+        self.git(&[
+            "worktree",
+            "remove",
+            "--force",
+            self.world.worktree(self.verb.id).to_str().unwrap(),
+        ]);
+        self.git(&[
+            "branch",
+            "-D",
+            "--quiet",
+            &format!("manyhands/document/{}", self.verb.id),
+        ]);
+    }
+
+    /// The forge squashed the document into the primary, and this clone
+    /// fetched it: the primary holds the document's file as the branch has it
+    /// with no merge of the branch, and the tracking primary is there too.
+    fn merged_by_the_forge(&self) {
+        let source =
+            fs::read_to_string(self.world.worktree(self.verb.id).join(self.verb.file())).unwrap();
+        self.primary_moved(&source);
+        let repository = &self.world.fixture.repository;
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .reference("refs/remotes/origin/main", head, true, "fixture")
+            .unwrap();
+        items::refresh_completely(&self.world.service, &self.world.root);
+    }
+}
+
+/// Part B and D: the preview of a pull-request promote is its own shape, with
+/// the three effects always and the link its pull request opens by, and
+/// changes nothing; in text it lists the effects and prints the link's line.
+#[test]
+fn a_pull_request_promote_previews_its_link() {
+    let case = Case::pull_request(PROMOTE);
+    let refs = case.refs();
+    let preview = case.promotion_preview();
+    let details = &preview["data"]["details"];
+    assert_eq!(details["type"], "pull_request_promotion_preview");
+    assert_eq!(details["situation"], "first");
+    assert_eq!(details["item_id"], PROMOTE.id);
+    assert_eq!(details["path"], DOCUMENT_NEW_PATH);
+    assert_eq!(
+        details["branch"],
+        format!("manyhands/document/{}", PROMOTE.id)
+    );
+    assert_eq!(details["primary_branch"], "main");
+    assert_eq!(details["remote"], "origin");
+    assert_eq!(details["remote_context_oid"], Value::Null);
+    assert_eq!(
+        details["context_oid"],
+        case.world.branch_tip(PROMOTE.id).unwrap().to_string()
+    );
+    assert_eq!(
+        details["pull_request"],
+        serde_json::json!({
+            "source": format!("manyhands/document/{}", PROMOTE.id),
+            "target": "main",
+            "forge": null,
+            "url": null,
+        })
+    );
+    // A direct promote's fields are none of it.
+    for direct in [
+        "integration",
+        "cleanup",
+        "changes",
+        "primary_oid",
+        "publication",
+    ] {
+        assert!(details.get(direct).is_none(), "{direct}: {details}");
+    }
+    assert_eq!(
+        Case::effects(&preview),
+        [
+            "context_synchronized",
+            "context_published",
+            "pull_request_link"
+        ]
+    );
+    golden(
+        "document_promote_pull_request_preview",
+        &preview,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs, "a preview changes nothing");
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    let text = stdout(&human);
+    for line in [
+        "Will synchronize the editing branch with the remote.\n",
+        "Will publish the editing branch.\n",
+        "Will record the pull request link.\n",
+        &format!(
+            "open a pull request from manyhands/document/{} into main\n",
+            PROMOTE.id
+        ),
+        "Situation: first\n",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+    for absent in [
+        "Will merge the editing branch into primary.\n",
+        "Will publish primary",
+        "Pull request source",
+    ] {
+        assert!(!text.contains(absent), "{absent}: {text}");
+    }
+    text_golden(
+        "document_promote_pull_request_preview_text",
+        &human,
+        &case.world.root,
+    );
+}
+
+/// R-4: a pull-request promote of a document the primary already holds is
+/// `already_applied` at prepare, with no data and no confirmation, and says in
+/// text that the primary branch holds the document.
+#[test]
+fn a_pull_request_prepare_of_a_held_document_says_the_primary_holds_it() {
+    let case = Case::pull_request(PROMOTE);
+    case.merged_by_the_forge();
+    let refs = case.refs();
+    let noop = case.json(&["--prepare"], 0, "already_applied", None);
+    assert_eq!(noop["outcome"], "noop", "{noop}");
+    assert_eq!(noop["data"], Value::Null);
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert_eq!(
+        stdout(&human),
+        "the primary branch already holds this document\n"
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+/// Part B's blockers: a dirty context blocks; and none of the blockers a
+/// pull-request promote drops appears, though each holds here: a dirty
+/// primary, a primary ahead of the remote's, and no identity to commit with.
+#[test]
+fn a_pull_request_prepare_is_blocked() {
+    let case = Case::pull_request(PROMOTE);
+    // What blocks a direct promote and no pull-request one: nothing of it
+    // touches the primary.
+    fs::write(case.world.root.join("dirty-primary.txt"), b"dirty\n").unwrap();
+    items::write(&case.world.root, "notes/extra.txt", "extra\n");
+    items::commit(
+        &case.world.fixture,
+        &["notes/extra.txt"],
+        items::COMMITTED_AT + 60,
+    );
+    case.forget_identity();
+    // The one that does: an edit the context has not committed.
+    let worktree = case.world.worktree(PROMOTE.id);
+    let path = worktree.join(PROMOTE.file());
+    let mut source = fs::read_to_string(&path).unwrap();
+    source.push_str("\nAn edit nothing committed.\n");
+    fs::write(&path, source).unwrap();
+    let refs = case.refs();
+    let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+    assert_eq!(blocked["outcome"], "blocked");
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["context_dirty"]),
+        "{blocked}"
+    );
+    golden(
+        "document_promote_pull_request_blocked",
+        &blocked,
+        &case.world.root,
+    );
+
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    assert!(text.contains("context_dirty"), "{text}");
+    for dropped in [
+        "primary_not_checked_out",
+        "primary_dirty",
+        "primary_ahead_of_remote",
+        "context_behind_remote",
+        "integration_conflict",
+        "document_invalid_after_integration",
+        "identity_required",
+    ] {
+        assert!(!text.contains(dropped), "{dropped}: {text}");
+    }
+    text_golden(
+        "document_promote_pull_request_blocked_text",
+        &human,
+        &case.world.root,
+    );
+    assert_eq!(case.refs(), refs);
+}
+
+/// C12 and the way out: a pull-request promote whose context child cannot
+/// connect stops as `item sync` stops (the transport's own answer, the library
+/// tables pin the rest of its stops), and the
+/// same request is offered; the child's branch gone, the same request ends as
+/// the finished record it is, and a replay gives the stored envelope with its
+/// data.
+#[test]
+fn a_pull_request_confirm_stops_at_its_child() {
+    let case = Case::pull_request_with_a_key(PROMOTE);
+    let refs = case.refs();
+    let stopped = case.stopped_promote(REQUEST_1);
+    assert_eq!(stopped["outcome"], "error", "{stopped}");
+    assert_eq!(stopped["effects"]["write"], "not_requested");
+    assert_eq!(stopped["effects"]["publication"], "not_requested");
+    assert_eq!(case.refs(), refs, "nothing was written");
+    // The same request is what continues it, and the document's branch is the
+    // answer's scope, as a branch record's is.
+    assert_eq!(
+        stopped["recovery"][0]["action"], "request.retry",
+        "{stopped}"
+    );
+    assert_eq!(stopped["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    assert_eq!(
+        stopped["scope"]["branch"],
+        format!("manyhands/document/{}", PROMOTE.id)
+    );
+    // The editing context goes, outside Manyhands (RR7): the same request
+    // ends, `external_change`, and its data names the document.
+    case.context_removed();
+    let ended = case.json(&["--request-id", REQUEST_1], 3, "external_change", None);
+    assert_eq!(ended["data"]["type"], "pull_request_promotion", "{ended}");
+    assert_eq!(ended["data"]["item_id"], PROMOTE.id);
+    assert_eq!(ended["data"]["primary_holds"], false);
+    assert_eq!(ended["data"]["pull_request"], Value::Null);
+    assert_eq!(ended["data"]["blockers"], serde_json::json!([]));
+    // A replay of the finished request is its stored envelope, data and all.
+    let replayed = case.json(&["--request-id", REQUEST_1], 3, "external_change", None);
+    assert_eq!(replayed["data"], ended["data"], "{replayed}");
+    assert_eq!(replayed["operation_id"], ended["operation_id"]);
+}
+
+/// C21 and Part G item 4: an `operation resume` of a pull-request promote's
+/// operation is refused for the request that holds it
+/// (`original_request_required`); with that request gone it takes the
+/// operation up, naming the document's branch and worktree as the record's own
+/// request does; and when what it takes up ends, its answer carries the
+/// promote's data, and a replay of the resume keeps both.
+#[test]
+fn operation_resume_of_a_pull_request_promote_names_its_request_or_takes_it_up() {
+    let case = Case::pull_request_with_a_key(PROMOTE);
+    let stopped = case.stopped_promote(REQUEST_1);
+    let operation = stopped["operation_id"].as_str().unwrap().to_owned();
+    let resume = |request: &str, status: i32, code: &str| {
+        mutation::checked(
+            &[
+                "operation",
+                "resume",
+                "--repo",
+                case.root(),
+                "--operation-id",
+                &operation,
+                "--request-id",
+                request,
+                "--json",
+            ],
+            &case.env,
+            &[],
+            status,
+            code,
+            None,
+        )
+    };
+    let held = resume(REQUEST_2, 3, "original_request_required");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+
+    // The request that held it is gone: the resume takes it up, and its
+    // answer names the document's branch, not a ticket's.
+    items::index(case.world.data.path())
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid = ?1",
+            [REQUEST_1],
+        )
+        .unwrap();
+    let scope_is_the_documents = |answer: &Value| {
+        assert_eq!(
+            answer["scope"]["branch"],
+            format!("manyhands/document/{}", PROMOTE.id),
+            "{answer}"
+        );
+        assert_eq!(answer["scope"]["item_id"], PROMOTE.id, "{answer}");
+        assert_eq!(
+            answer["scope"]["worktree"],
+            Path::new(case.root())
+                .join(".manyhands")
+                .join("worktrees")
+                .join(PROMOTE.id)
+                .to_str()
+                .unwrap(),
+            "{answer}"
+        );
+    };
+    let continued = resume(REQUEST_3, 5, "transport_unavailable");
+    assert_eq!(continued["command"], "operation resume");
+    scope_is_the_documents(&continued);
+    let step: String = items::index(case.world.data.path())
+        .query_row(
+            "SELECT step FROM document_promotions WHERE operation_id = ?1",
+            [&operation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(step, "confirmed", "still the one record, unfinished");
+
+    // The context goes: the resume ends the record, with the promote's data.
+    case.context_removed();
+    let ended = resume(ENDING_REQUEST, 3, "external_change");
+    assert_eq!(ended["data"]["type"], "pull_request_promotion", "{ended}");
+    assert_eq!(ended["data"]["item_id"], PROMOTE.id);
+    scope_is_the_documents(&ended);
+    // A replay of the resume is its stored answer, with its data and scope.
+    let replayed = resume(ENDING_REQUEST, 3, "external_change");
+    assert_eq!(replayed["data"], ended["data"], "{replayed}");
+    scope_is_the_documents(&replayed);
+}

@@ -4,7 +4,7 @@ var
   Hash: String;
   I: Integer;
 begin
-  Files := SplitPolicyString('bin\manyhands-cli.exe|bin\manyhands.exe|licenses\README.md|licenses\installer\INNO-LICENSE.txt|licenses\installer\managed-files.txt', '|');
+  Files := SplitPolicyString('bin\manyhands-cli.exe|bin\manyhands.exe|licenses\README.md|licenses\installer\INNO-LICENSE.txt|licenses\installer\managed-files.txt|skills\README.md|skills\manyhands-overview\SKILL.md', '|');
   if not ValidManagedFileList(Files) then RaiseException('Valid managed list rejected.');
   Hash := '';
   for I := 1 to 64 do Hash := Hash + 'a';
@@ -24,7 +24,7 @@ begin
   if ValidManagedDigestList(Files, Digests) then RaiseException('Missing digest entry accepted.');
   SetArrayLength(Digests, Length(Files) + 1);
   if ValidManagedDigestList(Files, Digests) then RaiseException('Extra digest entry accepted.');
-  Bad := SplitPolicyString('..|bin\..\outside|bin\\file|bin\a:stream|bin\CON.txt|bin\COM1|bin\CONIN$|bin\con .txt|bin\file.|bin\file |BIN\a|licenses\<file>|user\state|bin\a/b|bin\a' + #10 + 'b', '|');
+  Bad := SplitPolicyString('..|bin\..\outside|bin\\file|bin\a:stream|bin\CON.txt|bin\COM1|bin\CONIN$|bin\con .txt|bin\file.|bin\file |BIN\a|licenses\<file>|user\state|Skills\a|skills|skills\CON.txt|skills\a:stream|bin\a/b|bin\a' + #10 + 'b', '|');
   for I := 0 to Length(Bad) - 1 do
     if ValidManagedPath(Bad[I]) then RaiseException('Unsafe managed path accepted: ' + Bad[I]);
   SetArrayLength(Files, Length(Files) + 1);
@@ -32,6 +32,8 @@ begin
   if ValidManagedFileList(Files) then RaiseException('Case collision accepted.');
   Files[Length(Files) - 1] := 'licenses\INSTALLER\other.txt';
   if ValidManagedFileList(Files) then RaiseException('Directory case alias accepted.');
+  Files[Length(Files) - 1] := 'skills\MANYHANDS-OVERVIEW\other.md';
+  if ValidManagedFileList(Files) then RaiseException('Skills directory case alias accepted.');
   Files[Length(Files) - 1] := 'licenses\README.md\child';
   if ValidManagedFileList(Files) then RaiseException('File/directory collision accepted.');
   Bad := SplitPolicyString('bin\foo|bin\foo-bar|bin\foo\child', '|');

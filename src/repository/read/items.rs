@@ -16,18 +16,28 @@ use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use super::{
-    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, DocumentFolderDto,
-    DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
-    ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto, ReadError, ReadinessState,
-    RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
-    graph::{TicketGraph, TicketNode},
-    index_state, root_action,
+    ChangeSource, ClosureDto, ClosurePublication, ClosureState, DependencyDto, DependencyState,
+    DocumentFolderDto, DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto,
+    ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto,
+    PullRequestDto, ReadError, ReadinessState, RelationshipCheckDto, RelationshipRejectionDto,
+    ResolvedRepository,
+    graph::{MovedContexts, TicketGraph, TicketNode},
+    index_state,
+    resolve::open_exactly,
+    root_action,
 };
 use crate::{
     canonical::{self, ItemId},
     repository::{
-        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
+        AuthoringKind, DirtyContexts, GuardedFile, RemoteRefPlan, RepositoryOperation,
+        RepositoryService, activity_source_name, authoring_kind_name,
+        closure::observe,
+        context_kind_name,
+        discovery::{
+            ContextKey, ContextObservation, ObservedCommentThread, ObservedItem, UnknownMetadata,
+        },
         mutation::absent_token,
+        pull_request_links,
     },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
@@ -35,12 +45,16 @@ use crate::{
     },
 };
 
-/// Which tickets a list returns, by lifecycle closure metadata: a ticket is
-/// closed when it carries `closed_at`, whatever its `status` text says.
+/// Which tickets a list returns, by lifecycle closure metadata, whatever a
+/// ticket's `status` text says: a ticket is closed when the primary's copy
+/// of it carries `closed_at`, and closing when only another copy does (see
+/// `ClosureState`). `Open` returns the open tickets and the closing ones,
+/// which are not closed yet; `Closing` only the closing ones.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ClosureFilter {
     Open,
     Closed,
+    Closing,
     #[default]
     All,
 }
@@ -56,7 +70,8 @@ pub enum ReadinessFilter {
 /// filter matches every ticket. `slug` matches a ticket's whole short code
 /// without regard to ASCII case, and never a ticket that has none.
 /// `readiness` keeps the open tickets that are ready, or the ones that are
-/// blocked, and never a closed ticket. The default matches all of them.
+/// blocked, and never a closed or a closing ticket. The default matches all
+/// of them.
 ///
 /// A filter chooses which tickets are returned and never what a ticket
 /// depends on: readiness is decided against every ticket the index holds.
@@ -73,8 +88,15 @@ pub struct TicketFilter {
 }
 
 impl TicketFilter {
-    /// `graph` is of every ticket, whatever the filter leaves out.
-    pub(super) fn matches(&self, item: &StoredItem, graph: &TicketGraph) -> bool {
+    /// `state` is the ticket's closure state as a read presents it (see
+    /// `Targets::closure_state`), and `graph` is of every ticket, whatever
+    /// the filter leaves out.
+    pub(super) fn matches(
+        &self,
+        item: &StoredItem,
+        state: ClosureState,
+        graph: &TicketGraph,
+    ) -> bool {
         let equals = |wanted: &Option<String>, stored: &Option<String>| {
             wanted
                 .as_ref()
@@ -84,8 +106,9 @@ impl TicketFilter {
             && equals(&self.ticket_type, &item.ticket_type)
             && equals(&self.project, &item.project)
             && match self.closure {
-                ClosureFilter::Open => item.closed_at.is_none(),
-                ClosureFilter::Closed => item.closed_at.is_some(),
+                ClosureFilter::Open => matches!(state, ClosureState::Open | ClosureState::Closing),
+                ClosureFilter::Closed => state == ClosureState::Closed,
+                ClosureFilter::Closing => state == ClosureState::Closing,
                 ClosureFilter::All => true,
             }
             && self.slug.as_ref().is_none_or(|wanted| {
@@ -95,11 +118,14 @@ impl TicketFilter {
                     .is_some_and(|slug| slug.eq_ignore_ascii_case(wanted))
             })
             && self.readiness.is_none_or(|wanted| {
-                graph.readiness_state(&item.id)
-                    == Some(match wanted {
-                        ReadinessFilter::Ready => ReadinessState::Ready,
-                        ReadinessFilter::Blocked => ReadinessState::Blocked,
-                    })
+                // A closing ticket reads as an open one does, and no
+                // readiness query returns it.
+                !graph.is_closing(&item.id)
+                    && graph.readiness_state(&item.id)
+                        == Some(match wanted {
+                            ReadinessFilter::Ready => ReadinessState::Ready,
+                            ReadinessFilter::Blocked => ReadinessState::Blocked,
+                        })
             })
     }
 }
@@ -139,6 +165,8 @@ const RELATIONSHIP_PROBLEMS: [ProblemCode; 5] = [
 
 /// Where item worktrees are, below the repository root.
 const WORKTREES_DIRECTORY: &str = ".manyhands/worktrees";
+/// Where each item's comments are, below a context's worktree.
+const COMMENTS_DIRECTORY: &str = ".manyhands/comments";
 
 const DOCUMENTS_DIRECTORY: &str = "docs";
 const DOCUMENT_PREFIX: &str = "docs/";
@@ -237,47 +265,190 @@ impl From<&canonical::TicketRelationships> for Relationships {
     }
 }
 
+impl StoredItem {
+    /// The ticket's state as a read presents it, this row being the copy
+    /// read. `primary` is the closure of the ticket's primary copy.
+    fn closure_state(&self, primary: &PrimaryClosures) -> ClosureState {
+        derived_closure_state(
+            self.closed_at.is_some(),
+            is_primary_copy(&self.context),
+            primary.get(&self.id),
+        )
+    }
+
+    /// The row a store of the context `observation` writes for its `item`,
+    /// as `stored_items` reads it back, under the key `row_id`. Each value
+    /// goes by the name the index stores it under, so the row is the one a
+    /// refresh would store.
+    fn observed(
+        observation: &ContextObservation,
+        item: &ObservedItem,
+        row_id: i64,
+    ) -> Result<Self, ReadError> {
+        Ok(Self {
+            row_id,
+            context: StoredContext {
+                kind: stored_context_kind(context_kind_name(observation.context.kind))?,
+                branch: observation.context.branch.clone(),
+                worktree: observation.context.worktree.to_string_lossy().into_owned(),
+                head_oid: observation.head.oid.map(|oid| oid.to_string()),
+            },
+            id: item.id.to_string(),
+            kind: ItemDtoKind::from_stored(authoring_kind_name(item.kind))
+                .ok_or_else(invalid_stored_data)?,
+            path: item.path.to_string_lossy().into_owned(),
+            title: item.title.clone(),
+            ticket_type: item.ticket_type.clone(),
+            status: item.status.clone(),
+            project: item.project.clone(),
+            team: item.team.clone(),
+            closed_at: item.closed_at.map(OffsetDateTime::unix_timestamp),
+            closed_by: item.closed_by.clone(),
+            unknown: item.unknown_metadata.clone(),
+            relationships: Relationships::from(&item.relationships),
+            activity_at: item.activity_at.unix_timestamp(),
+            change_source: stored_change_source(activity_source_name(item.activity_source))?,
+        })
+    }
+}
+
 /// What an ID names among the items and comments the index holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     Document,
     Comment,
     OpenTicket,
+    ClosingTicket,
     ClosedTicket,
+}
+
+/// The closure the primary's copy of a ticket holds, as the index stored it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PrimaryClosure {
+    closed_at: i64,
+    closed_by: Option<String>,
+}
+
+/// For each ticket whose primary's copy holds a closure, that closure. A
+/// read takes it from every stored row it holds, after the substitution of
+/// a moved context's rows, and not from the effective rows alone: the
+/// primary's copy of a ticket that has a worktree of its own is a row
+/// the effective rows leave out. An ID not here has a primary's copy that
+/// holds none, or none at all.
+///
+/// The primary's copy is the first stored row at rank `PRIMARY_COPY`: one
+/// outside any item worktree, the root's working tree in the normal case.
+/// An uncommitted closure there counts.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct PrimaryClosures(BTreeMap<String, PrimaryClosure>);
+
+impl PrimaryClosures {
+    /// Of the stored rows of every item in every context.
+    pub(super) fn of(stored: &[StoredItem]) -> Self {
+        let mut decided = BTreeSet::new();
+        let mut closures = BTreeMap::new();
+        for row in stored {
+            if row.kind != ItemDtoKind::Ticket
+                || !is_primary_copy(&row.context)
+                || !decided.insert(row.id.as_str())
+            {
+                continue;
+            }
+            if let Some(closed_at) = row.closed_at {
+                closures.insert(
+                    row.id.clone(),
+                    PrimaryClosure {
+                        closed_at,
+                        closed_by: row.closed_by.clone(),
+                    },
+                );
+            }
+        }
+        Self(closures)
+    }
+
+    fn get(&self, id: &str) -> Option<&PrimaryClosure> {
+        self.0.get(id)
+    }
+}
+
+/// Whether a copy is the primary's: read in a context outside every item
+/// worktree, the root or one the index cannot verify, and not an item's.
+fn is_primary_copy(context: &StoredContext) -> bool {
+    context.kind != ItemContextKind::Active
+}
+
+/// A ticket's closure state as a read presents it, from the copy read
+/// (whether it holds a closure, and whether it is the primary's copy) and
+/// the closure the primary's copy holds (`PrimaryClosures`). A closure only
+/// the primary's copy holds closes the ticket, whichever copy is read; a
+/// closure only another copy holds is a closing one.
+fn derived_closure_state(
+    holds: bool,
+    primary_copy: bool,
+    primary: Option<&PrimaryClosure>,
+) -> ClosureState {
+    match (holds, primary_copy, primary) {
+        (false, _, None) => ClosureState::Open,
+        (false, _, Some(_)) | (true, true, _) | (true, false, Some(_)) => ClosureState::Closed,
+        (true, false, None) => ClosureState::Closing,
+    }
 }
 
 /// Everything the index holds that has an ID, by that ID, as the target of
 /// a relationship. An ID that is not here is in no context the index has
 /// seen, and a later fetch or merge may still bring a ticket for it.
-pub(super) struct Targets<'a>(BTreeMap<&'a str, Target>);
+pub(super) struct Targets<'a> {
+    kinds: BTreeMap<&'a str, Target>,
+    primary: PrimaryClosures,
+}
 
 impl<'a> Targets<'a> {
-    /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment a relationship read here
-    /// can name.
-    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
-        let mut targets: BTreeMap<&str, Target> = comments
+    /// `rows` holds one row for each item, its effective copy, `primary`
+    /// the closure of the primary's copy of each ticket, from every stored
+    /// row, and `comments` the ID of every stored comment a relationship
+    /// read here can name.
+    pub(super) fn of(
+        rows: &[&'a StoredItem],
+        primary: PrimaryClosures,
+        comments: &'a [String],
+    ) -> Self {
+        let mut kinds: BTreeMap<&str, Target> = comments
             .iter()
             .map(|comment| (comment.as_str(), Target::Comment))
             .collect();
         // An item's row decides what its ID names.
-        targets.extend(rows.iter().map(|row| {
-            let target = match (row.kind, row.closed_at) {
-                (ItemDtoKind::Document, _) => Target::Document,
-                (ItemDtoKind::Ticket, None) => Target::OpenTicket,
-                (ItemDtoKind::Ticket, Some(_)) => Target::ClosedTicket,
+        kinds.extend(rows.iter().map(|row| {
+            let target = match row.kind {
+                ItemDtoKind::Document => Target::Document,
+                ItemDtoKind::Ticket => match row.closure_state(&primary) {
+                    ClosureState::Open => Target::OpenTicket,
+                    ClosureState::Closing => Target::ClosingTicket,
+                    ClosureState::Closed => Target::ClosedTicket,
+                },
             };
             (row.id.as_str(), target)
         }));
-        Self(targets)
+        Self { kinds, primary }
+    }
+
+    /// The closure the primary's copy of every ticket holds.
+    pub(super) fn primary(&self) -> &PrimaryClosures {
+        &self.primary
+    }
+
+    /// The state of the ticket in `row`.
+    pub(super) fn closure_state(&self, row: &StoredItem) -> ClosureState {
+        row.closure_state(&self.primary)
     }
 
     /// What a `deps` entry or a `parent` names: a ticket in some state, or
     /// `None` for something that is not a ticket.
     fn state(&self, id: &str) -> Option<DependencyState> {
-        match self.0.get(id) {
+        match self.kinds.get(id) {
             Some(Target::Document | Target::Comment) => None,
             Some(Target::OpenTicket) => Some(DependencyState::Open),
+            Some(Target::ClosingTicket) => Some(DependencyState::Closing),
             Some(Target::ClosedTicket) => Some(DependencyState::Closed),
             None => Some(DependencyState::Unresolved),
         }
@@ -285,11 +456,12 @@ impl<'a> Targets<'a> {
 
     /// A ticket as the graph takes it: without a `parent` or a `deps` entry
     /// that names a document or a comment, which names no ticket.
-    fn node(&self, id: &str, closed: bool, relationships: &Relationships) -> TicketNode {
+    fn node(&self, id: &str, state: ClosureState, relationships: &Relationships) -> TicketNode {
         let names_a_ticket = |id: &&String| self.state(id).is_some();
         TicketNode {
             id: id.to_owned(),
-            closed,
+            closed: state == ClosureState::Closed,
+            closing: state == ClosureState::Closing,
             parent: relationships
                 .parent
                 .as_ref()
@@ -306,7 +478,7 @@ impl<'a> Targets<'a> {
 
     /// The ticket in `row` as the graph takes it.
     fn stored_node(&self, row: &StoredItem) -> TicketNode {
-        self.node(&row.id, row.closed_at.is_some(), &row.relationships)
+        self.node(&row.id, self.closure_state(row), &row.relationships)
     }
 }
 
@@ -321,11 +493,16 @@ pub(super) struct Related<'a> {
 }
 
 impl<'a> Related<'a> {
-    /// `rows` holds one row for each item, its effective copy, and
-    /// `comments` the ID of every stored comment a relationship read here
-    /// can name.
-    pub(super) fn of(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
-        let targets = Targets::of(rows, comments);
+    /// `rows` holds one row for each item, its effective copy, `primary`
+    /// the closure of the primary's copy of each ticket, from every stored
+    /// row (`PrimaryClosures::of`), and `comments` the ID of every stored
+    /// comment a relationship read here can name.
+    pub(super) fn of(
+        rows: &[&'a StoredItem],
+        primary: PrimaryClosures,
+        comments: &'a [String],
+    ) -> Self {
+        let targets = Targets::of(rows, primary, comments);
         let tickets: Vec<&StoredItem> = rows
             .iter()
             .copied()
@@ -343,10 +520,16 @@ impl<'a> Related<'a> {
     /// and a graph of nothing, which no document is looked up in.
     fn for_documents(rows: &[&'a StoredItem], comments: &'a [String]) -> Self {
         Self {
-            targets: Targets::of(rows, comments),
+            targets: Targets::of(rows, PrimaryClosures::default(), comments),
             tickets: Vec::new(),
             graph: TicketGraph::new(Vec::new()),
         }
+    }
+
+    /// Whether `filter` matches the ticket in `row`, whose copy this read
+    /// presents.
+    pub(super) fn matches(&self, filter: &TicketFilter, row: &StoredItem) -> bool {
+        filter.matches(row, self.targets.closure_state(row), &self.graph)
     }
 
     /// The graph with one ticket as its file has it now, in place of what
@@ -379,9 +562,9 @@ impl<'a> Related<'a> {
         // The ticket's own ID names the ticket, whether or not the index
         // holds it yet.
         for target in named.into_iter().filter(|target| *target != id) {
-            match self.targets.0.get(target.as_str()) {
+            match self.targets.kinds.get(target.as_str()) {
                 Some(Target::Document | Target::Comment) => not_tickets.push(target.clone()),
-                Some(Target::OpenTicket | Target::ClosedTicket) => {}
+                Some(Target::OpenTicket | Target::ClosingTicket | Target::ClosedTicket) => {}
                 None => unresolved.push(target.clone()),
             }
         }
@@ -400,16 +583,17 @@ impl<'a> Related<'a> {
                 ids: vec![id.to_owned()],
             })
         } else {
-            let closed = self
+            let state = self
                 .tickets
                 .iter()
-                .any(|row| row.id == id && row.closed_at.is_some());
+                .find(|row| row.id == id)
+                .map_or(ClosureState::Open, |row| self.targets.closure_state(row));
             let proposed = Relationships {
                 parent: parent.clone(),
                 deps: deps.iter().cloned().collect(),
                 ..Default::default()
             };
-            let graph = self.graph_with(self.targets.node(id, closed, &proposed));
+            let graph = self.graph_with(self.targets.node(id, state, &proposed));
             graph
                 .dependency_cycle_ids(id)
                 .or_else(|| graph.parent_cycle_ids(id))
@@ -429,10 +613,15 @@ impl<'a> Related<'a> {
     }
 }
 
-/// The ID of every comment the index holds for the registration that one of
-/// its stored edges names and that no stored item has: the only comments a
+/// The ID of every comment of a presented copy that one of the index's
+/// stored edges names and that no presented item has: the only comments a
 /// relationship can be read against. They are only compared with IDs that
 /// were checked, so none is checked here.
+///
+/// `rows` holds one row for each item, its effective copy (see
+/// `effective_rows`). A comment only another copy of an item holds, such as
+/// the primary's copy that Table A hides behind the item's own worktree, is
+/// no comment a read presents.
 ///
 /// A comment no edge names is never asked about, and an ID an item has is
 /// that item's whatever comment shares it, so leaving both out changes no
@@ -441,9 +630,10 @@ impl<'a> Related<'a> {
 pub(super) fn stored_comment_targets(
     connection: &Connection,
     repo: &ResolvedRepository,
+    rows: &[&StoredItem],
 ) -> Result<Vec<String>, ReadError> {
     let mut statement = connection.prepare(
-        "SELECT DISTINCT comments.comment_id
+        "SELECT DISTINCT comments.item_id, comments.comment_id
            FROM discovered_comments AS comments
            JOIN discovered_items AS items ON items.id = comments.item_id
            JOIN contexts ON contexts.id = items.context_id
@@ -454,34 +644,47 @@ pub(super) fn stored_comment_targets(
                   JOIN discovered_items AS sources ON sources.id = edges.item_id
                   JOIN contexts AS source_contexts
                     ON source_contexts.id = sources.context_id
-                 WHERE source_contexts.repository_id = ?1)
-            AND comments.comment_id NOT IN (
-                SELECT held.item_id
-                  FROM discovered_items AS held
-                  JOIN contexts AS held_contexts ON held_contexts.id = held.context_id
-                 WHERE held_contexts.repository_id = ?1)",
+                 WHERE source_contexts.repository_id = ?1)",
     )?;
-    let ids = statement
-        .query_map([repo.registration_id()], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
-    Ok(ids)
+    let found = statement
+        .query_map([repo.registration_id()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(presented_comments(rows, found))
+}
+
+/// Of `found`, each a comment's ID with the row of the item copy that holds
+/// it, the IDs of the comments a copy in `rows` holds and no item in `rows`
+/// has, each once.
+pub(super) fn presented_comments(rows: &[&StoredItem], found: Vec<(i64, String)>) -> Vec<String> {
+    let copies: BTreeSet<i64> = rows.iter().map(|row| row.row_id).collect();
+    let items: BTreeSet<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    let ids: BTreeSet<String> = found
+        .into_iter()
+        .filter(|(copy, id)| copies.contains(copy) && !items.contains(id.as_str()))
+        .map(|(_, id)| id)
+        .collect();
+    ids.into_iter().collect()
 }
 
 /// How many IDs one statement asks about, well under what SQLite binds.
 const IDS_IN_A_STATEMENT: usize = 500;
 
-/// Those of `ids` that are the ID of a comment the index holds for the
-/// registration.
+/// Those of `ids` that are the ID of a comment of a presented copy and of no
+/// presented item. `rows` holds one row for each item, its effective copy,
+/// as for `stored_comment_targets`.
 pub(super) fn stored_comments_among(
     connection: &Connection,
     repo: &ResolvedRepository,
+    rows: &[&StoredItem],
     ids: &[String],
 ) -> Result<Vec<String>, ReadError> {
     let mut found = Vec::new();
     for ids in ids.chunks(IDS_IN_A_STATEMENT) {
         let placeholders = vec!["?"; ids.len()].join(", ");
         let mut statement = connection.prepare(&format!(
-            "SELECT DISTINCT comments.comment_id
+            "SELECT DISTINCT comments.item_id, comments.comment_id
                FROM discovered_comments AS comments
                JOIN discovered_items AS items ON items.id = comments.item_id
                JOIN contexts ON contexts.id = items.context_id
@@ -490,28 +693,148 @@ pub(super) fn stored_comments_among(
         ))?;
         let parameters = std::iter::once(rusqlite::types::Value::from(repo.registration_id()))
             .chain(ids.iter().cloned().map(rusqlite::types::Value::from));
-        let rows = statement.query_map(rusqlite::params_from_iter(parameters), |row| row.get(0))?;
-        for id in rows {
-            found.push(id?);
+        let comments = statement.query_map(rusqlite::params_from_iter(parameters), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for comment in comments {
+            found.push(comment?);
         }
     }
-    Ok(found)
+    Ok(presented_comments(rows, found))
+}
+
+/// What `substitute_observed` put among the stored rows.
+#[derive(Default)]
+pub(super) struct ObservedRows {
+    /// The ID of each comment of a row it put in, with that row's key, as
+    /// `presented_comments` takes them.
+    pub(super) comments: Vec<(i64, String)>,
+    /// The `parent` and the `deps` of every row it put in, which may name a
+    /// comment no stored edge names.
+    pub(super) targets: Vec<String>,
+}
+
+/// Puts in `stored`, in place of what the index holds of each context of
+/// `observed`, the rows a store of that context's observation would write,
+/// as `stored_items` reads them back: none for a context the reads do not
+/// present (see `presents_context`), such as an item worktree that is not a
+/// valid item context. Nothing is written to the index.
+///
+/// A row put in has a negative key, which no stored row has (SQLite gives a
+/// row a positive one), so a comment the index stores under the row it
+/// replaces is not presented with it. The rows of a context gone from disk,
+/// which no observation is given for, stay as they are stored.
+///
+/// The observations were made before `connection`'s session began, and a
+/// store can land between the two. A context whose stored indexed time is
+/// later than the start of its observation was stored from an observation
+/// begun after this one: its stored rows are newer than what was read, and
+/// they stay in place of it.
+pub(super) fn substitute_observed(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    stored: &mut Vec<StoredItem>,
+    observed: &[(ContextKey, ContextObservation)],
+) -> Result<ObservedRows, ReadError> {
+    let indexed_at = stored_indexed_times(connection, repo.registration_id())?;
+    let observed: Vec<&(ContextKey, ContextObservation)> = observed
+        .iter()
+        .filter(|(key, observation)| {
+            indexed_at
+                .get(key)
+                .is_none_or(|indexed_at| *indexed_at <= observation.started_at_ns)
+        })
+        .collect();
+    let replaced: BTreeSet<&ContextKey> = observed.iter().map(|(key, _)| key).collect();
+    stored.retain(|row| {
+        stored_context_key(repo, &row.context.worktree).is_none_or(|key| !replaced.contains(&key))
+    });
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let mut put = ObservedRows::default();
+    let mut row_id = 0;
+    for (_, observation) in observed {
+        if !presents_context(context_kind_name(observation.context.kind), item_contexts) {
+            continue;
+        }
+        for item in &observation.items {
+            row_id -= 1;
+            let row = StoredItem::observed(observation, item, row_id)?;
+            let edges = &row.relationships;
+            put.targets
+                .extend(edges.parent.iter().chain(&edges.deps).cloned());
+            observed_comments(row_id, &item.comments, &mut put.comments);
+            stored.push(row);
+        }
+    }
+    Ok(put)
+}
+
+/// When each context of the registration `registration_id` was last stored,
+/// in nanoseconds, by its key. A context stored with no indexed time, as an
+/// older build stored it, is not here.
+fn stored_indexed_times(
+    connection: &Connection,
+    registration_id: i64,
+) -> Result<BTreeMap<ContextKey, i64>, ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT item_id, indexed_at FROM contexts
+          WHERE repository_id = ?1 AND indexed_at IS NOT NULL",
+    )?;
+    let rows = statement
+        .query_map([registration_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(item_id, indexed_at)| {
+            let key = match item_id {
+                None => ContextKey::Primary,
+                Some(item_id) => ContextKey::Item(item_id.parse().ok()?),
+            };
+            Some((key, indexed_at))
+        })
+        .collect())
+}
+
+/// Each comment of `threads`, replies included, with the key `row_id` of the
+/// item row they are stored under.
+fn observed_comments(
+    row_id: i64,
+    threads: &[ObservedCommentThread],
+    into: &mut Vec<(i64, String)>,
+) {
+    for thread in threads {
+        into.push((row_id, thread.id.to_string()));
+        observed_comments(row_id, &thread.replies, into);
+    }
+}
+
+/// The context whose worktree a stored row names: the primary for the
+/// root, and an item's for its worktree under `.manyhands/worktrees/`.
+/// `None` for any other path.
+fn stored_context_key(repo: &ResolvedRepository, worktree: &str) -> Option<ContextKey> {
+    let directory = context_directory(repo, worktree)?;
+    match directory.file_name() {
+        None => Some(ContextKey::Primary),
+        Some(id) => id.to_str()?.parse().ok().map(ContextKey::Item),
+    }
 }
 
 /// The comments a complete read of the file `source` reads relationships
 /// against: the ones a stored edge names, and the ones only the file as it
-/// is now names. `stored` is every item row of the registration.
+/// is now names. `rows` holds one row for each item, its effective copy.
 fn comment_targets(
     connection: &Connection,
     repo: &ResolvedRepository,
-    stored: &[StoredItem],
+    rows: &[&StoredItem],
     source: &ReadSource,
 ) -> Result<Vec<String>, ReadError> {
-    let mut comments = stored_comment_targets(connection, repo)?;
+    let mut comments = stored_comment_targets(connection, repo, rows)?;
     let unseen: Vec<String> = {
         let known: BTreeSet<&str> = comments
             .iter()
-            .chain(stored.iter().map(|item| &item.id))
+            .chain(rows.iter().map(|item| &item.id))
             .map(String::as_str)
             .collect();
         let unseen: BTreeSet<&String> = source
@@ -520,7 +843,7 @@ fn comment_targets(
             .collect();
         unseen.into_iter().cloned().collect()
     };
-    comments.extend(stored_comments_among(connection, repo, &unseen)?);
+    comments.extend(stored_comments_among(connection, repo, rows, &unseen)?);
     Ok(comments)
 }
 
@@ -540,10 +863,62 @@ pub(super) fn invalid_stored_data() -> ReadError {
 fn stored_context_kind(stored: &str) -> Result<ItemContextKind, ReadError> {
     match stored {
         "primary" => Ok(ItemContextKind::Primary),
-        "unverified" => Ok(ItemContextKind::Unverified),
+        // An invalid item worktree is not one a read may act on, as a root
+        // whose branch could not be verified is not: it reads as unverified,
+        // and the contract has no kind for it.
+        "unverified" | "invalid" => Ok(ItemContextKind::Unverified),
         "active" => Ok(ItemContextKind::Active),
         _ => Err(invalid_stored_data()),
     }
+}
+
+/// Whether the reads present a context the index stores as `kind`, when
+/// `item_contexts` says whether they present item contexts at all. The root
+/// always is one. An item worktree that is not a valid item context never
+/// is: nothing in it is presented, and the primary's copy of its item, if
+/// any, is that item's.
+pub(crate) fn presents_context(kind: &str, item_contexts: bool) -> bool {
+    match kind {
+        "active" => item_contexts,
+        "invalid" => false,
+        _ => true,
+    }
+}
+
+/// Whether the reads present the registration's item contexts. Discovery
+/// observes them only while the primary's configuration is valid, so none
+/// is presented once the index holds that it is missing or invalid,
+/// whatever item contexts it still holds.
+pub(crate) fn presents_item_contexts(
+    connection: &Connection,
+    registration_id: i64,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM configuration_observations
+                            WHERE repository_id = ?1 AND state != 'valid')",
+        [registration_id],
+        |row| row.get(0),
+    )
+}
+
+/// Where the reads present a problem stored in the item worktree that is
+/// not a valid item context at `worktree`, relative to the root: in the
+/// primary's frame, at the worktree itself, or at `path` inside it. That is
+/// where a refresh that stores no context for such a worktree stores it.
+pub(crate) fn invalid_context_problem_path(worktree: &str, path: Option<&str>) -> String {
+    match path.filter(|path| !path.is_empty()) {
+        Some(path) => format!("{worktree}/{path}"),
+        None => worktree.to_owned(),
+    }
+}
+
+/// Whether `path`, relative to the root, is inside the ticket or the comment
+/// directory of the item `id`. While the item is in its own worktree, the
+/// primary's problems there are not presented: that worktree's are.
+pub(crate) fn is_in_item_directories(path: &str, id: &str) -> bool {
+    [TICKETS_DIRECTORY, COMMENTS_DIRECTORY]
+        .into_iter()
+        .any(|directory| Path::new(path).starts_with(Path::new(directory).join(id)))
 }
 
 fn stored_change_source(stored: &str) -> Result<ChangeSource, ReadError> {
@@ -563,6 +938,10 @@ fn timestamp(seconds: i64) -> Option<String> {
 /// The registration's index state and, in seconds, when it was last
 /// refreshed. A registration removed since the repository was resolved is
 /// `repository_not_registered`.
+///
+/// The row of an item worktree that is not a valid item context is no
+/// context the reads present, and is not counted as one the index holds;
+/// while it is dirty, the index is behind all the same.
 pub(super) fn stored_index_state(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -571,7 +950,8 @@ pub(super) fn stored_index_state(
         .query_row(
             "SELECT refresh_required, refreshed_at,
                     EXISTS(SELECT 1 FROM contexts
-                            WHERE contexts.repository_id = repositories.id)
+                            WHERE contexts.repository_id = repositories.id
+                              AND contexts.kind != 'invalid')
                FROM repositories
               WHERE id = ?1 AND root_path = ?2",
             rusqlite::params![repo.registration_id(), repo.root().to_str()],
@@ -580,14 +960,16 @@ pub(super) fn stored_index_state(
         .optional()?;
     let (refresh_required, refreshed_at, has_contexts) =
         stored.ok_or_else(|| ReadError::new(ResultCode::RepositoryNotRegistered))?;
+    let any_dirty = DirtyContexts::read(connection, repo.registration_id())?.any();
     Ok((
-        index_state(refresh_required, refreshed_at, has_contexts),
+        index_state(refresh_required, refreshed_at, has_contexts, any_dirty),
         refreshed_at,
     ))
 }
 
-/// Every context of the registration, in worktree order.
-fn stored_contexts(
+/// Every context of the registration the reads present, in worktree order.
+/// See `presents_context`.
+pub(super) fn stored_contexts(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredContext>, ReadError> {
@@ -606,24 +988,30 @@ fn stored_contexts(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    rows.into_iter()
-        .map(|(kind, branch, worktree, head_oid)| {
-            Ok(StoredContext {
-                kind: stored_context_kind(&kind)?,
-                branch,
-                worktree,
-                head_oid,
-            })
-        })
-        .collect()
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let mut contexts = Vec::new();
+    for (kind, branch, worktree, head_oid) in rows {
+        let context = StoredContext {
+            kind: stored_context_kind(&kind)?,
+            branch,
+            worktree,
+            head_oid,
+        };
+        if presents_context(&kind, item_contexts) {
+            contexts.push(context);
+        }
+    }
+    Ok(contexts)
 }
 
-/// Every document and ticket the index holds for the registration. The
-/// order is the index's; each caller sorts what it returns.
+/// Every document and ticket the index holds for the registration in a
+/// context the reads present (see `presents_context`). The order is the
+/// index's; each caller sorts what it returns.
 pub(super) fn stored_items(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredItem>, ReadError> {
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
     let mut statement = connection.prepare(
         "SELECT contexts.kind, contexts.branch, contexts.worktree_path, contexts.head_oid,
                 items.item_id, items.kind, items.canonical_path, items.title,
@@ -637,8 +1025,12 @@ pub(super) fn stored_items(
     )?;
     let mut rows = statement.query([repo.registration_id()])?;
     let mut items = Vec::new();
+    // Whether each row, in the same order, is in a context the reads
+    // present. Every row is checked, and its edges attached, all the same.
+    let mut presented = Vec::new();
     while let Some(row) = rows.next()? {
         let context_kind: String = row.get(0)?;
+        presented.push(presents_context(&context_kind, item_contexts));
         let kind: String = row.get(5)?;
         let unknown: Option<String> = row.get(14)?;
         let activity_source: String = row.get(16)?;
@@ -696,6 +1088,8 @@ pub(super) fn stored_items(
         });
     }
     stored_relationships(connection, repo, &mut items)?;
+    let mut presented = presented.into_iter();
+    items.retain(|_| presented.next().unwrap_or(false));
     Ok(items)
 }
 
@@ -798,39 +1192,153 @@ fn stored_relationships(
     Ok(())
 }
 
-/// Every stored problem that has a path and a context, in context, path,
-/// code and then insertion order. The stored guidance is not read: it can
-/// hold a parser's or the operating system's own words.
+/// Every stored problem that has a path and a context, as the reads present
+/// it (see `presented_problems`), in context, path, code and then insertion
+/// order.
 pub(super) fn stored_problems(
     connection: &Connection,
     repo: &ResolvedRepository,
 ) -> Result<Vec<StoredProblem>, ReadError> {
+    Ok(presented_problems(connection, repo)?
+        .into_iter()
+        .filter_map(|problem| {
+            Some(StoredProblem {
+                context: problem.context?,
+                path: problem.path?,
+                code: problem.code,
+            })
+        })
+        .collect())
+}
+
+/// A stored problem as the reads present it: the context it is in, when it
+/// is in one, and its path there, when it has one.
+pub(super) struct PresentedProblem {
+    pub(super) context: Option<StoredContext>,
+    pub(super) path: Option<String>,
+    pub(super) code: ProblemCode,
+}
+
+/// Every stored problem the reads present, in context, path, code and then
+/// insertion order. The stored guidance is not read: it can hold a parser's
+/// or the operating system's own words.
+///
+/// Each is presented in the context the index presents its item from, as
+/// Table A of the fast-writes design says, whether the index stores it
+/// there or in the context it was found in:
+///
+/// - A problem of an item worktree that is not a valid item context is the
+///   primary's, at the worktree's path below the root (see
+///   `invalid_context_problem_path`).
+/// - The problems of an item context are not presented while no item
+///   context is (see `presents_item_contexts`).
+/// - The primary's problems inside the ticket and comment directories of an
+///   item whose own worktree is an item context the reads present are not
+///   presented: that worktree's are. Which worktrees those are is what the
+///   index holds, so one it still holds after it was removed outside
+///   Manyhands hides them until the next refresh.
+pub(super) fn presented_problems(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+) -> Result<Vec<PresentedProblem>, ReadError> {
+    let item_contexts = presents_item_contexts(connection, repo.registration_id())?;
+    let root = absolute_path_string(repo.root()).ok_or_else(invalid_stored_data)?;
     let mut statement = connection.prepare(
-        "SELECT contexts.kind, contexts.branch, contexts.worktree_path, contexts.head_oid,
-                problems.path, problems.code
-           FROM problems
-           JOIN contexts ON contexts.id = problems.context_id
-          WHERE problems.repository_id = ?1 AND problems.path IS NOT NULL
-          ORDER BY contexts.worktree_path ASC, problems.path ASC, problems.code ASC,
-                   problems.id ASC",
+        "SELECT id, kind, branch, worktree_path, head_oid FROM contexts
+          WHERE repository_id = ?1",
     )?;
+    let mut contexts: BTreeMap<i64, (String, StoredContext)> = BTreeMap::new();
+    let mut rows = statement.query([repo.registration_id()])?;
+    while let Some(row) = rows.next()? {
+        let kind: String = row.get(1)?;
+        let context = StoredContext {
+            kind: stored_context_kind(&kind)?,
+            branch: row.get(2)?,
+            worktree: row.get(3)?,
+            head_oid: row.get(4)?,
+        };
+        contexts.insert(row.get(0)?, (kind, context));
+    }
+    let root_context = contexts
+        .values()
+        .map(|(_, context)| context)
+        .find(|context| context.worktree == root)
+        .cloned()
+        .unwrap_or_else(|| unobserved_root(root.clone()));
+    // The items in their own worktrees, as the reads present them.
+    let in_own_worktree: BTreeSet<String> = contexts
+        .values()
+        .filter(|(kind, _)| kind == "active" && presents_context(kind, item_contexts))
+        .filter_map(|(_, context)| worktree_item_id(repo, &context.worktree))
+        .collect();
+
+    let mut statement = connection
+        .prepare("SELECT id, context_id, path, code FROM problems WHERE repository_id = ?1")?;
     let mut rows = statement.query([repo.registration_id()])?;
     let mut problems = Vec::new();
     while let Some(row) = rows.next()? {
-        let context_kind: String = row.get(0)?;
-        let code: String = row.get(5)?;
-        problems.push(StoredProblem {
-            context: StoredContext {
-                kind: stored_context_kind(&context_kind)?,
-                branch: row.get(1)?,
-                worktree: row.get(2)?,
-                head_oid: row.get(3)?,
+        let id: i64 = row.get(0)?;
+        let context_id: Option<i64> = row.get(1)?;
+        let path: Option<String> = row.get(2)?;
+        let code: String = row.get(3)?;
+        let (context, path) = match context_id {
+            None => (None, path),
+            Some(context_id) => {
+                let (kind, context) = contexts.get(&context_id).ok_or_else(invalid_stored_data)?;
+                if kind == "invalid" {
+                    let worktree = context_directory(repo, &context.worktree)
+                        .filter(|directory| !directory.as_os_str().is_empty())
+                        .and_then(|directory| directory.to_str().map(str::to_owned))
+                        .ok_or_else(invalid_stored_data)?;
+                    (
+                        Some(root_context.clone()),
+                        Some(invalid_context_problem_path(&worktree, path.as_deref())),
+                    )
+                } else if !presents_context(kind, item_contexts)
+                    || (context.worktree == root
+                        && path.as_deref().is_some_and(|path| {
+                            in_own_worktree
+                                .iter()
+                                .any(|item| is_in_item_directories(path, item))
+                        }))
+                {
+                    continue;
+                } else {
+                    (Some(context.clone()), path)
+                }
+            }
+        };
+        problems.push((
+            id,
+            code.clone(),
+            PresentedProblem {
+                context,
+                path,
+                code: ProblemCode::from_stored(&code),
             },
-            path: row.get(4)?,
-            code: ProblemCode::from_stored(&code),
-        });
+        ));
     }
-    Ok(problems)
+    problems.sort_by(|left, right| problem_order(left).cmp(&problem_order(right)));
+    Ok(problems
+        .into_iter()
+        .map(|(_, _, problem)| problem)
+        .collect())
+}
+
+/// The order the index sorts problem rows in, as they are presented: by
+/// worktree, path, stored code and then row, with an absent value first.
+fn problem_order(
+    (id, code, problem): &(i64, String, PresentedProblem),
+) -> (Option<&str>, Option<&str>, &str, i64) {
+    (
+        problem
+            .context
+            .as_ref()
+            .map(|context| context.worktree.as_str()),
+        problem.path.as_deref(),
+        code,
+        *id,
+    )
 }
 
 /// Whether the last refresh saw every place an item of `kind` can be, as
@@ -972,6 +1480,7 @@ fn bare_item(
         parent: None,
         deps: Vec::new(),
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: None,
         source: None,
@@ -984,14 +1493,194 @@ fn bare_item(
     }
 }
 
-fn closure(closed_at: Option<String>, closed_by: Option<String>) -> ClosureDto {
-    ClosureDto {
-        state: match closed_at {
-            Some(_) => ClosureState::Closed,
-            None => ClosureState::Open,
+/// The closure a read presents for a ticket: the state follows both copies
+/// (`derived_closure_state`), and the fields are set exactly when it is
+/// `closed` or `closing`. They are the primary's copy's when a closure it
+/// holds closes the ticket and the copy read is not that one, and the copy
+/// read's own otherwise.
+///
+/// `closed_at` and `closed_by` are what the copy read holds, `primary_copy`
+/// is whether it is the primary's, and `primary` is what the primary's copy
+/// holds.
+fn closure(
+    closed_at: Option<String>,
+    closed_by: Option<String>,
+    primary_copy: bool,
+    primary: Option<&PrimaryClosure>,
+) -> ClosureDto {
+    let holds = closed_at.is_some();
+    let state = derived_closure_state(holds, primary_copy, primary);
+    match primary {
+        Some(primary) if state == ClosureState::Closed && !(holds && primary_copy) => ClosureDto {
+            state,
+            closed_at: timestamp(primary.closed_at),
+            closed_by: primary.closed_by.clone(),
+            publication: None,
         },
-        closed_at,
-        closed_by,
+        _ => ClosureDto {
+            state,
+            closed_at,
+            closed_by,
+            publication: None,
+        },
+    }
+}
+
+/// What a complete read adds to what the index lists: the pull request link
+/// this clone gave the item and, for a closing ticket in a pull-request
+/// repository, whether its closure is on the remote yet. A document's link is
+/// the row's while the primary does not hold the document and the read is of
+/// its active context (design Part E). A list reads the index only, and
+/// leaves both null.
+fn fill_complete_read(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    item: &mut ItemDto,
+) -> Result<(), ReadError> {
+    let Some(id) = item.id.clone() else {
+        return Ok(());
+    };
+    let kind = match item.kind {
+        ItemDtoKind::Ticket => AuthoringKind::Ticket,
+        ItemDtoKind::Document => AuthoringKind::Document,
+    };
+    item.pull_request = pull_request_links::link_of(
+        connection,
+        repo.registration_id(),
+        authoring_kind_name(kind),
+        &id,
+    )?
+    .filter(|_| kind == AuthoringKind::Ticket || document_link_offered(connection, repo, item, &id))
+    .as_ref()
+    .map(PullRequestDto::from);
+    let publication = match &item.closure {
+        Some(closure) if closure.state == ClosureState::Closing => {
+            publication_of(connection, repo, &id, closure)?
+        }
+        _ => None,
+    };
+    if let Some(closure) = &mut item.closure {
+        closure.publication = publication;
+    }
+    Ok(())
+}
+
+/// Whether the link row of a document read stays offered: the read is of the
+/// document's active context, and the primary does not hold the document, by
+/// the cheap check of Part E. Whatever cannot be read leaves the primary not
+/// holding it, as the proof's refusals do.
+fn document_link_offered(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    item: &ItemDto,
+    id: &str,
+) -> bool {
+    if item.context.kind != ItemContextKind::Active {
+        return false;
+    }
+    let Some(branch) = item.context.branch.as_deref() else {
+        return true;
+    };
+    // The link is read in either mode; the primary it is judged against is
+    // the configuration's, which is absent when it was never observed.
+    let configuration: Option<(Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT publication_remote, primary_branch
+               FROM configuration_observations
+              WHERE repository_id = ?1 AND state = 'valid'",
+            [repo.registration_id()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let (Some(git), Ok(item_id)) = (open_exactly(repo.root()).ok(), id.parse::<ItemId>()) else {
+        return true;
+    };
+    let tip = git
+        .find_reference(&format!("refs/heads/{branch}"))
+        .and_then(|reference| reference.peel_to_commit())
+        .map(|commit| commit.id());
+    let (Some((Some(remote), Some(primary))), Ok(tip)) = (configuration, tip) else {
+        return true;
+    };
+    let tracking_primary = RemoteRefPlan::from_configuration(&remote, &primary)
+        .ok()
+        .and_then(|plan| git.refname_to_id(plan.primary().tracking_ref()).ok());
+    crate::repository::promotion::observe::document_link_outstanding(
+        &git,
+        tip,
+        &item.path,
+        tracking_primary,
+        &primary,
+        &remote,
+        &item_id,
+        false,
+    )
+}
+
+/// Whether a closing ticket's closure is published: `published` when the
+/// ticket at the tracking ref of its branch on the publication remote holds
+/// the same closure, `pending` when it does not, or there is no such ref or
+/// remote, or the ref cannot be read. Null in direct mode, where a closure
+/// on the ticket's branch alone is never published.
+fn publication_of(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: &str,
+    closure: &ClosureDto,
+) -> Result<Option<ClosurePublication>, ReadError> {
+    let configuration: Option<(Option<String>, Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT integration, publication_remote, primary_branch
+               FROM configuration_observations
+              WHERE repository_id = ?1 AND state = 'valid'",
+            [repo.registration_id()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((Some(integration), remote, primary)) = configuration else {
+        return Ok(None);
+    };
+    if integration != canonical::Integration::PullRequest.as_str() {
+        return Ok(None);
+    }
+    let held = remote
+        .zip(primary)
+        .and_then(|(remote, primary)| RemoteRefPlan::from_configuration(&remote, &primary).ok())
+        .zip(id.parse::<ItemId>().ok())
+        .and_then(|(plan, id)| {
+            let tracking = plan.context(AuthoringKind::Ticket, &id);
+            tracked_closure(repo.root(), tracking.tracking_ref(), &id)
+        });
+    let shown = (closure.closed_at.clone(), closure.closed_by.clone());
+    Ok(Some(
+        if closure.closed_at.is_some() && held == Some(shown) {
+            ClosurePublication::Published
+        } else {
+            ClosurePublication::Pending
+        },
+    ))
+}
+
+/// The `closed_at` and `closed_by` of the ticket at the tracking ref
+/// `reference`, as a read presents them, or `None` when there is no such ref
+/// or ticket, or either cannot be read.
+fn tracked_closure(
+    root: &Path,
+    reference: &str,
+    id: &ItemId,
+) -> Option<(Option<String>, Option<String>)> {
+    let git = open_exactly(root).ok()?;
+    let commit = git.find_reference(reference).ok()?.peel_to_commit().ok()?;
+    let path = observe::ticket_path(id);
+    let held = observe::tree_ticket(&git, commit.tree_id(), &path, root).ok()??;
+    match canonical::parse_item(&path, std::str::from_utf8(&held.bytes).ok()?).ok()? {
+        canonical::CanonicalItem::Ticket(ticket) => Some((
+            ticket.closed_at.and_then(timestamp_string),
+            ticket.closed_by,
+        )),
+        _ => None,
     }
 }
 
@@ -1078,8 +1767,14 @@ pub(super) fn stored_item_dto(
         status: item.status.clone(),
         project: item.project.clone(),
         team: item.team.clone(),
-        closure: is_ticket
-            .then(|| closure(item.closed_at.and_then(timestamp), item.closed_by.clone())),
+        closure: is_ticket.then(|| {
+            closure(
+                item.closed_at.and_then(timestamp),
+                item.closed_by.clone(),
+                is_primary_copy(&item.context),
+                related.targets.primary().get(&item.id),
+            )
+        }),
         unknown_metadata: item.unknown.values.clone(),
         changed_at: timestamp(item.activity_at),
         change_source: Some(item.change_source),
@@ -1137,16 +1832,14 @@ fn parsed_item_dto(
     };
     if let canonical::CanonicalItem::Ticket(ticket) = item {
         let targets = &related.targets;
-        let graph = related.graph_with(targets.node(
-            &ticket.id.to_string(),
-            ticket.closed_at.is_some(),
-            relationships,
-        ));
+        let id = ticket.id.to_string();
+        let primary_copy = is_primary_copy(context);
+        let primary = targets.primary().get(&id);
+        let closed_at = ticket.closed_at.and_then(timestamp_string);
+        let closure = closure(closed_at, ticket.closed_by, primary_copy, primary);
+        let graph = related.graph_with(targets.node(&id, closure.state, relationships));
         relate(&mut dto, relationships, targets, &graph);
-        dto.closure = Some(closure(
-            ticket.closed_at.and_then(timestamp_string),
-            ticket.closed_by,
-        ));
+        dto.closure = Some(closure);
         dto.ticket_type = Some(ticket.ticket_type);
         dto.status = Some(ticket.status);
         dto.project = ticket.project;
@@ -1246,6 +1939,15 @@ fn context_directory(repo: &ResolvedRepository, worktree: &str) -> Option<PathBu
     let id = relative.strip_prefix(WORKTREES_DIRECTORY).ok()?.to_str()?;
     id.parse::<ItemId>().ok()?;
     Some(Path::new(WORKTREES_DIRECTORY).join(id))
+}
+
+/// The ID of the item whose worktree `worktree` is, when it is an item
+/// worktree under the root.
+fn worktree_item_id(repo: &ResolvedRepository, worktree: &str) -> Option<String> {
+    context_directory(repo, worktree)?
+        .file_name()?
+        .to_str()
+        .map(str::to_owned)
 }
 
 /// `root` followed by each component of `relative`, which is written with
@@ -1402,21 +2104,82 @@ fn item_path_is_missing(error: &io::Error) -> bool {
     }
 }
 
+/// Nanoseconds in the second a file's modification time and the
+/// repository's `refreshed_at` are kept in.
+const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
+
 impl ItemFile {
-    /// Whether the file was modified in a later second than the one the
-    /// last completed refresh began observing in.
+    /// Whether the file was modified in a later second than the one its
+    /// context's observation began in (`indexed_at_ns`, in nanoseconds), or,
+    /// for a context stored with no such time, than the one the last
+    /// completed refresh began observing in (`refreshed_at`).
     ///
-    /// That time is taken before the refresh looks at anything, so a file
-    /// changed while a refresh runs is newer. This still misses a change
-    /// made in the same second the refresh began, a change that keeps or
+    /// That time is taken before the observation looks at anything, so a
+    /// file changed while it runs is newer. This still misses a change
+    /// made in the same second the observation began, a change that keeps or
     /// sets back the file's modification time, and any change where the
     /// platform reports no time; and a file whose time is in the future
     /// reads as newer until that time passes. A change to metadata the
     /// index stores is seen separately, by comparing it.
-    pub(super) fn newer_than(&self, refreshed_at: Option<i64>) -> bool {
+    pub(super) fn newer_than(&self, indexed_at_ns: Option<i64>, refreshed_at: Option<i64>) -> bool {
         self.modified
-            .zip(refreshed_at)
-            .is_some_and(|(modified, refreshed)| modified > refreshed)
+            .zip(
+                indexed_at_ns
+                    .map(|indexed| indexed.div_euclid(NANOSECONDS_PER_SECOND))
+                    .or(refreshed_at),
+            )
+            .is_some_and(|(modified, indexed)| modified > indexed)
+    }
+}
+
+/// How the index stands with one context: when it was last indexed, and
+/// whether it is owed an indexing.
+///
+/// A read judges a file of the context against this, not against when the
+/// repository was last refreshed as a whole. A write indexes the contexts it
+/// changed and leaves the repository's refresh time where it was, so a file
+/// the write did not touch must not read as changed for it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ContextFreshness {
+    /// When the context's observation began, in nanoseconds; none for a row
+    /// an older build stored.
+    indexed_at: Option<i64>,
+    dirty: bool,
+}
+
+impl ContextFreshness {
+    /// What the index holds of the context whose worktree is `worktree`.
+    /// The root with no row of its own is the primary, which no observation
+    /// has stored a time for.
+    pub(super) fn read(
+        connection: &Connection,
+        repo: &ResolvedRepository,
+        worktree: &str,
+    ) -> Result<Self, ReadError> {
+        let (indexed_at, item_id): (Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT indexed_at, item_id FROM contexts
+                  WHERE repository_id = ?1 AND worktree_path = ?2",
+                rusqlite::params![repo.registration_id(), worktree],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .unwrap_or_default();
+        let owed = DirtyContexts::read(connection, repo.registration_id())?;
+        let dirty = match item_id.as_deref().map(str::parse::<ItemId>) {
+            None => owed.any_of(&[ContextKey::Primary]),
+            Some(Ok(id)) => owed.any_of(&[ContextKey::Item(id)]),
+            // A key no context can have: nothing says what is owed it.
+            Some(Err(_)) => true,
+        };
+        Ok(Self { indexed_at, dirty })
+    }
+
+    /// Whether the index may not hold `file` of this context as it is: the
+    /// context is dirty or owed an indexing, or the file is newer than its
+    /// indexing (see `ItemFile::newer_than`).
+    pub(super) fn is_behind(&self, file: &ItemFile, refreshed_at: Option<i64>) -> bool {
+        self.dirty || file.newer_than(self.indexed_at, refreshed_at)
     }
 }
 
@@ -1534,6 +2297,7 @@ fn is_own_worktree_row(repo: &ResolvedRepository, row: &StoredItem) -> bool {
 }
 
 const OWN_WORKTREE: u8 = 0;
+const PRIMARY_COPY: u8 = 1;
 const OTHER_WORKTREE: u8 = 2;
 
 /// The order in which the rows of one item are tried: its own worktree's,
@@ -1547,23 +2311,53 @@ fn row_rank(repo: &ResolvedRepository, row: &StoredItem) -> u8 {
     if is_own_worktree_row(repo, row) {
         OWN_WORKTREE
     } else if row.context.kind != ItemContextKind::Active {
-        1
+        PRIMARY_COPY
     } else {
         OTHER_WORKTREE
     }
 }
 
-/// One row for each item, and whether the index is known to be behind: it
-/// held an item more than once, or held one only as a copy in another
-/// item's worktree.
+/// The rows of one item in the order they are tried, and whether Table A
+/// of the fast-writes design explains the index holding them: once, or as
+/// the primary's copy and the copy in the item's own worktree, which is
+/// what the first edit of an item the primary holds makes. Any other set of
+/// rows is what a refresh leaves part of the way through, or a copy in
+/// another item's worktree, and the index is behind.
+fn ranked<'a>(
+    repo: &ResolvedRepository,
+    mut rows: Vec<&'a StoredItem>,
+) -> (Vec<&'a StoredItem>, bool) {
+    // The sort keeps the index's order within each rank.
+    rows.sort_by_key(|row| row_rank(repo, row));
+    let explained = match rows.as_slice() {
+        [_] => true,
+        [own, primary] => {
+            row_rank(repo, own) == OWN_WORKTREE && row_rank(repo, primary) == PRIMARY_COPY
+        }
+        _ => false,
+    };
+    (rows, explained)
+}
+
+/// One row for each item, and whether the index is known to be behind.
+///
+/// This and `effective_copy` are where a read chooses the copy of an item
+/// it presents. Each takes the rows of the contexts the reads present
+/// (`stored_items`), and the stored shape makes no difference: an index
+/// that leaves out the primary's copy of an item in its own worktree is
+/// read as one that holds both.
+///
+/// The row of the item's own worktree is the effective one while that
+/// worktree is there, and otherwise the primary one. The index is behind
+/// when it holds an item as Table A does not explain (see `ranked`), when
+/// the item's own worktree it holds is no longer there, or when it holds an
+/// item only as a copy in another item's worktree.
 ///
 /// A refresh stores the root, each item worktree and the removal of
 /// worktrees that are gone in separate transactions, so a read can find an
 /// item both in the primary context and in the row of a worktree that no
-/// longer exists, or the reverse. Then the row of the item's own worktree
-/// is the effective one if that worktree is still there, and otherwise the
-/// primary one; and the index, which is in the middle of changing, is
-/// behind.
+/// longer exists. The primary's copy is then the effective one, and the
+/// index, which is in the middle of changing, is behind.
 pub(super) fn effective_rows<'a>(
     repo: &ResolvedRepository,
     stored: &'a [StoredItem],
@@ -1575,9 +2369,9 @@ pub(super) fn effective_rows<'a>(
     let mut is_behind = false;
     let rows = by_id
         .into_values()
-        .map(|mut rows| {
-            is_behind |= rows.len() > 1;
-            rows.sort_by_key(|row| row_rank(repo, row));
+        .map(|rows| {
+            let (rows, explained) = ranked(repo, rows);
+            is_behind |= !explained;
             let row = rows
                 .iter()
                 .find(|row| {
@@ -1587,7 +2381,7 @@ pub(super) fn effective_rows<'a>(
                 })
                 .copied()
                 .unwrap_or(rows[0]);
-            is_behind |= row_rank(repo, row) == OTHER_WORKTREE;
+            is_behind |= !std::ptr::eq(row, rows[0]) || row_rank(repo, row) == OTHER_WORKTREE;
             row
         })
         .collect();
@@ -1610,7 +2404,8 @@ pub(super) struct EffectiveCopy<'a> {
 /// a row with nothing behind it gives way to the next; a copy that is there
 /// and cannot be read is a failure, not a reason to answer from another
 /// copy. `index` comes back `stale` when it claimed to be current and held
-/// the item more than once, or only as a copy in another item's worktree.
+/// the item as Table A does not explain (see `ranked`), when the copy read
+/// is not the first tried, or when it is a copy in another item's worktree.
 ///
 /// No row, and no row with a file behind it, is `item_not_found`.
 pub(super) fn effective_copy<'a>(
@@ -1619,28 +2414,24 @@ pub(super) fn effective_copy<'a>(
     id: &str,
     index: IndexStateDto,
 ) -> Result<EffectiveCopy<'a>, ReadError> {
-    let mut rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
+    let rows: Vec<&StoredItem> = stored.iter().filter(|item| item.id == id).collect();
     // A refresh can only find the item if the index is behind.
     if rows.is_empty() {
         return Err(item_not_found(repo, index.state != IndexState::Current));
     }
-    let index = if rows.len() > 1 {
-        behind(&index)
-    } else {
-        index
-    };
-    // The sort keeps the index's order within each rank.
-    rows.sort_by_key(|row| row_rank(repo, row));
-    for row in rows {
+    let (rows, explained) = ranked(repo, rows);
+    let index = if explained { index } else { behind(&index) };
+    for (tried, row) in rows.into_iter().enumerate() {
         if canonical_item_kind(&row.path).is_none() {
             return Err(invalid_stored_data());
         }
         match read_item_file(repo, &row.context.worktree, &row.path)? {
             ItemFileRead::Found(file) => {
-                // Answered from a copy in another item's worktree: a last
-                // resort, and the index is behind for offering nothing
-                // better.
-                let index = if row_rank(repo, row) == OTHER_WORKTREE {
+                // Answered from a copy the index did not offer first, its
+                // own being gone, or from a copy in another item's
+                // worktree, a last resort: the index is behind for offering
+                // nothing better.
+                let index = if tried > 0 || row_rank(repo, row) == OTHER_WORKTREE {
                     behind(&index)
                 } else {
                     index
@@ -1713,16 +2504,16 @@ impl RepositoryService {
             let problems = stored_problems(connection, repo)?;
             let (rows, is_behind) = effective_rows(repo, &stored);
             let index = if is_behind { behind(&index) } else { index };
-            let comments = stored_comment_targets(connection, repo)?;
+            let comments = stored_comment_targets(connection, repo, &rows)?;
             let related = match kind {
                 ItemDtoKind::Document => Related::for_documents(&rows, &comments),
-                ItemDtoKind::Ticket => Related::of(&rows, &comments),
+                ItemDtoKind::Ticket => Related::of(&rows, PrimaryClosures::of(&stored), &comments),
             };
 
             let mut listed: Vec<&StoredItem> = rows
                 .into_iter()
                 .filter(|item| item.kind == kind)
-                .filter(|item| filter.is_none_or(|filter| filter.matches(item, &related.graph)))
+                .filter(|item| filter.is_none_or(|filter| related.matches(filter, item)))
                 .collect();
             let mut nonconforming = nonconforming_entries(kind, &stored, &problems, &index);
             let items = match kind {
@@ -1777,10 +2568,14 @@ impl RepositoryService {
     /// the nonconforming form with its source. A file that cannot be opened
     /// is `repository_inaccessible`.
     ///
-    /// When the index holds the item in more than one context, which it can
-    /// while a refresh is under way, the copy in the item's own worktree is
-    /// read if it is still there, otherwise the primary copy, and the index
-    /// is `stale`. A copy that is there and cannot be read fails the read.
+    /// When the index holds the item in more than one context, the copy in
+    /// the item's own worktree is read if it is still there, otherwise the
+    /// primary copy. Holding the primary's copy and that worktree's, as the
+    /// first edit of an item the primary holds does, leaves the index as it
+    /// is; reading the primary's because the worktree's is gone, or holding
+    /// the item any other way, which it can while a refresh is under way,
+    /// makes it `stale` (see `effective_copy`). A copy that is there and
+    /// cannot be read fails the read.
     pub fn show_item(&self, repo: &ResolvedRepository, id: &ItemId) -> Result<ItemDto, ReadError> {
         let id = id.to_string();
         self.read_session(RepositoryOperation::Read, |connection| {
@@ -1789,10 +2584,12 @@ impl RepositoryService {
             let EffectiveCopy { row, file, index } = effective_copy(repo, &stored, &id, index)?;
             let observation =
                 observation_token(row.context.branch.as_deref(), &row.path, &file.bytes);
-            let newer = file.newer_than(refreshed_at);
+            let freshness = ContextFreshness::read(connection, repo, &row.context.worktree)?;
+            let newer = freshness.is_behind(&file, refreshed_at);
             let read = ReadSource::of(file.bytes, &row.path);
-            let comments = comment_targets(connection, repo, &stored, &read)?;
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
+            let rows = effective_rows(repo, &stored).0;
+            let comments = comment_targets(connection, repo, &rows, &read)?;
+            let related = Related::of(&rows, PrimaryClosures::of(&stored), &comments);
             let listed = stored_item_dto(row, &related, &index);
             let mut item = match parse_file(read, &row.path, &row.context, &index, &related) {
                 ParsedFile::Item { dto, source } => {
@@ -1822,11 +2619,51 @@ impl RepositoryService {
                 },
             };
             item.observation = Some(observation);
+            fill_complete_read(connection, repo, &mut item)?;
             Ok(item)
         })
         .map_err(|error| {
             let mut error = repo.failure(error);
             error.scope.item_id = Some(id.clone());
+            error
+        })
+    }
+
+    /// Whether the index holds a context of this item's own: the worktree
+    /// and authoring branch made to edit it, at `.manyhands/worktrees/<ID>`.
+    /// An unknown ID has none.
+    ///
+    /// This is about the context, not about the copy `show_item` presents.
+    /// That copy is the primary's whenever the item's own worktree no longer
+    /// holds the file, so a copy of the primary's says nothing of whether
+    /// the item has a context. An item worktree counts here whether the
+    /// index holds it as an active context, as it does until a refresh sees
+    /// the file gone, or as one that is no valid item context, as it does
+    /// after (see `presents_context`): either way the item has a worktree of
+    /// its own, which a save would not be making.
+    ///
+    /// This reads the index and nothing else: a worktree removed outside
+    /// Manyhands is still one until the next refresh.
+    pub fn item_has_context(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+    ) -> Result<bool, ReadError> {
+        let item_id = id.to_string();
+        self.read_session(RepositoryOperation::Read, |connection| {
+            // A registration removed since the repository was resolved is
+            // `repository_not_registered`.
+            stored_index_state(connection, repo)?;
+            Ok(connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM contexts
+                                WHERE repository_id = ?1 AND item_id = ?2)",
+                rusqlite::params![repo.registration_id(), item_id],
+                |row| row.get(0),
+            )?)
+        })
+        .map_err(|error| {
+            let mut error = repo.failure(error);
+            error.scope.item_id = Some(item_id.clone());
             error
         })
     }
@@ -1881,11 +2718,13 @@ impl RepositoryService {
                 ItemFileRead::NotAFile => return Err(ReadError::invalid_path()),
             };
             let observation = observation_token(context.branch.as_deref(), path, &file.bytes);
-            let newer = file.newer_than(refreshed_at);
+            let freshness = ContextFreshness::read(connection, repo, &context.worktree)?;
+            let newer = freshness.is_behind(&file, refreshed_at);
             let stored = stored_items(connection, repo)?;
             let read = ReadSource::of(file.bytes, path);
-            let comments = comment_targets(connection, repo, &stored, &read)?;
-            let related = Related::of(&effective_rows(repo, &stored).0, &comments);
+            let rows = effective_rows(repo, &stored).0;
+            let comments = comment_targets(connection, repo, &rows, &read)?;
+            let related = Related::of(&rows, PrimaryClosures::of(&stored), &comments);
             let row = stored
                 .iter()
                 .find(|item| item.context.worktree == worktree && item.path == path);
@@ -1941,6 +2780,7 @@ impl RepositoryService {
                 }
             };
             item.observation = Some(observation);
+            fill_complete_read(connection, repo, &mut item)?;
             Ok(item)
         })
     }
@@ -2036,6 +2876,44 @@ impl RepositoryService {
         id: &ItemId,
         proposed: &ProposedRelationships,
     ) -> Result<RelationshipCheckDto, ReadError> {
+        self.check_relationships_over(repo, id, proposed, None)
+    }
+
+    /// `check_ticket_relationships` as a save makes it, before it writes a
+    /// ticket's `deps` or `parent`: the basis of every context, the primary
+    /// included, is first compared with the one the index stores, by stat
+    /// and by the hash of each file too new for its stat, and each context
+    /// whose basis moved is read from disk, its tickets and comments
+    /// standing in the check for what the index holds of it. So a cycle that
+    /// a commit made outside Manyhands closes is found before the next
+    /// refresh. Nothing is written to the index: what was read is not
+    /// stored, and no context is marked.
+    ///
+    /// No lease is taken, and none is to be held by the caller: reading a
+    /// context is a scan, and no scan runs under the lease.
+    pub(crate) fn check_ticket_relationships_reading_moved_contexts(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+    ) -> Result<RelationshipCheckDto, ReadError> {
+        let moved = MovedContexts::observe(self, repo).map_err(|mut error| {
+            error.scope.item_id = Some(id.to_string());
+            error
+        })?;
+        self.check_relationships_over(repo, id, proposed, Some(&moved))
+    }
+
+    /// The check both of those make: over the index, with the contexts of
+    /// `moved`, when it is given, read from disk in place of what the index
+    /// holds of them.
+    fn check_relationships_over(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+        moved: Option<&MovedContexts>,
+    ) -> Result<RelationshipCheckDto, ReadError> {
         let id = id.to_string();
         let deps: BTreeSet<String> = proposed.deps.iter().map(ToString::to_string).collect();
         let parent = proposed.parent.as_ref().map(ToString::to_string);
@@ -2043,7 +2921,7 @@ impl RepositoryService {
         // has them, and the ones only the proposal names.
         let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
         let named: Vec<String> = named.into_iter().cloned().collect();
-        self.read_tickets_naming(repo, &named, |tickets| {
+        self.read_tickets_naming(repo, &named, moved, |tickets| {
             Ok(tickets
                 .related
                 .check(&id, deps, parent, tickets.index.clone(), tickets.complete))
@@ -2123,7 +3001,8 @@ fn named_worktree(repo: &ResolvedRepository, context: Option<&Path>) -> Result<S
 }
 
 /// The context whose worktree is `worktree`: the repository root, or an
-/// item context the index holds as active. Any other is `invalid_path`.
+/// item context the index holds as active and the reads present. Any other
+/// is `invalid_path`.
 fn named_context(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -2136,15 +3015,20 @@ fn named_context(
     {
         Some(context) if worktree == root || context.kind == ItemContextKind::Active => Ok(context),
         Some(_) => Err(ReadError::invalid_path()),
-        // The root is a context whether or not it has been observed;
-        // unobserved, nothing has verified its branch.
-        None if worktree == root => Ok(StoredContext {
-            kind: ItemContextKind::Unverified,
-            branch: None,
-            worktree: root,
-            head_oid: None,
-        }),
+        None if worktree == root => Ok(unobserved_root(root)),
         None => Err(ReadError::invalid_path()),
+    }
+}
+
+/// The root, whose worktree is `root`, when the index holds no context for
+/// it. The root is a context whether or not it has been observed;
+/// unobserved, nothing has verified its branch.
+fn unobserved_root(root: String) -> StoredContext {
+    StoredContext {
+        kind: ItemContextKind::Unverified,
+        branch: None,
+        worktree: root,
+        head_oid: None,
     }
 }
 
@@ -2228,3 +3112,7 @@ fn refresh_action(repo: &ResolvedRepository) -> RecoveryAction {
 #[cfg(test)]
 #[path = "items_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "freshness_tests.rs"]
+mod freshness_tests;

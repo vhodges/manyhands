@@ -7,7 +7,9 @@
 //! is merged as `synchronize_remote` merges it: one merge commit of the
 //! local and the incoming history, in that order, which is then
 //! published. Nothing is rebased. `merge_required` is a code no request
-//! of theirs is answered with.
+//! of theirs is answered with. In a pull-request repository the
+//! synchronization refuses `repo sync` before it would merge or push the
+//! primary, which it only fast-forwards there.
 //!
 //! A merge that conflicts is left in the target worktree, with the
 //! branch where the merge began and the reservation released. The
@@ -60,18 +62,22 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 
 use crate::{
-    canonical::ItemId,
-    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
+    canonical::{Integration, ItemId},
+    results::{
+        DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, RecoveryAction,
+        RecoveryActionKind, ResultCode, Scope,
+    },
 };
 
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
-            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
-            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
-            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, IndexPending, LifecycleIndexStep,
+            OperationFamily, OperationId, ReadError, RemoteOperationSafePoint, RepositoryOperation,
+            RepositoryService, SafePointRequest, SynchronizationError, SynchronizationObserver,
+            SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
+            SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow},
             remote::{conflict_read, sync::RepublishConsent},
             transport::SshTransportErrorKind,
@@ -79,7 +85,8 @@ use super::{
         command::Command,
         context::context_names,
         dto::{
-            ConflictNextAction, ConflictNextDto, MutationDataDto,
+            ConflictNextAction, ConflictNextDto, LocalCommitDto, MutationDataDto,
+            PrimaryLocalCommitsDto, PrimaryLocalCommitsType, PullRequestLinkDataDto,
             SynchronizationConflictMutationDto, SynchronizationConflictType,
             SynchronizationMutationDto,
         },
@@ -520,7 +527,7 @@ impl SynchronizationObserver for Watch<'_> {
 }
 
 /// What a host that is not trusted presented, as the result's data.
-fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
+pub(super) fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
     let SynchronizationError::Transport(error) = error else {
         return None;
     };
@@ -604,7 +611,7 @@ pub(crate) fn resumed(
         target,
         republish: None,
     }
-    .call(call, accepted, subject, owner, None, true)
+    .taken_up(call, accepted, subject, owner, None)
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, as
@@ -627,7 +634,7 @@ pub(super) fn continued(
         target,
         republish: None,
     }
-    .call(call, accepted, subject, owner, holder, true)
+    .taken_up(call, accepted, subject, owner, holder)
 }
 
 /// What the domain returned of one call of a synchronization: `None`
@@ -951,6 +958,87 @@ impl SyncBinding {
         (Some(Err(error)), ran)
     }
 
+    /// The call of an operation taken up under its own ID, by `operation
+    /// resume` (`resumed`) or by the continuation of `conflict resolve`
+    /// (`continued`), as `call` makes it. A lifecycle's child that completed
+    /// while the index does not hold the context its local update changed
+    /// indexes that context itself, since its parent is not running in this
+    /// call (R-SDD-66), and is answered as a completed child is; only when
+    /// that step does not complete is it answered as `owed_to_its_parent`
+    /// says (decision 8). When the step's row may be pending still, not
+    /// closed or with a call at work under it, it would refuse that refresh:
+    /// the child is then answered as a synchronization whose hand-off is
+    /// owed, as folder create is then, and no refresh is offered. Nothing of
+    /// the call is held by then.
+    fn taken_up(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        subject: Subject,
+        owner: Option<RequestId>,
+        holder: Option<RequestId>,
+    ) -> Ran {
+        let (result, ran) = self.observed(call, accepted, subject, owner, holder, true);
+        match result {
+            Some(Ok(SynchronizationResult::Complete(came_to)))
+                if call.service.lifecycle_child_owes_its_parent(
+                    &accepted.root(),
+                    accepted.operation_id,
+                    &self.target,
+                ) =>
+            {
+                match call
+                    .service
+                    .index_lifecycle_child(&accepted.root(), &self.target)
+                {
+                    LifecycleIndexStep::Indexed => ran,
+                    LifecycleIndexStep::Pending => {
+                        self.owed_to_its_parent(call.service, accepted, came_to)
+                    }
+                    LifecycleIndexStep::PendingUnderOperation => self.finished(
+                        call.service,
+                        accepted,
+                        &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+                    ),
+                }
+            }
+            _ => ran,
+        }
+    }
+
+    /// The answer of a lifecycle's child taken up under its own ID
+    /// (`operation resume <child>`, or `conflict resolve`'s continuation of
+    /// it) that completed while the index does not hold the context its
+    /// local update changed, and whose own index step of it did not
+    /// complete (`taken_up`): that indexing is its parent's exit's (Task
+    /// 22) or any refresh's, and no operation owes it. It is answered as
+    /// a completed save's replay is (R-SDD-16): `discovery_pending`,
+    /// offering the refresh that brings the index up to date, and final, so
+    /// that no resume is offered for what no resume would do.
+    fn owed_to_its_parent(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        came_to: SynchronizationOutcome,
+    ) -> Ran {
+        let Ran { answer, .. } = self.finished(
+            service,
+            accepted,
+            &SynchronizationResult::IndexPending(IndexPending::new(came_to)),
+        );
+        Ran {
+            answer: Answer {
+                recovery: crate::results::absolute_path_string(&accepted.root())
+                    .as_deref()
+                    .map(outcome::refresh_the_root)
+                    .into_iter()
+                    .collect(),
+                ..answer
+            },
+            standing: Standing::Final,
+        }
+    }
+
     /// The domain returned a result: the synchronization has its
     /// outcome, and all that can remain is its index hand-off.
     fn finished(
@@ -1008,10 +1096,141 @@ impl SyncBinding {
         Ran {
             answer: Answer {
                 effects,
+                data: self.link_given(service, accepted, outcome),
                 ..Answer::stopped(outcome::synchronization_result_code(result))
             },
             standing,
         }
+    }
+
+    /// The pull request link of an item whose branch this `item sync`
+    /// published, or found current, in a pull-request repository with a
+    /// remote (design Part H, decision 12, and Part F, decision 4).
+    ///
+    /// A ticket gets it when its branch holds a closure no primary holds,
+    /// and the link record's row is given here. A document gets it when its
+    /// link row exists and the primary does not hold the document after the
+    /// synchronization (R-3, the full proof); the row is read and never
+    /// written, so `given_at` stays the promote's (R-10). Every other
+    /// synchronization gives no data: a republish, the primary's, a direct
+    /// repository's, a ticket that is open or closed, a document with no row
+    /// or that the primary holds. A link that cannot be recorded is not
+    /// given, and the next `item sync` gives it.
+    fn link_given(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        outcome: &SynchronizationOutcome,
+    ) -> Option<MutationDataDto> {
+        let SynchronizationTarget::Context { kind, item_id } = &self.target else {
+            return None;
+        };
+        let (SynchronizationOutcome::Published { target: _, oid }
+        | SynchronizationOutcome::AlreadyCurrent { target: _, oid }) = outcome
+        else {
+            return None;
+        };
+        if self.republish.is_some() {
+            return None;
+        }
+        let root = accepted.root();
+        let ConfigurationInspection::Valid(config) =
+            read_configuration_for(&root, RepositoryOperation::RepositorySnapshot).ok()?
+        else {
+            return None;
+        };
+        let remote = config.publication_remote.as_deref()?;
+        if config.integration() != Integration::PullRequest {
+            return None;
+        }
+        let repository = git2::Repository::open(&root).ok()?;
+        let link = match kind {
+            AuthoringKind::Ticket => {
+                let primaries: Vec<git2::Oid> = [
+                    format!("refs/heads/{}", config.primary_branch),
+                    format!("refs/remotes/{remote}/{}", config.primary_branch),
+                ]
+                .iter()
+                .filter_map(|name| repository.refname_to_id(name).ok())
+                .collect();
+                if !crate::repository::closure::observe::holds_provisional_closure(
+                    &repository,
+                    item_id,
+                    *oid,
+                    &primaries,
+                ) {
+                    return None;
+                }
+                let link = crate::repository::closure::checkpoint::branch_link(
+                    &repository,
+                    &config.primary_branch,
+                    config.forge().as_ref(),
+                    remote,
+                    item_id,
+                );
+                crate::repository::remote::state::with_transaction(
+                    service,
+                    &root,
+                    |tx, repository_id| {
+                        crate::repository::pull_request_links::upsert_link(
+                            tx,
+                            repository_id,
+                            authoring_kind_segment(&AuthoringKind::Ticket),
+                            &item_id.to_string(),
+                            &link,
+                            time::OffsetDateTime::now_utc().unix_timestamp(),
+                        )
+                        .map_err(|_| crate::repository::remote::state::recovery_required())
+                    },
+                )
+                .ok()?;
+                link
+            }
+            AuthoringKind::Document => {
+                // The row is read first, outside any write: a document that
+                // was never promoted has none, and gets no answer without
+                // the full content proof being run for it.
+                let scope = super::super::identity::ScopeKey::for_repository(&root)?;
+                let link = service
+                    .read_session(RepositoryOperation::Read, |db| {
+                        let repository_id: Option<i64> = db
+                            .query_row(
+                                "SELECT id FROM repositories WHERE root_path=?1",
+                                [scope.as_str()],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        let Some(repository_id) = repository_id else {
+                            return Ok(None);
+                        };
+                        Ok(crate::repository::pull_request_links::link_of(
+                            db,
+                            repository_id,
+                            authoring_kind_segment(&AuthoringKind::Document),
+                            &item_id.to_string(),
+                        )?)
+                    })
+                    .ok()??;
+                let tracking_primary = repository
+                    .refname_to_id(&format!("refs/remotes/{remote}/{}", config.primary_branch))
+                    .ok();
+                if crate::repository::promotion::observe::primary_holds_document(
+                    &repository,
+                    *oid,
+                    tracking_primary,
+                    &config.primary_branch,
+                    remote,
+                    item_id,
+                    false,
+                ) {
+                    return None;
+                }
+                link
+            }
+        };
+        Some(MutationDataDto::PullRequestLink(Box::new(
+            PullRequestLinkDataDto::of(&link),
+        )))
     }
 
     /// The domain returned an error. What the request is answered with
@@ -1034,12 +1253,24 @@ impl SyncBinding {
                 standing: Standing::Final,
             };
         }
+        // The domain ends an operation on unresolved history, on the local
+        // commits of a pull-only primary, or on a ticket closed on the
+        // primary (R-30), as it ends a cancelled one, but none is the
+        // caller's cancellation: the answer is the error's. The first names
+        // the repair; the others offer none.
+        let unresolved = matches!(error, SynchronizationError::HistoryUnresolved);
+        let own_end = unresolved
+            || matches!(
+                error,
+                SynchronizationError::PrimaryHasLocalCommits { .. }
+                    | SynchronizationError::TicketClosed
+            );
         let cancelled = match &journal {
             Some(JournalRow::Final {
                 kind: FinalKind::Cancelled,
                 owes_work: _,
                 checkpointed: _,
-            }) => true,
+            }) => !own_end,
             Some(
                 JournalRow::Absent
                 | JournalRow::Pending(_)
@@ -1059,6 +1290,32 @@ impl SyncBinding {
             if let Some(owner) = watch.owner {
                 let _ = service.take_cancellation(owner);
             }
+        }
+        // A pull-only refusal changed nothing here and published nothing,
+        // and will not: every effect is `not_requested`, set explicitly
+        // (`effects_so_far(Unknown)` would say the publication is pending).
+        // It makes no merge, and the journal's row is what settles the
+        // record.
+        if let SynchronizationError::PrimaryHasLocalCommits { commits, complete } = error {
+            return Ran {
+                answer: Answer {
+                    data: Some(MutationDataDto::PrimaryLocalCommits(
+                        PrimaryLocalCommitsDto {
+                            r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                            local_commits: commits
+                                .iter()
+                                .map(|(oid, summary)| LocalCommitDto {
+                                    oid: oid.to_string(),
+                                    summary: summary.clone(),
+                                })
+                                .collect(),
+                            complete: *complete,
+                        },
+                    )),
+                    ..Answer::stopped(outcome::synchronization_error_code(error))
+                },
+                standing: Standing::Stopped { journal },
+            };
         }
         // A merge commit the request made stays whatever stopped it.
         let merge = merge_made(service, accepted);
@@ -1155,13 +1412,33 @@ impl SyncBinding {
                 host_data(error)
             }
         };
+        // The operation the synchronization was refused for: the local
+        // row the reservation found in its way, or, for a reservation
+        // another remote operation holds, that operation.
+        let blocker = error.blocker().cloned().or_else(|| {
+            matches!(error, SynchronizationError::Busy)
+                .then(|| service.reservation_holder(&accepted.root(), accepted.operation_id))
+                .flatten()
+        });
+        let recovery = if unresolved {
+            crate::results::absolute_path_string(&accepted.root())
+                .map(|root| {
+                    RecoveryAction::new(RecoveryActionKind::RemoteHistory, [("root", root.into())])
+                })
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ran {
             answer: Answer {
                 effects,
                 data,
                 local_change,
+                recovery,
                 ..Answer::stopped(code)
-            },
+            }
+            .naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Stopped { journal },
         }
     }
@@ -1201,6 +1478,22 @@ pub(crate) fn conflict_next(
 /// `None` when the journal or Git cannot be read: nothing is claimed on
 /// that.
 fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::Oid> {
+    merge_made_on(
+        service,
+        &accepted.scope,
+        accepted.operation_id,
+        accepted.position.base_ref.as_deref()?,
+    )
+}
+
+/// `merge_made`, of any operation that synchronizes `branch`: a lifecycle's
+/// child has no request of its own.
+pub(super) fn merge_made_on(
+    service: &RepositoryService,
+    scope: &super::super::identity::ScopeKey,
+    operation: OperationId,
+    branch: &str,
+) -> Option<git2::Oid> {
     let merge = service
         .read_session(RepositoryOperation::Read, |connection| {
             Ok(connection
@@ -1214,7 +1507,7 @@ fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::
                         AND step.phase = 'applied' AND step.candidate_oid IS NOT NULL
                       ORDER BY step.window_number DESC, step.ordinal DESC
                       LIMIT 1",
-                    rusqlite::params![accepted.scope.as_str(), accepted.operation_id.to_string()],
+                    rusqlite::params![scope.as_str(), operation.to_string()],
                     |row| row.get::<_, Option<String>>(0),
                 )
                 .optional()?
@@ -1222,8 +1515,7 @@ fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::
         })
         .ok()??;
     let merge = git2::Oid::from_str(&merge).ok()?;
-    let branch = accepted.position.base_ref.as_deref()?;
-    let repository = git2::Repository::open(accepted.root()).ok()?;
+    let repository = git2::Repository::open(scope.as_str()).ok()?;
     let tip = repository.refname_to_id(branch).ok()?;
     (tip == merge || repository.graph_descendant_of(tip, merge).ok()?).then_some(merge)
 }
@@ -1439,3 +1731,7 @@ impl Binding for SyncBinding {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod tests;

@@ -12,12 +12,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(super) mod answer;
 #[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
 pub(super) mod integrate;
 pub(super) mod lifecycle;
 pub(super) mod lifecycle_record;
 pub(super) mod observe;
 pub(super) mod record;
+mod rerun;
 pub(super) mod run;
 
 #[cfg(test)]
@@ -184,10 +186,63 @@ impl DocumentPromotionOutcome {
         self.cleanup
     }
 }
+/// A finished pull-request promotion's answer: it never reached the primary,
+/// so it has no integration or cleanup to report. `Debug` shows IDs, OIDs and
+/// categories only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchPromotionOutcome {
+    operation_id: OperationId,
+    answer: record::PromotionAnswer,
+    publication: Option<PromotionPublication>,
+}
+impl BranchPromotionOutcome {
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    /// How the record answered.
+    pub(super) fn answer(&self) -> record::PromotionAnswer {
+        self.answer
+    }
+    /// What the record's context child published, when that child completed.
+    pub fn publication(&self) -> Option<PromotionPublication> {
+        self.publication
+    }
+    /// An outcome of the answer given, for the binding's tests.
+    #[cfg(test)]
+    pub(super) fn for_testing(
+        answer: record::PromotionAnswer,
+        publication: Option<PromotionPublication>,
+    ) -> Self {
+        Self {
+            operation_id: OperationId::new(),
+            answer,
+            publication,
+        }
+    }
+    /// The same outcome, of the operation `operation`, for a test whose
+    /// answer reads the operation's record.
+    #[cfg(test)]
+    pub(super) fn of_operation_for_testing(self, operation: OperationId) -> Self {
+        Self {
+            operation_id: operation,
+            ..self
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocumentPromotionResult {
     Complete(DocumentPromotionOutcome),
     IndexPending(IndexPending<DocumentPromotionOutcome>),
+    /// A pull-request promote, finished: whatever way it answered.
+    Branch(BranchPromotionOutcome),
+    BranchIndexPending(IndexPending<BranchPromotionOutcome>),
+}
+/// What the promotion lifecycle's runner builds an outcome of: a direct
+/// promote's, or a pull-request promote's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PromotionOutcome {
+    Direct(DocumentPromotionOutcome),
+    Branch(BranchPromotionOutcome),
 }
 
 #[derive(Clone)]
@@ -215,6 +270,8 @@ pub enum PromotionBlocker {
     RemoteContextDeleted,
     HistoryUnknown,
     DocumentInvalidAfterIntegration,
+    /// Last, so the stored blocker masks keep their bits.
+    HistoryUnresolved,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,6 +333,54 @@ impl fmt::Debug for PromotionExpectation {
     }
 }
 
+/// What a pull-request promotion's preview adds to the common facts: whether
+/// the document already has a link row (the situation), the link the preview
+/// shows, and `R` when it is another clone's work this clone has not merged.
+/// `L` is the preview's `context_oid`, `R` its `tracking_context`.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PullRequestPromotion {
+    situation: record::PromotionSituation,
+    link: crate::forge::PullRequestLink,
+    /// `R`, only when it is ahead of or beside `L`: the digest binds `R`
+    /// itself then, and one state for an `R` that is absent, equal to `L` or
+    /// behind it, since a push of `L` moves `R` to it.
+    unmerged_remote: Option<Oid>,
+    /// The document's path on its editing branch, which the preview shows.
+    document_path: PathBuf,
+}
+
+impl PullRequestPromotion {
+    pub(in super::super) fn situation(&self) -> record::PromotionSituation {
+        self.situation
+    }
+    pub(in super::super) fn link(&self) -> &crate::forge::PullRequestLink {
+        &self.link
+    }
+    /// `R`, when it is ahead of or beside `L`.
+    pub(in super::super) fn unmerged_remote(&self) -> Option<Oid> {
+        self.unmerged_remote
+    }
+    pub(in super::super) fn document_path(&self) -> &Path {
+        &self.document_path
+    }
+}
+
+#[cfg(test)]
+impl PullRequestPromotion {
+    /// Facts the binding's tests consent to without observing a repository.
+    pub(super) fn for_testing(
+        situation: record::PromotionSituation,
+        link: crate::forge::PullRequestLink,
+    ) -> Self {
+        Self {
+            situation,
+            link,
+            unmerged_remote: None,
+            document_path: PathBuf::from("docs/fixture.md"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct DocumentPromotionPreview {
     item_id: ItemId,
@@ -283,6 +388,9 @@ pub struct DocumentPromotionPreview {
     context_branch: String,
     context_oid: Oid,
     primary_branch: String,
+    /// The primary the observation judged against: the local primary's tip in
+    /// a direct preview; in a pull-request preview, the tracking primary's tip
+    /// (the local primary is only an input to the content proof there).
     primary_oid: Oid,
     publication_remote: Option<String>,
     tracking_primary: Option<Oid>,
@@ -292,8 +400,14 @@ pub struct DocumentPromotionPreview {
     publication: PlannedPublication,
     cleanup: PlannedCleanup,
     expectation: PromotionExpectation,
+    /// Set for a pull-request promotion, which integrates nothing: its
+    /// `integration` is `AlreadyContained`, its `changes` and `cleanup` empty.
+    pull_request: Option<PullRequestPromotion>,
 }
 impl DocumentPromotionPreview {
+    pub(super) fn pull_request(&self) -> Option<&PullRequestPromotion> {
+        self.pull_request.as_ref()
+    }
     pub fn item_id(&self) -> &ItemId {
         &self.item_id
     }
@@ -354,7 +468,120 @@ impl fmt::Debug for DocumentPromotionPreview {
 #[allow(clippy::large_enum_variant)] // The approved preflight API returns the ready preview by value.
 pub enum DocumentPromotionPreflight {
     Ready(DocumentPromotionPreview),
-    Blocked { blockers: Vec<PromotionBlocker> },
+    Blocked {
+        blockers: Vec<PromotionBlocker>,
+    },
+    /// In a pull-request repository: the primary already holds the document
+    /// (R-3), so there is nothing to confirm.
+    PrimaryHolds,
+}
+
+/// What the mutation boundary reads of a parent record: a lifecycle parent
+/// usually has no journal row, so this is where it stands. It holds
+/// IDs, OIDs, the consent's digest and fixed categories.
+pub(super) struct ParentView<B> {
+    pub(super) step: lifecycle::ParentStep,
+    /// What ended the record, when a consent refusal did.
+    pub(super) refusal: Option<lifecycle_record::Refusal<B>>,
+    /// The digest the record was begun with, which the same operation ID
+    /// is called with again.
+    pub(super) expectation: [u8; 32],
+    pub(super) item_id: ItemId,
+    /// The closure checkpoint the record holds. Its ref may not have moved
+    /// while the step is `closing`.
+    pub(super) checkpoint: Option<Oid>,
+    pub(super) integration: Option<Oid>,
+    /// How that commit reached primary: `already_contained` is a context
+    /// primary held already.
+    pub(super) integration_kind: Option<record::IntegrationKind>,
+    pub(super) publication: Option<record::PublicationCategory>,
+    /// The parent's own flag, which `cancel_document_promotion` or
+    /// `cancel_ticket_closure` sets as well as `request cancel`.
+    pub(super) cancel_requested: bool,
+    /// The children it has bound, either of which may hold the reservation.
+    pub(super) children: [Option<OperationId>; 2],
+    /// A branch record never integrates, and publishes instead.
+    pub(super) path: lifecycle::RecordPath,
+    /// A finished branch record has stored the answer it gave, and answers
+    /// from it ever after.
+    pub(super) answered: bool,
+}
+
+impl<B> ParentView<B> {
+    /// The same view, with a refusal's blockers as `blocker` gives them.
+    pub(super) fn of_blockers<C>(self, blocker: impl Fn(B) -> C) -> ParentView<C> {
+        use lifecycle_record::Refusal;
+        ParentView {
+            step: self.step,
+            refusal: self.refusal.map(|refusal| match refusal {
+                Refusal::Blocked(blockers) => {
+                    Refusal::Blocked(blockers.into_iter().map(blocker).collect())
+                }
+                Refusal::ExternalChange => Refusal::ExternalChange,
+                Refusal::ReconfirmationRequired => Refusal::ReconfirmationRequired,
+            }),
+            expectation: self.expectation,
+            item_id: self.item_id,
+            checkpoint: self.checkpoint,
+            integration: self.integration,
+            integration_kind: self.integration_kind,
+            publication: self.publication,
+            cancel_requested: self.cancel_requested,
+            children: self.children,
+            path: self.path,
+            answered: self.answered,
+        }
+    }
+}
+
+/// The parent record of `operation`, of the lifecycle `R` is the record of,
+/// when there is one.
+pub(super) fn lifecycle_parent<R, B>(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Result<Option<ParentView<B>>, RepositoryError>
+where
+    R: lifecycle_record::ParentRecord<Refusal = lifecycle_record::Refusal<B>>,
+    B: Clone,
+{
+    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+        Ok(
+            lifecycle_record::read_record::<R>(tx, repository_id, operation)?.map(|parent| {
+                ParentView {
+                    step: parent.step(),
+                    refusal: parent.refusal().cloned(),
+                    expectation: parent.expectation_bytes(),
+                    item_id: parent.item_id().clone(),
+                    checkpoint: parent.written_checkpoint(),
+                    integration: parent.integration_oid(),
+                    integration_kind: parent.integration_kind(),
+                    publication: parent.publication(),
+                    cancel_requested: parent.cancel_requested(),
+                    children: [parent.context_sync_id(), parent.primary_sync_id()],
+                    path: parent.path(),
+                    answered: parent.answered(),
+                }
+            }),
+        )
+    })
+}
+
+/// The operation of the item's unfinished parent record of the lifecycle `R`
+/// is the record of, in the repository `repository_id`, when a new request
+/// could not supersede it (decision 33). It is a read, made in the caller's
+/// read session.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn unfinished_holder<R: lifecycle_record::ParentRecord>(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    item: &ItemId,
+) -> Result<Option<OperationId>, crate::repository::ReadError> {
+    Ok(
+        lifecycle_record::unfinished_record::<R>(db, repository_id, item)?
+            .filter(|parent| !parent.supersedable())
+            .map(|parent| parent.operation_id()),
+    )
 }
 
 impl RepositoryService {
@@ -363,7 +590,18 @@ impl RepositoryService {
         request: PromoteDocumentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-        run::promote(self, request, session)
+        run::promote(self, request, session, None, &mut run::Unobserved)
+    }
+    /// `promote_document`, stopping at each safe point when `probe` says so,
+    /// and telling `progress` of its steps (D5 decision 11).
+    pub(super) fn promote_document_observed<P: SessionCredentialProvider>(
+        &self,
+        request: PromoteDocumentRequest,
+        session: &mut SessionCredentials<P>,
+        probe: lifecycle::CancellationProbe,
+        progress: &mut dyn run::RunObserver,
+    ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+        run::promote(self, request, session, Some(probe), progress)
     }
     pub fn cancel_document_promotion(
         &self,

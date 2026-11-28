@@ -1,14 +1,17 @@
 //! Prepare, authenticate, recheck, use, and drop one selected-key operation.
 use super::{
+    agent::AgentSigner,
     callbacks::{CallbackAttempt, build_callbacks},
     endpoint::configured_remote_endpoint,
     remote::{AuthenticatedSshRemote, backend_failure},
     *,
 };
 use crate::repository::{
-    ConfigurationInspection, RepositoryOperation, RepositoryService, canonical_repository_root,
-    keys::*, read_configuration,
+    CallRegistry, ConfigurationInspection, RepositoryError, RepositoryOperation, RepositoryService,
+    canonical_repository_root, keys::*, read_configuration,
+    remote::observation::endpoint_digest_of, setup::record as setup_record,
 };
+use rusqlite::OptionalExtension;
 
 impl RepositoryService {
     pub fn verify_ssh_transport<P: SessionCredentialProvider>(
@@ -72,6 +75,62 @@ impl RepositoryService {
         expectation: Option<&SshScopeExpectation>,
         use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
     ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_from(
+            request,
+            session,
+            automatic,
+            expectation,
+            RemoteSource::Configured,
+            use_remote,
+        )
+    }
+
+    /// `verify_ssh_transport`, for the remote of a pending setup: the host
+    /// observation and approval of a remote that no configuration file names
+    /// yet. The scope is the record's, read by the caller; every recheck
+    /// holds the call to it.
+    pub(crate) fn verify_setup_transport<P: SessionCredentialProvider>(
+        &self,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<SshTransportVerified, SshTransportError> {
+        self.with_setup_remote(request, scope, false, session, |remote| {
+            remote.advertisement()?;
+            Ok(remote.verified())
+        })
+    }
+
+    /// One connection, in `request.direction`, to the remote of a pending
+    /// setup, with today's `automatic` policy for a background call. The
+    /// call can use only the four setup methods of the connection.
+    pub(crate) fn with_setup_remote<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        scope: &SetupScope,
+        automatic: bool,
+        session: &mut SessionCredentials<P>,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
+        self.with_authenticated_remote_from(
+            request,
+            session,
+            automatic,
+            None,
+            RemoteSource::Setup(scope.clone()),
+            use_remote,
+        )
+    }
+
+    fn with_authenticated_remote_from<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        automatic: bool,
+        expectation: Option<&SshScopeExpectation>,
+        source: RemoteSource,
+        use_remote: impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
+    ) -> Result<T, SshTransportError> {
         let mut context = SshTransportError {
             root: request.root.clone(),
             remote_name: String::new(),
@@ -83,7 +142,7 @@ impl RepositoryService {
         if !crate::runtime::git_transport_initialized() {
             return Err(context.with_kind(SshTransportErrorKind::RuntimeUninitialized));
         }
-        let prepared = match self.prepare_ssh(request, &mut context) {
+        let prepared = match self.prepare_ssh_from(request, &mut context, source) {
             Ok(prepared) => prepared,
             Err(kind) => {
                 invalidate_preflight_session(session, &kind);
@@ -108,14 +167,53 @@ impl RepositoryService {
         session.reconcile_source(&unlock);
         let mut use_remote = Some(use_remote);
         let mut may_prompt = false;
-        if !cached {
-            match self.connect_ssh(&prepared, &context, None, &mut use_remote, &mut may_prompt) {
+        // An agent that holds the selected key signs for it: no passphrase, no
+        // prompt. Anything else about the agent (unset, unreachable, key absent,
+        // refusing to sign, rejected by the server) leaves today's flow as it
+        // was. A failure that is not about the key (host trust, the network)
+        // would repeat in that flow, so it ends here.
+        if let Ok(signer) = super::agent::lookup(
+            self.agent_socket.as_deref(),
+            &prepared.registration.private_key_path,
+        ) {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                Some(&signer),
+                &mut use_remote,
+                &mut false,
+            ) {
                 Ok(result) => return result,
+                Err(error) if !authentication_failure(&error.kind) => return Err(error),
+                Err(_) => {}
+            }
+        }
+        if !cached {
+            match self.connect_ssh(
+                &prepared,
+                &context,
+                None,
+                None,
+                &mut use_remote,
+                &mut may_prompt,
+            ) {
+                Ok(result) => return result,
+                // A key stored without a passphrase has none to ask for: the
+                // failure is the answer, and a prompt could never succeed.
+                Err(error)
+                    if may_prompt
+                        && !source_may_need_passphrase(&prepared.registration.private_key_path) =>
+                {
+                    return Err(error);
+                }
                 Err(_) if may_prompt => {}
                 Err(error) => return Err(error),
             }
         }
-        // The first connection and all callback/Git/registry handles have dropped.
+        // The first connection and all its callback and Git handles have
+        // dropped. The call's registry connection stays open, idle: it holds
+        // no guard and no read transaction (design decision 36).
         // An Err here prevents newly supplied material from entering the cache.
         if automatic && let Some(failure) = session.blocked_unlock(&unlock) {
             return Err(context.with_kind(match failure {
@@ -137,12 +235,14 @@ impl RepositoryService {
                 &prepared,
                 &context,
                 Some(passphrase),
+                None,
                 &mut use_remote,
                 &mut may_prompt,
             )
             .map_err(|error| {
-                connection_error = Some(error);
-                PassphraseUseFailure::Unavailable
+                let failure = passphrase_use_failure(cached, &error.kind);
+                connection_error = Some(blame_for_cached(cached, error));
+                failure
             })
         });
         // Cancellation/unavailability can also race state changes in the provider.
@@ -157,11 +257,11 @@ impl RepositoryService {
             Ok(result) => {
                 if result
                     .as_ref()
-                    .is_err_and(|error| invalidates_secret(&error.kind))
+                    .is_err_and(|error| invalidates_secret(cached, &error.kind))
                 {
                     session.invalidate(prepared.registration.id);
                 }
-                result
+                result.map_err(|error| blame_for_cached(cached, error))
             }
             Err(failure) => Err(context.with_kind(match failure {
                 SessionUnlockFailure::Cancelled => SshTransportErrorKind::UnlockCancelled,
@@ -173,18 +273,36 @@ impl RepositoryService {
         }
     }
 
+    #[cfg(test)]
     fn prepare_ssh(
         &self,
         request: VerifySshTransportRequest,
         context: &mut SshTransportError,
     ) -> Result<PreparedSshAttempt, SshTransportErrorKind> {
+        self.prepare_ssh_from(request, context, RemoteSource::Configured)
+    }
+
+    /// `prepare_ssh`, for a remote taken from `source`: the file's
+    /// publication remote, exactly as every call takes it, or the setup's.
+    pub(super) fn prepare_ssh_from(
+        &self,
+        request: VerifySshTransportRequest,
+        context: &mut SshTransportError,
+        remote_source: RemoteSource,
+    ) -> Result<PreparedSshAttempt, SshTransportErrorKind> {
         let (repository, root) =
             canonical_repository_root(&request.root, RepositoryOperation::Inspect)
                 .map_err(|_| SshTransportErrorKind::ConfigurationInvalid)?;
         context.root = root;
-        context.remote_name = publication_remote(&context.root)?;
+        context.remote_name = match &remote_source {
+            RemoteSource::Configured => publication_remote(&context.root)?,
+            RemoteSource::Setup(scope) => scope.remote_name.clone(),
+        };
+        // The call's key reads, this one and its rechecks', go through one
+        // registry connection, which the call holds until it ends.
+        let registry = CallRegistry::new();
         let registration = self
-            .list_shared_keys()
+            .list_shared_keys_in(&registry)
             .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?
             .into_iter()
             .find(|registration| registration.selected)
@@ -193,6 +311,9 @@ impl RepositoryService {
         repository
             .find_remote(&context.remote_name)
             .map_err(|_| SshTransportErrorKind::PublicationRemoteMissing)?;
+        if let RemoteSource::Setup(scope) = &remote_source {
+            self.check_setup_source(&registry, &context.root, scope, &repository)?;
+        }
         let endpoint =
             configured_remote_endpoint(&repository, &context.remote_name, context.direction)?;
         context.authority = Some(endpoint.authority.clone());
@@ -208,6 +329,8 @@ impl RepositoryService {
             endpoint,
             trust,
             approval: request.approval,
+            registry,
+            remote_source,
         })
     }
 
@@ -216,8 +339,9 @@ impl RepositoryService {
         prepared: &PreparedSshAttempt,
         context: &SshTransportError,
     ) -> Result<(), SshTransportErrorKind> {
+        // The current rows, read afresh on the call's registry connection.
         let selected = self
-            .list_shared_keys()
+            .list_shared_keys_in(&prepared.registry)
             .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?
             .into_iter()
             .find(|registration| registration.selected);
@@ -233,14 +357,69 @@ impl RepositoryService {
         {
             return Err(SshTransportErrorKind::KeySourceChanged);
         }
-        if publication_remote(&context.root).as_ref() != Ok(&context.remote_name) {
-            return Err(SshTransportErrorKind::EndpointChanged);
+        match &prepared.remote_source {
+            RemoteSource::Configured => {
+                if publication_remote(&context.root).as_ref() != Ok(&context.remote_name) {
+                    return Err(SshTransportErrorKind::EndpointChanged);
+                }
+            }
+            RemoteSource::Setup(scope) => {
+                if scope.remote_name != context.remote_name {
+                    return Err(SshTransportErrorKind::EndpointChanged);
+                }
+            }
         }
         let repository = git2::Repository::open(&context.root)
             .map_err(|_| SshTransportErrorKind::EndpointChanged)?;
+        if let RemoteSource::Setup(scope) = &prepared.remote_source {
+            self.check_setup_source(&prepared.registry, &context.root, scope, &repository)?;
+        }
         if configured_remote_endpoint(&repository, &context.remote_name, context.direction).as_ref()
             != Ok(&prepared.endpoint)
         {
+            return Err(SshTransportErrorKind::EndpointChanged);
+        }
+        Ok(())
+    }
+
+    /// Whether the setup's record still holds the scope's setup, remote and
+    /// primary, and the remote's endpoints still digest to the scope's
+    /// digest. Anything else is `EndpointChanged`: the setup this call was
+    /// made for is not the one there is, or its remote is not where it was.
+    /// The record is read on the call's registry connection, as its key
+    /// reads are.
+    fn check_setup_source(
+        &self,
+        registry: &CallRegistry,
+        root: &std::path::Path,
+        scope: &SetupScope,
+        repository: &git2::Repository,
+    ) -> Result<(), SshTransportErrorKind> {
+        let current = self
+            .read_key_registry(Some(registry), RepositoryOperation::Inspect, |connection| {
+                let Some(key) = root.to_str() else {
+                    return Ok(None);
+                };
+                let id = connection
+                    .query_row(
+                        "SELECT id FROM repositories WHERE root_path = ?1",
+                        [key],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map_err(RepositoryError::sqlite)?;
+                id.map(|id| setup_record::read(connection, id))
+                    .transpose()
+                    .map(Option::flatten)
+            })
+            .and_then(|read| read)
+            .map_err(|_| SshTransportErrorKind::RegistryUnavailable)?;
+        let holds = current.as_ref().is_some_and(|record| {
+            record.setup_id == scope.setup_id
+                && record.remote_name == scope.remote_name
+                && record.primary_branch == scope.primary_branch
+        });
+        if !holds || endpoint_digest_of(repository, &scope.remote_name) != scope.endpoint_digest {
             return Err(SshTransportErrorKind::EndpointChanged);
         }
         Ok(())
@@ -251,6 +430,7 @@ impl RepositoryService {
         prepared: &PreparedSshAttempt,
         context: &SshTransportError,
         passphrase: Option<&str>,
+        agent: Option<&AgentSigner>,
         use_remote: &mut Option<
             impl FnOnce(&mut AuthenticatedSshRemote<'_, '_>) -> Result<T, SshTransportError>,
         >,
@@ -283,7 +463,7 @@ impl RepositoryService {
                     SshDirection::Fetch => git2::Direction::Fetch,
                     SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
                 },
-                Some(build_callbacks(prepared, passphrase, &attempt)),
+                Some(build_callbacks(prepared, passphrase, agent, &attempt)),
                 None,
             )
             .map_err(|error| {
@@ -316,12 +496,15 @@ impl RepositoryService {
         .map_err(|kind| context.with_kind(kind))?;
         #[cfg(test)]
         super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
+        // The call lists and transfers on this connection, under this attempt.
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
+            &attempt,
             self,
             prepared,
             context,
             passphrase,
+            agent,
             observed,
         );
         Ok(use_remote.take().expect("one authenticated operation")(
@@ -370,16 +553,47 @@ pub(super) fn authentication_failure(kind: &SshTransportErrorKind) -> bool {
             | SshTransportErrorKind::UnlockFailed
     )
 }
-fn invalidates_secret(kind: &SshTransportErrorKind) -> bool {
-    authentication_failure(kind)
-        || matches!(
-            kind,
-            SshTransportErrorKind::SelectionChanged
-                | SshTransportErrorKind::KeySourceChanged
-                | SshTransportErrorKind::EndpointChanged
-                | SshTransportErrorKind::HostTrustChanged
-        )
+/// Whether a failed attempt means the cached or just-supplied passphrase must
+/// go. A passphrase that already unlocked the key (`cached`) is not at fault
+/// when a server rejects the key or cannot be reached, and another repository
+/// shares it, so only a change under it evicts. A new passphrase is on trial:
+/// any rejection counts against it.
+fn invalidates_secret(cached: bool, kind: &SshTransportErrorKind) -> bool {
+    changed_under_secret(kind) || (!cached && authentication_failure(kind))
 }
+fn changed_under_secret(kind: &SshTransportErrorKind) -> bool {
+    matches!(
+        kind,
+        SshTransportErrorKind::SelectionChanged
+            | SshTransportErrorKind::KeySourceChanged
+            | SshTransportErrorKind::EndpointChanged
+            | SshTransportErrorKind::HostTrustChanged
+    )
+}
+/// What a failed connection says about the passphrase it used.
+fn passphrase_use_failure(cached: bool, kind: &SshTransportErrorKind) -> PassphraseUseFailure {
+    if cached && !changed_under_secret(kind) {
+        PassphraseUseFailure::Unrelated
+    } else {
+        PassphraseUseFailure::Unavailable
+    }
+}
+/// A server's rejection of a key whose passphrase already worked is not an
+/// unlock failure, and reads as one only because a passphrase was supplied.
+fn blame_for_cached(cached: bool, error: SshTransportError) -> SshTransportError {
+    if cached && error.kind == SshTransportErrorKind::UnlockFailed {
+        error.with_kind(SshTransportErrorKind::KeyRejected)
+    } else {
+        error
+    }
+}
+
+#[cfg(test)]
+#[path = "operation_passphrase_tests.rs"]
+mod passphrase_tests;
+#[cfg(test)]
+#[path = "operation_registry_tests.rs"]
+mod registry_tests;
 impl SshTransportError {
     pub(super) fn with_kind(&self, kind: SshTransportErrorKind) -> Self {
         Self {

@@ -1,0 +1,15 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: write=written checkpoint=committed discovery=current integration=complete commit=<oid>
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Operation id: <id>
+Result oid: <oid>
+State: complete
+--- stderr
+progress: accepted
+progress: observing
+progress: updating_local
+progress: indexing
+--- exit 0

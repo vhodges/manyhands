@@ -237,6 +237,30 @@ fn optional_objects_allow_missing_but_refuse_null_and_check_nested_fields() {
 }
 
 #[test]
+fn nullable_objects_tell_absent_from_null_and_refuse_other_types() {
+    // Absent is `None`; null is `Some(None)`: the one removes nothing, the
+    // other removes the table.
+    assert!(ok(object("{}").nullable_object("forge")).is_none());
+    assert!(matches!(
+        ok(object(r#"{"forge":null}"#).nullable_object("forge")),
+        Some(None)
+    ));
+    let present = ok(object(r#"{"forge":{"kind":"github"}}"#).nullable_object("forge"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(ok(present.string("kind")), "github");
+    for value in ["true", "1", "[]", r#""VALUE-SENTINEL-41""#] {
+        assert!(matches!(
+            object(&format!("{{\"forge\":{value}}}")).nullable_object("forge"),
+            Err(InputError::WrongType {
+                field: "forge",
+                expected: "an object or null"
+            })
+        ));
+    }
+}
+
+#[test]
 fn enums_require_an_exact_allowed_string() {
     for value in ALLOWED {
         let input = object(&format!(r#"{{"protection":"{value}"}}"#));
@@ -512,5 +536,32 @@ fn an_object_list_that_is_missing_empty_or_not_a_list_of_objects_is_refused() {
             "Input field items must be a non-empty array of objects."
         );
         assert!(!detail.contains(SENTINEL));
+    }
+}
+
+#[test]
+fn a_whole_number_is_required_and_is_nothing_else() {
+    let object = parse(br#"{"n":600}"#).ok().unwrap();
+    assert_eq!(object.whole_number("n").ok(), Some(600));
+    assert!(matches!(
+        object.whole_number("other"),
+        Err(InputError::Missing("other"))
+    ));
+    for text in [
+        &br#"{"n":"600"}"#[..],
+        br#"{"n":600.5}"#,
+        br#"{"n":600.0}"#,
+        br#"{"n":-1}"#,
+        br#"{"n":null}"#,
+        br#"{"n":[600]}"#,
+    ] {
+        let object = parse(text).ok().unwrap();
+        assert!(matches!(
+            object.whole_number("n"),
+            Err(InputError::WrongType {
+                field: "n",
+                expected: "a whole number"
+            })
+        ));
     }
 }

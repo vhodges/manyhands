@@ -30,6 +30,8 @@ mod support;
 #[path = "mutation_confirmation/enablement_index.rs"]
 mod enablement_index;
 
+#[path = "mutation_confirmation/retirement.rs"]
+mod retirement;
 #[path = "mutation_confirmation/unusable_identity.rs"]
 mod unusable_identity;
 
@@ -2421,6 +2423,9 @@ fn killed_enable(root: &Path) -> Mutation {
         primary_branch: "main".to_owned(),
         identity: None,
         slug_prefix: None,
+        publication_remote: None,
+        integration: None,
+        forge: None,
     })
 }
 
@@ -2578,6 +2583,9 @@ fn of_two_requests_racing_for_one_confirmation_one_is_confirmation_used() {
                 primary_branch: "main".to_owned(),
                 identity: None,
                 slug_prefix: None,
+                publication_remote: None,
+                integration: None,
+                forge: None,
             }),
         );
         assert_eq!(enabled.code, ResultCode::Ok, "{}", enabled.message);

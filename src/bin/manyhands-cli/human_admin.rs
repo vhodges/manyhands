@@ -35,9 +35,22 @@ pub fn republish_noop(envelope: &Envelope<PrepareDataDto>) -> Option<Human> {
     })
 }
 
+/// `fields`, less the top-level keys a caller shows in its own form.
+pub(crate) fn fields_without(dto: &impl serde::Serialize, keys: &[&str]) -> String {
+    let Ok(mut value) = serde_json::to_value(dto) else {
+        return String::new();
+    };
+    if let Some(fields) = value.as_object_mut() {
+        for key in keys {
+            fields.remove(*key);
+        }
+    }
+    fields(&value)
+}
+
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.
-pub(super) fn fields(dto: &impl serde::Serialize) -> String {
+pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut String) {
         match value {
             serde_json::Value::Object(values) => {
@@ -83,15 +96,32 @@ pub(super) fn fields(dto: &impl serde::Serialize) -> String {
 }
 pub fn preview(preview: &PreviewDto) -> String {
     let details = match &preview.details {
+        PreviewDetailsDto::SetupCancel(d) => fields(d),
+        PreviewDetailsDto::Setup(d) => fields(d),
         PreviewDetailsDto::Repository(d) => fields(d),
         PreviewDetailsDto::RemoteRemoval(d) => fields(d),
         PreviewDetailsDto::RepositoryRemoval(d) => fields(d),
         PreviewDetailsDto::KeyDeletion(d) => fields(d),
-        PreviewDetailsDto::OperationAbandon(d) => fields(d),
+        PreviewDetailsDto::OperationAbandon(d) => {
+            // What a local operation has no part in is left out.
+            let absent: Vec<&str> = [
+                ("retirement", d.retirement.is_none()),
+                ("evidence", d.evidence.is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(key, none)| none.then_some(key))
+            .collect();
+            fields_without(d, &absent)
+        }
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
         PreviewDetailsDto::Republish(d) => fields(d),
+        PreviewDetailsDto::ResolveHistory(d) => fields(d),
+        PreviewDetailsDto::ResolveCacheLoss(d) => fields(d),
+        PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
+        PreviewDetailsDto::PullRequestClosure(d) => pull_request_closure_details(d),
+        PreviewDetailsDto::PullRequestPromotion(d) => pull_request_promotion_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -104,6 +134,80 @@ pub fn preview(preview: &PreviewDto) -> String {
     ));
     out
 }
+/// A preview's details: its fields, with each change on one line, its kind
+/// beside its path, where `Changes` sorts.
+fn lifecycle_details(details: &manyhands::repository::LifecyclePreviewDto) -> String {
+    let fields = fields_without(details, &["changes"]);
+    let changes: String = if details.changes.is_empty() {
+        "Changes: none\n".into()
+    } else {
+        details
+            .changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "Changes: {} {}\n",
+                    change.change.as_str(),
+                    field(&change.path)
+                )
+            })
+            .collect()
+    };
+    let at = fields
+        .lines()
+        .position(|line| {
+            line.split(':')
+                .next()
+                .is_some_and(|label| label > "Changes")
+        })
+        .map_or(fields.len(), |line| {
+            fields.lines().take(line).map(|text| text.len() + 1).sum()
+        });
+    format!("{}{changes}{}", &fields[..at], &fields[at..])
+}
+
+/// A pull-request closure's details: its fields, and for a new branch each
+/// path the old context holds that the primary does not, on a line of its
+/// own, through the output's field escaping.
+fn pull_request_closure_details(
+    details: &manyhands::repository::PullRequestClosurePreviewDto,
+) -> String {
+    let mut out = fields_without(details, &["unheld"]);
+    for entry in &details.unheld {
+        out.push_str(&format!(
+            "not on {}: {} {}\n",
+            field(&details.primary_branch),
+            entry.change.as_str(),
+            field(&entry.path)
+        ));
+    }
+    out
+}
+
+/// A pull-request promote's details: its fields, less its tag, then the link
+/// in the words of `PullRequestLink::human_line`, on a line of its own.
+fn pull_request_promotion_details(
+    details: &manyhands::repository::PullRequestPromotionPreviewDto,
+) -> String {
+    format!(
+        "{}{}\n",
+        fields_without(details, &["type", "pull_request"]),
+        field(&link_line(&details.pull_request))
+    )
+}
+
+/// The sentence that says where to open a pull request, from the link
+/// object a result carries: the forge is not part of it.
+pub(crate) fn link_line(link: &manyhands::repository::PullRequestDto) -> String {
+    manyhands::forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line()
+}
+
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
     match effect {
         PreviewEffect::DirectoryCreated => "create the directory",
@@ -125,6 +229,7 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::PublicKeyFileDeleted => "delete the public key file",
         PreviewEffect::KeyUnregistered => "unregister the key",
         PreviewEffect::OperationClosed => "close the operation",
+        PreviewEffect::PushMarkedRejected => "record its push as refused",
         PreviewEffect::RequestReleased => "release the request",
         PreviewEffect::HostPinned => "pin the host key",
         PreviewEffect::HostPinReplaced => "replace the host pin",
@@ -133,6 +238,25 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::SourceWritten => "write the corrected source",
         PreviewEffect::CheckpointCommitted => "commit the checkpoint",
         PreviewEffect::BranchRepublished => "push the deleted branch again at the local commit",
+        PreviewEffect::HistoryFlagCleared => "clear the remote history flag",
+        PreviewEffect::HistoryResolved => "record the context as never published",
+        PreviewEffect::ContextSynchronized => "synchronize the editing branch with the remote",
+        PreviewEffect::ClosureRecorded => "record the closure on the editing branch",
+        PreviewEffect::PrimaryIntegrated => "merge the editing branch into primary",
+        PreviewEffect::PrimaryPublished => "publish primary",
+        PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
+        PreviewEffect::WorktreeRemoved => "remove the editing worktree",
+        PreviewEffect::BranchDeleted => "delete the local editing branch",
+        PreviewEffect::SetupRecorded => "record the setup",
+        PreviewEffect::SetupBranchCommitted => "commit the setup on a branch",
+        PreviewEffect::SetupBranchPublished => "publish the setup branch",
+        PreviewEffect::SetupBranchDeletedRemotely => "delete the setup branch from the remote",
+        PreviewEffect::SetupBranchDeleted => "delete the local setup branch",
+        PreviewEffect::SetupRecordRemoved => "remove the setup record",
+        PreviewEffect::RepositoryUnregistered => "take the repository out of the list",
+        PreviewEffect::ContextPublished => "publish the editing branch",
+        PreviewEffect::PullRequestLink => "record the pull request link",
+        PreviewEffect::ClosureWithdrawn => "withdraw the closure from the editing branch",
     }
 }
 fn effects(effects: &Effects) -> String {
@@ -178,16 +302,66 @@ pub fn mutation_success(envelope: &Envelope<MutationDataDto>) -> Human {
     stdout.push_str(&metadata(envelope));
     if let Some(data) = &envelope.data {
         stdout.push_str(&fields(data));
+        stdout.push_str(&setup_lines(data));
     }
     Human {
         stdout,
         notes: vec![],
     }
 }
+/// A setup's answer, in words: how far the setup has come and the link that
+/// opens its pull request. Nothing for any other data.
+fn setup_lines(data: &MutationDataDto) -> String {
+    if let MutationDataDto::SetupCancel(cancel) = data {
+        let mut lines = String::new();
+        if cancel.remote_branch == "kept" {
+            lines.push_str("The setup branch on the remote is at another commit than the one set up, and was left.\n");
+        }
+        if cancel.local_branch == "kept" {
+            lines.push_str("The local setup branch was left: it is at another commit than the one set up, or it is checked out.\n");
+        }
+        return lines;
+    }
+    let MutationDataDto::Setup(setup) = data else {
+        return String::new();
+    };
+    let link = &setup.pull_request;
+    let state = if setup.state == "published" {
+        format!(
+            "waiting for {} to merge into {}",
+            field(&setup.branch),
+            field(&link.target)
+        )
+    } else {
+        "recorded, not published yet".to_owned()
+    };
+    let line = manyhands::forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line();
+    format!("Setup: {state}\n{}\n", field(&line))
+}
 pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> String {
     let mut out = metadata(envelope);
+    // A setup that the remote's primary already holds: the refusal names the
+    // setup in its data, which no other refusal of the command does.
+    let merged = envelope.command == "repo setup-cancel"
+        && envelope.code == ResultCode::RecoveryRequired
+        && matches!(envelope.data, Some(MutationDataDto::Setup(_)));
     if let Some(data) = &envelope.data {
         out.push_str(&fields(data));
+        // Its words say the setup is waiting for a merge, which is not so.
+        if !merged {
+            out.push_str(&setup_lines(data));
+        }
+    }
+    if merged {
+        out.push_str(
+            "hint: a setup that the remote's primary already holds cannot be cancelled; run manyhands-cli poll once so that the repository finishes it\n",
+        );
     }
     if supplied && envelope.code == ResultCode::TransportUnavailable {
         out.push_str("hint: if the passphrase was wrong, run the command again\n");

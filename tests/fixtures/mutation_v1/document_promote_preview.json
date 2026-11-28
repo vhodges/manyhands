@@ -1,0 +1,83 @@
+{
+  "code": "ok",
+  "command": "document promote",
+  "data": {
+    "command": "document promote",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDC",
+      "changes": [
+        {
+          "change": "added",
+          "path": "docs/lifecycle.md"
+        }
+      ],
+      "cleanup": {
+        "local_branch": true,
+        "remote_branch": true,
+        "worktree": true
+      },
+      "closure": null,
+      "context_oid": "<context>",
+      "integration": "merge_commit",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+      "kind": "document",
+      "primary_branch": "main",
+      "primary_oid": "<primary>",
+      "publication": "publish",
+      "remote": "origin",
+      "root": "<root>",
+      "slug": null
+    },
+    "effects": [
+      {
+        "effect": "context_synchronized"
+      },
+      {
+        "effect": "primary_integrated"
+      },
+      {
+        "effect": "primary_published"
+      },
+      {
+        "effect": "remote_branch_deleted"
+      },
+      {
+        "effect": "worktree_removed"
+      },
+      {
+        "effect": "branch_deleted"
+      }
+    ],
+    "expires_at": "<expires>",
+    "scope": {
+      "branch": null,
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

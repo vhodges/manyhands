@@ -17,7 +17,7 @@ use std::{
     sync::mpsc,
 };
 
-use gpui_kit::{Entity, TestAppContext, px, size};
+use gpui_kit::{Entity, TestAppContext};
 use manyhands::{
     canonical::{CONFIG_PATH, ItemId},
     repository::{ItemDtoKind, RequestId},
@@ -93,7 +93,7 @@ pub(super) fn posting_shell(
     build(&fixture, &root);
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.resize_keeping_content(1440., 1400., cx);
     shell.run(cx);
     open_ticket(&shell, &root, cx);
     (shell, root)

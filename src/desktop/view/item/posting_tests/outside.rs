@@ -13,20 +13,29 @@ use super::support::{
     posting_shell, press, submit, until_answered, until_attempt, write_new,
 };
 use crate::desktop::{
-    model::publication::CommentOutcome,
-    services::JobKind,
-    view::{harness::Shell, operations::recovery_id},
+    model::{activity::rows::RowKey, publication::CommentOutcome},
+    services::{JobKind, requests::DesktopRequestId},
+    view::{
+        activity_support::{refresh, row},
+        harness::Shell,
+        operations::DISMISS,
+    },
 };
 
-/// The labels of the recovery controls the operation entry of `id` shows.
-fn recovery_labels(
-    shell: &Shell,
-    id: crate::desktop::services::requests::DesktopRequestId,
-    cx: &mut TestAppContext,
-) -> Vec<String> {
-    (0..4)
-        .filter_map(|n| shell.label(recovery_id(id, n), cx))
-        .collect()
+/// The labels of every control the log's entry of the request `id` offers,
+/// after a refresh. The entry is listed and offers Dismiss, so an empty
+/// answer cannot be an entry that is missing.
+fn recovery_labels(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Vec<String> {
+    refresh(shell, cx);
+    let labels: Vec<String> = row(shell, &RowKey::Request(id), cx)
+        .expect("the post's entry")
+        .row
+        .menu
+        .into_iter()
+        .map(|offer| offer.label)
+        .collect();
+    assert!(labels.iter().any(|label| label == DISMISS), "{labels:?}");
+    labels
 }
 
 /// Decision 26: a comment post whose answer is not saved, which the

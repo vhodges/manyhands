@@ -167,6 +167,30 @@ pub(super) fn discard_note(
 }
 
 impl ItemPane {
+    /// Whether a post of `composer`'s comment waits for the lock: while the
+    /// item's close or merge is unfinished a comment would change the
+    /// item's working copy (R-23, P23). The composer says so with the
+    /// item's words, and its text stays. Submit, Retry and Post as a new
+    /// comment all ask here before they send. The ask is made when the
+    /// action is pressed: a lock that arrives while Post as a new comment
+    /// re-targets its text (`retarget`) does not stop that post.
+    pub(super) fn refused_while_locked(
+        &mut self,
+        composer: EntityId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.edits_wait(cx) {
+            return false;
+        }
+        let words = self.refused_words(cx);
+        if let Some((_, slot)) = self.composers.find(composer) {
+            slot.composer
+                .clone()
+                .update(cx, |composer, cx| composer.say_refused(words, cx));
+        }
+        true
+    }
+
     /// Submit: posts the composer's comment; an adopted draft with no
     /// record after P4's checks. An adopted draft that was submitted
     /// waits for Retry.
@@ -182,6 +206,12 @@ impl ItemPane {
         if slot.post.busy || slot.post.resend_pending {
             return;
         }
+        if self.refused_while_locked(composer, cx) {
+            return;
+        }
+        let Some((_, slot)) = self.composers.find(composer) else {
+            return;
+        };
         let checks = slot.post.unchecked;
         self.start_post(composer, checks, window, cx);
     }

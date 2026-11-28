@@ -7,12 +7,13 @@ use crate::{
 };
 use clap::ArgMatches;
 use manyhands::{
+    canonical::{ForgeKind, ForgeSetting, Integration},
     repository::{
         CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, InitialsChange,
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput, Mutation, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
-        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
-        RequestId, SharedKeyId,
+        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
+        RepoSetupCancelInput, RepositoryService, RequestId, SharedKeyId,
         keys::{KeyProtection, KeyStore},
         transport::SshAuthority,
     },
@@ -164,10 +165,7 @@ pub fn repo_identity_set(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::RepoIdentitySet(RepoIdentitySetInput {
                 root: root.clone(),
@@ -183,10 +181,71 @@ struct RepositoryInput {
     primary_branch: String,
     identity: Option<CommitIdentity>,
     slug_prefix: Option<String>,
+    /// What only `repo enable` takes: the publication remote, the mode and
+    /// the forge. A `repo create` input never holds them.
+    publication_remote: Option<String>,
+    integration: Option<Integration>,
+    forge: Option<ForgeSetting>,
 }
 
-fn repository_input(input: &InputObject) -> Result<RepositoryInput, InputError> {
-    input.only(&["primary_branch", "identity", "ticket_slug_prefix"])?;
+const FORGE_KINDS: &[&str] = &[
+    "bitbucket-cloud",
+    "bitbucket-data-center",
+    "github",
+    "gitlab",
+];
+
+/// The `forge` object of a `repo enable` input: closed, and each kind one of
+/// the four the configuration knows.
+fn forge_setting(forge: &InputObject) -> Result<ForgeSetting, InputError> {
+    forge.only(&["kind", "web_url", "pull_request_url"])?;
+    let kind = match forge.optional_string("kind")? {
+        None => None,
+        Some(kind) => Some(
+            ForgeKind::ALL
+                .into_iter()
+                .find(|known| known.as_str() == kind)
+                .ok_or(InputError::InvalidValue {
+                    field: "kind",
+                    allowed: FORGE_KINDS,
+                })?,
+        ),
+    };
+    Ok(ForgeSetting {
+        kind,
+        web_url: forge.optional_string("web_url")?,
+        pull_request_url: forge.optional_string("pull_request_url")?,
+    })
+}
+
+/// The optional `integration` field: `direct` or `pull_request`.
+fn integration_mode(input: &InputObject) -> Result<Option<Integration>, InputError> {
+    match input.optional_string("integration")?.as_deref() {
+        None => Ok(None),
+        Some("direct") => Ok(Some(Integration::Direct)),
+        Some("pull_request") => Ok(Some(Integration::PullRequest)),
+        Some(_) => Err(InputError::InvalidValue {
+            field: "integration",
+            allowed: &["direct", "pull_request"],
+        }),
+    }
+}
+
+/// The input of `repo create`, or with `enable` of `repo enable`, which takes
+/// three fields more.
+fn repository_input(input: &InputObject, enable: bool) -> Result<RepositoryInput, InputError> {
+    if enable {
+        input.only(&[
+            "primary_branch",
+            "identity",
+            "ticket_slug_prefix",
+            "publication_remote",
+            "integration",
+            "forge",
+        ])?;
+    } else {
+        input.only(&["primary_branch", "identity", "ticket_slug_prefix"])?;
+    }
     let primary_branch = input.string("primary_branch")?;
     let identity = input
         .optional_object("identity")?
@@ -198,10 +257,17 @@ fn repository_input(input: &InputObject) -> Result<RepositoryInput, InputError> 
             })
         })
         .transpose()?;
+    let integration = integration_mode(input)?;
     Ok(RepositoryInput {
         primary_branch,
         identity,
         slug_prefix: input.optional_string("ticket_slug_prefix")?,
+        publication_remote: input.optional_string("publication_remote")?,
+        integration,
+        forge: input
+            .optional_object("forge")?
+            .map(|forge| forge_setting(&forge))
+            .transpose()?,
     })
 }
 
@@ -211,14 +277,21 @@ pub fn repo_create(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    repo_onboard(service, session, spec, args, |root, input, identity| {
-        Mutation::RepoCreate(RepoCreateInput {
-            root,
-            primary_branch: input.primary_branch.clone(),
-            identity,
-            slug_prefix: input.slug_prefix.clone(),
-        })
-    })
+    repo_onboard(
+        service,
+        session,
+        spec,
+        args,
+        false,
+        |root, input, identity| {
+            Mutation::RepoCreate(RepoCreateInput {
+                root,
+                primary_branch: input.primary_branch.clone(),
+                identity,
+                slug_prefix: input.slug_prefix.clone(),
+            })
+        },
+    )
 }
 
 pub fn repo_enable(
@@ -227,14 +300,24 @@ pub fn repo_enable(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    repo_onboard(service, session, spec, args, |root, input, identity| {
-        Mutation::RepoEnable(RepoEnableInput {
-            root,
-            primary_branch: input.primary_branch.clone(),
-            identity,
-            slug_prefix: input.slug_prefix.clone(),
-        })
-    })
+    repo_onboard(
+        service,
+        session,
+        spec,
+        args,
+        true,
+        |root, input, identity| {
+            Mutation::RepoEnable(RepoEnableInput {
+                root,
+                primary_branch: input.primary_branch.clone(),
+                identity,
+                slug_prefix: input.slug_prefix.clone(),
+                publication_remote: input.publication_remote.clone(),
+                integration: input.integration,
+                forge: input.forge.clone(),
+            })
+        },
+    )
 }
 
 fn repo_onboard(
@@ -242,12 +325,13 @@ fn repo_onboard(
     session: &mut Session,
     spec: &'static CommandSpec,
     args: &ArgMatches,
+    enable: bool,
     build: impl Fn(PathBuf, &RepositoryInput, Option<CommitIdentity>) -> Mutation,
 ) -> Output {
     let result = (|| {
         let flags = flags(session, spec, args)?;
         let object = input_object(session, spec, args, flags.request_id)?;
-        let input = repository_input(&object)
+        let input = repository_input(&object, enable)
             .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
         let root = mutation_root(session, spec, args, flags.request_id)?;
         Ok((flags, input, root))
@@ -300,11 +384,36 @@ pub fn repo_remove(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| Mutation::RepoRemove(RepoRemoveInput { root: root.clone() }),
+        &mut std::thread::sleep,
+    )
+}
+
+/// `repo setup-cancel`: the repository's pending setup is ended, its branches
+/// deleted, and a first-time setup unregistered. It reads no input.
+pub fn repo_setup_cancel(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root))
+    })();
+    let (flags, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        mutate::RETRYING,
+        &mut |_| Mutation::RepoSetupCancel(RepoSetupCancelInput { root: root.clone() }),
         &mut std::thread::sleep,
     )
 }
@@ -335,10 +444,7 @@ pub fn remote_add(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::RemoteAdd(RemoteAddInput {
                 root: root.clone(),
@@ -361,13 +467,9 @@ pub fn remote_remove(
         session,
         spec,
         args,
-        |object| Ok(Some(object.string("name")?)),
-        |root, name| {
-            Mutation::RemoteRemove(RemoteRemoveInput {
-                root,
-                name: name.expect("required remote name"),
-            })
-        },
+        &["name"],
+        |object| object.string("name"),
+        |root, name| Mutation::RemoteRemove(RemoteRemoveInput { root, name }),
     )
 }
 
@@ -382,30 +484,50 @@ pub fn remote_select(
         session,
         spec,
         args,
-        |object| object.nullable_string("name"),
-        |root, name| Mutation::RemoteSelect(RemoteSelectInput { root, name }),
+        &["name", "integration", "forge"],
+        |object| {
+            let name = object.nullable_string("name")?;
+            let integration = integration_mode(object)?;
+            // Absent leaves the table as it is; null removes it.
+            let forge = object
+                .nullable_object("forge")?
+                .map(|forge| forge.map(|forge| forge_setting(&forge)).transpose())
+                .transpose()?;
+            Ok((name, integration, forge))
+        },
+        |root, (name, integration, forge)| {
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root,
+                name,
+                integration,
+                forge,
+            })
+        },
     )
 }
 
-fn remote_name(
+/// The input of `remote select` and `remote remove`: the fields `only` names,
+/// read by `read_fields` and built into the mutation by `build`.
+fn remote_name<T: Clone>(
     service: &RepositoryService,
     session: &mut Session,
     spec: &'static CommandSpec,
     args: &ArgMatches,
-    read_name: impl FnOnce(&InputObject) -> Result<Option<String>, InputError>,
-    build: impl Fn(PathBuf, Option<String>) -> Mutation,
+    only: &[&str],
+    read_fields: impl FnOnce(&InputObject) -> Result<T, InputError>,
+    build: impl Fn(PathBuf, T) -> Mutation,
 ) -> Output {
     let result = (|| {
         let flags = flags(session, spec, args)?;
         let object = input_object(session, spec, args, flags.request_id)?;
-        let name = object
-            .only(&["name"])
-            .and_then(|()| read_name(&object))
+        let fields = object
+            .only(only)
+            .and_then(|()| read_fields(&object))
             .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
         let root = mutation_root(session, spec, args, flags.request_id)?;
-        Ok((flags, name, root))
+        Ok((flags, fields, root))
     })();
-    let (flags, name, root) = match result {
+    let (flags, fields, root) = match result {
         Ok(values) => values,
         Err(out) => return out,
     };
@@ -414,11 +536,8 @@ fn remote_name(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
-        &mut |_| build(root.clone(), name.clone()),
+        mutate::RETRYING,
+        &mut |_| build(root.clone(), fields.clone()),
         &mut std::thread::sleep,
     )
 }
@@ -565,10 +684,7 @@ pub fn key_import(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::KeyImport(KeyImportInput {
                 label: label.clone(),
@@ -644,10 +760,7 @@ fn key_selected(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| build(id),
         &mut std::thread::sleep,
     )
@@ -668,10 +781,7 @@ pub fn key_clear(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| Mutation::KeyClear(KeyClearInput {}),
         &mut std::thread::sleep,
     )
@@ -706,10 +816,7 @@ pub fn key_delete(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             Mutation::KeyDelete(KeyDeleteInput {
                 store: store.clone(),
@@ -804,10 +911,7 @@ fn host_mutation(
         session,
         spec,
         flags,
-        Plan {
-            identity_prompt: false,
-            retry: true,
-        },
+        mutate::RETRYING,
         &mut |_| {
             if let Some(old_fingerprint) = &input.old_fingerprint {
                 Mutation::HostReplace(HostReplaceInput {

@@ -305,6 +305,7 @@ impl Pair {
                 }
                 Err(FixtureError)
             }
+            DocumentPromotionPreflight::PrimaryHolds => Err(FixtureError),
         }
     }
     fn promote(&self) -> Result<DocumentPromotionOutcome, FixtureError> {
@@ -316,6 +317,10 @@ impl Pair {
             DocumentPromotionResult::Complete(outcome) => Ok(outcome),
             DocumentPromotionResult::IndexPending(_) => {
                 ssh_harness::observation(&[801]);
+                Err(FixtureError)
+            }
+            // A direct fixture never answers as a pull-request promotion.
+            DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
                 Err(FixtureError)
             }
         }
@@ -837,7 +842,7 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
     let final_privacy = p.privacy();
     ssh_harness::observation(&[
         20,
-        matches!(publication, Err(SynchronizationError::HistoryUnknown)) as u128,
+        matches!(publication, Err(SynchronizationError::HistoryUnresolved)) as u128,
         first_privacy.is_ok() as u128,
         final_privacy.is_ok() as u128,
     ]);
@@ -851,7 +856,7 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
     assert_eq!(evidence, RemotePublicationEvidence::HistoryUnknown);
     assert!(matches!(
         publication,
-        Err(SynchronizationError::HistoryUnknown)
+        Err(SynchronizationError::HistoryUnresolved)
     ));
     assert_eq!(p.server.receive_updates(), receives);
     assert_eq!(journeys::image(&p.a.worktree())?, image);
@@ -870,7 +875,8 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
         &mut SessionCredentials::new(remote_world::Provider),
     );
     p.diagnostics(&format!("{replay:?}"))?;
-    assert!(matches!(replay, Err(SynchronizationError::HistoryUnknown)));
+    // The unresolved call ended its operation; the replay finds it cancelled.
+    assert!(matches!(replay, Err(SynchronizationError::Interrupted)));
     assert_eq!(p.server.receive_updates(), receives);
     assert_eq!(journeys::image(&p.a.worktree())?, image);
     first_privacy?;
@@ -889,6 +895,8 @@ const ROW_POLICY: privacy_rows::RowPolicy<'static> = privacy_rows::RowPolicy {
     ],
     required: "document_promotions",
     exempt: &[("title", TITLE.as_bytes())],
+    // The probes hold no commit identity: no author value is accepted.
+    authors: &[],
 };
 fn scan_workflow_rows(db: &rusqlite::Connection, probes: &[Vec<u8>]) -> Result<(), FixtureError> {
     privacy_rows::scan_workflow_rows(db, probes, &ROW_POLICY)

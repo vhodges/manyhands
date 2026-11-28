@@ -3,6 +3,8 @@
   "command": "repo inspect",
   "data": {
     "configuration": {
+      "forge": null,
+      "integration": "direct",
       "primary_branch": "main",
       "problems": [],
       "publication_remote": "publish",
@@ -13,6 +15,7 @@
     "local_branches": [
       "main"
     ],
+    "operations": [],
     "registered": true,
     "remotes": [
       {
@@ -31,7 +34,8 @@
       }
     ],
     "root": "<repository>",
-    "selected_path": "<repository>"
+    "selected_path": "<repository>",
+    "setup": null
   },
   "effects": {
     "checkpoint": "not_requested",

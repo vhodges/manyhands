@@ -325,7 +325,7 @@ impl Candidate {
             slug: item.slug.clone(),
             title: item.title.clone(),
             lifecycle: item.closure.as_ref().map(|closure| match closure.state {
-                ClosureState::Open => Lifecycle::Open,
+                ClosureState::Open | ClosureState::Closing => Lifecycle::Open,
                 ClosureState::Closed => Lifecycle::Closed,
             }),
         })

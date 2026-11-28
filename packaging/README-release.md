@@ -31,6 +31,10 @@ Compare the archive's SHA-256 hash with `SHA256SUMS` attached to the same
 GitHub Release. Checksums identify the release bytes; they do not turn an
 ad-hoc or self-signed application into a trusted-publisher application.
 
+## Agent skills
+
+The `skills/` directory holds Agent Skills that teach an AI coding agent to use Manyhands through `manyhands-cli`. See `skills/README.md` for the list and the install steps. Install the whole `skills/` directory, not single skills: the skills link to shared material in `manyhands-overview`. On macOS the same directory is under `Manyhands.app/Contents/Resources/skills/`.
+
 ## Licences and source
 
 Manyhands is licensed under the MIT licence in `LICENSE`.

@@ -87,6 +87,72 @@ pub struct RepositoryConfig {
     pub unknown: toml::Table,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Integration {
+    Direct,
+    PullRequest,
+}
+
+impl Integration {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::PullRequest => "pull_request",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForgeKind {
+    BitbucketCloud,
+    BitbucketDataCenter,
+    Github,
+    Gitlab,
+}
+
+impl ForgeKind {
+    pub const ALL: [Self; 4] = [
+        Self::BitbucketCloud,
+        Self::BitbucketDataCenter,
+        Self::Github,
+        Self::Gitlab,
+    ];
+
+    /// The kind a contract spelling names, or `None` for any other text.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BitbucketCloud => "bitbucket-cloud",
+            Self::BitbucketDataCenter => "bitbucket-data-center",
+            Self::Github => "github",
+            Self::Gitlab => "gitlab",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForgeSetting {
+    pub kind: Option<ForgeKind>,
+    pub web_url: Option<String>,
+    pub pull_request_url: Option<String>,
+}
+
+impl RepositoryConfig {
+    /// The integration mode: `Direct` when absent, and also when the table
+    /// holds an invalid value, which parse and serialize refuse.
+    pub fn integration(&self) -> Integration {
+        mode_from_table(&self.unknown).unwrap_or(Integration::Direct)
+    }
+
+    /// The `[forge]` setting, or `None` when it is absent or invalid.
+    pub fn forge(&self) -> Option<ForgeSetting> {
+        forge_from_table(&self.unknown).ok().flatten()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub id: ItemId,
@@ -1296,12 +1362,12 @@ pub fn parse_repository_config(source: &str) -> Result<RepositoryConfig, Validat
     let format_version = values.remove("format_version").ok_or_else(|| {
         validation_problem(ValidationCode::MissingField, "missing format_version")
     })?;
-    match format_version {
-        toml::Value::Integer(1) => {}
+    let format_version = match format_version {
+        toml::Value::Integer(version @ (1 | 2)) => version,
         toml::Value::Integer(_) => {
             return Err(validation_problem(
                 ValidationCode::InvalidField,
-                "unsupported format_version; expected 1",
+                UNSUPPORTED_FORMAT_VERSION,
             ));
         }
         _ => {
@@ -1310,7 +1376,7 @@ pub fn parse_repository_config(source: &str) -> Result<RepositoryConfig, Validat
                 "format_version must be an integer",
             ));
         }
-    }
+    };
 
     let primary_branch = required_string(&mut values, "primary_branch")?;
     let publication_remote = optional_string(&mut values, "publication_remote")?;
@@ -1318,6 +1384,7 @@ pub fn parse_repository_config(source: &str) -> Result<RepositoryConfig, Validat
     if let Some(publication_remote) = &publication_remote {
         validate_git_short_name(publication_remote, "publication_remote")?;
     }
+    validate_mode_and_forge(format_version, publication_remote.as_deref(), &values)?;
 
     Ok(RepositoryConfig {
         primary_branch,
@@ -1331,12 +1398,24 @@ pub fn serialize_repository_config(config: &RepositoryConfig) -> Result<String, 
     if let Some(publication_remote) = &config.publication_remote {
         validate_git_short_name(publication_remote, "publication_remote")?;
     }
+    let format_version = match config.integration() {
+        Integration::PullRequest => 2,
+        Integration::Direct => 1,
+    };
+    validate_mode_and_forge(
+        format_version,
+        config.publication_remote.as_deref(),
+        &config.unknown,
+    )?;
 
     let mut values = config.unknown.clone();
     values.remove("format_version");
     values.remove("primary_branch");
     values.remove("publication_remote");
-    values.insert("format_version".into(), toml::Value::Integer(1));
+    values.insert(
+        "format_version".into(),
+        toml::Value::Integer(format_version),
+    );
     values.insert(
         "primary_branch".into(),
         toml::Value::String(config.primary_branch.clone()),
@@ -1354,6 +1433,137 @@ pub fn serialize_repository_config(config: &RepositoryConfig) -> Result<String, 
             format!("cannot serialize TOML configuration: {error}"),
         )
     })
+}
+
+const UNSUPPORTED_FORMAT_VERSION: &str = "unsupported format_version; expected 1 or 2";
+const INVALID_INTEGRATION: &str = "integration must be \"direct\" or \"pull_request\"";
+const INVALID_FORGE_KIND: &str =
+    "forge.kind must be one of bitbucket-cloud, bitbucket-data-center, github, gitlab";
+
+/// The one validation of the mode and the `[forge]` table, shared by parse
+/// and serialize. `table` holds every key but the version, the branch and the
+/// remote.
+fn validate_mode_and_forge(
+    format_version: i64,
+    publication_remote: Option<&str>,
+    table: &toml::Table,
+) -> Result<(), ValidationProblem> {
+    if !matches!(format_version, 1 | 2) {
+        return Err(validation_problem(
+            ValidationCode::InvalidField,
+            UNSUPPORTED_FORMAT_VERSION,
+        ));
+    }
+    if mode_from_table(table)? == Integration::PullRequest {
+        if format_version != 2 {
+            return Err(validation_problem(
+                ValidationCode::InvalidField,
+                "integration = \"pull_request\" requires format_version = 2",
+            ));
+        }
+        if publication_remote.is_none() {
+            return Err(validation_problem(
+                ValidationCode::InvalidField,
+                "integration = \"pull_request\" requires publication_remote",
+            ));
+        }
+    }
+    forge_from_table(table)?;
+    Ok(())
+}
+
+fn mode_from_table(table: &toml::Table) -> Result<Integration, ValidationProblem> {
+    match table.get("integration") {
+        None => Ok(Integration::Direct),
+        Some(toml::Value::String(mode)) if mode == "direct" => Ok(Integration::Direct),
+        Some(toml::Value::String(mode)) if mode == "pull_request" => Ok(Integration::PullRequest),
+        Some(_) => Err(validation_problem(
+            ValidationCode::InvalidField,
+            INVALID_INTEGRATION,
+        )),
+    }
+}
+
+fn forge_from_table(table: &toml::Table) -> Result<Option<ForgeSetting>, ValidationProblem> {
+    let Some(forge) = table.get("forge") else {
+        return Ok(None);
+    };
+    let toml::Value::Table(forge) = forge else {
+        return Err(validation_problem(
+            ValidationCode::InvalidField,
+            "forge must be a table",
+        ));
+    };
+    if !forge.contains_key("kind") && !forge.contains_key("pull_request_url") {
+        return Err(validation_problem(
+            ValidationCode::InvalidField,
+            "forge needs a kind or a pull_request_url",
+        ));
+    }
+    let kind = match forge.get("kind") {
+        None => None,
+        Some(toml::Value::String(kind)) => Some(match kind.as_str() {
+            "bitbucket-cloud" => ForgeKind::BitbucketCloud,
+            "bitbucket-data-center" => ForgeKind::BitbucketDataCenter,
+            "github" => ForgeKind::Github,
+            "gitlab" => ForgeKind::Gitlab,
+            _ => {
+                return Err(validation_problem(
+                    ValidationCode::InvalidField,
+                    INVALID_FORGE_KIND,
+                ));
+            }
+        }),
+        Some(_) => {
+            return Err(validation_problem(
+                ValidationCode::InvalidField,
+                INVALID_FORGE_KIND,
+            ));
+        }
+    };
+    let web_url = forge_url(forge, "web_url")?;
+    let pull_request_url = forge_url(forge, "pull_request_url")?;
+    if pull_request_url
+        .as_deref()
+        .is_some_and(|template| !template.contains("{source}"))
+    {
+        return Err(validation_problem(
+            ValidationCode::InvalidField,
+            "forge.pull_request_url must contain {source}",
+        ));
+    }
+    Ok(Some(ForgeSetting {
+        kind,
+        web_url,
+        pull_request_url,
+    }))
+}
+
+fn forge_url(forge: &toml::Table, key: &str) -> Result<Option<String>, ValidationProblem> {
+    let Some(value) = forge.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        toml::Value::String(url) if is_absolute_http_url(url) => Ok(Some(url.clone())),
+        _ => Err(validation_problem(
+            ValidationCode::InvalidField,
+            format!("forge.{key} must be an absolute http or https URL"),
+        )),
+    }
+}
+
+fn is_absolute_http_url(value: &str) -> bool {
+    let Some(rest) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    !authority.is_empty()
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
 }
 
 fn required_string(values: &mut toml::Table, name: &str) -> Result<String, ValidationProblem> {

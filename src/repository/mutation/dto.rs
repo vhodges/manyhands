@@ -108,12 +108,15 @@ contract_enum!(
     /// `key_unregistered` is the key taken out of the key list, with the
     /// record that Manyhands made its files.
     ///
-    /// `operation_closed` is a pending local operation closed as
-    /// abandoned, so that it no longer refuses other operations on its
-    /// repository. With it goes the record of the unfinished request
-    /// that began the operation, `request_released`, listed when there
-    /// is one: that request's ID is then free. Neither touches a file
-    /// under the repository's root or anything Git holds.
+    /// `operation_closed` is a pending operation closed as abandoned, so
+    /// that it no longer refuses other operations on its repository. For a
+    /// synchronization whose push nothing answered, `push_marked_rejected`
+    /// follows: the push is recorded as refused, so that a later
+    /// synchronization of its branch no longer counts it as unanswered.
+    /// With them goes the record of the unfinished request that began the
+    /// operation, `request_released`, listed when there is one: that
+    /// request's ID is then free. None of the three touches a file under
+    /// the repository's root or anything Git holds, or contacts a remote.
     ///
     /// `host_pinned` is a host that has no pin given one: the key the
     /// request names, once the host is seen to present it.
@@ -123,8 +126,10 @@ contract_enum!(
     ///
     /// `context_created`, `id_adopted`, `source_written` and
     /// `checkpoint_committed` are a repair's. `context_created` is the
-    /// editing context of the repaired item made from the primary branch:
-    /// its branch and its worktree, listed when the item has none.
+    /// editing context of the repaired item made from a primary branch,
+    /// the local one or the remote's when only the remote holds it: its
+    /// branch and its worktree, listed when the item has none. A
+    /// pull-request closure lists it too, when it makes its context.
     /// `id_adopted` is an ID assigned to a file that holds no valid one:
     /// the ID the corrected source carries, which the preview's details
     /// name. `source_written` is the corrected source written over the
@@ -137,6 +142,42 @@ contract_enum!(
     /// preview's details name. Nothing is integrated: no local branch
     /// moves, and the next synchronization of the item integrates
     /// primary.
+    ///
+    /// `history_resolved` is a context whose publication history was
+    /// unknown recorded as never published, so that the next
+    /// synchronization of the item may publish it. Nothing is pushed or
+    /// fetched, and no branch moves.
+    ///
+    /// `history_flag_cleared` is the repository-wide cache-loss flag cleared
+    /// once no context reads unknown (`remote resolve-history`), with the
+    /// marker file deleted after it.
+    ///
+    /// `context_synchronized` to `branch_deleted` are a promotion's and a
+    /// closure's, in order, each listed when the preview plans it:
+    /// `context_synchronized` is the editing branch synchronized with the
+    /// remote first; `closure_recorded` the closure fields written and
+    /// committed there; `primary_integrated` the branch merged into primary;
+    /// `primary_published` primary pushed; `remote_branch_deleted`,
+    /// `worktree_removed` and `branch_deleted` the context retired.
+    ///
+    /// `setup_recorded` to `setup_branch_published` are a pull-request
+    /// enable's: the setup recorded in the registry, its commit made on the
+    /// remote's primary and kept on the local branch `manyhands/setup/<id>`,
+    /// and that branch pushed.
+    ///
+    /// `setup_branch_deleted_remotely` to `repository_unregistered` are a
+    /// setup's cancellation's: the remote branch deleted at its recorded
+    /// commit, the local branch and the private base ref deleted, the setup's
+    /// record removed, and, for a first-time setup, the repository taken out
+    /// of the repository list.
+    ///
+    /// `context_published`, `pull_request_link` and `closure_withdrawn` are
+    /// a pull-request closure's, and a withdrawal's. `context_published` is
+    /// the editing branch pushed to the remote, with what the context holds
+    /// that the remote does not; `pull_request_link` the link of the
+    /// ticket's pull request recorded or refreshed; `closure_withdrawn` the
+    /// closure fields taken off the editing branch, on a commit of their
+    /// own.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -157,6 +198,7 @@ contract_enum!(
         PublicKeyFileDeleted => "public_key_file_deleted",
         KeyUnregistered => "key_unregistered",
         OperationClosed => "operation_closed",
+        PushMarkedRejected => "push_marked_rejected",
         RequestReleased => "request_released",
         HostPinned => "host_pinned",
         HostPinReplaced => "host_pin_replaced",
@@ -165,6 +207,25 @@ contract_enum!(
         SourceWritten => "source_written",
         CheckpointCommitted => "checkpoint_committed",
         BranchRepublished => "branch_republished",
+        HistoryResolved => "history_resolved",
+        HistoryFlagCleared => "history_flag_cleared",
+        ContextSynchronized => "context_synchronized",
+        ClosureRecorded => "closure_recorded",
+        PrimaryIntegrated => "primary_integrated",
+        PrimaryPublished => "primary_published",
+        RemoteBranchDeleted => "remote_branch_deleted",
+        WorktreeRemoved => "worktree_removed",
+        BranchDeleted => "branch_deleted",
+        SetupRecorded => "setup_recorded",
+        SetupBranchCommitted => "setup_branch_committed",
+        SetupBranchPublished => "setup_branch_published",
+        SetupBranchDeletedRemotely => "setup_branch_deleted_remotely",
+        SetupBranchDeleted => "setup_branch_deleted",
+        SetupRecordRemoved => "setup_record_removed",
+        RepositoryUnregistered => "repository_unregistered",
+        ContextPublished => "context_published",
+        PullRequestLink => "pull_request_link",
+        ClosureWithdrawn => "closure_withdrawn",
     }
 );
 
@@ -212,10 +273,49 @@ pub struct RepositoryPreviewDto {
     pub slug_prefix: Option<String>,
 }
 
+/// The forge a setup's configuration names: the `[forge]` table. Every key
+/// is always present; one the table lacks is `null`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupForgeDto {
+    pub kind: Option<String>,
+    pub web_url: Option<String>,
+    pub pull_request_url: Option<String>,
+}
+
+/// What a preview of a pull-request `repo enable` shows: the root, the
+/// primary, the identity, the prefix, the mode, the setup remote's name and
+/// its location (redacted), and the forge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupPreviewDto {
+    pub root: String,
+    pub primary_branch: String,
+    pub identity: PreviewIdentityDto,
+    pub slug_prefix: Option<String>,
+    pub integration: String,
+    pub remote_name: String,
+    pub remote_location: Option<String>,
+    pub forge: Option<SetupForgeDto>,
+}
+
+/// What a preview of `repo setup-cancel` shows: the setup that will be ended,
+/// as the record has it. The branch is the setup's, on the remote and in the
+/// repository.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelPreviewDto {
+    pub root: String,
+    pub setup_id: String,
+    pub kind: String,
+    pub state: String,
+    pub branch: String,
+    pub remote: String,
+}
+
 /// A preview's `details`: the command's own fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum PreviewDetailsDto {
+    SetupCancel(SetupCancelPreviewDto),
+    Setup(SetupPreviewDto),
     Repository(RepositoryPreviewDto),
     RemoteRemoval(RemoteRemovalPreviewDto),
     RepositoryRemoval(RepositoryRemovalPreviewDto),
@@ -225,6 +325,136 @@ pub enum PreviewDetailsDto {
     Host(HostPreviewDto),
     Repair(RepairPreviewDto),
     Republish(ItemRepublishPreviewDto),
+    ResolveHistory(ItemResolveHistoryPreviewDto),
+    ResolveCacheLoss(RemoteResolveHistoryPreviewDto),
+    Lifecycle(Box<LifecyclePreviewDto>),
+    PullRequestClosure(Box<PullRequestClosurePreviewDto>),
+    PullRequestPromotion(Box<PullRequestPromotionPreviewDto>),
+}
+
+contract_enum!(
+    /// How a preview plans to reach primary.
+    LifecyclePlannedIntegration {
+        MergeCommit => "merge_commit",
+        AlreadyContained => "already_contained",
+    }
+);
+
+contract_enum!(
+    /// What a preview plans for primary's publication: a push, or none for
+    /// a repository with no publication remote.
+    LifecyclePlannedPublication {
+        Publish => "publish",
+        PendingNoRemote => "pending_no_remote",
+    }
+);
+
+contract_enum!(
+    /// How a path differs between primary and the item's context.
+    LifecyclePathChangeKind {
+        Added => "added",
+        Modified => "modified",
+        Deleted => "deleted",
+    }
+);
+
+contract_enum!(
+    /// How a closure reaches the ticket: this operation writes both closure
+    /// fields, or the context already holds them.
+    LifecycleRecording {
+        Record => "record",
+        Existing => "existing",
+    }
+);
+
+/// One path of a preview's whole-branch change set. It names the path and
+/// holds nothing the file holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePathChangeDto {
+    /// Relative to the repository, with forward slashes.
+    pub path: String,
+    pub change: LifecyclePathChangeKind,
+}
+
+/// What a preview plans to retire of the item's context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePlannedCleanupDto {
+    pub remote_branch: bool,
+    pub worktree: bool,
+    pub local_branch: bool,
+}
+
+/// What a closure records. `closed_by` is personal data, and appears only in
+/// a preview, canonical content, the index and Git (Cycle 10): a request's
+/// record never holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePlannedClosureDto {
+    pub recording: LifecycleRecording,
+    pub closed_by: String,
+}
+
+/// What a preview of `document promote` or `ticket close` shows. It holds
+/// names, commits and paths, and no title, body or content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The ticket's short code, when the index holds one.
+    pub slug: Option<String>,
+    /// The item's editing branch, as its short name.
+    pub branch: String,
+    pub primary_branch: String,
+    /// The publication remote, by its name. Null for a repository with none.
+    pub remote: Option<String>,
+    pub context_oid: String,
+    pub primary_oid: String,
+    pub changes: Vec<LifecyclePathChangeDto>,
+    pub integration: LifecyclePlannedIntegration,
+    pub publication: LifecyclePlannedPublication,
+    pub cleanup: LifecyclePlannedCleanupDto,
+    /// Null for a promotion, which records no closure.
+    pub closure: Option<LifecyclePlannedClosureDto>,
+}
+
+contract_enum!(
+    /// What stands in the way of a promotion or a closure: the domain's
+    /// blockers of both, by one vocabulary.
+    LifecycleBlocker {
+        NotADocument => "not_a_document",
+        NotATicket => "not_a_ticket",
+        ContextMissing => "context_missing",
+        ContextNonconforming => "context_nonconforming",
+        ContextDirty => "context_dirty",
+        ContextConflicted => "context_conflicted",
+        ConflictPending => "conflict_pending",
+        LocalOperationPending => "local_operation_pending",
+        CommentPublicationPending => "comment_publication_pending",
+        PrimaryMissing => "primary_missing",
+        PrimaryNotCheckedOut => "primary_not_checked_out",
+        PrimaryDirty => "primary_dirty",
+        PrimaryConflicted => "primary_conflicted",
+        PrimaryAheadOfRemote => "primary_ahead_of_remote",
+        ContextBehindRemote => "context_behind_remote",
+        IntegrationConflict => "integration_conflict",
+        RemoteContextDeleted => "remote_context_deleted",
+        HistoryUnknown => "history_unknown",
+        HistoryUnresolved => "history_unresolved",
+        AlreadyClosed => "already_closed",
+        PrimaryReopened => "primary_reopened",
+        DocumentInvalidAfterIntegration => "document_invalid_after_integration",
+        TicketInvalidAfterClosure => "ticket_invalid_after_closure",
+        IdentityRequired => "identity_required",
+        RemoteContextUnmaterialized => "remote_context_unmaterialized",
+    }
+);
+
+/// What a `prepare` of `document promote` or `ticket close` reports when it
+/// is refused for its blockers: every one of them, in the domain's order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleBlockedDto {
+    pub blockers: Vec<LifecycleBlocker>,
 }
 
 /// What a preview of `item republish` shows: the item's editing branch,
@@ -246,6 +476,165 @@ pub struct ItemRepublishPreviewDto {
     pub last_published_oid: Option<String>,
     /// The local commit the branch will be published at: its tip.
     pub local_oid: String,
+}
+
+/// What a preview of `item resolve-history` shows: the context whose
+/// publication history is unknown, and what the latest complete fetch says
+/// of it. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when the branch has no local ref.
+    pub local_oid: Option<String>,
+    /// Whether the context's remote-tracking ref exists locally.
+    pub tracking_ref_exists: bool,
+    /// Whether the repository-wide cache-loss flag is set; the last
+    /// resolution clears it.
+    pub cache_loss: bool,
+}
+
+/// What a preview of `remote resolve-history` shows: the cache-loss flag is
+/// set and no context reads unknown, so it can be cleared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteResolveHistoryPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    /// Whether the marker file is there to be deleted after the commit.
+    pub marker_present: bool,
+}
+
+contract_enum!(
+    /// What became of the cache-loss marker file once a resolution cleared
+    /// the flag: `not_applicable` when the flag was not cleared, `removed`,
+    /// `absent` when there was no file, and `failed` when it could not be
+    /// deleted (the resolution stands).
+    HistoryMarkerState {
+        NotApplicable => "not_applicable",
+        Removed => "removed",
+        Absent => "absent",
+        Failed => "failed",
+    }
+);
+
+contract_enum!(
+    /// How a context's local head relates to the branch the remote advertises
+    /// in `remote history`. Absent when the remote lacks the branch, or when
+    /// either commit is not here to compare.
+    HistoryRelation {
+        Same => "same",
+        LocalAhead => "local_ahead",
+        RemoteAhead => "remote_ahead",
+        Diverged => "diverged",
+    }
+);
+
+/// What the owner may do about an unresolved context: both are offered only
+/// when the remote does not have the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryChoicesDto {
+    pub publish: bool,
+    pub release: bool,
+    pub republish: bool,
+}
+
+/// One context `remote history` lists: unresolved, or resolved by the poll it
+/// ran. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryEntryDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The editing branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when it has no local ref.
+    pub local_oid: Option<String>,
+    pub tracking_ref_exists: bool,
+    /// The commit the remote advertises for the branch. Null when it lacks it.
+    pub remote_oid: Option<String>,
+    pub relation: Option<HistoryRelation>,
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    /// The fetch recorded the context as published, so no choice is needed.
+    pub resolved: bool,
+    /// What the poll did with the context. Null when it reported no target.
+    pub disposition: Option<PollTargetDisposition>,
+    pub choices: RemoteHistoryChoicesDto,
+}
+
+/// What `remote history` reports after its fresh poll of the publication
+/// remote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryDto {
+    /// The repository-wide cache-loss flag: set when the registry was lost.
+    pub cache_loss: bool,
+    pub generation: i64,
+    pub entries: Vec<RemoteHistoryEntryDto>,
+}
+
+impl From<&crate::repository::RemoteHistoryReport> for RemoteHistoryDto {
+    fn from(report: &crate::repository::RemoteHistoryReport) -> Self {
+        use crate::repository::{AuthoringKind, RemoteHistoryRelation as Domain};
+        Self {
+            cache_loss: report.cache_loss,
+            generation: report.generation,
+            entries: report
+                .entries
+                .iter()
+                .map(|entry| RemoteHistoryEntryDto {
+                    kind: match entry.kind {
+                        AuthoringKind::Document => ItemDtoKind::Document,
+                        AuthoringKind::Ticket => ItemDtoKind::Ticket,
+                    },
+                    item_id: entry.item_id.to_string(),
+                    branch: entry.branch.clone(),
+                    local_oid: entry.local_head.map(|oid| oid.to_string()),
+                    tracking_ref_exists: entry.tracking_ref_exists,
+                    remote_oid: entry.advertised.map(|oid| oid.to_string()),
+                    relation: entry.relation.map(|relation| match relation {
+                        Domain::Same => HistoryRelation::Same,
+                        Domain::LocalAhead => HistoryRelation::LocalAhead,
+                        Domain::RemoteAhead => HistoryRelation::RemoteAhead,
+                        Domain::Diverged => HistoryRelation::Diverged,
+                    }),
+                    ahead: entry.ahead.map(|count| count as u64),
+                    behind: entry.behind.map(|count| count as u64),
+                    resolved: entry.resolved,
+                    disposition: entry.disposition.map(super::bind::poll::dto_disposition),
+                    choices: RemoteHistoryChoicesDto {
+                        publish: entry.choices.publish,
+                        release: entry.choices.release,
+                        republish: entry.choices.republish,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What `item resolve-history` reports: the context is recorded as never
+/// published, and whether that cleared the cache-loss flag. `item sync` is
+/// what publishes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemResolveHistoryMutationDto {
+    pub cache_loss_cleared: bool,
+    pub marker: HistoryMarkerState,
+}
+
+impl ItemResolveHistoryMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let marker = stored.get("marker")?.as_str()?;
+        Some(Self {
+            cache_loss_cleared: stored.get("cache_loss_cleared")?.as_bool()?,
+            marker: HistoryMarkerState::ALL
+                .into_iter()
+                .find(|known| known.as_str() == marker)?,
+        })
+    }
 }
 
 /// What a preview of `document repair` or `ticket repair` shows: the
@@ -378,6 +767,8 @@ pub struct IdentityPreviewDto {
 /// leaves as it is. It holds names and paths and no content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationAbandonPreviewDto {
+    /// Required-nullable; an ordinary retirement retains its controlling request.
+    pub retirement: Option<crate::repository::RetirementAbandonMetadata>,
     /// The repository's root, as the operation's journal names it.
     pub root: String,
     /// The operation that will be closed.
@@ -421,6 +812,36 @@ pub struct OperationAbandonPreviewDto {
     /// branch, a worktree, the index or the configuration. It never
     /// does: this is false.
     pub git_state_changed: bool,
+    /// What the remote journal shows of the push a synchronization left,
+    /// for the person to decide with. Null for an operation of the local
+    /// journal.
+    pub evidence: Option<OperationAbandonEvidenceDto>,
+}
+
+/// What the preview of the abandon of a synchronization shows of the push
+/// it left. The remote is not contacted: what is said of it is what the
+/// operation's row last saw. Each is null where there is nothing to say.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationAbandonEvidenceDto {
+    /// Whether the branch the operation publishes to was on the remote when
+    /// the row last looked. Null for a row that recorded no look, and for
+    /// one whose push the remote took after its last look.
+    pub remote_ref_present: Option<bool>,
+    /// The commit the operation's local branch names now. Null when the
+    /// branch is not there.
+    pub local_oid: Option<String>,
+    /// The commit the remote branch named when the row last looked. Null
+    /// when it was not there, when the row recorded no look, and when the
+    /// push returned after that look.
+    pub remote_oid: Option<String>,
+    /// The commit the operation set out to push. Null when it recorded no
+    /// push.
+    pub push_oid: Option<String>,
+    /// Whether that push returned after the row's last look: the remote
+    /// took it, and nothing is said of the branch for that reason. A
+    /// cancellation acknowledged as the push returned records the step
+    /// before the push as its last, so this alone says the push went out.
+    pub push_returned: bool,
 }
 
 /// What a preview of `key delete` shows: the key, and the files that
@@ -533,8 +954,8 @@ pub(crate) fn authority_text(host: &str, port: u16) -> String {
     }
 }
 
-/// The `data` of a `prepare` envelope: the preview, or, for the one
-/// refusal that reports any, what the refusal is about. A `prepare`
+/// The `data` of a `prepare` envelope: the preview, or, for the
+/// refusals that report any, what the refusal is about. A `prepare`
 /// that gives neither carries no data: every other rejection, and a
 /// no-op for a command whose end state already holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -543,6 +964,13 @@ pub enum PrepareDataDto {
     Preview(Box<PreviewDto>),
     /// Of `host approve`, refused as `host_replacement_required`.
     HostReplacement(HostReplacementDto),
+    /// Of `document promote` and `ticket close`, refused for their blockers.
+    LifecycleBlocked(LifecycleBlockedDto),
+    /// Of a preview refused `busy` or `recovery_required` because another
+    /// operation's row is unfinished: that operation, as an execute's data
+    /// names it (`blocked.schema.json`). An `operation abandon` of a
+    /// synchronization another process still works under is one.
+    Blocked(BlockedDto),
 }
 
 impl PrepareDataDto {
@@ -550,7 +978,7 @@ impl PrepareDataDto {
     pub fn preview(&self) -> Option<&PreviewDto> {
         match self {
             Self::Preview(preview) => Some(preview),
-            Self::HostReplacement(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
 
@@ -558,13 +986,87 @@ impl PrepareDataDto {
     pub fn into_preview(self) -> Option<PreviewDto> {
         match self {
             Self::Preview(preview) => Some(*preview),
-            Self::HostReplacement(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) | Self::Blocked(_) => None,
         }
     }
 }
 
+/// The operation whose unfinished row stands in a request's way, and
+/// whose it is: the fields `operation show` gives of it, with the same
+/// names and the same meaning of `live`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockerDto {
+    pub operation_id: String,
+    pub family: OperationFamily,
+    /// Null only when the answer could not read the operation's row and
+    /// names it by what the wait knew of it: its ID, its family and that
+    /// its holder still worked. Every other field is then null too.
+    pub action: Option<OperationAction>,
+    pub item_id: Option<String>,
+    pub request_id: Option<String>,
+    pub author: Option<String>,
+    pub host: Option<String>,
+    pub pid: Option<i64>,
+    /// When the request began the operation, in UTC.
+    pub started_at: Option<String>,
+    /// Whether its holder still worked when the request was answered: the
+    /// judgment that made the answer `busy` (true) or `recovery_required`
+    /// (false). Null when the row names neither a host nor a process.
+    pub live: Option<bool>,
+}
+
+impl BlockerDto {
+    /// The blocker as the domain knew it alone: its operation and its
+    /// journal, and whether its holder worked. Every other field is null.
+    pub(crate) fn known(blocker: &crate::repository::Blocker) -> Self {
+        Self {
+            operation_id: blocker.operation_id.to_string(),
+            family: blocker.family,
+            action: None,
+            item_id: None,
+            request_id: None,
+            author: None,
+            host: None,
+            pid: None,
+            started_at: None,
+            live: blocker.live,
+        }
+    }
+
+    /// The blocker as `operation show` reads `operation`.
+    pub(crate) fn of(operation: &crate::repository::OperationDto, fallback_id: String) -> Self {
+        let attribution = &operation.attribution;
+        Self {
+            operation_id: operation.operation_id.clone().unwrap_or(fallback_id),
+            family: operation.family,
+            action: Some(operation.action),
+            item_id: operation.item_id.clone(),
+            request_id: attribution.request_id.clone(),
+            author: attribution.author.clone(),
+            host: attribution.host.clone(),
+            pid: attribution.pid,
+            started_at: attribution.started_at.clone(),
+            live: attribution.live,
+        }
+    }
+}
+
+/// The `data` of a `busy` or `recovery_required` answer refused for
+/// another operation's unfinished row: that operation. It replaces the
+/// command's own data in that answer (a ticket save's, a comment's, a
+/// synchronization's), as `lifecycle_blocked.schema.json` is the data of a
+/// lifecycle preview refused for what stands in its way; `blocked.schema.json`
+/// publishes it. A lifecycle's answer keeps its own data and names none. It
+/// is never stored: a finished record keeps the command's own data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BlockedDto {
+    pub blocker: BlockerDto,
+}
+
 /// The `data` of a mutation's envelope: the shape of the command's family.
-/// It may accompany any outcome and never holds a body or a source.
+/// It may accompany any outcome and never holds a body or a source. The one
+/// text it carries from the person's own work is `PrimaryLocalCommitsDto`'s
+/// commit summaries: the person's own commit text, shown back to that person.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum MutationDataDto {
@@ -576,12 +1078,966 @@ pub enum MutationDataDto {
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
     SynchronizationConflict(SynchronizationConflictMutationDto),
+    /// Of a pull-only `repo sync` refused for the commits the local primary
+    /// holds that the remote does not.
+    PrimaryLocalCommits(PrimaryLocalCommitsDto),
     Comment(CommentMutationDto),
     ConflictResolution(ConflictResolutionMutationDto),
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
     Repair(RepairMutationDto),
     Context(ContextMutationDto),
+    ContextRetirement(ContextRetirementMutationDto),
+    Lifecycle(Box<LifecycleMutationDto>),
+    /// Of a branch record that finished: a pull-request close, or a
+    /// withdraw (design Part H).
+    PullRequestClosure(Box<PullRequestClosureMutationDto>),
+    /// Of a pull-request promote that finished, whatever way (design Part D).
+    PullRequestPromotion(Box<PullRequestPromotionMutationDto>),
+    /// Of an `item sync` that published, or found current, a branch whose
+    /// ticket holds a provisional closure: where to open the pull request.
+    PullRequestLink(Box<PullRequestLinkDataDto>),
+    PollPolicy(PollPolicyMutationDto),
+    Poll(PollMutationDto),
+    PollRetirement(PollRetirementMutationDto),
+    ResolveHistory(ItemResolveHistoryMutationDto),
+    /// Of a pull-request `repo enable` or `remote select`: the setup it
+    /// recorded, with its state.
+    Setup(Box<SetupMutationDto>),
+    /// Of a `poll once` of a repository whose first-time setup is pending:
+    /// what the setup poll saw, and what it did (design Part G).
+    SetupPoll(Box<SetupPollDto>),
+    /// Of a `repo setup-cancel`: what became of the setup's branches and
+    /// registration (design Part H).
+    SetupCancel(Box<SetupCancelDto>),
+    /// Of a `busy` or `recovery_required` answer that names the operation
+    /// in its way. It is never stored: a record keeps the command's own.
+    Blocked(BlockedDto),
+}
+
+contract_enum!(
+    /// The tag of `SetupMutationDto`: one value, so that the data of a setup
+    /// is told apart by it alone.
+    SetupMutationType {
+        Setup => "setup",
+    }
+);
+
+/// The setup a pull-request enable recorded: the fields of a repository's
+/// `setup` read (`RepositorySetupDto`), inline and never null. `state` is
+/// `recorded` until the remote holds the setup's branch, then `published`.
+/// It holds no remote location, credential or identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupMutationDto {
+    pub r#type: SetupMutationType,
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub request_id: String,
+    pub branch: String,
+    pub remote: String,
+    pub integration: String,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl SetupMutationDto {
+    /// The data of a setup read, as an answer carries it.
+    pub(crate) fn of(setup: crate::repository::RepositorySetupDto) -> Self {
+        let crate::repository::RepositorySetupDto {
+            id,
+            kind,
+            state,
+            request_id,
+            branch,
+            remote,
+            integration,
+            pull_request,
+        } = setup;
+        Self {
+            r#type: SetupMutationType::Setup,
+            id,
+            kind,
+            state,
+            request_id,
+            branch,
+            remote,
+            integration,
+            pull_request,
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the nine
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 9 || stored.get("type")?.as_str()? != "setup" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let kind = text("kind")?;
+        let state = text("state")?;
+        let integration = text("integration")?;
+        if !matches!(kind.as_str(), "enable" | "change")
+            || !matches!(state.as_str(), "recorded" | "published")
+            || !matches!(integration.as_str(), "direct" | "pull_request")
+        {
+            return None;
+        }
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
+        Some(Self {
+            r#type: SetupMutationType::Setup,
+            id: text("id")?,
+            kind,
+            state,
+            request_id: text("request_id")?,
+            branch: text("branch")?,
+            remote: text("remote")?,
+            integration,
+            pull_request,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupPollDto`: one value, so that the data of a setup poll
+    /// is told apart by it alone.
+    SetupPollType {
+        SetupPoll => "setup_poll",
+    }
+);
+
+/// What a setup poll answers: the setup it looked at, what it saw
+/// (`outcome`), the merged mode on activation (`integration`, else null),
+/// whether the merged file is not the one the setup intended, and the link
+/// that opens the pull request. It holds no remote location, credential or
+/// identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupPollDto {
+    pub r#type: SetupPollType,
+    pub setup_id: String,
+    pub outcome: String,
+    pub integration: Option<String>,
+    pub differs: bool,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl SetupPollDto {
+    /// The data of a setup poll's report.
+    pub(crate) fn of(report: &crate::repository::setup::poll::SetupPollReport) -> Self {
+        Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: report.setup_id.to_string(),
+            outcome: report.outcome.as_str().to_owned(),
+            integration: report
+                .integration
+                .map(|integration| integration.as_str().to_owned()),
+            differs: report.differs,
+            pull_request: crate::repository::PullRequestDto::from(&report.link),
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_poll" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let outcome = text("outcome")?;
+        if !crate::repository::setup::poll::SetupPollOutcome::ALL
+            .iter()
+            .any(|known| known.as_str() == outcome)
+        {
+            return None;
+        }
+        let integration = match stored.get("integration")? {
+            serde_json::Value::Null => None,
+            value => {
+                let mode = value.as_str()?;
+                if !matches!(mode, "direct" | "pull_request") {
+                    return None;
+                }
+                Some(mode.to_owned())
+            }
+        };
+        let pull_request =
+            crate::repository::PullRequestDto::from_stored(stored.get("pull_request")?)?;
+        Some(Self {
+            r#type: SetupPollType::SetupPoll,
+            setup_id: text("setup_id")?,
+            outcome,
+            integration,
+            differs: stored.get("differs")?.as_bool()?,
+            pull_request,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SetupCancelDto`: one value, so that the data of a setup's
+    /// cancellation is told apart by it alone.
+    SetupCancelType {
+        SetupCancel => "setup_cancel",
+    }
+);
+
+/// What `repo setup-cancel` answers: the setup it ended, what became of its
+/// remote and local branches, and whether a first-time setup's registration
+/// was removed. It holds no remote location, credential or identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetupCancelDto {
+    pub r#type: SetupCancelType,
+    pub setup_id: String,
+    pub kind: String,
+    pub remote_branch: String,
+    pub local_branch: String,
+    pub unregistered: bool,
+}
+
+impl SetupCancelDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data of a cancel's report.
+    pub(crate) fn of(report: &crate::repository::SetupCancelReport) -> Self {
+        Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: report.setup_id.to_string(),
+            kind: report.kind.as_str().to_owned(),
+            remote_branch: report.remote_branch.as_str().to_owned(),
+            local_branch: report.local_branch.as_str().to_owned(),
+            unregistered: report.unregistered,
+        }
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let object = stored.as_object()?;
+        if object.len() != 6 || stored.get("type")?.as_str()? != "setup_cancel" {
+            return None;
+        }
+        let text = |key: &str| Some(stored.get(key)?.as_str()?.to_owned());
+        let kind = text("kind")?;
+        let remote_branch = text("remote_branch")?;
+        let local_branch = text("local_branch")?;
+        if !matches!(kind.as_str(), "enable" | "change")
+            || !crate::repository::RemoteBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == remote_branch)
+            || !crate::repository::LocalBranch::ALL
+                .iter()
+                .any(|known| known.as_str() == local_branch)
+        {
+            return None;
+        }
+        Some(Self {
+            r#type: SetupCancelType::SetupCancel,
+            setup_id: text("setup_id")?,
+            kind,
+            remote_branch,
+            local_branch,
+            unregistered: stored.get("unregistered")?.as_bool()?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The closed tag of an ordinary retirement result.
+    ContextRetirementMutationType { ContextRetirement => "context_retirement", }
+);
+contract_enum!(
+    /// Retirement state, distinct from observation's closed/promoted guidance.
+    ContextRetirementState {
+        Retired => "retired",
+        AlreadyAbsent => "already_absent",
+        Refused => "refused",
+        Pending => "pending",
+        Preserved => "preserved",
+    }
+);
+
+/// Metadata only: never source, title, endpoint, key or backend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextRetirementMutationDto {
+    pub r#type: ContextRetirementMutationType,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub operation_id: String,
+    pub state: ContextRetirementState,
+    pub code: ResultCode,
+    pub worktree_removal: crate::repository::RetirementRemoval,
+    pub branch_removal: crate::repository::RetirementRemoval,
+    pub materialization_settled: bool,
+}
+
+impl ContextRetirementMutationDto {
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(values: &[T], name: impl Fn(T) -> &'static str, text: &str) -> Option<T> {
+            values.iter().copied().find(|&value| name(value) == text)
+        }
+        // A closed root: a mixed legacy/new payload is not retirement evidence.
+        let object = stored.as_object()?;
+        if object.len() != 9 || stored.get("type")?.as_str()? != "context_retirement" {
+            return None;
+        }
+        Some(Self {
+            r#type: ContextRetirementMutationType::ContextRetirement,
+            kind: known(
+                &ItemDtoKind::ALL,
+                ItemDtoKind::as_str,
+                stored.get("kind")?.as_str()?,
+            )?,
+            item_id: stored.get("item_id")?.as_str()?.to_owned(),
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            state: known(
+                &ContextRetirementState::ALL,
+                ContextRetirementState::as_str,
+                stored.get("state")?.as_str()?,
+            )?,
+            code: known(
+                &ResultCode::ALL,
+                ResultCode::as_str,
+                stored.get("code")?.as_str()?,
+            )?,
+            worktree_removal: serde_json::from_value(stored.get("worktree_removal")?.clone())
+                .ok()?,
+            branch_removal: serde_json::from_value(stored.get("branch_removal")?.clone()).ok()?,
+            materialization_settled: stored.get("materialization_settled")?.as_bool()?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `LifecycleMutationDto`: one value, so that the data of a
+    /// promotion or a closure is told apart by it alone.
+    LifecycleMutationType {
+        Lifecycle => "lifecycle",
+    }
+);
+
+contract_enum!(
+    /// How an operation reached primary: its merge commit, or a context
+    /// primary already contained.
+    LifecycleIntegrationKind {
+        Merged => "merged",
+        AlreadyContained => "already_contained",
+    }
+);
+
+contract_enum!(
+    /// How far primary's publication got.
+    LifecyclePublicationState {
+        Published => "published",
+        AlreadyCurrent => "already_current",
+        Pending => "pending",
+    }
+);
+
+contract_enum!(
+    /// Why primary's publication is pending: the repository has no
+    /// publication remote; its synchronization stopped for this category;
+    /// or it was cancelled.
+    LifecyclePublicationPendingReason {
+        NoPublicationRemote => "no_publication_remote",
+        Conflict => "conflict",
+        Rejected => "rejected",
+        Transport => "transport",
+        Identity => "identity",
+        Busy => "busy",
+        Yielding => "yielding",
+        RecoveryRequired => "recovery_required",
+        Cancelled => "cancelled",
+    }
+);
+
+contract_enum!(
+    /// How far retiring the context got.
+    LifecycleCleanupState {
+        Complete => "complete",
+        Pending => "pending",
+    }
+);
+
+contract_enum!(
+    /// Why retiring the context is pending. It holds a fixed category and
+    /// no text a server sent.
+    LifecycleCleanupPendingReason {
+        AwaitingPublication => "awaiting_publication",
+        ContextChanged => "context_changed",
+        IgnoredFiles => "ignored_files",
+        RemoteContextChanged => "remote_context_changed",
+        RemoteDeletionTransport => "remote_deletion_transport",
+        RemoteDeletionRejected => "remote_deletion_rejected",
+        RemoteDeletionConfiguration => "remote_deletion_configuration",
+        RemoteDeletionKey => "remote_deletion_key",
+        RemoteDeletionUnlock => "remote_deletion_unlock",
+        RemoteDeletionHost => "remote_deletion_host",
+        RecoveryRequired => "recovery_required",
+        Cancelled => "cancelled",
+    }
+);
+
+contract_enum!(
+    /// What a closure's `made_ready` is: `current`, the set read when this
+    /// answer was made; `index_pending`, none yet: a request sent again reads
+    /// again, and a resume has no request to send, so `ticket ready` is its
+    /// live view; `index_unavailable_final`, none, and none will be computed, so
+    /// `ticket ready` is the live view; `not_computed`, none, since the closure
+    /// has not reached primary; `not_applicable`, none, since this operation
+    /// only finished cleaning up what primary already held.
+    LifecycleMadeReadyState {
+        Current => "current",
+        IndexPending => "index_pending",
+        IndexUnavailableFinal => "index_unavailable_final",
+        NotComputed => "not_computed",
+        NotApplicable => "not_applicable",
+    }
+);
+
+/// A ticket a closure made ready. Its title is not held: a request record
+/// stores this.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleMadeReadyDto {
+    pub id: String,
+    pub slug: Option<String>,
+}
+
+/// What `document promote` and `ticket close` report. An operation that
+/// reached primary reports how far it got; one refused for its blockers
+/// names them, and the rest is null. It holds IDs, commits and fixed
+/// categories: no `closed_by`, title or body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleMutationDto {
+    pub r#type: LifecycleMutationType,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// How the closure reached the ticket. Null for a promotion, and for a
+    /// closure that did not reach primary.
+    pub recording: Option<LifecycleRecording>,
+    /// The commit that recorded the closure, when this operation wrote it.
+    pub checkpoint_oid: Option<String>,
+    pub integration: Option<LifecycleIntegrationKind>,
+    pub integration_oid: Option<String>,
+    pub publication: Option<LifecyclePublicationState>,
+    /// The commit primary was published at, or found current at.
+    pub publication_oid: Option<String>,
+    /// Set exactly when the publication is pending.
+    pub publication_pending: Option<LifecyclePublicationPendingReason>,
+    pub cleanup: Option<LifecycleCleanupState>,
+    /// Set exactly when the cleanup is pending.
+    pub cleanup_pending: Option<LifecycleCleanupPendingReason>,
+    /// What refused the operation, in the domain's order. Empty otherwise.
+    pub blockers: Vec<LifecycleBlocker>,
+    /// The tickets this closure made ready, in ID order. Empty unless
+    /// `made_ready_state` is `current`. Null for a promotion, which makes no
+    /// ticket ready.
+    pub made_ready: Option<Vec<LifecycleMadeReadyDto>>,
+    /// What `made_ready` is. Null for a promotion.
+    pub made_ready_state: Option<LifecycleMadeReadyState>,
+}
+
+impl LifecycleMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        // A closed vocabulary: what is not of it is not of this shape.
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        // A nullable field of a closed vocabulary. The outer `None` is data
+        // that is not of this shape.
+        fn optional_known<T: Copy>(
+            value: Option<String>,
+            all: &[T],
+            name: fn(T) -> &'static str,
+        ) -> Option<Option<T>> {
+            match value {
+                Some(value) => Some(Some(known(all, name, &value)?)),
+                None => Some(None),
+            }
+        }
+        Some(Self {
+            r#type: known(
+                &LifecycleMutationType::ALL,
+                LifecycleMutationType::as_str,
+                &text("type")??,
+            )?,
+            kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &text("kind")??)?,
+            item_id: text("item_id")??,
+            recording: optional_known(
+                text("recording")?,
+                &LifecycleRecording::ALL,
+                LifecycleRecording::as_str,
+            )?,
+            checkpoint_oid: text("checkpoint_oid")?,
+            integration: optional_known(
+                text("integration")?,
+                &LifecycleIntegrationKind::ALL,
+                LifecycleIntegrationKind::as_str,
+            )?,
+            integration_oid: text("integration_oid")?,
+            publication: optional_known(
+                text("publication")?,
+                &LifecyclePublicationState::ALL,
+                LifecyclePublicationState::as_str,
+            )?,
+            publication_oid: text("publication_oid")?,
+            publication_pending: optional_known(
+                text("publication_pending")?,
+                &LifecyclePublicationPendingReason::ALL,
+                LifecyclePublicationPendingReason::as_str,
+            )?,
+            cleanup: optional_known(
+                text("cleanup")?,
+                &LifecycleCleanupState::ALL,
+                LifecycleCleanupState::as_str,
+            )?,
+            cleanup_pending: optional_known(
+                text("cleanup_pending")?,
+                &LifecycleCleanupPendingReason::ALL,
+                LifecycleCleanupPendingReason::as_str,
+            )?,
+            blockers: stored
+                .get("blockers")?
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    known(
+                        &LifecycleBlocker::ALL,
+                        LifecycleBlocker::as_str,
+                        value.as_str()?,
+                    )
+                })
+                .collect::<Option<_>>()?,
+            made_ready: match stored.get("made_ready")? {
+                serde_json::Value::Null => None,
+                value => Some(
+                    value
+                        .as_array()?
+                        .iter()
+                        .map(|entry| {
+                            Some(LifecycleMadeReadyDto {
+                                id: entry.get("id")?.as_str()?.to_owned(),
+                                slug: match entry.get("slug")? {
+                                    serde_json::Value::Null => None,
+                                    slug => Some(slug.as_str()?.to_owned()),
+                                },
+                            })
+                        })
+                        .collect::<Option<_>>()?,
+                ),
+            },
+            made_ready_state: optional_known(
+                text("made_ready_state")?,
+                &LifecycleMadeReadyState::ALL,
+                LifecycleMadeReadyState::as_str,
+            )?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `PullRequestClosureMutationDto`: one value, so that the
+    /// data of a pull-request closure's record is told apart by it alone.
+    PullRequestClosureMutationType {
+        PullRequestClosure => "pull_request_closure",
+    }
+);
+
+contract_enum!(
+    /// What a branch record did to the ticket: its closure's action.
+    PullRequestClosureAction {
+        Close => "close",
+        Withdraw => "withdraw",
+        NewBranch => "new_branch",
+    }
+);
+
+contract_enum!(
+    /// What a branch record did with the closure: wrote it (`recorded`),
+    /// kept one the ticket already held (`existing`), removed it
+    /// (`withdrawn`), or wrote nothing (`none`).
+    PullRequestClosureRecording {
+        Recorded => "recorded",
+        Existing => "existing",
+        Withdrawn => "withdrawn",
+        Nothing => "none",
+    }
+);
+
+contract_enum!(
+    /// How the ticket's branch reached the remote: this record pushed it, or
+    /// found the remote holding it already. Null when the record's
+    /// publication did not complete.
+    PullRequestClosurePublication {
+        Published => "published",
+        Current => "current",
+    }
+);
+
+/// What a branch record did with the closure. `closed_at` is the closure's
+/// own timestamp, null for a record that wrote or kept none; `closed_by` is
+/// never here, since it is personal data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestClosureDto {
+    pub recording: PullRequestClosureRecording,
+    pub closed_at: Option<String>,
+}
+
+/// What a pull-request close or a withdraw reports: a branch record that
+/// finished, whatever way. Nothing reached primary, so there is no
+/// integration, cleanup or made-ready report. It holds IDs, commits and
+/// fixed categories: no `closed_by`, title or body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestClosureMutationDto {
+    pub r#type: PullRequestClosureMutationType,
+    pub action: PullRequestClosureAction,
+    pub closure: PullRequestClosureDto,
+    /// The commit this record made on the ticket's branch, when it made one.
+    pub checkpoint_oid: Option<String>,
+    pub publication: Option<PullRequestClosurePublication>,
+    /// The commit a new branch retired of the old context: its old tip, or
+    /// the remote history's last published commit. Null for any other record.
+    pub retired_context: Option<String>,
+    /// Where to open the pull request, from the link record. Null when the
+    /// item has none.
+    pub pull_request: Option<crate::repository::PullRequestDto>,
+    /// What stands in the way, as a blocked prepare names it. Empty
+    /// otherwise.
+    pub blockers: Vec<LifecycleBlocker>,
+}
+
+impl PullRequestClosureMutationDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the eight
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        if stored.as_object()?.len() != 8 {
+            return None;
+        }
+        let closure = stored.get("closure")?.as_object()?;
+        if closure.len() != 2 {
+            return None;
+        }
+        let closed_at = match closure.get("closed_at")? {
+            serde_json::Value::Null => None,
+            value => Some(value.as_str()?.to_owned()),
+        };
+        Some(Self {
+            r#type: known(
+                &PullRequestClosureMutationType::ALL,
+                PullRequestClosureMutationType::as_str,
+                &text("type")??,
+            )?,
+            action: known(
+                &PullRequestClosureAction::ALL,
+                PullRequestClosureAction::as_str,
+                &text("action")??,
+            )?,
+            closure: PullRequestClosureDto {
+                recording: known(
+                    &PullRequestClosureRecording::ALL,
+                    PullRequestClosureRecording::as_str,
+                    closure.get("recording")?.as_str()?,
+                )?,
+                closed_at,
+            },
+            checkpoint_oid: text("checkpoint_oid")?,
+            publication: match text("publication")? {
+                Some(publication) => Some(known(
+                    &PullRequestClosurePublication::ALL,
+                    PullRequestClosurePublication::as_str,
+                    &publication,
+                )?),
+                None => None,
+            },
+            retired_context: text("retired_context")?,
+            pull_request: match stored.get("pull_request")? {
+                serde_json::Value::Null => None,
+                link => Some(crate::repository::PullRequestDto::from_stored(link)?),
+            },
+            blockers: stored
+                .get("blockers")?
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    known(
+                        &LifecycleBlocker::ALL,
+                        LifecycleBlocker::as_str,
+                        value.as_str()?,
+                    )
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `PullRequestLinkDataDto`: one value, so that the data of an
+    /// `item sync` that gives a link is told apart by it alone.
+    PullRequestLinkDataType {
+        PullRequestLink => "pull_request_link",
+    }
+);
+
+/// What an `item sync` of a ticket or a document adds to its answer: where to
+/// open the pull request. A ticket's link is given when its branch holds a
+/// provisional closure, and `item sync` records it. A document's is given
+/// while the primary does not hold the document, and `item sync` only reads
+/// it: `document promote` records it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestLinkDataDto {
+    pub r#type: PullRequestLinkDataType,
+    pub pull_request: crate::repository::PullRequestDto,
+}
+
+impl PullRequestLinkDataDto {
+    /// The data of a link `item sync` gives.
+    pub(crate) fn of(link: &crate::forge::PullRequestLink) -> Self {
+        Self {
+            r#type: PullRequestLinkDataType::PullRequestLink,
+            pull_request: crate::repository::PullRequestDto::from(link),
+        }
+    }
+
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of its two
+    /// keys.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        if stored.as_object()?.len() != 2
+            || stored.get("type")?.as_str()? != PullRequestLinkDataType::PullRequestLink.as_str()
+        {
+            return None;
+        }
+        Some(Self {
+            r#type: PullRequestLinkDataType::PullRequestLink,
+            pull_request: crate::repository::PullRequestDto::from_stored(
+                stored.get("pull_request")?,
+            )?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `PullRequestClosurePreviewDto`: one value, so that the
+    /// details of a pull-request closure's preview are told apart by it
+    /// alone.
+    PullRequestClosurePreviewType {
+        PullRequestClosurePreview => "pull_request_closure_preview",
+    }
+);
+
+/// What a preview of a pull-request close or a withdraw shows (Part H). It
+/// holds names, commits and paths, and no title, body or content. The
+/// `closure`'s `closed_by` is the preview's alone, as the direct preview's
+/// is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestClosurePreviewDto {
+    pub r#type: PullRequestClosurePreviewType,
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub action: PullRequestClosureAction,
+    pub item_id: String,
+    /// The ticket's short code, when the index holds one.
+    pub slug: Option<String>,
+    /// The item's editing branch, as its short name.
+    pub branch: String,
+    pub primary_branch: String,
+    /// The publication remote, by its name.
+    pub remote: Option<String>,
+    /// The editing branch's head. Null for a new branch of a ticket with no
+    /// context; for one with a context, its old tip.
+    pub context_oid: Option<String>,
+    /// The remote's primary, as this clone last fetched it.
+    pub tracking_primary_oid: Option<String>,
+    /// A closure that is recorded, kept, or (for a withdraw) removed.
+    pub closure: LifecyclePlannedClosureDto,
+    /// What a new branch retires of the old context. Null for any other
+    /// record, and for a new branch with nothing to retire.
+    pub retired_context: Option<String>,
+    /// What the old context holds that the primary does not, for a new
+    /// branch: each path, and its change against the primary.
+    pub unheld: Vec<LifecyclePathChangeDto>,
+    /// Where to open the pull request. Null for a withdraw.
+    pub pull_request: Option<crate::repository::PullRequestDto>,
+}
+
+contract_enum!(
+    /// The tag of `PullRequestPromotionMutationDto`: one value, so that the
+    /// data of a pull-request promote's record is told apart by it alone.
+    PullRequestPromotionMutationType {
+        PullRequestPromotion => "pull_request_promotion",
+    }
+);
+
+contract_enum!(
+    /// How the document's branch reached the remote: this record's context
+    /// child pushed it, or found the remote holding it already. Null when
+    /// no child completed.
+    PullRequestPromotionPublication {
+        Published => "published",
+        Current => "current",
+    }
+);
+
+/// What a pull-request promote reports: a record that finished, whatever
+/// way. Nothing reached the primary, so it has no integration, cleanup or
+/// made-ready report. It holds IDs and fixed categories: no title or body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestPromotionMutationDto {
+    pub r#type: PullRequestPromotionMutationType,
+    pub item_id: String,
+    /// How the document's branch reached the remote. Null when the record's
+    /// context child did not complete.
+    pub publication: Option<PullRequestPromotionPublication>,
+    /// Whether the primary already holds the document, so that there is
+    /// nothing to open a pull request for.
+    pub primary_holds: bool,
+    /// Where to open the pull request, from the link record. Null when the
+    /// document has none.
+    pub pull_request: Option<crate::repository::PullRequestDto>,
+    /// What stands in the way, as a blocked prepare names it. Empty
+    /// otherwise; `history_unresolved` for a record whose child ended on it.
+    pub blockers: Vec<LifecycleBlocker>,
+}
+
+impl PullRequestPromotionMutationDto {
+    /// `from_stored`, for the tests of a front end that builds an answer.
+    #[doc(hidden)]
+    pub fn from_stored_for_testing(stored: &serde_json::Value) -> Option<Self> {
+        Self::from_stored(stored)
+    }
+
+    /// The data as a finished record stored it: a closed object of the six
+    /// keys, each of its shape.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        if stored.as_object()?.len() != 6 {
+            return None;
+        }
+        Some(Self {
+            r#type: known(
+                &PullRequestPromotionMutationType::ALL,
+                PullRequestPromotionMutationType::as_str,
+                stored.get("type")?.as_str()?,
+            )?,
+            item_id: stored.get("item_id")?.as_str()?.to_owned(),
+            publication: match stored.get("publication")? {
+                serde_json::Value::Null => None,
+                publication => Some(known(
+                    &PullRequestPromotionPublication::ALL,
+                    PullRequestPromotionPublication::as_str,
+                    publication.as_str()?,
+                )?),
+            },
+            primary_holds: stored.get("primary_holds")?.as_bool()?,
+            pull_request: match stored.get("pull_request")? {
+                serde_json::Value::Null => None,
+                link => Some(crate::repository::PullRequestDto::from_stored(link)?),
+            },
+            blockers: stored
+                .get("blockers")?
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    known(
+                        &LifecycleBlocker::ALL,
+                        LifecycleBlocker::as_str,
+                        value.as_str()?,
+                    )
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `PullRequestPromotionPreviewDto`: one value, so that the
+    /// details of a pull-request promote's preview are told apart by it
+    /// alone.
+    PullRequestPromotionPreviewType {
+        PullRequestPromotionPreview => "pull_request_promotion_preview",
+    }
+);
+
+contract_enum!(
+    /// Whether the document already has a link: `first` promotes it and
+    /// builds the link now, `again` publishes what it holds since and gives
+    /// the link it has.
+    PullRequestPromotionSituation {
+        First => "first",
+        Again => "again",
+    }
+);
+
+/// What a preview of a pull-request promote shows (design Part B). It holds
+/// names, commits and a path, and no title, body or content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PullRequestPromotionPreviewDto {
+    pub r#type: PullRequestPromotionPreviewType,
+    pub item_id: String,
+    /// The document's path on its editing branch, relative to the
+    /// repository with forward slashes.
+    pub path: String,
+    /// The document's editing branch, as its short name.
+    pub branch: String,
+    pub primary_branch: String,
+    /// The publication remote, by its name.
+    pub remote: Option<String>,
+    /// The editing branch's head: what the promote publishes.
+    pub context_oid: String,
+    /// The remote's copy of the branch, when it holds work this clone has
+    /// not merged (ahead of the editing branch or beside it). Null when the
+    /// remote has none, or what the branch holds or less: a push moves it.
+    pub remote_context_oid: Option<String>,
+    pub situation: PullRequestPromotionSituation,
+    /// Where to open the pull request: the link the document holds for
+    /// `again`, the one that would be built now for `first`.
+    pub pull_request: crate::repository::PullRequestDto,
 }
 
 contract_enum!(
@@ -969,6 +2425,69 @@ impl SynchronizationConflictMutationDto {
     }
 }
 
+contract_enum!(
+    /// The tag of `PrimaryLocalCommitsDto`: one value, so that the data of
+    /// a pull-only refusal is told apart by it alone.
+    PrimaryLocalCommitsType {
+        PrimaryLocalCommits => "primary_local_commits",
+    }
+);
+
+/// One commit of the local primary branch that the remote does not have.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LocalCommitDto {
+    /// The commit, in full: 40 hexadecimal characters.
+    pub oid: String,
+    /// The first line of the commit's message. It is the author's text:
+    /// a consumer escapes it as a field.
+    pub summary: String,
+}
+
+impl LocalCommitDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let oid = stored.get("oid")?.as_str()?;
+        (oid.len() == 40 && oid.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(())?;
+        Some(Self {
+            oid: oid.to_owned(),
+            summary: stored.get("summary")?.as_str()?.to_owned(),
+        })
+    }
+}
+
+/// What a pull-only `repo sync` reports when it refused: the local primary
+/// has commits the remote does not, which a pull request repository's
+/// synchronization never merges or pushes. `local_commits` are the newest
+/// of them, newest first, and `complete` says whether that is all of them.
+/// The list is empty when the push endpoint is ahead of what was fetched.
+/// The summaries are the person's own commit text, shown back to that
+/// person. Nothing was published.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrimaryLocalCommitsDto {
+    pub r#type: PrimaryLocalCommitsType,
+    pub local_commits: Vec<LocalCommitDto>,
+    pub complete: bool,
+}
+
+impl PrimaryLocalCommitsDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let tag = stored.get("type")?.as_str()?;
+        Some(Self {
+            r#type: PrimaryLocalCommitsType::ALL
+                .into_iter()
+                .find(|known| known.as_str() == tag)?,
+            local_commits: stored
+                .get("local_commits")?
+                .as_array()?
+                .iter()
+                .map(LocalCommitDto::from_stored)
+                .collect::<Option<_>>()?,
+            complete: stored.get("complete")?.as_bool()?,
+        })
+    }
+}
+
 /// What `operation abandon` reports of the operation it closed: where
 /// the operation stood, and what it left on disk for its user to deal
 /// with in Git. Every effect of an abandon is `not_requested`: this,
@@ -1172,6 +2691,395 @@ impl RemoteMutationDto {
     }
 }
 
+/// What `poll configure`, `poll pause` and `poll resume` report: the
+/// registration's polling policy as the request's transaction left it. A
+/// replay gives it as it was then; `poll status` reads what is stored now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollPolicyMutationDto {
+    pub enabled: bool,
+    pub paused: bool,
+    pub interval_seconds: u64,
+    pub backoff_seconds: Option<u64>,
+    /// Automatic polls stay blocked while this is set, whatever a
+    /// `poll resume` did: it is not lifted here.
+    pub recovery_suspended: bool,
+    /// Null when no deadline is stored, so an eligible poll is due.
+    pub next_eligible_at: Option<String>,
+}
+
+impl PollPolicyMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            enabled: stored.get("enabled")?.as_bool()?,
+            paused: stored.get("paused")?.as_bool()?,
+            interval_seconds: stored.get("interval_seconds")?.as_u64()?,
+            backoff_seconds: match stored.get("backoff_seconds")? {
+                serde_json::Value::Null => None,
+                value => Some(value.as_u64()?),
+            },
+            recovery_suspended: stored.get("recovery_suspended")?.as_bool()?,
+            next_eligible_at: match stored.get("next_eligible_at")? {
+                serde_json::Value::Null => None,
+                value => Some(value.as_str()?.to_owned()),
+            },
+        })
+    }
+}
+
+contract_enum!(
+    /// How a poll's pass ended. A poll that stopped on the way to its remote
+    /// completed too: its code says what stopped it.
+    PollMutationCompletion {
+        Completed => "completed",
+        Interrupted => "interrupted",
+        Cancelled => "cancelled",
+    }
+);
+
+contract_enum!(
+    /// What a poll did about one target. Anything but `current`,
+    /// `fast_forwarded` and `materialized` left the target as it was found, and
+    /// is data, not a failure.
+    PollTargetDisposition {
+        Current => "current",
+        FastForwarded => "fast_forwarded",
+        LocalAhead => "local_ahead",
+        Diverged => "diverged",
+        Dirty => "dirty",
+        Conflicted => "conflicted",
+        Inaccessible => "inaccessible",
+        Materialized => "materialized",
+        Nonconforming => "nonconforming",
+        BlockedByLocalState => "blocked_by_local_state",
+        MaterializationIncomplete => "materialization_incomplete",
+        Malformed => "malformed",
+        RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
+        HistoryUnknown => "history_unknown",
+        Unpublished => "unpublished",
+        NotReached => "not_reached",
+    }
+);
+
+impl PollTargetDisposition {
+    /// What a person is told of the target, in the domain's words. A front end
+    /// prints this; it is no part of the data.
+    pub fn guidance(self) -> &'static str {
+        use super::super::PollDisposition as Domain;
+        match self {
+            Self::Current => Domain::Current,
+            Self::FastForwarded => Domain::FastForwarded,
+            Self::LocalAhead => Domain::LocalAhead,
+            Self::Diverged => Domain::Diverged,
+            Self::Dirty => Domain::Dirty,
+            Self::Conflicted => Domain::Conflicted,
+            Self::Inaccessible => Domain::Inaccessible,
+            Self::Materialized => Domain::Materialized,
+            Self::Nonconforming => Domain::Nonconforming,
+            Self::BlockedByLocalState => Domain::BlockedByLocalState,
+            Self::MaterializationIncomplete => Domain::MaterializationIncomplete,
+            Self::Malformed => Domain::Malformed,
+            Self::RemotelyDeleted => Domain::RemotelyDeleted,
+            Self::Closed => Domain::Closed,
+            Self::Promoted => Domain::Promoted,
+            Self::HistoryUnknown => Domain::HistoryUnknown,
+            Self::Unpublished => Domain::Unpublished,
+            Self::NotReached => Domain::NotReached,
+        }
+        .guidance()
+    }
+}
+
+/// One target of a poll, as the domain reports it. A malformed remote
+/// ref is reported with every field but its disposition null, and its name is
+/// nowhere in the result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollTargetDto {
+    pub target: Option<String>,
+    pub kind: Option<ItemDtoKind>,
+    pub item_id: Option<String>,
+    pub disposition: PollTargetDisposition,
+    pub before_oid: Option<String>,
+    pub after_oid: Option<String>,
+}
+
+/// What `poll once` reports. A restart reports what its own pass saw.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollMutationDto {
+    pub operation_id: String,
+    pub completion: PollMutationCompletion,
+    pub completed_at: String,
+    pub next_eligible_at: Option<String>,
+    pub targets: Vec<PollTargetDto>,
+}
+
+impl PollMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        if stored.as_object()?.len() != 5 {
+            return None;
+        }
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        fn optional(stored: &serde_json::Value, key: &str) -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        }
+        let targets = stored
+            .get("targets")?
+            .as_array()?
+            .iter()
+            .map(|target| {
+                if target.as_object()?.len() != 6 {
+                    return None;
+                }
+                Some(PollTargetDto {
+                    target: optional(target, "target")?,
+                    kind: match optional(target, "kind")? {
+                        Some(kind) => Some(known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &kind)?),
+                        None => None,
+                    },
+                    item_id: optional(target, "item_id")?,
+                    disposition: known(
+                        &PollTargetDisposition::ALL,
+                        PollTargetDisposition::as_str,
+                        target.get("disposition")?.as_str()?,
+                    )?,
+                    before_oid: optional(target, "before_oid")?,
+                    after_oid: optional(target, "after_oid")?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            completion: known(
+                &PollMutationCompletion::ALL,
+                PollMutationCompletion::as_str,
+                stored.get("completion")?.as_str()?,
+            )?,
+            completed_at: stored.get("completed_at")?.as_str()?.to_owned(),
+            next_eligible_at: optional(stored, "next_eligible_at")?,
+            targets,
+        })
+    }
+}
+
+contract_enum!(PollRetirementMutationType { PollRetirement => "poll_retirement", });
+contract_enum!(PollRetirementCompletion { Completed => "completed", Stopped => "stopped", });
+contract_enum!(PollRetirementItemState {
+    Retired => "retired", AlreadyAbsent => "already_absent", Refused => "refused",
+    Pending => "pending", NotReached => "not_reached", Preserved => "preserved",
+});
+contract_enum!(PollRetirementDebt { Cleanup => "cleanup", Discovery => "discovery", Admission => "admission", });
+
+/// Immutable as-of-pass snapshot. Handles read CURRENT child state; independent
+/// child recovery never edits this historical report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollRetirementItemDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub request_id: String,
+    pub operation_id: Option<String>,
+    pub state: PollRetirementItemState,
+    pub code: Option<ResultCode>,
+    pub debt: Option<PollRetirementDebt>,
+    pub result: Option<ContextRetirementMutationDto>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollRetirementMutationDto {
+    pub r#type: PollRetirementMutationType,
+    pub poll: PollMutationDto,
+    pub completion: PollRetirementCompletion,
+    pub stop_code: Option<ResultCode>,
+    pub retirements: Vec<PollRetirementItemDto>,
+}
+impl PollRetirementMutationDto {
+    pub(crate) fn from_stored(v: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(
+            all: &[T],
+            name: fn(T) -> &'static str,
+            v: &serde_json::Value,
+        ) -> Option<T> {
+            all.iter().copied().find(|x| Some(name(*x)) == v.as_str())
+        }
+        fn text(v: &serde_json::Value) -> Option<Option<String>> {
+            if v.is_null() {
+                Some(None)
+            } else {
+                Some(Some(v.as_str()?.into()))
+            }
+        }
+        if v.as_object()?.len() != 5 || v.get("type")?.as_str()? != "poll_retirement" {
+            return None;
+        }
+        let report = Self {
+            r#type: PollRetirementMutationType::PollRetirement,
+            poll: PollMutationDto::from_stored(v.get("poll")?)?,
+            completion: known(
+                &PollRetirementCompletion::ALL,
+                PollRetirementCompletion::as_str,
+                v.get("completion")?,
+            )?,
+            stop_code: if v.get("stop_code")?.is_null() {
+                None
+            } else {
+                Some(known(
+                    &ResultCode::ALL,
+                    ResultCode::as_str,
+                    v.get("stop_code")?,
+                )?)
+            },
+            retirements: v
+                .get("retirements")?
+                .as_array()?
+                .iter()
+                .map(|r| {
+                    if r.as_object()?.len() != 8 {
+                        return None;
+                    }
+                    Some(PollRetirementItemDto {
+                        kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, r.get("kind")?)?,
+                        item_id: r.get("item_id")?.as_str()?.into(),
+                        request_id: r.get("request_id")?.as_str()?.into(),
+                        operation_id: text(r.get("operation_id")?)?,
+                        state: known(
+                            &PollRetirementItemState::ALL,
+                            PollRetirementItemState::as_str,
+                            r.get("state")?,
+                        )?,
+                        code: if r.get("code")?.is_null() {
+                            None
+                        } else {
+                            Some(known(&ResultCode::ALL, ResultCode::as_str, r.get("code")?)?)
+                        },
+                        debt: if r.get("debt")?.is_null() {
+                            None
+                        } else {
+                            Some(known(
+                                &PollRetirementDebt::ALL,
+                                PollRetirementDebt::as_str,
+                                r.get("debt")?,
+                            )?)
+                        },
+                        result: if r.get("result")?.is_null() {
+                            None
+                        } else {
+                            Some(ContextRetirementMutationDto::from_stored(r.get("result")?)?)
+                        },
+                    })
+                })
+                .collect::<Option<_>>()?,
+        };
+        if (report.completion == PollRetirementCompletion::Completed) != report.stop_code.is_none()
+            || report
+                .stop_code
+                .is_some_and(|c| matches!(c, ResultCode::Ok | ResultCode::AlreadyApplied))
+        {
+            return None;
+        }
+        for row in &report.retirements {
+            if let Some(result) = &row.result {
+                if result.kind != row.kind
+                    || result.item_id != row.item_id
+                    || Some(result.operation_id.as_str()) != row.operation_id.as_deref()
+                    || Some(result.code) != row.code
+                {
+                    return None;
+                }
+                let state = match result.state {
+                    ContextRetirementState::Retired => PollRetirementItemState::Retired,
+                    ContextRetirementState::AlreadyAbsent => PollRetirementItemState::AlreadyAbsent,
+                    ContextRetirementState::Refused => PollRetirementItemState::Refused,
+                    ContextRetirementState::Pending => PollRetirementItemState::Pending,
+                    ContextRetirementState::Preserved => PollRetirementItemState::Preserved,
+                };
+                if state != row.state {
+                    return None;
+                }
+            }
+            match row.state {
+                PollRetirementItemState::NotReached => {
+                    if row.operation_id.is_some()
+                        || row.code.is_some()
+                        || row.debt.is_some()
+                        || row.result.is_some()
+                    {
+                        return None;
+                    }
+                }
+                PollRetirementItemState::Pending => {
+                    if row.operation_id.is_none()
+                        || row.code.is_none()
+                        || row.debt.is_none()
+                        || row.result.is_none()
+                    {
+                        return None;
+                    }
+                }
+                PollRetirementItemState::Refused => {
+                    if row.debt.is_some()
+                        || row.code.is_none()
+                        || row.operation_id.is_some() != row.result.is_some()
+                    {
+                        return None;
+                    }
+                }
+                _ => {
+                    if row.result.is_none() || row.operation_id.is_none() || row.debt.is_some() {
+                        return None;
+                    }
+                }
+            }
+        }
+        if report.completion == PollRetirementCompletion::Completed
+            && report.retirements.iter().any(|r| {
+                matches!(
+                    r.state,
+                    PollRetirementItemState::Pending | PollRetirementItemState::NotReached
+                )
+            })
+        {
+            return None;
+        }
+        Some(report)
+    }
+}
+
+#[test]
+fn poll_retirement_stored_contract_is_closed_and_cannot_complete_a_not_reached_prefix() {
+    let poll = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-06T00:00:00Z","next_eligible_at":null,"targets":[]});
+    assert!(matches!(
+        MutationDataDto::from_stored(Command::PollOnce, &poll),
+        Some(MutationDataDto::Poll(_))
+    ));
+    let valid = serde_json::json!({"type":"poll_retirement","poll":poll,"completion":"stopped","stop_code":"recovery_required","retirements":[{"kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","request_id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","operation_id":null,"state":"not_reached","code":null,"debt":null,"result":null}]});
+    assert!(PollRetirementMutationDto::from_stored(&valid).is_some());
+    let mut complete = valid.clone();
+    complete["completion"] = "completed".into();
+    complete["stop_code"] = serde_json::Value::Null;
+    assert!(
+        PollRetirementMutationDto::from_stored(&complete).is_none(),
+        "all selected, not just a settled prefix"
+    );
+    for key in valid.as_object().unwrap().keys() {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            PollRetirementMutationDto::from_stored(&missing).is_none(),
+            "required {key}"
+        );
+    }
+    let mut mixed = valid.clone();
+    mixed["operation_id"] = "ordinary root field".into();
+    assert!(PollRetirementMutationDto::from_stored(&mixed).is_none());
+    assert!(PollMutationDto::from_stored(&valid).is_none());
+}
+
 /// What `document create`, `document save` and `document move` report
 /// about the document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1250,6 +3158,8 @@ impl MutationDataDto {
             Self::LocalContextSync(_) => None,
             Self::Synchronization(data) => Some(data.authority()),
             Self::SynchronizationConflict(_)
+            // A refusal for local commits never reaches the host's key.
+            | Self::PrimaryLocalCommits(_)
             // A comment's data names no host: its synchronization's is
             // not kept.
             | Self::Comment(_)
@@ -1265,7 +3175,30 @@ impl MutationDataDto {
             // none.
             | Self::Host(_)
             | Self::Repair(_)
-            | Self::Context(_) => None,
+            | Self::Context(_)
+            // A lifecycle's category carries no authority (design, Answers).
+            | Self::Lifecycle(_)
+            // Nor does a branch record's, or the link an `item sync` gives.
+            | Self::PullRequestClosure(_)
+            | Self::PullRequestPromotion(_)
+            | Self::PullRequestLink(_)
+            | Self::PollPolicy(_)
+            // A poll's report names no host; a host it stopped for is reported
+            // as a synchronization's is.
+            | Self::Poll(_)
+            | Self::PollRetirement(_)
+            | Self::ContextRetirement(_)
+            // A history resolution never reaches the host.
+            | Self::ResolveHistory(_)
+            // A setup's data names no host: the transport's error does.
+            | Self::Setup(_)
+            // Nor does a setup poll's.
+            | Self::SetupPoll(_)
+            // Nor does a cancellation's.
+            | Self::SetupCancel(_)
+            // Nor is a request refused for another operation's row
+            // refused for its host.
+            | Self::Blocked(_) => None,
         }
     }
 
@@ -1291,11 +3224,49 @@ impl MutationDataDto {
             {
                 CommentMutationDto::from_stored(stored).map(Self::Comment)
             }
+            // A resume that continued a promotion or a closure gives the
+            // lifecycle's data, told apart by its own tag.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(LifecycleMutationType::Lifecycle.as_str()) =>
+            {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
+            // So does one that continued a branch record to its end (a pull-request
+            // close, a withdraw or a new branch), by its own tag.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestClosureMutationType::PullRequestClosure.as_str()) =>
+            {
+                PullRequestClosureMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestClosure(Box::new(data)))
+            }
+            // So does one that continued a pull-request promote to its end.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestPromotionMutationType::PullRequestPromotion.as_str()) =>
+            {
+                PullRequestPromotionMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestPromotion(Box::new(data)))
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }
             Command::TicketCreate | Command::TicketSave | Command::TicketSlugAssign => {
                 TicketMutationDto::from_stored(stored).map(Self::Ticket)
+            }
+            // A pull-request selection stores the setup it recorded, or the
+            // local commits that refused it, told apart by the tag.
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup") =>
+            {
+                SetupMutationDto::from_stored(stored).map(|data| Self::Setup(Box::new(data)))
+            }
+            Command::RemoteSelect
+                if stored.get("type").and_then(|t| t.as_str()) == Some("primary_local_commits") =>
+            {
+                PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
             }
             Command::RemoteAdd | Command::RemoteSelect | Command::RemoteRemove => {
                 RemoteMutationDto::from_stored(stored).map(Self::Remote)
@@ -1325,32 +3296,652 @@ impl MutationDataDto {
             // A synchronization that stopped on a conflict of its own
             // merge, or a resume that took one up, is told apart by its
             // tag.
-            Command::ItemSync | Command::RepoSync | Command::OperationResume
+            // A branch record's child stops as `item sync` does, so a close
+            // joins it.
+            Command::ItemSync
+            | Command::RepoSync
+            | Command::OperationResume
+            | Command::TicketClose
+            | Command::TicketWithdrawClosure
+            | Command::DocumentPromote
                 if stored.get("type").and_then(|t| t.as_str())
                     == Some(SynchronizationConflictType::SynchronizationConflict.as_str()) =>
             {
                 SynchronizationConflictMutationDto::from_stored(stored)
                     .map(Self::SynchronizationConflict)
             }
+            // A pull-only refusal, or a resume that took its operation up
+            // and gave the same answer, is told apart by its tag too.
+            Command::RepoSync | Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PrimaryLocalCommitsType::PrimaryLocalCommits.as_str()) =>
+            {
+                PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
+            }
+            Command::ContextRetire => {
+                ContextRetirementMutationDto::from_stored(stored).map(Self::ContextRetirement)
+            }
             Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
+            // A direct promote's data, and a blocked or a refused one's of
+            // either mode, is the lifecycle's, told apart by its tag.
+            Command::DocumentPromote
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(LifecycleMutationType::Lifecycle.as_str()) =>
+            {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
+            // A pull-request promote's, which finished.
+            Command::DocumentPromote
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestPromotionMutationType::PullRequestPromotion.as_str()) =>
+            {
+                PullRequestPromotionMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestPromotion(Box::new(data)))
+            }
+            // A direct close's data, and a blocked or a refused one's of
+            // either mode, is the lifecycle's, told apart by its tag.
+            Command::TicketClose | Command::TicketWithdrawClosure
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(LifecycleMutationType::Lifecycle.as_str()) =>
+            {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
+            // A branch record's, which finished.
+            Command::TicketClose | Command::TicketWithdrawClosure
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestClosureMutationType::PullRequestClosure.as_str()) =>
+            {
+                PullRequestClosureMutationDto::from_stored(stored)
+                    .map(|data| Self::PullRequestClosure(Box::new(data)))
+            }
+            Command::PollConfigure | Command::PollPause | Command::PollResume => {
+                PollPolicyMutationDto::from_stored(stored).map(Self::PollPolicy)
+            }
+            // A poll's report, or the host it stopped for on its first call.
+            Command::PollOnce => {
+                if stored.get("type").and_then(|t| t.as_str()) == Some("setup_poll") {
+                    SetupPollDto::from_stored(stored).map(|data| Self::SetupPoll(Box::new(data)))
+                } else if stored.get("type").and_then(|t| t.as_str()) == Some("poll_retirement") {
+                    PollRetirementMutationDto::from_stored(stored).map(Self::PollRetirement)
+                } else if stored.get("completion").is_some() {
+                    PollMutationDto::from_stored(stored).map(Self::Poll)
+                } else {
+                    SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
+                }
+            }
+            Command::ItemResolveHistory | Command::RemoteResolveHistory => {
+                ItemResolveHistoryMutationDto::from_stored(stored).map(Self::ResolveHistory)
+            }
+            // An `item sync` that gave a link reports it, told apart by its
+            // tag, before the host data below.
+            Command::ItemSync
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(PullRequestLinkDataType::PullRequestLink.as_str()) =>
+            {
+                PullRequestLinkDataDto::from_stored(stored)
+                    .map(|data| Self::PullRequestLink(Box::new(data)))
+            }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the
             // conflict above. A republish reports only the host it
-            // stopped for: it merges nothing.
+            // stopped for: it merges nothing. A close's child that stopped
+            // for its host reports the same, last.
             Command::ItemSync
             | Command::RepoSync
             | Command::OperationResume
-            | Command::ItemRepublish => {
+            | Command::ItemRepublish
+            | Command::TicketClose
+            | Command::TicketWithdrawClosure
+            | Command::DocumentPromote => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
+            // A cancellation of a setup stores what became of it.
+            Command::RepoSetupCancel => {
+                SetupCancelDto::from_stored(stored).map(|data| Self::SetupCancel(Box::new(data)))
+            }
+            // A pull-request enable stores the setup it recorded, or the
+            // local commits that refused it, told apart by the tag. A direct
+            // enable reports no data, so a record of one stores none.
+            Command::RepoEnable => match stored.get("type").and_then(|t| t.as_str()) {
+                Some("setup") => {
+                    SetupMutationDto::from_stored(stored).map(|data| Self::Setup(Box::new(data)))
+                }
+                Some("primary_local_commits") => {
+                    PrimaryLocalCommitsDto::from_stored(stored).map(Self::PrimaryLocalCommits)
+                }
+                _ => None,
+            },
             // These report no data, so a record of one stores none.
             Command::IndexRefresh
             | Command::IndexRebuild
             | Command::RepoCreate
-            | Command::RepoEnable
             | Command::RepoRemove
             | Command::FolderCreate
             | Command::ContextRelease => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod poll_retirement_recognition_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_retirement_stored_data_is_closed_and_typed() {
+        let valid = serde_json::json!({"type":"context_retirement","kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","state":"preserved","code":"external_change","worktree_removal":"observed","branch_removal":"possible","materialization_settled":false});
+        assert!(ContextRetirementMutationDto::from_stored(&valid).is_some());
+        for (key, bad) in [
+            ("type", "poll"),
+            ("kind", "unknown"),
+            ("state", "closed"),
+            ("code", "unknown"),
+            ("worktree_removal", "removed"),
+            ("branch_removal", "true"),
+        ] {
+            let mut changed = valid.clone();
+            changed[key] = bad.into();
+            assert!(
+                ContextRetirementMutationDto::from_stored(&changed).is_none(),
+                "{key}"
+            );
+        }
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                ContextRetirementMutationDto::from_stored(&missing).is_none(),
+                "{key}"
+            );
+        }
+        let mut extra = valid;
+        extra["source"] = "private".into();
+        assert!(ContextRetirementMutationDto::from_stored(&extra).is_none());
+    }
+
+    #[test]
+    fn ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values() {
+        let legacy = [
+            "current",
+            "fast_forwarded",
+            "local_ahead",
+            "diverged",
+            "dirty",
+            "conflicted",
+            "inaccessible",
+            "materialized",
+            "nonconforming",
+            "blocked_by_local_state",
+            "materialization_incomplete",
+            "malformed",
+            "remotely_deleted",
+            "history_unknown",
+            "not_reached",
+        ];
+        for disposition in legacy.into_iter().chain(["closed", "promoted"]) {
+            let stored = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-04T00:00:00Z","next_eligible_at":null,"targets":[{"target":null,"kind":null,"item_id":null,"disposition":disposition,"before_oid":null,"after_oid":null}]});
+            let decoded = PollMutationDto::from_stored(&stored).expect("old and new values decode");
+            assert_eq!(serde_json::to_value(decoded).unwrap(), stored);
+            assert_eq!(stored.as_object().unwrap().len(), 5);
+        }
+    }
+}
+
+#[cfg(test)]
+mod primary_local_commits_tests {
+    use super::*;
+
+    /// O5: the data a pull-only refusal stored is read back on a replay as
+    /// the same data, by `repo sync` and by an `operation resume` that took
+    /// the operation up, and only by those: the tag guards the arm before
+    /// the generic one.
+    #[test]
+    fn o5_local_commits_data_reads_back() {
+        let data = |commits: Vec<LocalCommitDto>, complete| {
+            MutationDataDto::PrimaryLocalCommits(PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: commits,
+                complete,
+            })
+        };
+        let commit = |oid: &str, summary: &str| LocalCommitDto {
+            oid: oid.to_owned(),
+            summary: summary.to_owned(),
+        };
+        for answer in [
+            data(
+                vec![
+                    commit("0123456789abcdef0123456789abcdef01234567", "Add a thing"),
+                    commit(
+                        "fedcba9876543210fedcba9876543210fedcba98",
+                        "Tab\there \u{1b}[31m",
+                    ),
+                ],
+                false,
+            ),
+            data(Vec::new(), true),
+        ] {
+            let stored = serde_json::to_value(&answer).unwrap();
+            assert_eq!(stored["type"], "primary_local_commits");
+            for command in [Command::RepoSync, Command::OperationResume] {
+                assert_eq!(
+                    MutationDataDto::from_stored(command, &stored),
+                    Some(answer.clone()),
+                    "{command:?}"
+                );
+            }
+            // The other synchronization has no such data, and does not
+            // answer it as another shape.
+            assert_eq!(
+                MutationDataDto::from_stored(Command::ItemSync, &stored),
+                None
+            );
+        }
+        // A tag with a malformed body is not read as the generic shape.
+        let malformed = serde_json::json!({
+            "type": "primary_local_commits",
+            "local_commits": [{"oid": "0123abc", "summary": "short oid"}],
+            "complete": true,
+        });
+        assert_eq!(
+            MutationDataDto::from_stored(Command::RepoSync, &malformed),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod pull_request_closure_tests {
+    use super::*;
+
+    const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn pull_request() -> crate::repository::PullRequestDto {
+        crate::repository::PullRequestDto {
+            source: format!("manyhands/ticket/{ITEM}"),
+            target: "main".to_owned(),
+            forge: Some("github".to_owned()),
+            url: Some("https://forge.example/new".to_owned()),
+        }
+    }
+
+    fn data(
+        action: PullRequestClosureAction,
+        recording: PullRequestClosureRecording,
+    ) -> PullRequestClosureMutationDto {
+        PullRequestClosureMutationDto {
+            r#type: PullRequestClosureMutationType::PullRequestClosure,
+            action,
+            closure: PullRequestClosureDto {
+                recording,
+                closed_at: (recording == PullRequestClosureRecording::Recorded)
+                    .then(|| "2026-11-25T10:00:00Z".to_owned()),
+            },
+            checkpoint_oid: (recording != PullRequestClosureRecording::Nothing)
+                .then(|| OID.to_owned()),
+            publication: Some(PullRequestClosurePublication::Published),
+            retired_context: (action == PullRequestClosureAction::NewBranch)
+                .then(|| OID.to_owned()),
+            pull_request: Some(pull_request()),
+            blockers: Vec::new(),
+        }
+    }
+
+    /// D19's library half: what a finished branch record stored is read back
+    /// as the same data for `ticket close`, by its tag, and only by the verbs
+    /// that report it; the data of every other shape a close stores still
+    /// reads as itself.
+    #[test]
+    fn pull_request_closure_data_reads_back() {
+        // A withdraw is a branch record too, and its answers read back as a
+        // close's do.
+        for verb in [Command::TicketClose, Command::TicketWithdrawClosure] {
+            use PullRequestClosureAction as Action;
+            use PullRequestClosureRecording as Recording;
+            let mut answers = Vec::new();
+            for (action, recording) in [
+                (Action::Close, Recording::Recorded),
+                (Action::Close, Recording::Existing),
+                (Action::Close, Recording::Nothing),
+                (Action::Withdraw, Recording::Withdrawn),
+                (Action::Withdraw, Recording::Nothing),
+                (Action::NewBranch, Recording::Recorded),
+                (Action::NewBranch, Recording::Existing),
+            ] {
+                answers.push(data(action, recording));
+            }
+            // The link record's link, or none; a publication that did not
+            // complete; and what a blocked step 3 names.
+            answers.push(PullRequestClosureMutationDto {
+                pull_request: None,
+                publication: None,
+                blockers: vec![LifecycleBlocker::AlreadyClosed],
+                ..data(Action::Close, Recording::Nothing)
+            });
+            for answer in answers {
+                let stored = serde_json::to_value(&answer).unwrap();
+                assert_eq!(stored["type"], "pull_request_closure");
+                assert_eq!(
+                    MutationDataDto::from_stored(verb, &stored),
+                    Some(MutationDataDto::PullRequestClosure(Box::new(
+                        answer.clone()
+                    ))),
+                    "{stored}"
+                );
+                assert_eq!(
+                    PullRequestClosureMutationDto::from_stored(&stored),
+                    Some(answer.clone())
+                );
+                // E-47: a resume that continued a branch record to its end
+                // stores its answer under `operation resume`, which reads it
+                // back by its tag.
+                assert_eq!(
+                    MutationDataDto::from_stored(Command::OperationResume, &stored),
+                    Some(MutationDataDto::PullRequestClosure(Box::new(
+                        answer.clone()
+                    ))),
+                    "{stored}"
+                );
+                // No other command reports it.
+                for other in [
+                    Command::DocumentPromote,
+                    Command::ItemSync,
+                    Command::RepoSync,
+                ] {
+                    assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+                }
+            }
+
+            // The lifecycle's own data, a direct close's or a blocked one's,
+            // still reads as the lifecycle DTO.
+            let lifecycle = LifecycleMutationDto {
+                r#type: LifecycleMutationType::Lifecycle,
+                kind: ItemDtoKind::Ticket,
+                item_id: ITEM.to_owned(),
+                recording: None,
+                checkpoint_oid: None,
+                integration: None,
+                integration_oid: None,
+                publication: None,
+                publication_oid: None,
+                publication_pending: None,
+                cleanup: None,
+                cleanup_pending: None,
+                blockers: vec![LifecycleBlocker::ContextDirty],
+                made_ready: Some(Vec::new()),
+                made_ready_state: Some(LifecycleMadeReadyState::NotComputed),
+            };
+            let stored = serde_json::to_value(&lifecycle).unwrap();
+            assert_eq!(
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::Lifecycle(Box::new(lifecycle)))
+            );
+
+            // A branch record's child stops as `item sync` does: the tagged
+            // conflict, and a host that is not trusted.
+            let conflict = SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: ConflictNextDto {
+                    operation_id: ITEM.to_owned(),
+                    next_action: ConflictNextAction::Resolve,
+                },
+            };
+            let stored = serde_json::to_value(&conflict).unwrap();
+            assert_eq!(
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::SynchronizationConflict(conflict))
+            );
+            let host = SynchronizationMutationDto {
+                host: "git.example".to_owned(),
+                port: 22,
+                presented_algorithm: "ssh-ed25519".to_owned(),
+                presented_fingerprint: "SHA256:abc".to_owned(),
+                pinned_algorithm: None,
+                pinned_fingerprint: None,
+            };
+            let stored = serde_json::to_value(&host).unwrap();
+            assert_eq!(
+                MutationDataDto::from_stored(verb, &stored),
+                Some(MutationDataDto::Synchronization(host))
+            );
+
+            // A tag with a malformed body is not read as another shape: a key
+            // missing, a key more, a value outside its vocabulary.
+            let valid = serde_json::to_value(data(Action::Close, Recording::Recorded)).unwrap();
+            for key in valid.as_object().unwrap().keys() {
+                let mut missing = valid.clone();
+                missing.as_object_mut().unwrap().remove(key);
+                assert_eq!(
+                    MutationDataDto::from_stored(verb, &missing),
+                    None,
+                    "without {key}"
+                );
+            }
+            let mut extra = valid.clone();
+            extra["source"] = "private".into();
+            assert_eq!(MutationDataDto::from_stored(verb, &extra), None);
+            for (key, bad) in [
+                ("action", serde_json::json!("reopen")),
+                ("blockers", serde_json::json!(["not_a_blocker"])),
+                ("publication", serde_json::json!("pending")),
+                ("checkpoint_oid", serde_json::json!(7)),
+                (
+                    "closure",
+                    serde_json::json!({"recording": "kept", "closed_at": null}),
+                ),
+                (
+                    "closure",
+                    serde_json::json!({"recording": "recorded", "closed_at": null, "closed_by": "A <a@b>"}),
+                ),
+                (
+                    "pull_request",
+                    serde_json::json!({"source": "a", "target": "b", "forge": "svn", "url": null}),
+                ),
+            ] {
+                let mut changed = valid.clone();
+                changed[key] = bad;
+                assert_eq!(MutationDataDto::from_stored(verb, &changed), None, "{key}");
+            }
+        }
+    }
+
+    /// R-25: what a finished pull-request promote stored is read back as the
+    /// same data for `document promote` and for the `operation resume` that
+    /// continued it, by its tag; a promote's own conflict and host data are
+    /// read back as a synchronization's, and its direct data as the
+    /// lifecycle's, each by its tag. A closure's data is no promote's.
+    #[test]
+    fn pull_request_promotion_data_reads_back() {
+        let promotion =
+            |publication, primary_holds, link: bool, blockers| PullRequestPromotionMutationDto {
+                r#type: PullRequestPromotionMutationType::PullRequestPromotion,
+                item_id: ITEM.to_owned(),
+                publication,
+                primary_holds,
+                pull_request: link.then(|| crate::repository::PullRequestDto {
+                    source: format!("manyhands/document/{ITEM}"),
+                    ..pull_request()
+                }),
+                blockers,
+            };
+        use PullRequestPromotionPublication as Publication;
+        let answers = [
+            promotion(Some(Publication::Published), false, true, Vec::new()),
+            promotion(Some(Publication::Current), false, true, Vec::new()),
+            promotion(None, true, false, Vec::new()),
+            promotion(
+                None,
+                false,
+                false,
+                vec![LifecycleBlocker::HistoryUnresolved],
+            ),
+        ];
+        for answer in answers {
+            let stored = serde_json::to_value(&answer).unwrap();
+            assert_eq!(stored["type"], "pull_request_promotion");
+            for command in [Command::DocumentPromote, Command::OperationResume] {
+                assert_eq!(
+                    MutationDataDto::from_stored(command, &stored),
+                    Some(MutationDataDto::PullRequestPromotion(Box::new(
+                        answer.clone()
+                    ))),
+                    "{command:?}: {stored}"
+                );
+            }
+            assert_eq!(
+                PullRequestPromotionMutationDto::from_stored(&stored),
+                Some(answer.clone())
+            );
+            // No other command reports it.
+            for other in [
+                Command::TicketClose,
+                Command::TicketWithdrawClosure,
+                Command::ItemSync,
+                Command::RepoSync,
+            ] {
+                assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+            }
+        }
+        // A closure's data is not a promote's.
+        let closure = serde_json::to_value(data(
+            PullRequestClosureAction::Close,
+            PullRequestClosureRecording::Recorded,
+        ))
+        .unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &closure),
+            None
+        );
+
+        // A stopped promote's child answers as `item sync` does, and a direct
+        // promote's data is still the lifecycle's.
+        let conflict = SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: ITEM.to_owned(),
+                next_action: ConflictNextAction::Resolve,
+            },
+        };
+        let stored = serde_json::to_value(&conflict).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::SynchronizationConflict(conflict))
+        );
+        let host = SynchronizationMutationDto {
+            host: "git.example".to_owned(),
+            port: 22,
+            presented_algorithm: "ssh-ed25519".to_owned(),
+            presented_fingerprint: "SHA256:abc".to_owned(),
+            pinned_algorithm: None,
+            pinned_fingerprint: None,
+        };
+        let stored = serde_json::to_value(&host).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::Synchronization(host))
+        );
+        let lifecycle = LifecycleMutationDto {
+            r#type: LifecycleMutationType::Lifecycle,
+            kind: ItemDtoKind::Document,
+            item_id: ITEM.to_owned(),
+            recording: None,
+            checkpoint_oid: None,
+            integration: None,
+            integration_oid: None,
+            publication: None,
+            publication_oid: None,
+            publication_pending: None,
+            cleanup: None,
+            cleanup_pending: None,
+            blockers: vec![LifecycleBlocker::ContextDirty],
+            made_ready: None,
+            made_ready_state: None,
+        };
+        let stored = serde_json::to_value(&lifecycle).unwrap();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &stored),
+            Some(MutationDataDto::Lifecycle(Box::new(lifecycle)))
+        );
+
+        // A tag with a malformed body is not read as another shape.
+        let valid = serde_json::to_value(promotion(
+            Some(Publication::Published),
+            false,
+            true,
+            Vec::new(),
+        ))
+        .unwrap();
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert_eq!(
+                MutationDataDto::from_stored(Command::DocumentPromote, &missing),
+                None,
+                "without {key}"
+            );
+        }
+        let mut extra = valid.clone();
+        extra["url"] = "private".into();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::DocumentPromote, &extra),
+            None
+        );
+        for (key, bad) in [
+            ("publication", serde_json::json!("pending")),
+            ("primary_holds", serde_json::json!("yes")),
+            ("blockers", serde_json::json!(["not_a_blocker"])),
+            ("item_id", serde_json::json!(7)),
+            (
+                "pull_request",
+                serde_json::json!({"source": "a", "target": "b", "forge": "svn", "url": null}),
+            ),
+        ] {
+            let mut changed = valid.clone();
+            changed[key] = bad;
+            assert_eq!(
+                MutationDataDto::from_stored(Command::DocumentPromote, &changed),
+                None,
+                "{key}"
+            );
+        }
+    }
+
+    /// The link `item sync` gives is read back by `item sync`, by its tag,
+    /// before the host data a synchronization otherwise stores.
+    #[test]
+    fn pull_request_link_data_reads_back() {
+        let link = PullRequestLinkDataDto {
+            r#type: PullRequestLinkDataType::PullRequestLink,
+            pull_request: pull_request(),
+        };
+        let stored = serde_json::to_value(&link).unwrap();
+        assert_eq!(stored["type"], "pull_request_link");
+        assert_eq!(
+            MutationDataDto::from_stored(Command::ItemSync, &stored),
+            Some(MutationDataDto::PullRequestLink(Box::new(link.clone())))
+        );
+        for other in [
+            Command::RepoSync,
+            Command::OperationResume,
+            Command::TicketClose,
+            Command::TicketWithdrawClosure,
+        ] {
+            assert_eq!(MutationDataDto::from_stored(other, &stored), None);
+        }
+        for bad in [
+            serde_json::json!({"type": "pull_request_link"}),
+            serde_json::json!({"type": "pull_request_link", "pull_request": null}),
+            serde_json::json!({"type": "pull_request_link", "pull_request": {"source": "a"}}),
+        ] {
+            assert_eq!(MutationDataDto::from_stored(Command::ItemSync, &bad), None);
+        }
+        let mut extra = stored;
+        extra["url"] = "https://x".into();
+        assert_eq!(
+            MutationDataDto::from_stored(Command::ItemSync, &extra),
+            None
+        );
     }
 }

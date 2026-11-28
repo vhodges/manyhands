@@ -33,6 +33,8 @@
         "relationship_not_a_ticket",
         "dependency_cycle",
         "parent_cycle",
+        "operations_unreadable",
+        "setup_unreadable",
         "unknown_problem"
       ]
     },

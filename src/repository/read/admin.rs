@@ -7,19 +7,21 @@ use git2::{Config, ConfigLevel, Repository};
 use time::OffsetDateTime;
 
 use super::{
-    Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
-    IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
+    Accessibility, ConfigurationDto, ConfigurationState, ForgeDto, IdentityAvailability,
+    IdentityDto, IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
     index_state,
+    pending_setup::{index_shows_complete, read_setup_or_problem},
     resolve::{at_root, open_exactly, selected_repository},
+    status::index_problems,
 };
 use crate::{
     canonical,
     repository::{
-        ConfigurationInspection, IdentityConfigProvider, IdentityInspection, RemoteInfo,
-        RepositoryError, RepositoryIdentityConfig, RepositoryOperation, RepositoryService,
-        SuppliedIdentityConfig, bridges::identity::local_initials, read_configuration_guarded,
-        remote_info_for, resolve_identity,
+        ConfigurationInspection, DirtyContexts, IdentityConfigProvider, IdentityInspection,
+        RemoteInfo, RepositoryError, RepositoryIdentityConfig, RepositoryOperation,
+        RepositoryService, SuppliedIdentityConfig, bridges::identity::local_initials,
+        read_configuration_guarded, remote_info_for, resolve_identity, setup::complete,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -62,6 +64,84 @@ fn configuration_dto(
         primary_branch,
         publication_remote,
         problems: problem.map(configuration_problem).into_iter().collect(),
+        integration: None,
+        forge: None,
+    }
+}
+
+/// A valid configuration's object: `configuration_dto` with its mode and
+/// forge.
+fn valid_configuration_dto(
+    primary_branch: String,
+    publication_remote: Option<String>,
+    integration: Option<String>,
+    forge: Option<ForgeDto>,
+) -> ConfigurationDto {
+    ConfigurationDto {
+        integration,
+        forge,
+        ..configuration_dto(
+            ConfigurationState::Valid,
+            Some(primary_branch),
+            publication_remote,
+            None,
+        )
+    }
+}
+
+/// `value` when it is the contract spelling of a mode this build knows.
+fn known_integration(value: &str) -> Option<String> {
+    use canonical::Integration::{Direct, PullRequest};
+    [Direct.as_str(), PullRequest.as_str()]
+        .contains(&value)
+        .then(|| value.to_owned())
+}
+
+/// `value` when it is the contract spelling of a forge kind this build knows.
+fn known_forge_kind(value: &str) -> Option<String> {
+    use canonical::ForgeKind::{BitbucketCloud, BitbucketDataCenter, Github, Gitlab};
+    [
+        BitbucketCloud.as_str(),
+        BitbucketDataCenter.as_str(),
+        Github.as_str(),
+        Gitlab.as_str(),
+    ]
+    .contains(&value)
+    .then(|| value.to_owned())
+}
+
+/// The mode and `[forge]` columns of a stored configuration row:
+/// `persist_configuration` sets them for a valid configuration and leaves
+/// them null for any other row.
+#[derive(Default)]
+pub(super) struct StoredMode {
+    pub(super) integration: Option<String>,
+    pub(super) forge_kind: Option<String>,
+    pub(super) forge_web_url: Option<String>,
+    pub(super) forge_pull_request_url: Option<String>,
+}
+
+/// A stored forge: its kind, web URL and pull request URL template.
+pub(super) type StoredForge = (Option<String>, Option<String>, Option<String>);
+
+impl StoredMode {
+    /// What a valid row's columns read as: its mode, and its forge when it
+    /// has one. A valid row whose mode is null was stored before the columns
+    /// existed and not refreshed since. No build before them wrote either
+    /// key, so it reads as direct with no forge.
+    pub(super) fn read(self) -> (String, Option<StoredForge>) {
+        let Some(integration) = self.integration else {
+            return (canonical::Integration::Direct.as_str().to_owned(), None);
+        };
+        let forge = (self.forge_kind.is_some()
+            || self.forge_web_url.is_some()
+            || self.forge_pull_request_url.is_some())
+        .then_some((
+            self.forge_kind,
+            self.forge_web_url,
+            self.forge_pull_request_url,
+        ));
+        (integration, forge)
     }
 }
 
@@ -73,17 +153,27 @@ pub(super) fn stored_configuration(
     primary_branch: Option<String>,
     publication_remote: Option<String>,
     invalid_code: Option<&str>,
+    mode: StoredMode,
 ) -> ConfigurationDto {
     match (state, primary_branch) {
         (None | Some("missing"), _) => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        (Some("valid"), Some(primary_branch)) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(primary_branch),
-            publication_remote,
-            None,
-        ),
+        (Some("valid"), Some(primary_branch)) => {
+            let (integration, forge) = mode.read();
+            // A value a later build wrote, which this one does not know,
+            // reads as null, so the object always satisfies the schema.
+            valid_configuration_dto(
+                primary_branch,
+                publication_remote,
+                known_integration(&integration),
+                forge.map(|(kind, web_url, pull_request_url)| ForgeDto {
+                    kind: kind.and_then(|kind| known_forge_kind(&kind)),
+                    web_url,
+                    pull_request_url,
+                }),
+            )
+        }
         (Some("invalid"), _) => configuration_dto(
             ConfigurationState::Invalid,
             None,
@@ -104,12 +194,20 @@ fn inspected_configuration(configuration: ConfigurationInspection) -> Configurat
         ConfigurationInspection::Missing => {
             configuration_dto(ConfigurationState::Missing, None, None, None)
         }
-        ConfigurationInspection::Valid(configuration) => configuration_dto(
-            ConfigurationState::Valid,
-            Some(configuration.primary_branch),
-            configuration.publication_remote,
-            None,
-        ),
+        ConfigurationInspection::Valid(configuration) => {
+            let integration = configuration.integration().as_str().to_owned();
+            let forge = configuration.forge().map(|forge| ForgeDto {
+                kind: forge.kind.map(|kind| kind.as_str().to_owned()),
+                web_url: forge.web_url,
+                pull_request_url: forge.pull_request_url,
+            });
+            valid_configuration_dto(
+                configuration.primary_branch,
+                configuration.publication_remote,
+                Some(integration),
+                forge,
+            )
+        }
         ConfigurationInspection::Invalid(problem) => configuration_dto(
             ConfigurationState::Invalid,
             None,
@@ -206,7 +304,8 @@ impl RepositoryService {
     /// Every registration, ordered by root.
     ///
     /// This reads the index and nothing else. A root is reported as it was
-    /// last stored, whatever has since happened to it on disk.
+    /// last stored, whatever has since happened to it on disk. Each counts
+    /// the problems its `index status` lists.
     pub fn list_repositories(&self) -> Result<RepositoryListDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let mut statement = connection.prepare(
@@ -216,46 +315,88 @@ impl RepositoryService {
                         repositories.refresh_required,
                         repositories.refreshed_at,
                         EXISTS(SELECT 1 FROM contexts
-                                WHERE contexts.repository_id = repositories.id),
+                                WHERE contexts.repository_id = repositories.id
+                                  AND contexts.kind != 'invalid'),
                         configuration.state,
                         configuration.primary_branch,
                         configuration.publication_remote,
                         configuration.invalid_code,
-                        (SELECT COUNT(*) FROM problems
-                          WHERE problems.repository_id = repositories.id)
+                        repositories.id,
+                        configuration.integration,
+                        configuration.forge_kind,
+                        configuration.forge_web_url,
+                        configuration.forge_pull_request_url
                    FROM repositories
                    LEFT JOIN configuration_observations AS configuration
                      ON configuration.repository_id = repositories.id
                   ORDER BY repositories.root_path ASC",
             )?;
-            let items = statement
+            let rows = statement
                 .query_map([], |row| {
+                    let root: String = row.get(0)?;
                     let enabled_at: i64 = row.get(1)?;
                     let accessibility: String = row.get(2)?;
                     let refresh_required: bool = row.get(3)?;
                     let state: Option<String> = row.get(6)?;
                     let invalid_code: Option<String> = row.get(9)?;
-                    let problem_count: i64 = row.get(10)?;
-                    Ok(RepositorySummaryDto {
-                        root: row.get(0)?,
-                        enabled_at: OffsetDateTime::from_unix_timestamp(enabled_at)
-                            .ok()
-                            .and_then(timestamp_string),
-                        accessibility: match accessibility.as_str() {
-                            "accessible" => Accessibility::Accessible,
-                            _ => Accessibility::Inaccessible,
+                    let registration = row.get::<_, i64>(10)?;
+                    let any_dirty = DirtyContexts::read(connection, registration)?.any();
+                    Ok((
+                        RepositorySummaryDto {
+                            root: root.clone(),
+                            enabled_at: OffsetDateTime::from_unix_timestamp(enabled_at)
+                                .ok()
+                                .and_then(timestamp_string),
+                            accessibility: match accessibility.as_str() {
+                                "accessible" => Accessibility::Accessible,
+                                _ => Accessibility::Inaccessible,
+                            },
+                            configuration: stored_configuration(
+                                state.as_deref(),
+                                row.get(7)?,
+                                row.get(8)?,
+                                invalid_code.as_deref(),
+                                StoredMode {
+                                    integration: row.get(11)?,
+                                    forge_kind: row.get(12)?,
+                                    forge_web_url: row.get(13)?,
+                                    forge_pull_request_url: row.get(14)?,
+                                },
+                            ),
+                            setup: None,
+                            index: index_state(
+                                refresh_required,
+                                row.get(4)?,
+                                row.get(5)?,
+                                any_dirty,
+                            ),
+                            problem_count: 0,
                         },
-                        configuration: stored_configuration(
-                            state.as_deref(),
-                            row.get(7)?,
-                            row.get(8)?,
-                            invalid_code.as_deref(),
-                        ),
-                        index: index_state(refresh_required, row.get(4)?, row.get(5)?),
-                        problem_count: u64::try_from(problem_count).unwrap_or_default(),
-                    })
+                        ResolvedRepository::registered(registration, root.into()),
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
+            let mut items = Vec::new();
+            for (mut item, repo) in rows {
+                // The index and the record only: no remote is read, so a
+                // link that needs the remote's URL has none. A setup this
+                // build cannot read reads as none, with a problem, and the
+                // list goes on.
+                // One the registration's blob already shows complete reads as
+                // none: the index only, so it lags until the next refresh.
+                let registration = repo.registration_id();
+                let (setup, problem) = read_setup_or_problem(
+                    connection,
+                    registration,
+                    |record| index_shows_complete(connection, registration, record),
+                    |_| None,
+                )?;
+                item.setup = setup;
+                item.configuration.problems.extend(problem);
+                item.problem_count =
+                    u64::try_from(index_problems(connection, &repo)?.len()).unwrap_or_default();
+                items.push(item);
+            }
             Ok(RepositoryListDto {
                 items,
                 complete: true,
@@ -281,7 +422,8 @@ impl RepositoryService {
         selected: &Path,
         root: &Path,
     ) -> Result<RepositoryInspectionDto, ReadError> {
-        let registered = self.registration_id(root)?.is_some();
+        let registration = self.registration_id(root)?;
+        let registered = registration.is_some();
         let inspection = self.inspect_reporting_detached_head(root)?;
         // A root that cannot be written as text cannot be enabled either.
         let (Some(selected_path), Some(root)) = (
@@ -290,12 +432,60 @@ impl RepositoryService {
         ) else {
             return Err(ReadError::invalid_path());
         };
-        let configuration = inspected_configuration(inspection.configuration);
+        let mut configuration = inspected_configuration(inspection.configuration);
         // The inspection opened the root; it is opened again here only to
         // ask whether each remote has a helper configured.
         let repository = open_exactly(Path::new(&root)).map_err(|error| {
             ReadError::new(ResultCode::RepositoryInaccessible).with_source(error)
         })?;
+        // The root as the registry stores it, which is the one the
+        // registration was looked up by.
+        //
+        // This is the verb every `recovery_required` points at, so rows that
+        // cannot be read do not refuse it: the list is empty and a problem
+        // says why, so that an empty list is not taken for nothing being
+        // unfinished. A busy or unavailable index is still refused.
+        let operations = match self.inspected_operations(Path::new(&root), registration) {
+            Ok(operations) => operations,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ResultCode::RecoveryRequired | ResultCode::InternalError
+                ) =>
+            {
+                configuration.problems.push(ProblemDto {
+                    code: ProblemCode::OperationsUnreadable,
+                    path: None,
+                    target_id: None,
+                });
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        // A repository that is not registered has no setup. The link is
+        // built with the setup remote's fetch URL as Git has it.
+        // One this build cannot read reads as none, with a problem, as
+        // unreadable operations do.
+        let setup = match registration {
+            Some(registration) => self.read_session(RepositoryOperation::Read, |connection| {
+                read_setup_or_problem(
+                    connection,
+                    registration,
+                    // A setup the local primary already holds reads as none.
+                    |record| complete::is_complete(&repository, record).unwrap_or(false),
+                    |name| {
+                        inspection
+                            .remotes
+                            .iter()
+                            .find(|remote| remote.name == name)
+                            .map(|remote| remote.fetch_url.clone())
+                    },
+                )
+            })?,
+            None => (None, None),
+        };
+        let (setup, setup_problem) = setup;
+        configuration.problems.extend(setup_problem);
         Ok(RepositoryInspectionDto {
             selected_path,
             root,
@@ -312,6 +502,8 @@ impl RepositoryService {
                 configuration.publication_remote.as_deref(),
             ),
             configuration,
+            setup,
+            operations,
         })
     }
 

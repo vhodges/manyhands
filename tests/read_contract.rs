@@ -7,16 +7,16 @@ use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, str::FromStr};
 use manyhands::{
     canonical::ItemId,
     repository::{
-        Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
-        DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
+        Accessibility, ChangeSource, ClosurePublication, ClosureState, ConfigurationState,
+        CycleKind, DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
         IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
         ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
-        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
-        OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
-        ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
-        ReadinessState, RelationshipRejectionDto, RepositoryService, RequestState,
-        ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
-        transport::SshAuthority,
+        KeyPublicMetadataState, OperationAction, OperationAttributionDto, OperationFamily,
+        OperationNextAction, OperationOwner, PollingInterval, PollingOutcome, PreviewEffect,
+        PreviewIdentitySource, ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter,
+        ReadinessReasonCode, ReadinessState, RelationshipRejectionDto, RepositoryService,
+        RequestState, ResolvedRepository, SetupMutationType, SharedKeyId, TicketFilter,
+        UnplannableReasonCode, transport::SshAuthority,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
@@ -662,12 +662,17 @@ fn every_golden_fixture_is_canonical_text() {
 
 /// The strings of the `enum` of `property`, which is a property name or a
 /// dotted path through nested objects. A nullable enumeration also lists
-/// `null`, which its `type` already allows and which is not a string.
+/// `null`, which its `type` already allows and which is not a string. The
+/// name `items` steps into an array's items.
 fn schema_enum(file: &str, property: &str) -> Vec<String> {
     let schema = read_json(&schema::schema_directory().join(file));
     let mut node = &schema;
     for name in property.split('.') {
-        node = &node["properties"][name];
+        node = if name == "items" {
+            &node["items"]
+        } else {
+            &node["properties"][name]
+        };
     }
     node["enum"]
         .as_array()
@@ -678,16 +683,15 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every `enum` in a published schema, by file and property, with the Rust
-/// list it must equal.
 /// The actions the local store records: what a local operation that is
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 15] = [
+const LOCAL_ACTIONS: [OperationAction; 17] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
+    OperationAction::CancelSetup,
     OperationAction::AddRemote,
     OperationAction::RemoveRemote,
     OperationAction::SetPublicationRemote,
@@ -695,6 +699,7 @@ const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::Rebuild,
     OperationAction::PrepareContext,
     OperationAction::ReleaseContext,
+    OperationAction::RetireContext,
     OperationAction::SaveDocument,
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,
@@ -702,10 +707,399 @@ const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::ContextSyncLocal,
 ];
 
+/// What `operation abandon` closes: every local action, and a
+/// synchronization of the remote journal.
+fn abandoned_actions() -> Vec<&'static str> {
+    LOCAL_ACTIONS
+        .iter()
+        .chain(&[
+            OperationAction::SynchronizeContext,
+            OperationAction::SynchronizePrimary,
+        ])
+        .map(|action| action.as_str())
+        .collect()
+}
+
+/// Every published string enumeration, pinned to Rust values or the explicitly
+/// documented retirement phase vocabulary, by file and property.
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
+    use manyhands::canonical::{ForgeKind, Integration};
+    use manyhands::repository::{
+        LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+        LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
+        LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+        LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+        LocalBranch, PollMutationCompletion, PollTargetDisposition, PullRequestClosureAction,
+        PullRequestClosureMutationType, PullRequestClosurePreviewType,
+        PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataType,
+        PullRequestPromotionMutationType, PullRequestPromotionPreviewType,
+        PullRequestPromotionPublication, PullRequestPromotionSituation, RemoteBranch,
+        SetupCancelType, SetupPollOutcome, SetupPollType,
+    };
     let mut enumerations = vec![
+        (
+            "repository_configuration.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "repository_configuration.schema.json",
+            "forge.kind",
+            [
+                ForgeKind::BitbucketCloud,
+                ForgeKind::BitbucketDataCenter,
+                ForgeKind::Github,
+                ForgeKind::Gitlab,
+            ]
+            .map(ForgeKind::as_str)
+            .to_vec(),
+        ),
+        (
+            "pull_request.schema.json",
+            "forge",
+            [
+                ForgeKind::BitbucketCloud,
+                ForgeKind::BitbucketDataCenter,
+                ForgeKind::Github,
+                ForgeKind::Gitlab,
+            ]
+            .map(ForgeKind::as_str)
+            .to_vec(),
+        ),
+        // The setup's kind and state are `SetupKind` and `SetupState`, which
+        // are crate-private; a library test pins their spellings
+        // (`inspect_and_list_report_a_pending_setup`).
+        (
+            "repository_setup.schema.json",
+            "kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "repository_setup.schema.json",
+            "state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "repository_setup.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "type",
+            SetupMutationType::ALL
+                .map(SetupMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_mutation.schema.json",
+            "kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "setup_mutation.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "type",
+            SetupCancelType::ALL.map(SetupCancelType::as_str).to_vec(),
+        ),
+        ("setup_cancel.schema.json", "kind", vec!["enable", "change"]),
+        (
+            "setup_cancel.schema.json",
+            "remote_branch",
+            RemoteBranch::ALL.map(RemoteBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel.schema.json",
+            "local_branch",
+            LocalBranch::ALL.map(LocalBranch::as_str).to_vec(),
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.kind",
+            vec!["enable", "change"],
+        ),
+        (
+            "setup_cancel_preview.schema.json",
+            "details.state",
+            vec!["recorded", "published"],
+        ),
+        (
+            "setup_poll.schema.json",
+            "type",
+            SetupPollType::ALL.map(SetupPollType::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "outcome",
+            SetupPollOutcome::ALL.map(SetupPollOutcome::as_str).to_vec(),
+        ),
+        (
+            "setup_poll.schema.json",
+            "integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.integration",
+            [Integration::Direct, Integration::PullRequest]
+                .map(Integration::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.identity.source",
+            PreviewIdentitySource::ALL
+                .map(PreviewIdentitySource::as_str)
+                .to_vec(),
+        ),
+        (
+            "setup_preview.schema.json",
+            "details.forge.kind",
+            ForgeKind::ALL.map(ForgeKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_blocked.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.changes.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.integration",
+            LifecyclePlannedIntegration::ALL
+                .map(LifecyclePlannedIntegration::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.publication",
+            LifecyclePlannedPublication::ALL
+                .map(LifecyclePlannedPublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.type",
+            PullRequestClosurePreviewType::ALL
+                .map(PullRequestClosurePreviewType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_preview.schema.json",
+            "details.unheld.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_preview.schema.json",
+            "details.type",
+            PullRequestPromotionPreviewType::ALL
+                .map(PullRequestPromotionPreviewType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_preview.schema.json",
+            "details.situation",
+            PullRequestPromotionSituation::ALL
+                .map(PullRequestPromotionSituation::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "type",
+            PullRequestClosureMutationType::ALL
+                .map(PullRequestClosureMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "action",
+            PullRequestClosureAction::ALL
+                .map(PullRequestClosureAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "closure.recording",
+            PullRequestClosureRecording::ALL
+                .map(PullRequestClosureRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "publication",
+            PullRequestClosurePublication::ALL
+                .map(PullRequestClosurePublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_closure_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
+            "type",
+            PullRequestPromotionMutationType::ALL
+                .map(PullRequestPromotionMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
+            "publication",
+            PullRequestPromotionPublication::ALL
+                .map(PullRequestPromotionPublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "pull_request_promotion_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "pull_request_link.schema.json",
+            "type",
+            PullRequestLinkDataType::ALL
+                .map(PullRequestLinkDataType::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "type",
+            LifecycleMutationType::ALL
+                .map(LifecycleMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "integration",
+            LifecycleIntegrationKind::ALL
+                .map(LifecycleIntegrationKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication",
+            LifecyclePublicationState::ALL
+                .map(LifecyclePublicationState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication_pending",
+            LifecyclePublicationPendingReason::ALL
+                .map(LifecyclePublicationPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup",
+            LifecycleCleanupState::ALL
+                .map(LifecycleCleanupState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup_pending",
+            LifecycleCleanupPendingReason::ALL
+                .map(LifecycleCleanupPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "made_ready_state",
+            LifecycleMadeReadyState::ALL
+                .map(LifecycleMadeReadyState::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "completion",
+            PollMutationCompletion::ALL
+                .map(PollMutationCompletion::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.disposition",
+            PollTargetDisposition::ALL
+                .map(PollTargetDisposition::as_str)
+                .to_vec(),
+        ),
         (
             "local_context_sync_observation.schema.json",
             "kind",
@@ -808,6 +1202,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "item.schema.json",
             "closure.state",
             ClosureState::ALL.map(ClosureState::as_str).to_vec(),
+        ),
+        (
+            "item.schema.json",
+            "closure.publication",
+            ClosurePublication::ALL
+                .map(ClosurePublication::as_str)
+                .to_vec(),
         ),
         (
             "item.schema.json",
@@ -927,6 +1328,16 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             OperationAction::ALL.map(OperationAction::as_str).to_vec(),
         ),
         (
+            "blocker.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "blocker.schema.json",
+            "action",
+            OperationAction::ALL.map(OperationAction::as_str).to_vec(),
+        ),
+        (
             "operation.schema.json",
             "next_action",
             OperationNextAction::ALL
@@ -987,12 +1398,12 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (
             "operation_abandon_preview.schema.json",
             "details.action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "operation_mutation.schema.json",
             "action",
-            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+            abandoned_actions(),
         ),
         (
             "preview.schema.json",
@@ -1053,6 +1464,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "type",
             SynchronizationConflictType::ALL
                 .map(SynchronizationConflictType::as_str)
+                .to_vec(),
+        ),
+        (
+            "primary_local_commits.schema.json",
+            "type",
+            manyhands::repository::PrimaryLocalCommitsType::ALL
+                .map(manyhands::repository::PrimaryLocalCommitsType::as_str)
                 .to_vec(),
         ),
     ]);
@@ -1166,11 +1584,229 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    enumerations.extend([
+        (
+            "item_resolve_history_preview.schema.json",
+            "details.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "history_resolution_mutation.schema.json",
+            "marker",
+            manyhands::repository::HistoryMarkerState::ALL
+                .map(manyhands::repository::HistoryMarkerState::as_str)
+                .to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.relation",
+            manyhands::repository::HistoryRelation::ALL
+                .map(manyhands::repository::HistoryRelation::as_str)
+                .to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.disposition",
+            PollTargetDisposition::ALL
+                .map(PollTargetDisposition::as_str)
+                .to_vec(),
+        ),
+    ]);
     enumerations.push((
         "item_republish_preview.schema.json",
         "details.kind",
         ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
     ));
+    use manyhands::repository::{
+        ContextRetirementMutationType, ContextRetirementState, PollRetirementCompletion,
+        PollRetirementDebt, PollRetirementItemState, PollRetirementMutationType, RetirementRemoval,
+    };
+    let retirement = "context_retirement_mutation.schema.json";
+    let poll_retirement = "poll_retirement_mutation.schema.json";
+    let abandon = "operation_abandon_preview.schema.json";
+    // The ordinary retirement root intentionally publishes only these result
+    // codes, not every ResultCode. Keep the named subset independent of the
+    // schema so either a removed code or a broadened contract fails this pin.
+    let retirement_codes = [
+        ResultCode::Ok,
+        ResultCode::AlreadyApplied,
+        ResultCode::ExternalChange,
+        ResultCode::RecoveryRequired,
+        ResultCode::WorktreeNotClean,
+        ResultCode::Cancelled,
+        ResultCode::DiscoveryPending,
+        ResultCode::Busy,
+        ResultCode::PollYielding,
+        ResultCode::InternalError,
+        ResultCode::IndexUnavailable,
+        ResultCode::RepositoryInaccessible,
+        ResultCode::InvalidPath,
+        ResultCode::NotRepository,
+        ResultCode::NotRepositoryRoot,
+        ResultCode::BareRepository,
+        ResultCode::RepositoryNotRegistered,
+        ResultCode::RepositoryNotEnabled,
+        ResultCode::InvalidRemote,
+        ResultCode::InvalidConfiguration,
+        ResultCode::PublicationRemoteRequired,
+        ResultCode::NoSelectedKey,
+        ResultCode::KeyUnavailable,
+        ResultCode::KeyRejected,
+        ResultCode::UnlockRequired,
+        ResultCode::UnlockFailed,
+        ResultCode::HostApprovalRequired,
+        ResultCode::HostReplacementRequired,
+        ResultCode::TransportUnavailable,
+        ResultCode::RemoteUnavailable,
+        ResultCode::OccupiedPath,
+        ResultCode::WrongBranch,
+        ResultCode::WorktreeConflicted,
+        ResultCode::IdentityRequired,
+        ResultCode::ItemNotFound,
+        ResultCode::InvalidInput,
+        ResultCode::RequestMismatch,
+    ];
+    // RetirementRemoval has no ALL registry; pin its named variants, using the
+    // same wire names as the CLI rather than copying their schema literals.
+    let removals = [
+        RetirementRemoval::None,
+        RetirementRemoval::Possible,
+        RetirementRemoval::Observed,
+    ];
+    // RetirementAbandonMetadata.phase is a String, not a public Rust enum. This
+    // explicit published vocabulary is the phase CHECK of the audited
+    // context_retirement_records table (context_retirement/record.rs), which
+    // preserve::metadata copies unchanged; it is not a Rust-registry check.
+    let retirement_phases = [
+        "selected",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleting",
+        "local_absent",
+        "index_pending",
+        "complete",
+        "refused",
+        "preserving",
+        "abandoned",
+    ];
+    enumerations.extend([
+        (
+            retirement,
+            "type",
+            ContextRetirementMutationType::ALL
+                .map(ContextRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            retirement,
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "state",
+            ContextRetirementState::ALL
+                .map(ContextRetirementState::as_str)
+                .to_vec(),
+        ),
+        (
+            retirement,
+            "code",
+            retirement_codes.map(ResultCode::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            retirement,
+            "branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "type",
+            PollRetirementMutationType::ALL
+                .map(PollRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "completion",
+            PollRetirementCompletion::ALL
+                .map(PollRetirementCompletion::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.state",
+            PollRetirementItemState::ALL
+                .map(PollRetirementItemState::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.debt",
+            PollRetirementDebt::ALL
+                .map(PollRetirementDebt::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.type",
+            ContextRetirementMutationType::ALL
+                .map(ContextRetirementMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.state",
+            ContextRetirementState::ALL
+                .map(ContextRetirementState::as_str)
+                .to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            poll_retirement,
+            "retirements.items.result.branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.phase",
+            retirement_phases.to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.worktree_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+        (
+            abandon,
+            "details.retirement.branch_removal",
+            removals.map(RetirementRemoval::as_str).to_vec(),
+        ),
+    ]);
     enumerations
 }
 
@@ -1193,8 +1829,8 @@ fn published_enumerations_list_exactly_the_registered_values() {
         assert_eq!(&schema_enum(file, property), expected, "{file}: {property}");
     }
 
-    // No schema holds an enumeration this test does not tie to Rust. The
-    // one exception is the schema version, an integer.
+    // Every schema enumeration is pinned above, to Rust values or the explicit
+    // retirement phase vocabulary. Check the integer schema version separately.
     assert_eq!(
         read_json(&schema::schema_directory().join(golden::ENVELOPE_SCHEMA))["properties"]["schema_version"]
             ["enum"],
@@ -1205,6 +1841,44 @@ fn published_enumerations_list_exactly_the_registered_values() {
         .map(|file| count_enums(&read_json(&schema::schema_directory().join(file))))
         .sum();
     assert_eq!(published, enumerations.len() + 1);
+    assert_git_transport_uninitialized();
+}
+
+/// The goldens read a repository without a setup; this is the object. Its
+/// schema is a nullable object, so it also accepts null, and is closed.
+#[test]
+fn a_pending_setup_matches_its_schema() {
+    use manyhands::repository::{PullRequestDto, RepositorySetupDto};
+    let setup = |forge: Option<&str>, url: Option<&str>| RepositorySetupDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        kind: "enable".into(),
+        state: "recorded".into(),
+        request_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".into(),
+        branch: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            target: "main".into(),
+            forge: forge.map(Into::into),
+            url: url.map(Into::into),
+        },
+    };
+    for setup in [
+        setup(Some("github"), Some("https://github.com/acme/widgets")),
+        setup(Some("gitlab"), None),
+        setup(None, None),
+    ] {
+        let value = serde_json::to_value(Some(setup)).unwrap();
+        schema::check_published("repository_setup.schema.json", &value).unwrap();
+        let mut extra = value.clone();
+        extra["pull_request"]["extra"] = json!(1);
+        assert!(schema::check_published("repository_setup.schema.json", &extra).is_err());
+        let mut unknown = value;
+        unknown["pull_request"]["forge"] = json!("sourcehut");
+        assert!(schema::check_published("repository_setup.schema.json", &unknown).is_err());
+    }
+    schema::check_published("repository_setup.schema.json", &Value::Null).unwrap();
     assert_git_transport_uninitialized();
 }
 
@@ -2606,10 +3280,97 @@ fn poll_status_matches_its_schema_and_golden() {
     assert_git_transport_uninitialized();
 }
 
+/// `remote history` after its poll: one context the remote lacks, which offers
+/// both choices, and one the poll just resolved, which has diverged. The report
+/// is built by hand: the poll that makes one needs an SSH server, and
+/// the report's shape does not.
+#[test]
+fn remote_history_matches_its_schema_and_golden() {
+    use manyhands::repository::{
+        AuthoringKind, PollDisposition, RemoteHistoryChoices, RemoteHistoryDto, RemoteHistoryEntry,
+        RemoteHistoryRelation, RemoteHistoryReport,
+    };
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let oid = |text: &str| git2::Oid::from_str(&text.repeat(40)).unwrap();
+    let report = RemoteHistoryReport {
+        entries: vec![
+            RemoteHistoryEntry {
+                kind: AuthoringKind::Ticket,
+                item_id: items::item_id(items::TICKET_A),
+                branch: format!("manyhands/ticket/{}", items::TICKET_A),
+                local_head: Some(oid("a")),
+                tracking_ref_exists: false,
+                advertised: None,
+                relation: None,
+                ahead: None,
+                behind: None,
+                resolved: false,
+                disposition: Some(PollDisposition::HistoryUnknown),
+                choices: RemoteHistoryChoices {
+                    publish: true,
+                    release: true,
+                    republish: false,
+                },
+            },
+            RemoteHistoryEntry {
+                kind: AuthoringKind::Document,
+                item_id: items::item_id(items::DOCUMENT_A),
+                branch: format!("manyhands/document/{}", items::DOCUMENT_A),
+                local_head: Some(oid("a")),
+                tracking_ref_exists: true,
+                advertised: Some(oid("b")),
+                relation: Some(RemoteHistoryRelation::Diverged),
+                ahead: Some(1),
+                behind: Some(2),
+                resolved: true,
+                disposition: Some(PollDisposition::Diverged),
+                choices: RemoteHistoryChoices::default(),
+            },
+        ],
+        cache_loss: true,
+        generation: 4,
+    };
+    let envelope = Envelope::read_success(
+        "remote history",
+        repo.scope(),
+        RemoteHistoryDto::from(&report),
+    );
+    golden::assert_contract(
+        &ContractCase {
+            name: "remote_history",
+            data_schema: Some("remote_history.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[],
+        },
+        &envelope,
+    );
+}
+
+/// The process id the probe of `repository_with_operations` finds, and one
+/// it does not.
+const LIVE_PID: i64 = 4242;
+const DEAD_PID: i64 = 4243;
+/// The comment row's index claim beats at `STORED_AT`; the service's clock
+/// reads one second later.
+const COMMENT_OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FA3";
+const COMMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCC";
+const REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
+
 /// A repository with an operation in each store: a key generation kept for
 /// inspection, the poll that holds the reservation, a document save part of
-/// the way through, an interrupted synchronization of a ticket, and a
-/// refresh from before operations had IDs.
+/// the way through, a comment whose indexing claim beats, an interrupted
+/// synchronization of a ticket, and a refresh from before operations had
+/// IDs.
+///
+/// The service reads the process table through `operations::ProcessTable`
+/// and the time from a clock set at `STORED_AT + 1`. Three rows are
+/// attributed: the document save to this host and a process that is gone,
+/// the poll, which holds the reservation, and the interrupted
+/// synchronization to this host and a live process, and the comment to
+/// another host with a fresh indexing heartbeat. The refresh is a legacy
+/// row with no attribution.
 fn repository_with_operations() -> (
     support::TestRepository,
     support::EnabledRepository,
@@ -2617,7 +3378,17 @@ fn repository_with_operations() -> (
 ) {
     let fixture = support::born_repository();
     let enabled = support::enabled_repository(&fixture);
+    let enabled = support::EnabledRepository {
+        service: enabled
+            .service
+            .with_clock_for_testing(support::mutation::TestClock::at(operations::STORED_AT + 1))
+            .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(vec![
+                u32::try_from(LIVE_PID).unwrap(),
+            ]))),
+        data_directory: enabled.data_directory,
+    };
     let data = enabled.data_directory.path();
+    let host = manyhands::repository::this_host();
     operations::configure_remote(data);
     operations::insert_local(data, None, "refresh", "failed", None);
     operations::insert_local(
@@ -2634,7 +3405,58 @@ fn repository_with_operations() -> (
             [items::DOCUMENT_A, OPERATION_C],
         )
         .unwrap();
+    operations::attribute_local(
+        data,
+        OPERATION_C,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("document save"),
+            author: Some("Ada Lovelace <ada@example.invalid>"),
+            host: Some(&host),
+            pid: Some(DEAD_PID),
+            started_at: Some(operations::STORED_AT - 50),
+        },
+        None,
+    );
+    operations::insert_local(
+        data,
+        Some(COMMENT_OPERATION),
+        "submit_comment",
+        "indexing",
+        Some("authoritative_observed"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE operation_records SET item_id = ?1 WHERE operation_ulid = ?2",
+            [items::TICKET_A, COMMENT_OPERATION],
+        )
+        .unwrap();
+    operations::attribute_local(
+        data,
+        COMMENT_OPERATION,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("comment add"),
+            author: Some("Grace Hopper <grace@example.invalid>"),
+            host: Some("elsewhere"),
+            pid: Some(1),
+            started_at: Some(operations::STORED_AT - 40),
+        },
+        Some(COMMENT_ID),
+    );
     operations::insert_remote_poll(data, OPERATION_B, "reserved", None, None);
+    operations::attribute_remote(
+        data,
+        OPERATION_B,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("poll once"),
+            author: None,
+            host: Some(&host),
+            pid: Some(LIVE_PID),
+            started_at: Some(operations::STORED_AT - 30),
+        },
+    );
     operations::insert_remote_synchronization(
         data,
         "01ARZ3NDEKTSV4RRFFQ69G5FA4",
@@ -2642,6 +3464,18 @@ fn repository_with_operations() -> (
         "interrupted",
         Some("before_fetch"),
         None,
+    );
+    operations::attribute_remote(
+        data,
+        "01ARZ3NDEKTSV4RRFFQ69G5FA4",
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("comment add"),
+            author: Some("Grace Hopper <grace@example.invalid>"),
+            host: Some(&host),
+            pid: Some(LIVE_PID),
+            started_at: Some(operations::STORED_AT - 40),
+        },
     );
     operations::insert_key_material(
         data,
@@ -2659,7 +3493,16 @@ fn operation_list_matches_its_schema_and_golden() {
     let (_fixture, enabled, repo) = repository_with_operations();
 
     let list = enabled.service.list_operations(&repo).unwrap();
-    let envelope = Envelope::read_success("operation list", repo.scope(), list.clone());
+    // The name of the machine the test runs on is no part of the golden,
+    // and a host name is too short to be given a placeholder.
+    let host = manyhands::repository::this_host();
+    let mut named = list.clone();
+    for item in &mut named.items {
+        if item.attribution.host.as_deref() == Some(host.as_str()) {
+            item.attribution.host = Some("<this-host>".to_owned());
+        }
+    }
+    let envelope = Envelope::read_success("operation list", repo.scope(), named);
 
     let families: Vec<_> = list.items.iter().map(|item| item.family).collect();
     assert_eq!(
@@ -2668,9 +3511,24 @@ fn operation_list_matches_its_schema_and_golden() {
             OperationFamily::KeyMaterial,
             OperationFamily::Remote,
             OperationFamily::Local,
+            OperationFamily::Local,
             OperationFamily::Remote,
             OperationFamily::Local,
         ]
+    );
+    // Whether each row's holder still works, as the injected process table
+    // and clock judge it: a live process holding the reservation, a process
+    // that is gone, a fresh indexing heartbeat of another host, a live
+    // process whose remote row was interrupted, and rows that name no
+    // holder.
+    let live: Vec<_> = list
+        .items
+        .iter()
+        .map(|item| item.attribution.live)
+        .collect();
+    assert_eq!(
+        live,
+        [None, Some(true), Some(false), Some(true), Some(false), None]
     );
     // The key is a new one each run.
     let key_id = list.items[0].key_id.as_deref().unwrap();
@@ -2737,6 +3595,27 @@ fn operation_show_matches_its_schema_and_golden() {
         &envelope,
     );
     assert_eq!(not_found.code(), ResultCode::OperationNotFound);
+    // A legacy row names no one: every attribution field is null.
+    assert_eq!(operation.attribution, OperationAttributionDto::default());
+    // An attributed row shows whose it is, and whether that holder works.
+    let attributed = enabled
+        .service
+        .show_operation(&repo, operations::operation_id(COMMENT_OPERATION))
+        .unwrap()
+        .attribution;
+    assert_eq!(
+        attributed,
+        OperationAttributionDto {
+            request_id: Some(REQUEST_ID.to_owned()),
+            command: Some("comment add".to_owned()),
+            author: Some("Grace Hopper <grace@example.invalid>".to_owned()),
+            host: Some("elsewhere".to_owned()),
+            pid: Some(1),
+            started_at: Some("2023-11-14T22:12:40Z".to_owned()),
+            comment_id: Some(COMMENT_ID.to_owned()),
+            live: Some(true),
+        }
+    );
     golden::assert_contract(
         &ContractCase {
             name: "failure_operation_not_found",
@@ -2778,7 +3657,7 @@ fn every_stored_operation_shape_matches_the_operation_schema() {
         );
     }
 
-    assert_eq!(shapes.len(), 7);
+    assert_eq!(shapes.len(), 8);
     for operation in shapes {
         let value = serde_json::to_value(&operation).unwrap();
         schema::check_published("operation.schema.json", &value).unwrap();

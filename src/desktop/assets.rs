@@ -1,9 +1,11 @@
-//! The desktop asset source: the item view's Lucide icons, asked first,
-//! and the Kit's default `Assets` as the fallback (facts 69 and 80).
+//! The desktop asset source: the item view's Lucide icons and the app icon,
+//! asked first, and the Kit's default `Assets` as the fallback (facts 69
+//! and 80).
 //!
 //! The Kit's `Assets::load` errors on an unknown path, so the added icons
 //! must be asked before it. The SVGs are the Kit's own bundled Lucide
-//! catalog (`gpui-kit-assets`); nothing is vendored in this repository.
+//! catalog (`gpui-kit-assets`); nothing is vendored in this repository except
+//! the app icon, a small PNG made from `packaging/icons/manyhands-1024.png`.
 
 use std::borrow::Cow;
 
@@ -51,10 +53,44 @@ icon_assets!(
         ArrowUp,
         ArrowDown,
         Archive,
+        Activity,
+        Repeat,
+        Bug,
+        Sparkles,
+        ListChecks,
+        FilePlus,
+        FolderPlus,
+        ChevronsDownUp,
+        ArrowUpDown,
+        ListFilter,
+        FileExclamationPoint,
+        Lock,
+        RefreshCw,
+        WifiOff,
+        // Sharing & keys' trash (Wave 04 Cycle 04, C2.1).
+        Trash,
+        // The Settings menu's Sharing & keys entry (Cycle 04, B1), and the
+        // Unlock key dialog's key card (Cycle 05a, Part D).
+        KeyRound,
+        // The Add repository sheet's mode control, Main branch and Share
+        // changes through (Wave 04 Cycle 05a, Part B, fact 40).
+        FolderInput,
+        GitBranch,
+        Cloud,
+        // The lifecycle dialog's Approve and merge tile and its Failed tile
+        // (Wave 04 Cycle 05b, Part A).
+        GitMerge,
+        CircleX,
     ]
 );
 
-/// The item view's icons first, then the Kit's default icons.
+/// Where the title bar asks for the app icon (R-16).
+pub(crate) const APP_ICON_PATH: &str = "brand/manyhands.png";
+
+const APP_ICON: &[u8] = include_bytes!("brand/manyhands.png");
+
+/// The item view's icons and the app icon first, then the Kit's default
+/// icons.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DesktopAssets;
 
@@ -65,6 +101,9 @@ pub(crate) fn icon_path(name: &str) -> String {
 
 impl AssetSource for DesktopAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
+        if path == APP_ICON_PATH {
+            return Ok(Some(Cow::Borrowed(APP_ICON)));
+        }
         if let Some(icon) = ItemIcons.load(path)? {
             return Ok(Some(icon));
         }
@@ -73,6 +112,9 @@ impl AssetSource for DesktopAssets {
 
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
         let mut paths = ItemIcons.list(path)?;
+        if APP_ICON_PATH.starts_with(path) {
+            paths.push(APP_ICON_PATH.into());
+        }
         for kit in Assets.list(path)? {
             if !paths.contains(&kit) {
                 paths.push(kit);

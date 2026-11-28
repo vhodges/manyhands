@@ -130,7 +130,8 @@ not: the initials and prefix come from who created the ticket and where. That
 is why the slug is stored and not recomputed.
 
 A ticket created before this RFC has no `slug`. It stays valid and is shown by
-its ULID. A person can give it one with the explicit assign operation below,
+its ULID (in the desktop list, `—` with the ULID in the row's tooltip; Wave 04
+Cycle 02 decision 4). A person can give it one with the explicit assign operation below,
 which uses the assigning identity's initials.
 
 ## Identity, selection and collisions
@@ -233,8 +234,32 @@ Ready, blocked and plan accept the ticket list filters (`status`, `type`,
 unless the query defines its own, and by ULID within a batch or tie. Lists are
 complete; silent truncation is forbidden.
 
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): closed and closing. A ticket reads **closed** when the primary's copy of it holds closure metadata, and **closing** when a copy that is not the primary's holds `closed_at` and `closed_by` and the primary's copy is open or absent. The primary's copy is the row the index stores for a context that is not an active item context, normally the root checkout's working tree. This amends "the index's effective copy" for closure only: the effective copy still decides every other field, but the closure state is derived from both copies, in both modes. So a closure that only a ticket's own context holds, an interrupted direct close's included, reads `closing` where it read `closed`, and an open branch copy beside a closed primary copy reads `closed`, with the primary's `closed_at` and `closed_by`. Readiness treats `closing` as open: a dependent of a closing ticket is blocked, with the reason `closing_dependency` in place of `open_dependency`, until the primary's copy holds the closure, and the dependency lines, the tree's lines and a parent's state report `closing`. The queries leave closing tickets themselves out: Ready, Blocked and the `--ready` and `--blocked` list filters never list one; Plan computes its batches with closing tickets as open tickets and then removes them from its batches and from `unplannable` as a filter removes tickets, so every batch keeps the number it has in the plan of every ticket and a batch left empty is not listed (`plan.schema.json` and the code's documentation of `PlanDto` say so); Critical path gives a closing ticket no length and leaves it out of the chain. A closing ticket's own readiness is computed as an open ticket's, and the made-ready report is unchanged. `ticket list --closure open` includes closing tickets and `--closure closing` selects only them.
+
 A ticket closure result additionally reports the tickets that became ready
 because of it.
+
+Amended 2026-11-03 by C5 (R-4, R-37, R-38; decisions 13 and 20; the C5
+design's Made-Ready Report). Closing T can make ready only the tickets that
+depend on T directly, and none of them was ready while T was open, so the
+report is the **direct dependents of T, in ULID order, that the index reads
+as open with every dependency closed** when the report is produced. It is
+evaluated at report time, from the index's effective copy, not reconstructed
+from history: a dependent closed, reopened or re-pointed since by another
+clone reads as it is now, so the list can differ from a historical diff.
+Readiness is lifecycle closure; status text plays no part, and a dependent
+whose status text is `closed` is read by its closure metadata. A dependent
+with another open or unresolved dependency is left out. Each entry carries
+the ticket's ULID and slug, and no title.
+
+`made_ready_state` says when there is no set: `current` (the set, complete),
+`index_pending` (the index hand-off or the read is owed, and the same request
+reads again), `index_unavailable_final` (the closure is complete but the read
+failed or was incomplete; it is not recomputed, and `ticket ready` is the live
+view), `not_computed` (the closure is not yet integrated) or `not_applicable`
+(a cleanup-only or superseding run). A finished request's report is stored,
+so a replay returns it unchanged; a retry evaluates again. `ticket ready`
+remains the live view.
 
 ## CLI
 
@@ -297,8 +322,10 @@ Human output shows the slug beside the ULID wherever a ticket is named.
 
 - Ticket lists and the ticket header show the slug. Copy controls offer the
   slug and the ULID separately.
-- A find-by-slug entry lists every match with its context; choosing one opens
-  that ticket by ULID.
+- The Tickets filter lists every ticket with that short code under the
+  filters chosen and says how many more match outside them, each with its
+  context in its tooltip; choosing one opens that ticket by ULID (Wave 04
+  Cycle 02 decision 2, amended 2026-11-11).
 - Ticket lists can filter to ready or blocked tickets. A blocked ticket shows
   its reasons.
 - The ticket view shows its dependencies, the tickets that depend on it, its

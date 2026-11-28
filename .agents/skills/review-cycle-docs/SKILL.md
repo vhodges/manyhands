@@ -14,6 +14,15 @@ before requesting approval. It reviews documents and their evidence; it does not
 replace ticket/worktree preflight, create implementation code, or authorize any
 lifecycle action.
 
+**Required:** follow the shared
+[Manyhands operations](../implementing-a-cycle/references/manyhands-operations.md)
+reference and load `manyhands-overview` first. Use `manyhands-finding-work` to
+read the ticket and `manyhands-comments` to read prior comments or record an
+authorized decision checkpoint. Use `manyhands-tickets` for intended ticket
+updates, `manyhands-documents` only for independently managed documents, and
+`manyhands-recovery` for blocked CLI operations. Reviewing a closure plan does
+not authorize close or promotion; do not execute lifecycle writes to test it.
+
 ## Review
 
 1. Read the ticket, Cycle, design, implementation plan, relevant Wave/RFCs,
@@ -48,4 +57,4 @@ implementation until the user has approved the Cycle, design, and plan.
 | A question merely asks for preferences | Investigate first; offer a concrete default and consequence. |
 | A backend or fixture assumption is called proof | Label it a feasibility gap and specify native evidence. |
 | A temporary workaround silently becomes scope | State its downstream obligation or obtain approval. |
-| Closure is treated as post-merge cleanup | Include ticket closure in the final pre-merge checkpoint. |
+| Closure is treated as post-merge cleanup | Closure is the merge: after review approval, set the resolution status, then `ticket close`. |

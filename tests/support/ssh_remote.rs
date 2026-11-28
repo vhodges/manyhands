@@ -147,6 +147,7 @@ pub(super) struct Shared {
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
     pub transfer_hold: Mutex<Option<TransferGate>>,
+    pub receive_command_hold: Mutex<Option<AdvertisementGate>>,
     pub receive_audit_hold: Mutex<Option<ReceiveAuditGate>>,
     pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
@@ -211,6 +212,25 @@ impl SshRemoteFixture {
 
     pub fn hold_advertisement(&self) -> Result<AdvertisementHold, FixtureError> {
         let mut gate = fixed(self.shared.advertisement_hold.lock())?;
+        if gate.is_some() {
+            return Err(FixtureError);
+        }
+        let (ready, reached) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *gate = Some(AdvertisementGate {
+            reached: ready,
+            release: released,
+        });
+        Ok(AdvertisementHold { reached, release })
+    }
+
+    /// Hold the next push's ref commands, once the client has sent them all,
+    /// before receive-pack reads any of them: the client has made its push
+    /// and waits for the answer. Dropping the controller disconnects instead,
+    /// so nothing of that push reaches the repository. A receive-pack session
+    /// that sends no command passes through and leaves the hold set.
+    pub fn hold_receive_commands(&self) -> Result<AdvertisementHold, FixtureError> {
+        let mut gate = fixed(self.shared.receive_command_hold.lock())?;
         if gate.is_some() {
             return Err(FixtureError);
         }
@@ -333,6 +353,7 @@ impl SshRemoteFixture {
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
             transfer_hold: Mutex::new(None),
+            receive_command_hold: Mutex::new(None),
             receive_audit_hold: Mutex::new(None),
             receive_receipt_events: Mutex::new(None),
             hostile: Mutex::new(None),

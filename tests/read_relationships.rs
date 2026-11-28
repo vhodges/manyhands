@@ -12,12 +12,11 @@ use std::{
 
 use manyhands::{
     repository::{
-        AuthoringKind, AuthoringTarget, ClosureFilter, ContextIntent, ContextProvisionOutcome,
-        CycleKind, DependencyDirection, DependencyState, DependencyTreeDto, DependencyTreeNodeDto,
-        ExpectedPathObservation, IndexState, ItemContextKind, ItemDto, ItemListDto, PlanDto,
-        ReadError, ReadinessFilter, ReadinessReasonCode, ReadinessState, RepositoryService,
-        ResolvedRepository, SaveOutcome, SaveTicketRequest, TicketDraft, TicketFilter,
-        UnplannableReasonCode,
+        AuthoringKind, AuthoringTarget, ClosureFilter, ClosureState, ContextIntent,
+        ContextProvisionOutcome, CycleKind, DependencyDirection, DependencyState,
+        DependencyTreeDto, DependencyTreeNodeDto, IndexState, ItemContextKind, ItemDto,
+        ItemListDto, PlanDto, ReadError, ReadinessFilter, ReadinessReasonCode, ReadinessState,
+        RepositoryService, ResolvedRepository, TicketFilter, UnplannableReasonCode,
     },
     results::{ProblemCode, ResultCode},
 };
@@ -246,46 +245,6 @@ fn edit_context(service: &RepositoryService, root: &Path, id: &str) -> PathBuf {
     file
 }
 
-/// Saves the ticket through the ordinary save, creating its item worktree
-/// when `intent` is to create it, and returns the ticket's file there.
-fn save_ticket(
-    service: &RepositoryService,
-    root: &Path,
-    id: &str,
-    intent: ContextIntent,
-) -> PathBuf {
-    clean_configuration_index(root);
-    let file = root
-        .join(".manyhands/worktrees")
-        .join(id)
-        .join(ticket_path(id));
-    let outcome = service
-        .save_ticket(SaveTicketRequest {
-            target: AuthoringTarget {
-                root: root.to_owned(),
-                kind: AuthoringKind::Ticket,
-                item_id: item_id(id),
-                intent,
-                operation_id: support::new_operation_id(),
-            },
-            draft: TicketDraft {
-                title: id.to_owned(),
-                ticket_type: "task".to_owned(),
-                status: "open".to_owned(),
-                project: None,
-                team: None,
-                body: format!("Body of {id}.\n"),
-            },
-            expected_path: match fs::read(&file) {
-                Ok(bytes) => ExpectedPathObservation::from_bytes(&bytes),
-                Err(_) => ExpectedPathObservation::Missing,
-            },
-        })
-        .unwrap();
-    assert!(matches!(outcome, SaveOutcome::Saved { .. }));
-    file
-}
-
 #[test]
 fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
     let (fixture, enabled) = enabled();
@@ -302,8 +261,8 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
         &paths.iter().map(String::as_str).collect::<Vec<_>>(),
         1_000,
     );
-    // A is closed in its own worktree and nowhere else; B, in its own,
-    // comes to depend on A.
+    // A is closed in its own worktree and nowhere else: closing. B, in its
+    // own, comes to depend on A.
     let a = edit_context(&enabled.service, root, TICKET_A);
     let b = edit_context(&enabled.service, root, TICKET_B);
     fs::write(&a, ticket_source(TICKET_A, TICKET_A, CLOSURE)).unwrap();
@@ -315,27 +274,33 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
     let ready = ready(service, &repo);
     let blocked = blocked(service, &repo);
 
-    // C waits for A, which is closed where it counts: in A's own context.
-    // The copy of A on the primary branch, still open, decides nothing.
+    // A is closed only in its own context, so it is closing: the copy of it
+    // on the primary branch is still open and the closure is not the
+    // primary's yet. B and C wait for it, and A, which reads ready, is in
+    // neither list.
     assert!(
         fs::read_to_string(root.join(ticket_path(TICKET_A)))
             .unwrap()
             .contains("status: open\n---")
     );
-    assert_eq!(sorted_ids(&ready), [TICKET_B, TICKET_C]);
-    assert_eq!(sorted_ids(&blocked), [TICKET_D]);
+    assert!(ready.items.is_empty());
+    assert_eq!(sorted_ids(&blocked), [TICKET_B, TICKET_C, TICKET_D]);
     assert_eq!(ready.index.state, IndexState::Current);
     assert!(ready.complete && blocked.complete);
-    for item in &ready.items {
-        assert_eq!(state(item), ReadinessState::Ready);
-        assert!(reasons(item).is_empty());
+    for id in [TICKET_B, TICKET_C] {
+        let item = ticket(&blocked, id);
+        assert_eq!(state(item), ReadinessState::Blocked);
+        assert_eq!(
+            reasons(item),
+            [(ReadinessReasonCode::ClosingDependency, vec![TICKET_A], true)]
+        );
     }
     assert_eq!(
-        ticket(&ready, TICKET_B).context.kind,
+        ticket(&blocked, TICKET_B).context.kind,
         ItemContextKind::Active
     );
     assert_eq!(
-        ticket(&ready, TICKET_C).context.kind,
+        ticket(&blocked, TICKET_C).context.kind,
         ItemContextKind::Primary
     );
     let d = ticket(&blocked, TICKET_D);
@@ -345,7 +310,8 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
         [(ReadinessReasonCode::OpenDependency, vec![TICKET_B], true)]
     );
 
-    // With no readiness chosen, every open ticket; a closed one never.
+    // With no readiness chosen, every open ticket; a closed one never, and
+    // a closing one never either.
     let open = service
         .ticket_readiness(&repo, &TicketFilter::default())
         .unwrap();
@@ -366,7 +332,9 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
     assert_eq!(listed.items.len(), 4);
     let a = ticket(&listed, TICKET_A);
     assert_eq!(a.context.kind, ItemContextKind::Active);
-    assert_eq!(state(a), ReadinessState::Closed);
+    assert_eq!(a.closure.as_ref().unwrap().state, ClosureState::Closing);
+    // Its own readiness is an open ticket's, though the queries leave it out.
+    assert_eq!(state(a), ReadinessState::Ready);
     assert!(reasons(a).is_empty());
     for item in ready.items.iter().chain(&blocked.items) {
         assert_eq!(ticket(&listed, item.id.as_deref().unwrap()), item);
@@ -380,9 +348,9 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
     }
     // A complete read decides the same from the file.
     for (id, expected) in [
-        (TICKET_A, ReadinessState::Closed),
-        (TICKET_B, ReadinessState::Ready),
-        (TICKET_C, ReadinessState::Ready),
+        (TICKET_A, ReadinessState::Ready),
+        (TICKET_B, ReadinessState::Blocked),
+        (TICKET_C, ReadinessState::Blocked),
         (TICKET_D, ReadinessState::Blocked),
     ] {
         let shown = service.show_item(&repo, &item_id(id)).unwrap();
@@ -401,7 +369,7 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
             .iter()
             .map(|node| node.state)
             .collect::<Vec<_>>(),
-        [DependencyState::Open, DependencyState::Closed]
+        [DependencyState::Open, DependencyState::Closing]
     );
     let up = tree(service, &repo, TICKET_A, DependencyDirection::Up, None);
     assert_eq!(
@@ -412,17 +380,24 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
             TICKET_C.to_owned(),
         ]
     );
-    assert_eq!(up.ticket.state, DependencyState::Closed);
+    assert_eq!(up.ticket.state, DependencyState::Closing);
     let both = tree(service, &repo, TICKET_B, DependencyDirection::Both, Some(1));
     assert_eq!(lines(&both.dependencies), [TICKET_A.to_owned()]);
     assert_eq!(lines(&both.dependents), [TICKET_D.to_owned()]);
+    // A closing ticket is an open node of the plan and is then left out of
+    // it: B and C keep batch 2, after A's batch 1.
     let plan = plan(service, &repo);
     assert_eq!(
         batches(&plan),
-        [(1, vec![TICKET_B, TICKET_C]), (2, vec![TICKET_D])]
+        [(2, vec![TICKET_B, TICKET_C]), (3, vec![TICKET_D])]
     );
     assert!(plan.unplannable.is_empty());
-    assert_eq!(batches(&plan)[0].1, sorted_ids(&ready));
+    let mut planned: Vec<&str> = batches(&plan)
+        .into_iter()
+        .flat_map(|batch| batch.1)
+        .collect();
+    planned.sort_unstable();
+    assert_eq!(planned, sorted_ids(&blocked));
     for (batch, kind) in [(0, ItemContextKind::Active), (1, ItemContextKind::Primary)] {
         assert_eq!(plan.batches[batch].items[0].context.kind, kind);
     }
@@ -434,6 +409,148 @@ fn ready_and_blocked_are_decided_across_primary_and_two_item_worktrees() {
         .show_path(&repo, None, Path::new(&ticket_path(TICKET_A)))
         .unwrap();
     assert_eq!(state(&copy), ReadinessState::Ready);
+
+    // Once the primary's copy holds the closure too, A is closed, B and C
+    // are ready as soon as it is, and D waits for B.
+    write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(TICKET_A, TICKET_A, CLOSURE),
+    );
+    commit(&fixture, &[&ticket_path(TICKET_A)], 2_000);
+    refresh_completely(service, root);
+    let ready = service
+        .ticket_readiness(&repo, &filter(ReadinessFilter::Ready))
+        .unwrap();
+    let blocked = service
+        .ticket_readiness(&repo, &filter(ReadinessFilter::Blocked))
+        .unwrap();
+    assert_eq!(sorted_ids(&ready), [TICKET_B, TICKET_C]);
+    assert_eq!(sorted_ids(&blocked), [TICKET_D]);
+    let listed = all_tickets(service, &repo);
+    let a = ticket(&listed, TICKET_A);
+    assert_eq!(a.closure.as_ref().unwrap().state, ClosureState::Closed);
+    assert_eq!(state(a), ReadinessState::Closed);
+    assert_eq!(
+        batches(
+            &service
+                .ticket_plan(&repo, &TicketFilter::default())
+                .unwrap()
+        ),
+        [(1, vec![TICKET_B, TICKET_C]), (2, vec![TICKET_D])]
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_closing_dependency_blocks_until_the_primary_holds_it() {
+    let (fixture, enabled) = enabled();
+    let root = &fixture.root;
+    let service = &enabled.service;
+    // B depends on A, and C on B, all open on the primary; A is closed in
+    // its own worktree and nowhere else: closing.
+    write_ticket(root, TICKET_A, "");
+    write_ticket(root, TICKET_B, &deps(&[TICKET_A]));
+    write_ticket(root, TICKET_C, &deps(&[TICKET_B]));
+    let paths = [TICKET_A, TICKET_B, TICKET_C].map(ticket_path);
+    commit(
+        &fixture,
+        &paths.iter().map(String::as_str).collect::<Vec<_>>(),
+        1_000,
+    );
+    let a = edit_context(service, root, TICKET_A);
+    fs::write(&a, ticket_source(TICKET_A, TICKET_A, CLOSURE)).unwrap();
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+
+    // B waits for a closing ticket and says so; C waits for B as before.
+    let listed = all_tickets(service, &repo);
+    assert_eq!(
+        ticket(&listed, TICKET_A).closure.as_ref().unwrap().state,
+        ClosureState::Closing
+    );
+    // A closing ticket's own readiness is an open ticket's.
+    assert_eq!(state(ticket(&listed, TICKET_A)), ReadinessState::Ready);
+    let b = ticket(&listed, TICKET_B);
+    assert_eq!(state(b), ReadinessState::Blocked);
+    assert_eq!(
+        reasons(b),
+        [(ReadinessReasonCode::ClosingDependency, vec![TICKET_A], true)]
+    );
+    assert_eq!(b.deps[0].state, DependencyState::Closing);
+    assert_eq!(
+        reasons(ticket(&listed, TICKET_C)),
+        [(ReadinessReasonCode::OpenDependency, vec![TICKET_B], true)]
+    );
+
+    // The queries leave the closing ticket out, though it reads ready.
+    assert!(ready(service, &repo).items.is_empty());
+    assert_eq!(sorted_ids(&blocked(service, &repo)), [TICKET_B, TICKET_C]);
+    for (readiness, expected) in [
+        (ReadinessFilter::Ready, Vec::new()),
+        (ReadinessFilter::Blocked, vec![TICKET_B, TICKET_C]),
+    ] {
+        let filtered = service.list_tickets(&repo, &filter(readiness)).unwrap();
+        assert_eq!(sorted_ids(&filtered), expected);
+    }
+    // The plan counts it as open, so B and C keep the numbers 2 and 3 and
+    // batch 1, which only it filled, is not listed. The ID it leaves is in
+    // no batch and not unplannable. The critical path gives it no length.
+    let planned = plan(service, &repo);
+    assert_eq!(
+        batches(&planned),
+        [(2, vec![TICKET_B]), (3, vec![TICKET_C])]
+    );
+    assert!(planned.unplannable.is_empty());
+    assert_eq!(
+        ids(&service.ticket_critical_path(&repo).unwrap()),
+        [TICKET_B, TICKET_C]
+    );
+    // The closing ticket reads ready and is still in no batch of a plan
+    // filtered to the ready tickets.
+    let ready_plan = service
+        .ticket_plan(&repo, &filter(ReadinessFilter::Ready))
+        .unwrap();
+    assert!(ready_plan.batches.is_empty() && ready_plan.unplannable.is_empty());
+
+    // The dependency tree names the state.
+    let down = tree(service, &repo, TICKET_B, DependencyDirection::Down, None);
+    assert_eq!(lines(&down.dependencies), [TICKET_A.to_owned()]);
+    assert_eq!(down.dependencies[0].state, DependencyState::Closing);
+    let up = tree(service, &repo, TICKET_A, DependencyDirection::Up, None);
+    assert_eq!(up.ticket.state, DependencyState::Closing);
+    assert_eq!(
+        up.dependents
+            .iter()
+            .map(|node| node.state)
+            .collect::<Vec<_>>(),
+        [DependencyState::Open, DependencyState::Open]
+    );
+
+    // Once the primary's copy holds the closure too, A is closed and B is
+    // ready.
+    write(
+        root,
+        &ticket_path(TICKET_A),
+        &ticket_source(TICKET_A, TICKET_A, CLOSURE),
+    );
+    refresh_completely(service, root);
+    let listed = all_tickets(service, &repo);
+    assert_eq!(
+        ticket(&listed, TICKET_A).closure.as_ref().unwrap().state,
+        ClosureState::Closed
+    );
+    assert_eq!(state(ticket(&listed, TICKET_A)), ReadinessState::Closed);
+    assert_eq!(ids(&ready(service, &repo)), [TICKET_B]);
+    assert_eq!(ids(&blocked(service, &repo)), [TICKET_C]);
+    assert_eq!(
+        ticket(&listed, TICKET_B).deps[0].state,
+        DependencyState::Closed
+    );
+    assert_eq!(
+        batches(&plan(service, &repo)),
+        [(1, vec![TICKET_B]), (2, vec![TICKET_C])]
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -921,10 +1038,16 @@ fn closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_ob
     let root = &fixture.root;
     let data = enabled.data_directory.path();
     let service = &enabled.service;
-    // B, on the primary branch, depends on A, which has its own worktree.
+    // B, on the primary branch, depends on A, which is there too and has
+    // its own worktree.
+    write_ticket(root, TICKET_A, "");
     write_ticket(root, TICKET_B, &deps(&[TICKET_A]));
-    commit(&fixture, &[&ticket_path(TICKET_B)], 1_000);
-    let a = save_ticket(service, root, TICKET_A, ContextIntent::Create);
+    commit(
+        &fixture,
+        &[&ticket_path(TICKET_A), &ticket_path(TICKET_B)],
+        1_000,
+    );
+    let a = edit_context(service, root, TICKET_A);
     refresh_completely(service, root);
     let repo = service.resolve_repository(root).unwrap();
     assert_eq!(ids(&blocked(service, &repo)), [TICKET_B]);
@@ -946,11 +1069,14 @@ fn closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_ob
     let dependent = fs::read(root.join(ticket_path(TICKET_B))).unwrap();
 
     // The index is told that A is closed, and nothing else: what it holds
-    // once A's context has been observed again and B's has not. No public
-    // call observes one context alone, so A's row is changed directly.
+    // once the primary has been observed again and B's context has not. No
+    // public call observes one context alone, so the row of A's primary copy
+    // is changed directly, and not the row of its worktree's copy.
     let closed = index(data)
         .execute(
-            "UPDATE discovered_items SET closed_at = 1, closed_by = 'Ada' WHERE item_id = ?1",
+            "UPDATE discovered_items SET closed_at = 1, closed_by = 'Ada'
+              WHERE item_id = ?1
+                AND context_id IN (SELECT id FROM contexts WHERE kind = 'primary')",
             [TICKET_A],
         )
         .unwrap();
@@ -964,15 +1090,25 @@ fn closing_a_dependency_makes_its_dependent_ready_without_the_dependent_being_ob
     assert!(blocked(service, &repo).items.is_empty());
     assert_eq!(batches(&plan(service, &repo)), [(1, vec![TICKET_B])]);
 
-    // The index follows the files: A's still says it is open.
+    // The index follows the files: A's say it is open, the primary's copy
+    // and its worktree's, which are observed again.
+    support::items::write_again(&a);
+    support::items::write_again(&root.join(ticket_path(TICKET_A)));
     refresh_completely(service, root);
     assert_eq!(ids(&blocked(service, &repo)), [TICKET_B]);
-    // Closed in its own worktree and refreshed, it unblocks B, whose file
-    // nobody wrote to.
+    // Closed in its own worktree alone and refreshed, A is closing: it
+    // leaves B blocked until the primary holds the closure, and nobody
+    // wrote to B's file.
     let open = fs::read_to_string(&a).unwrap();
     fs::write(&a, open.replacen("---\n", &format!("---\n{CLOSURE}"), 1)).unwrap();
     refresh_completely(service, root);
-    assert_eq!(ids(&ready(service, &repo)), [TICKET_B]);
+    assert!(ready(service, &repo).items.is_empty());
+    let blocked_list = blocked(service, &repo);
+    assert_eq!(ids(&blocked_list), [TICKET_B]);
+    assert_eq!(
+        reasons(&blocked_list.items[0]),
+        [(ReadinessReasonCode::ClosingDependency, vec![TICKET_A], true)]
+    );
     assert_eq!(edges(), edges_before);
     assert_eq!(
         fs::read(root.join(ticket_path(TICKET_B))).unwrap(),

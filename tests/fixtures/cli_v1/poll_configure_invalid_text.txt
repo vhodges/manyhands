@@ -1,0 +1,6 @@
+--- stderr
+error: The request input is not valid.
+code: invalid_input
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+Input field interval_seconds must be a whole number.
+--- exit 2

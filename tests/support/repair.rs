@@ -333,6 +333,16 @@ impl Drop for Shelf {
 pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
     match envelope.data.as_ref() {
         Some(MutationDataDto::LocalContextSync(_)) => panic!("local synchronization data"),
+        Some(MutationDataDto::ResolveHistory(_)) => panic!("a history resolution's data"),
+        Some(MutationDataDto::Blocked(_)) => panic!("the operation in the request's way"),
+        Some(MutationDataDto::Setup(_)) => panic!("a setup's data"),
+        Some(MutationDataDto::SetupPoll(_)) => panic!("a setup poll's data"),
+        Some(MutationDataDto::SetupCancel(_)) => panic!("a setup cancellation's data"),
+        Some(MutationDataDto::PollPolicy(_))
+        | Some(MutationDataDto::Poll(_))
+        | Some(MutationDataDto::PollRetirement(_)) => {
+            panic!("a polling policy's data")
+        }
         Some(MutationDataDto::Repair(data)) => data,
         Some(
             MutationDataDto::Document(_)
@@ -342,11 +352,17 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
             | MutationDataDto::Operation(_)
             | MutationDataDto::Synchronization(_)
             | MutationDataDto::SynchronizationConflict(_)
+            | MutationDataDto::PrimaryLocalCommits(_)
             | MutationDataDto::Comment(_)
             | MutationDataDto::ConflictResolution(_)
             | MutationDataDto::Identity(_)
             | MutationDataDto::Host(_)
-            | MutationDataDto::Context(_),
+            | MutationDataDto::Context(_)
+            | MutationDataDto::ContextRetirement(_)
+            | MutationDataDto::Lifecycle(_)
+            | MutationDataDto::PullRequestClosure(_)
+            | MutationDataDto::PullRequestPromotion(_)
+            | MutationDataDto::PullRequestLink(_),
         )
         | None => panic!("the envelope carries no repair data"),
     }

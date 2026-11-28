@@ -270,6 +270,7 @@ pub(super) fn continue_without_source(owner: &mut Owner<'_>) -> Result<ResultCod
         owner.transaction(|db,row|{
         let epoch=row.owner_epoch.checked_add(1).ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
         if db.execute("UPDATE local_context_sync_records SET owner_epoch=?2 WHERE operation_ulid=?1 AND owner_epoch=?3",params![row.operation_id.to_string(),epoch,row.owner_epoch])?!=1{return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        super::record::hold_envelope(db, row.operation_id)?;
         if let Some(attempt)=row.active_resolution && db.execute("UPDATE local_context_sync_resolutions SET owner_epoch=?2 WHERE attempt_ulid=?1",params![attempt.to_string(),epoch])?!=1{return Err(ReadError::new(ResultCode::RecoveryRequired));}
         Ok(())
         })?;
@@ -371,6 +372,7 @@ fn apply(
         .ok_or_else(Fault::authority)?;
     owner.transaction(|db,row| {
         if db.execute("UPDATE local_context_sync_records SET owner_epoch=?2 WHERE operation_ulid=?1 AND owner_epoch=?3 AND generation=?4",params![row.operation_id.to_string(),epoch,row.owner_epoch,row.generation])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        super::record::hold_envelope(db, row.operation_id)?;
         db.execute("UPDATE local_context_sync_resolutions SET owner_epoch=?2,state=CASE WHEN state='prepared' THEN 'applying' ELSE state END WHERE attempt_ulid=?1",params![row.active_resolution.map(|id|id.to_string()),epoch])?;
         Ok(())
     })?;
@@ -445,6 +447,7 @@ fn validate<'a>(
             &owner.git,
             &entry.path,
             entry.sides,
+            None,
             source.source.as_bytes(),
         )? {
             return Err(invalid());
@@ -614,6 +617,7 @@ fn prepared_candidate(
         worker,
         row.context_parent,
         row.primary_parent,
+        None,
         candidate,
     )? {
         return Err(invalid());
@@ -635,6 +639,7 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
         &owner.git,
         owner.row.context_parent,
         owner.row.primary_parent,
+        None,
         oid,
     )? {
         return Err(Fault::foreign());
@@ -992,6 +997,7 @@ fn external_proof_in(
             git,
             row.context_parent,
             row.primary_parent,
+            None,
             oid,
         )?
     {

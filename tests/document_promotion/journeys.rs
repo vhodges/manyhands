@@ -4,10 +4,21 @@ use super::*;
 mod advanced;
 #[path = "exits.rs"]
 mod exits;
+#[path = "identity.rs"]
+mod identity;
 #[path = "quality.rs"]
 mod quality;
 
 pub(super) const CASES: &[ssh_harness::Case] = &[
+    ("c5_identity_configured_bracketed", || {
+        identity::configured(identity::BRACKETED_NAME)
+    }),
+    ("c5_identity_configured_trimmed", || {
+        identity::configured(identity::TRIMMED_NAME)
+    }),
+    ("c5_identity_confirmed_unusable", identity::confirmed),
+    ("c5_identity_plain_control", identity::plain),
+    ("c5_identity_kept_records_and_replays", identity::kept),
     (
         "quality2_image_name_payload_boundaries",
         quality::image_boundaries,
@@ -53,7 +64,6 @@ pub(super) const CASES: &[ssh_harness::Case] = &[
     ("blocker_remote_deleted", || blocker(6)),
     ("preserve_edited_context_then_supersede", || preservation(0)),
     ("preserve_untracked_then_supersede", || preservation(1)),
-    ("preserve_ignored_then_supersede", || preservation(2)),
     ("preserve_locked_then_supersede", || preservation(3)),
     ("retained_r1_unknown_history_and_consumption", retained_r1),
     ("r1_verified_push_consumes_before_authority", || {
@@ -248,6 +258,9 @@ fn authoritative(result: DocumentPromotionResult) -> DocumentPromotionOutcome {
     match result {
         DocumentPromotionResult::Complete(o) => o,
         DocumentPromotionResult::IndexPending(p) => p.authoritative,
+        DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
+            unreachable!("a direct fixture never answers as a pull-request promotion")
+        }
     }
 }
 fn run(
@@ -481,7 +494,7 @@ fn happy() -> Result<(), FixtureError> {
             .targets()
             .iter()
             .any(|r| r.item_id().is_some_and(|id| id.to_string() == DOC)
-                && r.disposition() == PollDisposition::RemotelyDeleted)
+                && r.disposition() == PollDisposition::Promoted)
     );
     assert_eq!(image(&p.b.worktree())?, before);
     let after = poll(&p, &p.a)?;
@@ -689,17 +702,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             ))?;
         }
         1 => fixed(std::fs::write(p.a.worktree().join("u"), b"user\n"))?,
-        2 => {
-            let repo = p.a.repo()?;
-            let path = repo.commondir().join("info/exclude");
-            let mut bytes = fixed(std::fs::read(&path))?;
-            bytes.extend_from_slice(b"\nprivate-ignored\n");
-            fixed(std::fs::write(path, bytes))?;
-            fixed(std::fs::write(
-                p.a.worktree().join("private-ignored"),
-                b"user\n",
-            ))?;
-        }
         3 => {
             fixed(p.a.repo()?.find_worktree(DOC))?
                 .lock(Some("owned fixture lock"))
@@ -713,11 +715,7 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     assert_eq!(
         outcome.cleanup(),
         PromotionCleanup::Pending {
-            reason: if mode == 2 {
-                PromotionCleanupPending::IgnoredFiles
-            } else {
-                PromotionCleanupPending::ContextChanged
-            }
+            reason: PromotionCleanupPending::ContextChanged
         }
     );
     assert_eq!(server_oid(&p, CONTEXT)?, context);
@@ -730,7 +728,6 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
             p.save_body(&p.a, &(BODY.to_owned() + "resolved user edit\n"))?;
         }
         1 => fixed(std::fs::remove_file(p.a.worktree().join("u")))?,
-        2 => fixed(std::fs::remove_file(p.a.worktree().join("private-ignored")))?,
         3 => fixed(fixed(p.a.repo()?.find_worktree(DOC))?.unlock())?,
         _ => unreachable!(),
     }
@@ -837,7 +834,10 @@ fn retained_r1() -> Result<(), FixtureError> {
         &mut SessionCredentials::new(remote_world::Provider),
     );
     p.diagnostics(&format!("{result:?}"))?;
-    assert!(matches!(result, Err(SynchronizationError::HistoryUnknown)));
+    assert!(matches!(
+        result,
+        Err(SynchronizationError::HistoryUnresolved)
+    ));
     assert_eq!(p.server.receive_updates(), receives);
     fixed(
         p.a.service

@@ -17,3 +17,6 @@ __pycache__/
 
 # Git worktrees
 .worktrees/
+
+# Editor backup files
+*~

@@ -43,6 +43,66 @@ fn host_input_schemas_match_closed_required_shapes_and_examples_reach_prepare() 
 }
 
 #[test]
+fn poll_configure_schema_is_closed_and_its_example_is_accepted() {
+    let file = "poll_configure.schema.json";
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_input_v1/poll_configure.json"),
+    );
+    schema::check(&directory(), file, &example).unwrap();
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"interval_seconds": "600"}),
+        serde_json::json!({"interval_seconds": null}),
+        serde_json::json!({"interval_seconds": 59}),
+        serde_json::json!({"interval_seconds": 600.5}),
+        serde_json::json!({"interval_seconds": 600, "enabled": false}),
+    ] {
+        assert!(schema::check(&directory(), file, &bad).is_err(), "{bad}");
+    }
+    super::polling::the_example_input_is_accepted(&example);
+}
+
+#[test]
+fn context_sync_local_schema_is_closed_and_its_example_is_accepted() {
+    let file = "context_sync_local.schema.json";
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_input_v1/context_sync_local.json"),
+    );
+    schema::check(&directory(), file, &example).unwrap();
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"observation": 7}),
+        serde_json::json!({"observation": null}),
+        serde_json::json!({"observation": "x", "kind": "ticket"}),
+    ] {
+        assert!(schema::check(&directory(), file, &bad).is_err(), "{bad}");
+    }
+    super::local_sync::the_example_input_is_accepted(&example);
+}
+
+#[test]
+fn context_resolve_local_schema_is_closed_and_its_example_is_accepted() {
+    let file = "context_resolve_local.schema.json";
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_input_v1/context_resolve_local.json"),
+    );
+    schema::check(&directory(), file, &example).unwrap();
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"observation": "x"}),
+        serde_json::json!({"observation": "x", "resolutions": [{"token": "t"}]}),
+        serde_json::json!({"observation": "x", "resolutions": [{"token": "t", "source": 1}]}),
+        serde_json::json!({"observation": "x", "resolutions": [], "kind": "ticket"}),
+    ] {
+        assert!(schema::check(&directory(), file, &bad).is_err(), "{bad}");
+    }
+    super::local_sync::the_resolve_example_input_is_accepted(&example);
+}
+
+#[test]
 fn protection_accepts_passphrase_and_none_only() {
     let f = super::keys::Fixture::new();
     for protection in ["passphrase", "none", "secret"] {
@@ -119,6 +179,150 @@ fn remote_names_are_required_and_only_selection_is_nullable() {
         ] {
             assert!(schema::check(&directory(), &schema, &invalid).is_err());
         }
+    }
+}
+
+/// `remote select` takes a mode and a forge, and a forge may be null, which
+/// removes it (design Part F); `remote remove` takes neither.
+#[test]
+fn remote_select_takes_integration_and_forge() {
+    let select = "remote_select.schema.json";
+    for valid in [
+        serde_json::json!({"name": "origin", "integration": "pull_request"}),
+        serde_json::json!({"name": "origin", "integration": "direct"}),
+        serde_json::json!({"name": "origin", "forge": null}),
+        serde_json::json!({"name": null, "forge": {"kind": "github", "web_url": "https://x.example.invalid"}}),
+        serde_json::json!({"name": "origin", "forge": {}}),
+    ] {
+        assert!(
+            schema::check(&directory(), select, &valid).is_ok(),
+            "{valid}"
+        );
+    }
+    for invalid in [
+        serde_json::json!({"name": "origin", "integration": "merge"}),
+        serde_json::json!({"name": "origin", "integration": null}),
+        serde_json::json!({"name": "origin", "forge": 1}),
+        serde_json::json!({"name": "origin", "forge": {"colour": "red"}}),
+        serde_json::json!({"name": "origin", "forge": {"kind": 1}}),
+        serde_json::json!({"integration": "direct"}),
+    ] {
+        assert!(
+            schema::check(&directory(), select, &invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    for field in [
+        ("integration", serde_json::json!("direct")),
+        ("forge", serde_json::json!({"kind": "github"})),
+    ] {
+        let mut input = serde_json::json!({"name": "origin"});
+        input[field.0] = field.1;
+        assert!(
+            schema::check(&directory(), "remote_remove.schema.json", &input).is_err(),
+            "remove refuses {}",
+            field.0
+        );
+    }
+}
+
+/// `repo enable` takes a publication remote, a mode and a forge; `repo create`
+/// does not (design R-8): its schema and its parser refuse each, and the
+/// enable's refuse what is not of their shapes.
+#[test]
+fn repo_create_refuses_the_enable_only_fields() {
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_input_v1/repo_enable.json"),
+    );
+    let fields = [
+        ("publication_remote", serde_json::json!("origin")),
+        ("integration", serde_json::json!("pull_request")),
+        (
+            "forge",
+            serde_json::json!({"kind": "github", "web_url": "https://github.example.invalid"}),
+        ),
+    ];
+    for (name, value) in &fields {
+        let mut input = example.clone();
+        input[name] = value.clone();
+        assert!(
+            schema::check(&directory(), "repo_enable.schema.json", &input).is_ok(),
+            "enable takes {name}"
+        );
+        assert!(
+            schema::check(&directory(), "repo_create.schema.json", &input).is_err(),
+            "create refuses {name}"
+        );
+    }
+    let mut all = example.clone();
+    for (name, value) in &fields {
+        all[name] = value.clone();
+    }
+    assert!(schema::check(&directory(), "repo_enable.schema.json", &all).is_ok());
+    for bad in [
+        serde_json::json!({"publication_remote": 1}),
+        serde_json::json!({"publication_remote": null}),
+        serde_json::json!({"integration": "merge"}),
+        serde_json::json!({"integration": null}),
+        serde_json::json!({"forge": null}),
+        serde_json::json!({"forge": {"kind": 1}}),
+        serde_json::json!({"forge": {"colour": "red"}}),
+    ] {
+        let mut input = example.clone();
+        for (name, value) in bad.as_object().unwrap() {
+            input[name] = value.clone();
+        }
+        assert!(
+            schema::check(&directory(), "repo_enable.schema.json", &input).is_err(),
+            "{bad}"
+        );
+    }
+
+    // The parsers: create refuses each field before it looks at the
+    // repository, and makes nothing.
+    for (name, value) in &fields {
+        let mut f = super::repository::Fixture::new("create");
+        let mut input = example.clone();
+        input[name] = value.clone();
+        f.set_input(&serde_json::to_vec(&input).unwrap());
+        super::mutation::checked(
+            &f.args("create", &["--json", "--prepare"]),
+            &f.env,
+            &[],
+            2,
+            "invalid_input",
+            None,
+        );
+        assert!(!f.root.exists(), "{name}: nothing was made");
+    }
+
+    // Enable takes them to the library: a remote the repository does not
+    // have is `invalid_remote`, and a forge that is no forge is
+    // `invalid_input`.
+    for (field, code) in [
+        (
+            serde_json::json!({"publication_remote": "origin"}),
+            "invalid_remote",
+        ),
+        (
+            serde_json::json!({"publication_remote": "origin", "forge": {"kind": "no-such-forge"}}),
+            "invalid_input",
+        ),
+    ] {
+        let mut f = super::repository::Fixture::new("enable");
+        let mut input = example.clone();
+        for (name, value) in field.as_object().unwrap() {
+            input[name] = value.clone();
+        }
+        f.set_input(&serde_json::to_vec(&input).unwrap());
+        super::mutation::checked(
+            &f.args("enable", &["--json", "--prepare"]),
+            &f.env,
+            &[],
+            2,
+            code,
+            None,
+        );
     }
 }
 

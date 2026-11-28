@@ -1,7 +1,7 @@
 #![allow(dead_code)] // Composed by the later promotion runner and Cycle 10.
 use super::{
     AuthoringKind, OperationId, RemoteRefPlan, RepositoryError, RepositoryLease,
-    RepositoryOperation, authoring_kind_segment, item_context,
+    RepositoryOperation, authoring_kind_segment, item_context, pull_request_links,
     remote::{state, sync},
     repository_lease, validate_context_worktree_identity,
 };
@@ -17,7 +17,6 @@ use std::{
 pub(super) enum Precheck {
     Ok,
     Changed,
-    IgnoredFiles,
     Locked,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -31,8 +30,8 @@ pub(super) enum WorktreeRemoval {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ReleaseCheck {
     Clean,
-    /// A change, an untracked or ignored file, a hidden index bit or a
-    /// submodule change: something of the user's that removal would lose.
+    /// A change, an untracked file, a hidden index bit or a submodule
+    /// change: something of the user's that removal would lose.
     NotClean,
     /// The worktree is not the context's as it is registered: another
     /// identity or HEAD, a lock, or a tree that is no context's.
@@ -67,6 +66,30 @@ enum Finding {
     /// What `require_cleanup_clean` refused for.
     NotClean(Precheck),
     Locked,
+}
+/// How much of a context `inspect` reads, and how it reads the item's tree.
+#[derive(Clone, Copy)]
+enum Depth<'a> {
+    /// All of it. With a service, the tree is read through the service's
+    /// cache of the trees it accepted; without one, it is walked.
+    Full(Option<&'a super::RepositoryService>),
+    /// All but the walk of ignored directories, the tree read through the
+    /// service's cache: the cheap check before a lifecycle's remote delete
+    /// (P-1).
+    HeadAndStatus(&'a super::RepositoryService),
+}
+impl<'a> Depth<'a> {
+    fn service(self) -> Option<&'a super::RepositoryService> {
+        match self {
+            Self::Full(service) => service,
+            Self::HeadAndStatus(service) => Some(service),
+        }
+    }
+    /// Whether ignored directories are walked for a repository nested in
+    /// one, or one that cannot be read (`ignored_dirs_hold_no_repository`).
+    fn walks_ignored(self) -> bool {
+        matches!(self, Self::Full(_))
+    }
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum TrackingDeletion {
@@ -164,7 +187,28 @@ impl ContextCleanup {
         Ok(worktree? || registration?)
     }
     pub(super) fn precheck_context(&self, kind: AuthoringKind, id: &ItemId, oid: Oid) -> Precheck {
-        match self.inspect(kind, id, oid, true) {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(None)))
+    }
+    /// The cheap check of a lifecycle's context just before its remote
+    /// branch is deleted (P-1): as `precheck_context`, the tree read through
+    /// `service`'s cache of accepted trees, except that no ignored
+    /// directory is walked. So it finds the worktree's head moved, a change,
+    /// an untracked file, a hidden index bit, a submodule's change, a lock
+    /// or a context that is not the one registered, and not a repository
+    /// nested in an ignored directory nor one that cannot be read, which
+    /// only the full check finds (`full_check`): before the cleanup's
+    /// reservation, and inside `remove_context_worktree`.
+    pub(super) fn precheck_head_and_status(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> Precheck {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::HeadAndStatus(service)))
+    }
+    fn precheck(found: Result<(), Finding>) -> Precheck {
+        match found {
             Ok(()) => Precheck::Ok,
             Err(Finding::Mismatch) => Precheck::Changed,
             Err(Finding::NotClean(reason)) => reason,
@@ -181,7 +225,7 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
     ) -> ReleaseCheck {
-        match self.inspect(kind, id, oid, false) {
+        match self.inspect(kind, id, oid, false, Depth::Full(None)) {
             Ok(()) => ReleaseCheck::Clean,
             Err(Finding::NotClean(_)) => ReleaseCheck::NotClean,
             Err(Finding::Mismatch | Finding::Locked) => ReleaseCheck::RecoveryRequired,
@@ -193,6 +237,7 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
         require_item: bool,
+        depth: Depth<'_>,
     ) -> Result<(), Finding> {
         let target = super::SynchronizationTarget::Context {
             kind,
@@ -232,15 +277,25 @@ impl ContextCleanup {
         }
         // The recorded clean OID is canonical authority. Do not invoke the
         // filesystem canonical-context scanner while this capability owns the
-        // common lease; materialization/status/ignored checks remain below.
-        if super::validate_context_tree_items(
-            &linked,
-            &context,
-            require_item,
-            RepositoryOperation::RepositorySnapshot,
-        )
-        .is_err()
-        {
+        // common lease; materialization/status checks remain below. With the
+        // item required the rule is `validate_context_tree`'s, so a service's
+        // cache of the trees it accepted answers for it (R-SDD-52): the key
+        // is the tree, the item's kind and ID, its configuration blob, the
+        // build and the item required, and HEAD is `oid`, checked above.
+        let tree = match depth.service() {
+            Some(service) if require_item => service.validate_context_tree(
+                &linked,
+                &context,
+                RepositoryOperation::RepositorySnapshot,
+            ),
+            _ => super::validate_context_tree_items(
+                &linked,
+                &context,
+                require_item,
+                RepositoryOperation::RepositorySnapshot,
+            ),
+        };
+        if tree.is_err() {
             return Err(Finding::Mismatch);
         }
         // This stronger proof is deletion-only. Do not change synchronization's
@@ -251,8 +306,15 @@ impl ContextCleanup {
             return Err(Finding::Mismatch);
         };
         let removal_roots = [worktree_root, admin_root];
-        require_cleanup_clean(&linked, &target, &removal_roots, &mut BTreeSet::new(), 0)
-            .map_err(Finding::NotClean)?;
+        require_cleanup_clean(
+            &linked,
+            &target,
+            &removal_roots,
+            &mut BTreeSet::new(),
+            0,
+            depth.walks_ignored(),
+        )
+        .map_err(Finding::NotClean)?;
         match self
             .repository
             .find_worktree(&id.to_string())
@@ -263,17 +325,58 @@ impl ContextCleanup {
             Err(_) => Err(Finding::Mismatch),
         }
     }
+    /// A lifecycle's removal of its context's worktree, resumed at
+    /// `worktree_removing`, under the one full check the cleanup makes
+    /// (P-1): as `precheck_context`'s, the tree read through `service`'s
+    /// cache of accepted trees. A removal may have begun, so a worktree
+    /// that is gone reads as one removed, and one partly gone as one whose
+    /// prune did not finish, before the check.
     pub(super) fn remove_context_worktree(
         &self,
+        service: &super::RepositoryService,
         kind: AuthoringKind,
         id: &ItemId,
         oid: Oid,
     ) -> WorktreeRemoval {
         let refusal = || {
-            (self.precheck_context(kind, id, oid) != Precheck::Ok)
+            (self.full_check(service, kind, id, oid) != Precheck::Ok)
                 .then_some(WorktreeRelease::NotClean)
         };
-        match self.remove_worktree(kind, id, refusal) {
+        Self::removal(self.remove_worktree(kind, id, refusal, || true))
+    }
+    /// `remove_context_worktree`, in the attempt that has just recorded
+    /// `worktree_removing`: no prune has run, so whatever the full check
+    /// finds, a worktree gone or partly gone or a file missing among it, is
+    /// the person's, and it answers first, `Changed`, as the check before
+    /// the removal did (R-SDD-71). The check still runs once.
+    pub(super) fn remove_fresh_context_worktree(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> WorktreeRemoval {
+        if self.full_check(service, kind, id, oid) != Precheck::Ok {
+            return WorktreeRemoval::Changed;
+        }
+        Self::removal(self.remove_worktree(kind, id, || None, || true))
+    }
+    /// The full check of a lifecycle's cleanup (P-1): as
+    /// `precheck_context`'s, ignored directories walked, the tree read
+    /// through `service`'s cache of accepted trees. It runs inside the
+    /// worktree's removal, and, when a remote delete is due, before the
+    /// cleanup's reservation (R-SDD-73).
+    pub(super) fn full_check(
+        &self,
+        service: &super::RepositoryService,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> Precheck {
+        Self::precheck(self.inspect(kind, id, oid, true, Depth::Full(Some(service))))
+    }
+    fn removal(release: WorktreeRelease) -> WorktreeRemoval {
+        match release {
             WorktreeRelease::Removed => WorktreeRemoval::Removed,
             WorktreeRelease::AlreadyAbsent => WorktreeRemoval::AlreadyAbsent,
             WorktreeRelease::NotClean => WorktreeRemoval::Changed,
@@ -296,7 +399,28 @@ impl ContextCleanup {
             ReleaseCheck::NotClean => Some(WorktreeRelease::NotClean),
             ReleaseCheck::RecoveryRequired => Some(WorktreeRelease::RecoveryRequired),
         };
-        self.remove_worktree(kind, id, refusal)
+        self.remove_worktree(kind, id, refusal, || true)
+    }
+    /// Retirement adds a final instance check to the SAME deletion-only
+    /// primitive. Existing release/promotion prechecks and results are unchanged.
+    pub(super) fn remove_retirement_worktree(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        instance: impl FnOnce() -> bool,
+    ) -> WorktreeRelease {
+        self.remove_worktree(
+            kind,
+            id,
+            || {
+                if self.precheck_context(kind, id, oid) != Precheck::Ok {
+                    return Some(WorktreeRelease::NotClean);
+                }
+                None
+            },
+            instance,
+        )
     }
     /// Prunes the context's worktree once `refusal`, the caller's
     /// precheck, finds nothing to refuse it for.
@@ -305,6 +429,7 @@ impl ContextCleanup {
         kind: AuthoringKind,
         id: &ItemId,
         refusal: impl FnOnce() -> Option<WorktreeRelease>,
+        authorize: impl FnOnce() -> bool,
     ) -> WorktreeRelease {
         let context = item_context(&self.root, kind, id.clone());
         match self.worktree_parts(kind, id) {
@@ -337,6 +462,9 @@ impl ContextCleanup {
         };
         let mut options = git2::WorktreePruneOptions::new();
         options.valid(true).working_tree(true).locked(false);
+        if !authorize() {
+            return WorktreeRelease::RecoveryRequired;
+        }
         if worktree.prune(Some(&mut options)).is_err() {
             return WorktreeRelease::Incomplete;
         }
@@ -351,6 +479,26 @@ impl ContextCleanup {
         kind: AuthoringKind,
         id: &ItemId,
         oid: Oid,
+    ) -> BranchDeletion {
+        self.delete_branch(kind, id, oid, || true)
+    }
+    /// Retirement adds its complete checkout authorization under the ref lock,
+    /// immediately before deletion. Ordinary lifecycle/release guards are intact.
+    pub(super) fn delete_retirement_branch(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        authorize: impl FnOnce() -> bool,
+    ) -> BranchDeletion {
+        self.delete_branch(kind, id, oid, authorize)
+    }
+    fn delete_branch(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        authorize: impl FnOnce() -> bool,
     ) -> BranchDeletion {
         let reference = format!(
             "refs/heads/manyhands/{}/{id}",
@@ -375,6 +523,9 @@ impl ContextCleanup {
                 return Ok(BranchDeletion::AlreadyAbsent);
             }
             if actual != Some(oid) || self.branch_is_checked_out(&reference)? {
+                return Err(());
+            }
+            if !authorize() {
                 return Err(());
             }
             transaction.remove(&reference).map_err(|_| ())?;
@@ -413,83 +564,7 @@ impl ContextCleanup {
         }
     }
     fn branch_is_checked_out(&self, reference: &str) -> Result<bool, ()> {
-        let at_branch = |gitdir: &Path| -> Result<bool, ()> {
-            let head = std::fs::read_to_string(gitdir.join("HEAD")).map_err(|_| ())?;
-            let head = head.trim_end_matches('\n');
-            if let Some(branch) = head.strip_prefix("ref: ") {
-                if !git2::Reference::is_valid_name(branch) {
-                    return Err(());
-                }
-                if branch == reference {
-                    return Ok(true);
-                }
-                // An indirect alias is not evidence of an unrelated checkout.
-                direct_oid(&self.repository, branch)
-                    .map_err(|_| ())?
-                    .ok_or(())?;
-                Ok(false)
-            } else {
-                let detached = Oid::from_str(head).map_err(|_| ())?;
-                if detached.is_zero() {
-                    return Err(());
-                }
-                Ok(false)
-            }
-        };
-        if at_branch(self.repository.path())? {
-            return Ok(true);
-        }
-        // libgit2's worktrees() silently filters incomplete registrations. Only
-        // a complete filesystem inventory can prove no checkout exists; missing
-        // or invalid evidence is a refusal, never permission to delete a ref.
-        let inventory = self.repository.commondir().join("worktrees");
-        match std::fs::symlink_metadata(&inventory) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err(()),
-            Ok(_) => plain_metadata(&inventory, true)?,
-        }
-        let common = self.repository.commondir().canonicalize().map_err(|_| ())?;
-        for entry in std::fs::read_dir(&inventory).map_err(|_| ())? {
-            let entry = entry.map_err(|_| ())?;
-            let admin = entry.path();
-            plain_metadata(&admin, true)?;
-            for member in ["commondir", "gitdir", "HEAD"] {
-                plain_metadata(&admin.join(member), false)?;
-            }
-            let read_link = |member: &str| -> Result<PathBuf, ()> {
-                let text = std::fs::read_to_string(admin.join(member)).map_err(|_| ())?;
-                let text = text.trim_end_matches('\n');
-                if text.is_empty() {
-                    return Err(());
-                }
-                // Absolute links remain absolute; relative metadata links are
-                // interpreted at their registration, as Git's commondir is.
-                admin.join(text).canonicalize().map_err(|_| ())
-            };
-            if read_link("commondir")? != common {
-                return Err(());
-            }
-            let name = entry.file_name();
-            let worktree = self
-                .repository
-                .find_worktree(name.to_str().ok_or(())?)
-                .map_err(|_| ())?;
-            if read_link("gitdir")?
-                != worktree
-                    .path()
-                    .join(".git")
-                    .canonicalize()
-                    .map_err(|_| ())?
-            {
-                return Err(());
-            }
-            // Inspect this actual registration's HEAD, never a redirected .git
-            // link in its working directory.
-            if at_branch(&admin)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        branch_is_checked_out(&self.repository, reference)
     }
     /// Git-first completion seam. Caller must first persist branch_deleted and
     /// validate the real reservation/configuration. This helper never invents
@@ -561,13 +636,16 @@ impl ContextCleanup {
 /// Called only while ContextCleanup owns the superproject lease. Recursion never
 /// acquires another lease/reservation, opens a transport, changes configuration
 /// or writes an index. Each populated gitlink gets its own full proof regardless
-/// of its parent's submodule ignore configuration.
+/// of its parent's submodule ignore configuration. Without `walk_ignored` no
+/// ignored directory is walked, in it or in any gitlink: the cheap check of
+/// P-1, which leaves a nested repository there to the full one.
 fn require_cleanup_clean(
     repository: &git2::Repository,
     target: &super::SynchronizationTarget,
     removal_roots: &[PathBuf; 2],
     visited: &mut BTreeSet<PathBuf>,
     depth: usize,
+    walk_ignored: bool,
 ) -> Result<(), Precheck> {
     const MAX_REPOSITORIES: usize = 64;
     // Git's on-disk CE_VALID (assume-unchanged) and extended SKIP_WORKTREE bits.
@@ -599,24 +677,17 @@ fn require_cleanup_clean(
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
-        .include_ignored(true)
-        .recurse_ignored_dirs(true);
+        .include_ignored(false);
     let statuses = repository
         .statuses(Some(&mut options))
         .map_err(|_| Precheck::Changed)?;
     if !statuses.is_empty() {
-        return Err(
-            if statuses
-                .iter()
-                .any(|entry| entry.status().contains(git2::Status::IGNORED))
-            {
-                Precheck::IgnoredFiles
-            } else {
-                Precheck::Changed
-            },
-        );
+        return Err(Precheck::Changed);
     }
     drop(statuses);
+    if walk_ignored {
+        ignored_dirs_hold_no_repository(repository)?;
+    }
     let workdir = repository.workdir().ok_or(Precheck::Changed)?;
     for entry in gitlinks {
         let path = std::str::from_utf8(&entry.path).map_err(|_| Precheck::Changed)?;
@@ -652,7 +723,14 @@ fn require_cleanup_clean(
             // A foreign linked-worktree registration is not ours to remove.
             return Err(Precheck::Changed);
         }
-        require_cleanup_clean(&child, target, removal_roots, visited, depth + 1)?;
+        require_cleanup_clean(
+            &child,
+            target,
+            removal_roots,
+            visited,
+            depth + 1,
+            walk_ignored,
+        )?;
         let common = child
             .commondir()
             .canonicalize()
@@ -668,6 +746,165 @@ fn require_cleanup_clean(
         }
     }
     Ok(())
+}
+
+/// Ignored files are build output and go with the worktree, but a Git
+/// repository nested in an ignored directory (a clone under `vendor/`) may
+/// hold commits nothing else has. Nothing is followed through a symlink, and
+/// a directory that cannot be read counts as one that might hold a repository.
+fn ignored_dirs_hold_no_repository(repository: &git2::Repository) -> Result<(), Precheck> {
+    let workdir = repository.workdir().ok_or(Precheck::Changed)?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(true)
+        .recurse_ignored_dirs(false);
+    // libgit2 reports an untracked directory that holds nothing but ignored
+    // files (or nothing at all, like a fresh `git init`) as IGNORED only when
+    // untracked entries are asked for; without them it is dropped unseen.
+    let statuses = repository
+        .statuses(Some(&mut options))
+        .map_err(|_| Precheck::Changed)?;
+    let mut pending = Vec::new();
+    for entry in statuses
+        .iter()
+        .filter(|entry| entry.status().contains(git2::Status::IGNORED))
+    {
+        let path = std::str::from_utf8(entry.path_bytes()).map_err(|_| Precheck::Changed)?;
+        pending.push(workdir.join(path));
+    }
+    match tree_holds_git_entry(pending) {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => Err(Precheck::Changed),
+    }
+}
+
+/// Whether any directory under `roots` holds a `.git` entry. Symlinks are not
+/// followed. A path that vanishes mid-walk (a build tool renaming its output)
+/// has nothing left to lose; any other read error is returned.
+fn tree_holds_git_entry(mut pending: Vec<std::path::PathBuf>) -> std::io::Result<bool> {
+    let gone = |error: std::io::Error| match error.kind() {
+        std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(error),
+    };
+    while let Some(path) = pending.pop() {
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) => {
+                gone(error)?;
+                continue;
+            }
+        }
+        let children = match std::fs::read_dir(&path) {
+            Ok(children) => children,
+            Err(error) => {
+                gone(error)?;
+                continue;
+            }
+        };
+        for child in children {
+            let child = match child {
+                Ok(child) => child,
+                Err(error) => {
+                    gone(error)?;
+                    continue;
+                }
+            };
+            if child.file_name() == ".git" {
+                return Ok(true);
+            }
+            match child.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push(child.path()),
+                Ok(_) => {}
+                Err(error) => gone(error)?,
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Complete registration/HEAD inventory shared by cleanup and metadata-only
+/// retirement admission. Call under the repository lease; it grants no effects.
+pub(super) fn branch_is_checked_out(
+    repository: &git2::Repository,
+    reference: &str,
+) -> Result<bool, ()> {
+    let at_branch = |gitdir: &Path| -> Result<bool, ()> {
+        let head = std::fs::read_to_string(gitdir.join("HEAD")).map_err(|_| ())?;
+        let head = head.trim_end_matches('\n');
+        if let Some(branch) = head.strip_prefix("ref: ") {
+            if !git2::Reference::is_valid_name(branch) {
+                return Err(());
+            }
+            if branch == reference {
+                return Ok(true);
+            }
+            // An indirect alias is not evidence of an unrelated checkout.
+            direct_oid(repository, branch).map_err(|_| ())?.ok_or(())?;
+            Ok(false)
+        } else {
+            let detached = Oid::from_str(head).map_err(|_| ())?;
+            if detached.is_zero() {
+                return Err(());
+            }
+            Ok(false)
+        }
+    };
+    if at_branch(repository.path())? {
+        return Ok(true);
+    }
+    // libgit2's worktrees() silently filters incomplete registrations. Only
+    // a complete filesystem inventory can prove no checkout exists; missing
+    // or invalid evidence is a refusal, never permission to delete a ref.
+    let inventory = repository.commondir().join("worktrees");
+    match std::fs::symlink_metadata(&inventory) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(()),
+        Ok(_) => plain_metadata(&inventory, true)?,
+    }
+    let common = repository.commondir().canonicalize().map_err(|_| ())?;
+    for entry in std::fs::read_dir(&inventory).map_err(|_| ())? {
+        let entry = entry.map_err(|_| ())?;
+        let admin = entry.path();
+        plain_metadata(&admin, true)?;
+        for member in ["commondir", "gitdir", "HEAD"] {
+            plain_metadata(&admin.join(member), false)?;
+        }
+        let read_link = |member: &str| -> Result<PathBuf, ()> {
+            let text = std::fs::read_to_string(admin.join(member)).map_err(|_| ())?;
+            let text = text.trim_end_matches('\n');
+            if text.is_empty() {
+                return Err(());
+            }
+            // Absolute links remain absolute; relative metadata links are
+            // interpreted at their registration, as Git's commondir is.
+            admin.join(text).canonicalize().map_err(|_| ())
+        };
+        if read_link("commondir")? != common {
+            return Err(());
+        }
+        let name = entry.file_name();
+        let worktree = repository
+            .find_worktree(name.to_str().ok_or(())?)
+            .map_err(|_| ())?;
+        if read_link("gitdir")?
+            != worktree
+                .path()
+                .join(".git")
+                .canonicalize()
+                .map_err(|_| ())?
+        {
+            return Err(());
+        }
+        // Inspect this actual registration's HEAD, never a redirected .git
+        // link in its working directory.
+        if at_branch(&admin)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn plain_metadata(path: &Path, directory: bool) -> Result<(), ()> {
@@ -778,6 +1015,9 @@ pub(super) fn retire_context(
     )
     .map_err(|_| state::recovery_required())?;
     tx.execute("INSERT INTO retired_contexts(repository_id,kind,item_id,operation_id,retired_oid) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(repository_id,kind,item_id) DO UPDATE SET operation_id=excluded.operation_id,retired_oid=excluded.retired_oid",rusqlite::params![repository_id,kind,evidence.item_id.to_string(),evidence.operation_id.to_string(),evidence.retired_oid.to_string()]).map_err(|_|state::recovery_required())?;
+    // The link goes with the context it was given for.
+    pull_request_links::delete_link(tx, repository_id, kind, &evidence.item_id.to_string())
+        .map_err(|_| state::recovery_required())?;
     Ok(())
 }
 

@@ -197,11 +197,14 @@ impl ItemPane {
         // no review opens while a save is kept for its Retry (I2).
         let reviewing = self.edit.phase() == Phase::Review;
         let kept = self.edit.save.run.is_some();
+        // Retry and Resume wait while the item's close or merge is
+        // unfinished (R-23).
+        let waits = self.edits_wait(cx);
         if !reviewing && !self.saves_directly() {
             let state = before_save(false);
             let action = match kept {
                 true => None,
-                false => action("item-save-review", state, cx, |this, cx| {
+                false => action("item-save-review", state, false, cx, |this, cx| {
                     this.open_review(cx)
                 }),
             };
@@ -241,7 +244,7 @@ impl ItemPane {
             SaveState::DiscoveryPending => {
                 let resume = match reviewing {
                     true => None,
-                    false => action("item-save-resume", state, cx, |this, cx| {
+                    false => action("item-save-resume", state, waits, cx, |this, cx| {
                         this.resume_save(cx)
                     }),
                 };
@@ -253,7 +256,9 @@ impl ItemPane {
             SaveState::CheckpointFailed => {
                 let retry = match reviewing {
                     true => None,
-                    false => action("item-save-retry", state, cx, |this, cx| this.retry_save(cx)),
+                    false => action("item-save-retry", state, waits, cx, |this, cx| {
+                        this.retry_save(cx)
+                    }),
                 };
                 banners.push((
                     Banner::CheckpointFailed,
@@ -321,10 +326,12 @@ fn row(id: &'static str, state: SaveState, action: Option<Button>) -> AnyElement
         .into_any_element()
 }
 
-/// The action `state` offers, as the button `id`, doing `act`.
+/// The action `state` offers, as the button `id`, doing `act`; disabled
+/// while `waits`.
 fn action(
     id: &'static str,
     state: SaveState,
+    waits: bool,
     cx: &mut Context<ItemPane>,
     act: impl Fn(&mut ItemPane, &mut Context<ItemPane>) + 'static,
 ) -> Option<Button> {
@@ -333,6 +340,7 @@ fn action(
         Button::new(id)
             .label(label)
             .small()
+            .disabled(waits)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| act(this, cx))),
     )
 }

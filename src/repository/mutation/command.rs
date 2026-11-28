@@ -72,6 +72,29 @@ commands! {
     ItemRepublish => "item republish",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
+    ContextRetire => "context retire",
+    DocumentPromote => "document promote",
+    TicketClose => "ticket close",
+    TicketWithdrawClosure => "ticket withdraw-closure",
+    PollConfigure => "poll configure",
+    PollPause => "poll pause",
+    PollResume => "poll resume",
+    PollOnce => "poll once",
+    ItemResolveHistory => "item resolve-history",
+    RemoteResolveHistory => "remote resolve-history",
+    RepoSetupCancel => "repo setup-cancel",
+}
+
+/// What a pending setup does to a command (Wave 06 Cycle 02, design Part B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SetupGate {
+    /// The command runs whatever the repository's setup.
+    Carries,
+    /// Refused while a first-time setup is pending: the repository has no
+    /// configuration yet, so its items cannot be written or published.
+    RefusedBeforeEnable,
+    /// Refused while any setup is pending.
+    Refused,
 }
 
 impl Command {
@@ -91,6 +114,9 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            Self::ContextRetire => true,
+            // One row of the remote journal, reserved for the explicit poll.
+            Self::PollOnce => true,
             Self::LocalContextSync => true,
             Self::LocalContextResolve => false,
             // The comment's own operation, in the local journal: its
@@ -116,6 +142,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             // The refresh that puts the folder in the index: making the
             // directory records nothing, and the refresh's row is the
@@ -139,6 +166,14 @@ impl Command {
             | Self::ItemSync
             | Self::RepoSync
             | Self::ItemRepublish => true,
+            // One parent operation, recorded in its lifecycle's own table
+            // and, once it deletes the remote context, in the remote
+            // journal under the same ID.
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
+            // One write in the request's own transaction, with no operation
+            // ID and no row: the record finished with it is
+            // what says it was made.
+            Self::PollConfigure | Self::PollPause | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -177,11 +212,16 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -199,6 +239,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -211,7 +252,12 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -221,11 +267,16 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -245,6 +296,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -257,7 +309,68 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
+        }
+    }
+
+    /// What a pending setup does to the command: the design's table, a
+    /// total partition of the commands. A command added here does not
+    /// compile until it has a place in it.
+    pub(crate) const fn setup_gate(self) -> SetupGate {
+        match self {
+            Self::TicketClose
+            | Self::TicketWithdrawClosure
+            | Self::DocumentPromote
+            | Self::RemoteSelect
+            | Self::RemoteRemove
+            | Self::RepoEnable => SetupGate::Refused,
+            Self::DocumentCreate
+            | Self::DocumentSave
+            | Self::DocumentMove
+            | Self::DocumentRepair
+            | Self::TicketCreate
+            | Self::TicketSave
+            | Self::TicketSlugAssign
+            | Self::TicketRepair
+            | Self::FolderCreate
+            | Self::CommentAdd
+            | Self::ItemSync
+            | Self::RepoSync
+            | Self::ItemRepublish
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory
+            | Self::ConflictResolve
+            | Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::ContextPrepare
+            | Self::ContextRelease
+            | Self::ContextRetire => SetupGate::RefusedBeforeEnable,
+            Self::RepoCreate
+            | Self::RepoRemove
+            | Self::RepoSetupCancel
+            | Self::RepoIdentitySet
+            | Self::RemoteAdd
+            | Self::KeyGenerate
+            | Self::KeyImport
+            | Self::KeySelect
+            | Self::KeyClear
+            | Self::KeyRemove
+            | Self::KeyDelete
+            | Self::HostApprove
+            | Self::HostReplace
+            | Self::OperationResume
+            | Self::OperationAbandon
+            | Self::PollOnce
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::IndexRefresh
+            | Self::IndexRebuild => SetupGate::Carries,
         }
     }
 
@@ -266,11 +379,16 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -290,6 +408,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -302,7 +421,12 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -317,6 +441,9 @@ impl Command {
     /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            Self::ContextRetire => true,
+            // A poll's own safe points, which its probe reaches.
+            Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
             // `request cancel` sets the request's flag, which the
@@ -325,6 +452,9 @@ impl Command {
             // A republish pushes as a synchronization does, from the safe
             // points of its own operation (R-32).
             Self::ItemRepublish => true,
+            // A promotion and a closure stop at the safe points of their
+            // one runner, and of the children it runs.
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -344,6 +474,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -353,7 +484,12 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume
+            | Self::ItemResolveHistory
+            | Self::RemoteResolveHistory => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -382,12 +518,20 @@ impl Command {
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
+            Self::ContextRetire => true,
+            // How a replay reads a finished row: it keeps the pinned equality.
+            Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync
             | Self::RepoSync
             | Self::OperationResume
             | Self::CommentAdd
-            | Self::ItemRepublish => true,
+            | Self::ItemRepublish
+            // This only decides how a replay reads a finished row, and keeps
+            // `finishes == stops || resume` (design, Command Predicates).
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -407,6 +551,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -420,7 +565,10 @@ impl Command {
             // A resolution's result says what its request did, and a
             // replay of it offers nothing (R-35): `conflict show` names
             // the next step.
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -428,9 +576,17 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            Self::ContextRetire => ProgressStage::Observing,
+            // What a poll does first is connect, to fetch.
+            Self::PollOnce => ProgressStage::Connecting,
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
             Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
+            // What a promotion or a closure does first is look at its record
+            // and the repository: a local-only or cleanup-only run never
+            // connects, and one that does reports `connecting` itself (D5
+            // decision 11).
+            Self::DocumentPromote | Self::TicketClose | Self::TicketWithdrawClosure => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -454,6 +610,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -473,7 +630,11 @@ impl Command {
             | Self::ContextPrepare
             // What a context release does is remove the worktree and
             // the branch.
-            | Self::ContextRelease => ProgressStage::Writing,
+            | Self::ContextRelease
+            // What a policy verb does is write its one field.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => ProgressStage::Writing,
         }
     }
 
@@ -485,11 +646,18 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            // A poll's hand-off is a refresh of the whole repository, and the
+            // operation it finished owes nothing of it.
+            Self::PollOnce => true,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -510,6 +678,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::ItemSync
@@ -525,7 +694,10 @@ impl Command {
             | Self::ContextPrepare
             // A release's hand-off is its operation's to owe, as a
             // save's is, and `operation resume` takes it up (R-32).
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume | Self::ItemResolveHistory | Self::RemoteResolveHistory => false,
         }
     }
 
@@ -536,6 +708,10 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            Self::ContextRetire => false,
+            // One fetch and clean fast-forwards: nothing is lost, and what it
+            // finds in the way it leaves.
+            Self::PollOnce => false,
             // A comment adds a file that nothing held, in the item's own
             // context, and publishes it as a synchronization would: there
             // is nothing to show first.
@@ -547,6 +723,7 @@ impl Command {
             | Self::RepoEnable
             | Self::RemoteRemove
             | Self::RepoRemove
+            | Self::RepoSetupCancel
             | Self::KeyDelete
             | Self::OperationAbandon
             | Self::RepoIdentitySet
@@ -560,7 +737,15 @@ impl Command {
             // A republish recreates a branch the remote deleted: its
             // caller is shown the branch, the remote and the commit, and
             // consents to that commit (decisions 4 and 7).
-            | Self::ItemRepublish => true,
+            | Self::ItemRepublish
+            // Each merges into primary, publishes and retires a context:
+            // its caller is shown all of it, and consents to that state.
+            | Self::DocumentPromote
+            | Self::TicketClose
+            | Self::TicketWithdrawClosure
+            // A resolution records that a context was never published: its
+            // caller is shown the context, the remote's answer and the choice.
+            | Self::ItemResolveHistory | Self::RemoteResolveHistory => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -590,7 +775,12 @@ impl Command {
             | Self::ContextRelease
             // A resume does only what an operation already owes and
             // was consented to when it began.
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            // One field of a stored policy: a pause and an interval lose
+            // nothing, and what they replace is shown by `poll status`.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 }
@@ -598,6 +788,17 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::{Command, ProgressStage};
+
+    #[test]
+    fn retirement_is_an_unconfirmed_local_operation_with_safe_points() {
+        let command = Command::parse("context retire").expect("ordinary retirement is bound");
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(!command.needs_confirmation());
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Observing);
+    }
 
     #[test]
     fn a_stored_name_is_read_back_as_its_command() {
@@ -627,6 +828,7 @@ mod tests {
         assert_eq!(Command::RepoEnable.name(), "repo enable");
         assert_eq!(Command::RemoteRemove.name(), "remote remove");
         assert_eq!(Command::RepoRemove.name(), "repo remove");
+        assert_eq!(Command::RepoSetupCancel.name(), "repo setup-cancel");
         assert_eq!(Command::KeyDelete.name(), "key delete");
         assert_eq!(Command::OperationAbandon.name(), "operation abandon");
         assert_eq!(Command::ItemSync.name(), "item sync");
@@ -641,6 +843,17 @@ mod tests {
         assert_eq!(Command::CommentAdd.name(), "comment add");
         assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
         assert_eq!(Command::ItemRepublish.name(), "item republish");
+        assert_eq!(Command::DocumentPromote.name(), "document promote");
+        assert_eq!(Command::TicketClose.name(), "ticket close");
+        assert_eq!(
+            Command::TicketWithdrawClosure.name(),
+            "ticket withdraw-closure"
+        );
+        assert_eq!(Command::PollConfigure.name(), "poll configure");
+        assert_eq!(Command::PollPause.name(), "poll pause");
+        assert_eq!(Command::PollResume.name(), "poll resume");
+        assert_eq!(Command::PollOnce.name(), "poll once");
+        assert_eq!(Command::ContextRetire.name(), "context retire");
     }
 
     #[test]
@@ -655,16 +868,34 @@ mod tests {
             // points; what it does first is write the comment.
             let comment = command == Command::CommentAdd;
             // A republish pushes as a synchronization does, at its safe
-            // points, and is the one stopping command that needs
-            // confirmation (R-32).
-            let republish = command == Command::ItemRepublish;
+            // points, and needs confirmation, as a promotion and a
+            // closure do, which stop at the safe points of their runner.
+            let confirmed = matches!(
+                command,
+                Command::ItemRepublish
+                    | Command::DocumentPromote
+                    | Command::TicketClose
+                    | Command::TicketWithdrawClosure
+            );
+            // A promotion or a closure looks first, and reports its steps'
+            // stages itself (D5 decision 11).
+            let lifecycle = matches!(
+                command,
+                Command::DocumentPromote | Command::TicketClose | Command::TicketWithdrawClosure
+            );
             let stopping = local
                 || comment
-                || republish
-                || matches!(command, Command::ItemSync | Command::RepoSync);
+                || confirmed
+                || matches!(
+                    command,
+                    Command::ItemSync
+                        | Command::RepoSync
+                        | Command::PollOnce
+                        | Command::ContextRetire
+                );
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
-                assert_eq!(command.needs_confirmation(), republish, "{command:?}");
+                assert_eq!(command.needs_confirmation(), confirmed, "{command:?}");
                 assert_eq!(
                     command.has_operation(),
                     command != Command::LocalContextResolve,
@@ -672,7 +903,7 @@ mod tests {
                 );
                 assert_eq!(
                     command.stage(),
-                    if local {
+                    if local || lifecycle || command == Command::ContextRetire {
                         ProgressStage::Observing
                     } else if comment {
                         ProgressStage::Writing
@@ -742,6 +973,7 @@ mod tests {
                         | Command::RepoEnable
                         | Command::RemoteRemove
                         | Command::RepoRemove
+                        | Command::RepoSetupCancel
                         | Command::KeyDelete
                         | Command::OperationAbandon
                         | Command::RepoIdentitySet
@@ -750,6 +982,11 @@ mod tests {
                         | Command::DocumentRepair
                         | Command::TicketRepair
                         | Command::ItemRepublish
+                        | Command::DocumentPromote
+                        | Command::TicketClose
+                        | Command::TicketWithdrawClosure
+                        | Command::ItemResolveHistory
+                        | Command::RemoteResolveHistory
                 ),
                 "{command:?}"
             );
@@ -776,9 +1013,19 @@ mod tests {
             // repository lease with no row.
             // So is a host's pin, written by the pin store's own
             // transaction with no row.
+            // So is a polling policy, written in its request's own
+            // transaction with no row. So is a history resolution's row of
+            // the remote registry.
             let unjournaled = matches!(
                 command,
-                Command::RepoIdentitySet | Command::HostApprove | Command::HostReplace
+                Command::RepoIdentitySet
+                    | Command::HostApprove
+                    | Command::HostReplace
+                    | Command::PollConfigure
+                    | Command::PollPause
+                    | Command::PollResume
+                    | Command::ItemResolveHistory
+                    | Command::RemoteResolveHistory
             );
             assert_eq!(
                 command.has_operation(),
@@ -809,11 +1056,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_folder_creation_hands_off_to_any_refresh() {
+    fn only_a_folder_creation_and_a_poll_hand_off_to_any_refresh() {
         for command in Command::ALL {
             assert_eq!(
                 command.hands_off_to_any_refresh(),
-                command == Command::FolderCreate,
+                matches!(command, Command::FolderCreate | Command::PollOnce),
                 "{command:?}"
             );
         }
@@ -862,6 +1109,64 @@ mod tests {
         assert_eq!(command.stage(), ProgressStage::Writing);
     }
 
+    /// The design's Command Predicates row of the lifecycle verbs, and of the
+    /// withdraw of a pull-request closure, which is a closure's twin. They
+    /// finish as a synchronization only in how a replay reads a finished
+    /// row, which keeps the pinned equality.
+    #[test]
+    fn a_promotion_and_a_closure_are_confirmed_operations_with_safe_points() {
+        for command in [
+            Command::DocumentPromote,
+            Command::TicketClose,
+            Command::TicketWithdrawClosure,
+        ] {
+            assert!(command.needs_confirmation(), "{command:?}");
+            assert!(command.has_operation(), "{command:?}");
+            assert!(command.stops_at_safe_points(), "{command:?}");
+            assert!(command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Observing, "{command:?}");
+        }
+    }
+
+    /// The design's Command Predicates row of `poll once`.
+    #[test]
+    fn a_poll_is_a_remote_operation_with_safe_points_and_no_confirmation() {
+        let command = Command::PollOnce;
+        assert!(!command.needs_confirmation());
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(command.hands_off_to_any_refresh());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert_eq!(command.stage(), ProgressStage::Connecting);
+    }
+
+    /// The design's Command Predicates row of the policy verbs.
+    #[test]
+    fn a_policy_verb_is_a_local_write_with_no_operation_and_no_confirmation() {
+        for command in [
+            Command::PollConfigure,
+            Command::PollPause,
+            Command::PollResume,
+        ] {
+            assert!(!command.needs_confirmation(), "{command:?}");
+            assert!(!command.has_operation(), "{command:?}");
+            assert!(!command.stops_at_safe_points(), "{command:?}");
+            assert!(!command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Writing, "{command:?}");
+        }
+    }
+
     #[test]
     fn only_a_rebuild_runs_while_the_index_is_unavailable() {
         for command in Command::ALL {
@@ -870,6 +1175,91 @@ mod tests {
                 command == Command::IndexRebuild,
                 "{command:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_command_has_the_setup_gate_of_the_design() {
+        use super::SetupGate::{Carries, Refused, RefusedBeforeEnable};
+        // Design Part B's table, written out.
+        let table = [
+            (
+                Refused,
+                &[
+                    "ticket close",
+                    "ticket withdraw-closure",
+                    "document promote",
+                    "remote select",
+                    "remote remove",
+                    "repo enable",
+                ][..],
+            ),
+            (
+                RefusedBeforeEnable,
+                &[
+                    "document create",
+                    "document save",
+                    "document move",
+                    "document repair",
+                    "ticket create",
+                    "ticket save",
+                    "ticket slug-assign",
+                    "ticket repair",
+                    "folder create",
+                    "comment add",
+                    "item sync",
+                    "repo sync",
+                    "item republish",
+                    "item resolve-history",
+                    "remote resolve-history",
+                    "conflict resolve",
+                    "context sync-local",
+                    "context resolve-local",
+                    "context prepare",
+                    "context release",
+                    "context retire",
+                ][..],
+            ),
+            (
+                Carries,
+                &[
+                    "repo create",
+                    "repo remove",
+                    "repo setup-cancel",
+                    "repo identity-set",
+                    "remote add",
+                    "key generate",
+                    "key import",
+                    "key select",
+                    "key clear",
+                    "key remove",
+                    "key delete",
+                    "host approve",
+                    "host replace",
+                    "operation resume",
+                    "operation abandon",
+                    "poll once",
+                    "poll configure",
+                    "poll pause",
+                    "poll resume",
+                    "index refresh",
+                    "index rebuild",
+                ][..],
+            ),
+        ];
+        let mut seen = Vec::new();
+        for (gate, names) in table {
+            for name in names {
+                let command = Command::parse(name).unwrap_or_else(|| panic!("{name}"));
+                assert_eq!(command.setup_gate(), gate, "{name}");
+                assert!(!seen.contains(&command), "{name} is in the table twice");
+                seen.push(command);
+            }
+        }
+        // The table names every command, once.
+        assert_eq!(seen.len(), Command::ALL.len());
+        for command in Command::ALL {
+            assert!(seen.contains(&command), "{command:?} is not in the table");
         }
     }
 

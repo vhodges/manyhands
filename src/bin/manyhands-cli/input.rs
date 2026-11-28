@@ -189,6 +189,21 @@ impl InputObject {
             .map(|values| values.map_or(ListChange::Missing, ListChange::Value))
     }
 
+    /// A required whole number that is not negative.
+    pub fn whole_number(&self, field: &'static str) -> Result<u64, InputError> {
+        match self.fields.get(field) {
+            None => Err(InputError::Missing(field)),
+            Some(Json::Number(number)) => number.as_u64().ok_or(InputError::WrongType {
+                field,
+                expected: "a whole number",
+            }),
+            Some(_) => Err(InputError::WrongType {
+                field,
+                expected: "a whole number",
+            }),
+        }
+    }
+
     pub fn optional_object(&self, field: &'static str) -> Result<Option<InputObject>, InputError> {
         match self.fields.get(field) {
             None => Ok(None),
@@ -198,6 +213,25 @@ impl InputObject {
             _ => Err(InputError::WrongType {
                 field,
                 expected: "an object",
+            }),
+        }
+    }
+
+    /// An optional object that may be null: the outer `None` is a field that
+    /// is absent, `Some(None)` is one that is null.
+    pub fn nullable_object(
+        &self,
+        field: &'static str,
+    ) -> Result<Option<Option<InputObject>>, InputError> {
+        match self.fields.get(field) {
+            None => Ok(None),
+            Some(Json::Null) => Ok(Some(None)),
+            Some(Json::Object(fields)) => Ok(Some(Some(InputObject {
+                fields: fields.clone(),
+            }))),
+            _ => Err(InputError::WrongType {
+                field,
+                expected: "an object or null",
             }),
         }
     }
@@ -250,7 +284,7 @@ pub fn schema_name(resource: &str, verb: &str) -> String {
 enum Json {
     Null,
     Bool(#[allow(dead_code)] bool),
-    Number(#[allow(dead_code)] serde_json::Number),
+    Number(serde_json::Number),
     String(String),
     Array(Vec<Json>),
     Object(BTreeMap<String, Json>),

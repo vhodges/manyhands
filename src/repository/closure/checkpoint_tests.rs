@@ -4,8 +4,10 @@ use super::super::test_support::{
 };
 use super::*;
 use crate::repository::{
-    OperationId, PreviewTicketClosureRequest, RepositoryErrorKind, RepositoryOperation,
+    ClosureExpectation, OperationId, PreviewTicketClosureRequest, RepositoryErrorKind,
+    RepositoryOperation,
     closure::{
+        Integration,
         observe::{closed_ticket_bytes, prepare_observation},
         record::{self, ClosureKind, ClosureStep},
     },
@@ -698,6 +700,114 @@ fn reconcile_unrelated_tip_is_unrecognized() {
     );
 }
 
+impl Fixture {
+    /// A withdraw record at `closing` on a context holding a closure `C`:
+    /// the withdraw commit `W` is built and recorded, and nothing is moved.
+    /// Returns the record, `C` and `W`.
+    fn withdrawing(&self) -> (ClosureRecord, Oid, Oid) {
+        let open = commit_entry(&self.repo, self.context_oid(), &ticket()).0;
+        let closed_bytes = closed_ticket_bytes(&open, at(1_700_000_000), CLOSER).unwrap();
+        let closed = tree_commit(
+            &self.context,
+            self.context_oid(),
+            &ticket(),
+            &closed_bytes,
+            0o100644,
+        );
+        checkout(&self.context, closed);
+        let r = state::with_transaction(&self.service, self.root.path(), |tx, rid| {
+            let mut r = record::begin_branch_record(
+                tx,
+                rid,
+                OperationId::new(),
+                &id(),
+                ClosureExpectation::from_bytes([7; 32]),
+                Some("origin"),
+                ClosureKind::Existing,
+                (Integration::PullRequest, ClosureAction::Withdraw),
+                None,
+            )?;
+            r.context_oid = Some(closed);
+            r.step = ClosureStep::ContextSynchronized;
+            record::save_record(tx, rid, &r)?;
+            Ok(r)
+        })
+        .unwrap();
+        let withdraw = build_withdraw_commit(
+            &self.repo,
+            &id(),
+            &ticket_path(&id()),
+            closed,
+            at(1_700_000_001),
+            &closer(),
+        )
+        .unwrap()
+        .unwrap();
+        state::with_transaction(&self.service, self.root.path(), |tx, rid| {
+            record::begin_branch_closing(
+                tx,
+                rid,
+                r.operation_id,
+                self.base,
+                record::BranchWrite::Withdraw { commit: withdraw },
+            )
+        })
+        .unwrap();
+        (self.reload(&r), closed, withdraw)
+    }
+}
+
+/// A withdraw's `closing` is read by its own commit: the same rows as a
+/// closure's, with the descendant rule holding the record's closure state,
+/// which for a withdraw is an open ticket. Only the descendant rows differ
+/// from the closure's rows, which the `reconcile_*` tests above pin.
+#[test]
+fn reconcile_closing_reads_a_withdraw_by_its_commit() {
+    // Nothing written: the ref at the context, the ticket unchanged.
+    let f = Fixture::new(true);
+    let (r, _, _) = f.withdrawing();
+    assert_eq!(r.action, ClosureAction::Withdraw);
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::NothingWritten
+    );
+    // The checkout ran, the ref did not move.
+    let f = Fixture::new(true);
+    let (r, closed, withdraw) = f.withdrawing();
+    assert!(
+        move_context_to_checkpoint_with(&f.context, &id(), closed, withdraw, || {
+            Err(state::recovery_required())
+        })
+        .is_err()
+    );
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::CheckoutDone
+    );
+    // The ref at the withdraw.
+    let f = Fixture::new(true);
+    let (r, closed, withdraw) = f.withdrawing();
+    move_context_to_checkpoint(&f.context, &id(), closed, withdraw).unwrap();
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::CheckpointWritten { tip: withdraw }
+    );
+    // A descendant whose ticket is open: a deliberate synchronization.
+    let (_, merge) = f.synchronize_context(withdraw);
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::CheckpointWritten { tip: merge }
+    );
+    // A descendant whose ticket holds a closure again: not the withdraw's.
+    let closed_bytes = commit_entry(&f.repo, closed, &ticket()).0;
+    let reclosed = tree_commit(&f.context, withdraw, &ticket(), &closed_bytes, 0o100644);
+    checkout(&f.context, reclosed);
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::Unrecognized
+    );
+}
+
 // --- Authority and the post-checkpoint merge (C9) ---
 
 #[test]
@@ -771,7 +881,7 @@ fn hook_writes_closing_then_moves_the_context_and_marks_refresh() {
     let r = f.record(ClosureKind::Record);
     let context = f.context_oid();
     f.db()
-        .execute("UPDATE repositories SET refresh_required=0", [])
+        .execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     let (base, merged, tree) = checkpoint_of(f.hook(&r).unwrap());
     let stored = f.reload(&r);
@@ -789,13 +899,7 @@ fn hook_writes_closing_then_moves_the_context_and_marks_refresh() {
         (closed_at.offset(), closed_at.nanosecond()),
         (time::UtcOffset::UTC, 0)
     );
-    let refresh: bool = f
-        .db()
-        .query_row("SELECT refresh_required FROM repositories", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert!(refresh);
+    assert!(f.context_dirty());
     // Integration merges the checkpoint with the exact closure subject.
     let merge = f.integrate(f.hook_resumed(&stored));
     let commit = f.repo.find_commit(merge).unwrap();
@@ -1291,11 +1395,14 @@ impl Fixture {
         .unwrap();
         self.reload(&r)
     }
-    fn refresh_required(&self) -> bool {
+    /// The dirty mark of the ticket's own context.
+    fn context_dirty(&self) -> bool {
         self.db()
-            .query_row("SELECT refresh_required FROM repositories", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT dirty FROM contexts WHERE item_id = ?1",
+                [id().to_string()],
+                |r| r.get(0),
+            )
             .unwrap()
     }
     /// The hook over a given (possibly stale) observation and base.
@@ -1328,11 +1435,11 @@ fn adopted_synchronization_is_integrated_and_the_checkpoint_kept() {
     let (advanced, merge) = f.synchronize_context(checkpoint);
     assert_eq!(f.context_oid(), merge);
     f.db()
-        .execute("UPDATE repositories SET refresh_required=0", [])
+        .execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     let first = f.resume(&stored).unwrap().unwrap();
-    // The context ref has moved: refresh is required again (idempotent).
-    assert!(f.refresh_required());
+    // The context ref has moved: its context is marked again (idempotent).
+    assert!(f.context_dirty());
     let adopted = f.reload(&r);
     assert_eq!(adopted.closure_oid, Some(checkpoint));
     assert_eq!(adopted.adopted_context_oid, Some(merge));

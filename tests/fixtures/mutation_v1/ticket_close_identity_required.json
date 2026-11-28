@@ -1,0 +1,39 @@
+{
+  "code": "identity_required",
+  "command": "ticket close",
+  "data": {
+    "blockers": [
+      "identity_required"
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "A name and an email are required.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.identity_set",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

@@ -10,8 +10,10 @@
     "head_branch",
     "local_branches",
     "configuration",
+    "setup",
     "identity_state",
-    "remotes"
+    "remotes",
+    "operations"
   ],
   "properties": {
     "selected_path": {
@@ -35,6 +37,9 @@
     "configuration": {
       "$ref": "repository_configuration.schema.json"
     },
+    "setup": {
+      "$ref": "repository_setup.schema.json"
+    },
     "identity_state": {
       "type": "string",
       "enum": ["available", "required"]
@@ -43,6 +48,13 @@
       "type": "array",
       "items": {
         "$ref": "remote.schema.json"
+      }
+    },
+    "operations": {
+      "description": "The repository's unfinished operations, as the operation list gives them for it and in its order, each with who started it and whether that holder still works. The application's key-material operations are not repository operations and are not listed here.",
+      "type": "array",
+      "items": {
+        "$ref": "operation.schema.json"
       }
     }
   }

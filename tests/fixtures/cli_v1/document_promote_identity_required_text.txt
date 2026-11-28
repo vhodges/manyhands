@@ -1,0 +1,6 @@
+--- stderr
+error: A name and an email are required.
+code: identity_required
+Blockers: identity_required
+next: repo.identity_set root=<repository>
+--- exit 3

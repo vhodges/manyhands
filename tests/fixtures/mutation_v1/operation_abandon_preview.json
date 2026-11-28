@@ -7,6 +7,7 @@
     "details": {
       "action": "save_ticket",
       "committed": false,
+      "evidence": null,
       "files_changed": false,
       "git_state_changed": false,
       "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
@@ -16,6 +17,7 @@
       ],
       "paths_complete": true,
       "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+      "retirement": null,
       "root": "<root>",
       "state": "worktree_observed",
       "step": "worktree_observed",

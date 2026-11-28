@@ -363,7 +363,9 @@ impl Pair {
         let request = self.request(side)?;
         match fixed(self.execute(&side.service, request))? {
             TicketClosureResult::Complete(outcome) => Ok(outcome),
-            TicketClosureResult::IndexPending(_) => Err(FixtureError),
+            TicketClosureResult::IndexPending(_)
+            | TicketClosureResult::Branch(_)
+            | TicketClosureResult::BranchIndexPending(_) => Err(FixtureError),
         }
     }
     fn diagnostics(&self, rendered: &str) -> Result<(), FixtureError> {
@@ -381,7 +383,9 @@ impl Pair {
         ssh_privacy::save(&self.probes)?;
         let exempt = self.exempt();
         let refs = exempt_refs(&exempt);
-        let policy = row_policy(&refs);
+        let authors = self.authors();
+        let author_refs = author_refs(&authors);
+        let policy = row_policy(&refs, &author_refs);
         let cache_probes = cache_probes(&self.probes);
         let store_probes: Vec<_> = cache_probes
             .iter()
@@ -400,7 +404,7 @@ impl Pair {
             privacy_rows::scan_workflow_rows(&db, &self.probes, &policy)?;
             privacy_rows::scan_workflow_rows(&db, &paths, &policy)?;
             privacy_rows::scan_rows(&db, &cache_probes, true, &policy)?;
-            scan_identity_parts(&db, &exempt)?;
+            scan_identity_parts(&db, &exempt, &author_refs)?;
             let backup = side.data.join("v");
             if backup.exists() {
                 fixed(std::fs::remove_file(&backup))?;
@@ -410,11 +414,19 @@ impl Pair {
             privacy_rows::scan_workflow_rows(&backup_db, &self.probes, &policy)?;
             privacy_rows::scan_workflow_rows(&backup_db, &paths, &policy)?;
             privacy_rows::scan_rows(&backup_db, &cache_probes, true, &policy)?;
-            scan_identity_parts(&backup_db, &exempt)?;
+            scan_identity_parts(&backup_db, &exempt, &author_refs)?;
             ssh_privacy::scan(&side.data, &store_probes)?;
             scan_store_identity_parts(&side.data, &exempt)?;
         }
         Ok(())
+    }
+    /// Each clone's configured commit identity, which its operations
+    /// record as their author; see `privacy_rows::RowPolicy::authors`.
+    fn authors(&self) -> Vec<Vec<u8>> {
+        vec![
+            self.a.closed_by().into_bytes(),
+            self.b.closed_by().into_bytes(),
+        ]
     }
     /// `(column, value)`: the ticket title and both clones' `closed_by`.
     fn exempt(&self) -> Vec<(&'static str, Vec<u8>)> {
@@ -427,7 +439,10 @@ impl Pair {
 }
 
 /// The tables closure adds to the workflow set, and its exemptions.
-fn row_policy<'a>(exempt: &'a [(&'a str, &'a [u8])]) -> privacy_rows::RowPolicy<'a> {
+fn row_policy<'a>(
+    exempt: &'a [(&'a str, &'a [u8])],
+    authors: &'a [&'a [u8]],
+) -> privacy_rows::RowPolicy<'a> {
     privacy_rows::RowPolicy {
         workflow: &[
             "ticket_closures",
@@ -438,7 +453,11 @@ fn row_policy<'a>(exempt: &'a [(&'a str, &'a [u8])]) -> privacy_rows::RowPolicy<
         ],
         required: "ticket_closures",
         exempt,
+        authors,
     }
+}
+fn author_refs(authors: &[Vec<u8>]) -> Vec<&[u8]> {
+    authors.iter().map(Vec::as_slice).collect()
 }
 fn exempt_refs<'a>(exempt: &'a [(&'static str, Vec<u8>)]) -> Vec<(&'static str, &'a [u8])> {
     exempt
@@ -555,6 +574,9 @@ fn authoritative(result: TicketClosureResult) -> TicketClosureOutcome {
     match result {
         TicketClosureResult::Complete(o) => o,
         TicketClosureResult::IndexPending(p) => p.authoritative,
+        TicketClosureResult::Branch(_) | TicketClosureResult::BranchIndexPending(_) => {
+            unreachable!("a direct close answered as a branch record")
+        }
     }
 }
 /// Fixed categories only: never a result's `Debug`, paths or private data.
@@ -929,11 +951,13 @@ fn identity_parts() -> Vec<Vec<u8>> {
         .collect()
 }
 /// Every cell of every table against the bare name and email. Inside an
-/// exempt cell (exactly its own `discovered_items` column and value) only
-/// the parts that are substrings of that value are skipped.
+/// exempt cell (exactly its own `discovered_items` column and value, or an
+/// operation journal's `author` holding exactly one of `authors`) only the
+/// parts that are substrings of that value are skipped.
 fn scan_identity_parts(
     db: &rusqlite::Connection,
     exempt: &[(&'static str, Vec<u8>)],
+    authors: &[&[u8]],
 ) -> Result<(), FixtureError> {
     let parts = identity_parts();
     let mut names = fixed(db.prepare(
@@ -963,7 +987,8 @@ fn scan_identity_parts(
                                 && name == column
                                 && bytes == value.as_slice()
                         })
-                        .map(|(_, value)| value.as_slice());
+                        .map(|(_, value)| value.as_slice())
+                        .or_else(|| privacy_rows::accepted_author(authors, &table, column, bytes));
                     for part in &parts {
                         if value
                             .is_some_and(|v| v.windows(part.len()).any(|w| w == part.as_slice()))

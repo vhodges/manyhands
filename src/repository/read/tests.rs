@@ -417,6 +417,7 @@ fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
         Some("main".to_owned()),
         Some("origin".to_owned()),
         None,
+        admin::StoredMode::default(),
     ));
     // Valid without a primary branch is not a configuration.
     unknown(admin::stored_configuration(
@@ -424,17 +425,444 @@ fn a_stored_configuration_this_build_cannot_read_is_invalid_not_valid() {
         None,
         Some("origin".to_owned()),
         None,
+        admin::StoredMode::default(),
     ));
     unknown(admin::stored_configuration(
         Some("invalid"),
         None,
         None,
         Some("some-later-code"),
+        admin::StoredMode::default(),
     ));
     unknown(admin::stored_configuration(
         Some("invalid"),
         None,
         None,
         None,
+        admin::StoredMode::default(),
     ));
+}
+
+// A valid row's mode and forge read as stored; one stored before the
+// columns existed holds a null mode and reads as direct, with no forge.
+#[test]
+fn a_valid_stored_configuration_reads_its_mode_and_forge() {
+    let text = |value: &str| Some(value.to_owned());
+    let template = "https://git.example.com/compare?source={source}";
+    let cases = [
+        (admin::StoredMode::default(), ("direct", None)),
+        (
+            admin::StoredMode {
+                forge_kind: text("github"),
+                ..admin::StoredMode::default()
+            },
+            ("direct", None),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("direct"),
+                ..admin::StoredMode::default()
+            },
+            ("direct", None),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("pull_request"),
+                forge_kind: text("bitbucket-cloud"),
+                ..admin::StoredMode::default()
+            },
+            ("pull_request", Some((text("bitbucket-cloud"), None, None))),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("direct"),
+                forge_pull_request_url: text(template),
+                ..admin::StoredMode::default()
+            },
+            ("direct", Some((None, None, text(template)))),
+        ),
+        (
+            admin::StoredMode {
+                integration: text("pull_request"),
+                forge_kind: text("bitbucket-data-center"),
+                forge_web_url: text("https://git.example.com"),
+                forge_pull_request_url: text(template),
+            },
+            (
+                "pull_request",
+                Some((
+                    text("bitbucket-data-center"),
+                    text("https://git.example.com"),
+                    text(template),
+                )),
+            ),
+        ),
+    ];
+
+    for (index, (stored, (integration, forge))) in cases.into_iter().enumerate() {
+        assert_eq!(
+            stored.read(),
+            (integration.to_owned(), forge),
+            "case {index}"
+        );
+    }
+}
+
+// A mode or forge kind this build does not know, written by a later one,
+// reads as null, so the object satisfies the schema's enumerations; the
+// forge's other parts are kept in their own places.
+#[test]
+fn a_stored_mode_or_forge_kind_this_build_does_not_know_reads_as_null() {
+    let text = |value: &str| Some(value.to_owned());
+    let read = |stored| {
+        let configuration =
+            admin::stored_configuration(Some("valid"), text("main"), text("origin"), None, stored);
+        (configuration.integration, configuration.forge)
+    };
+
+    let (integration, forge) = read(admin::StoredMode {
+        integration: text("squash_request"),
+        forge_kind: text("sourcehut"),
+        forge_web_url: text("https://git.example.com"),
+        forge_pull_request_url: text("https://git.example.com/pr?source={source}"),
+    });
+    assert_eq!(integration, None);
+    assert_eq!(
+        forge,
+        Some(ForgeDto {
+            kind: None,
+            web_url: text("https://git.example.com"),
+            pull_request_url: text("https://git.example.com/pr?source={source}"),
+        })
+    );
+
+    let (integration, forge) = read(admin::StoredMode {
+        integration: text("pull_request"),
+        forge_kind: text("gitlab"),
+        forge_web_url: text("https://git.example.com"),
+        forge_pull_request_url: None,
+    });
+    assert_eq!(integration, text("pull_request"));
+    assert_eq!(
+        forge,
+        Some(ForgeDto {
+            kind: text("gitlab"),
+            web_url: text("https://git.example.com"),
+            pull_request_url: None,
+        })
+    );
+}
+
+use crate::{
+    canonical::ItemId,
+    repository::{
+        CommitIdentity, EnableRepositoryRequest, OperationId, REGISTRY_FILE,
+        mutation::RequestId,
+        open_registry,
+        setup::record::{self, SetupKind, SetupRecord, SetupState},
+    },
+};
+use git2::Oid;
+
+const SETUP: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const REQUEST: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+const FETCH: &str = "git@github.com:acme/widgets.git";
+const CONFIGURATION: &str = "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"origin\"\nintegration = \"pull_request\"\n\n[forge]\nkind = \"github\"\n";
+
+fn oid_of(digit: char) -> Oid {
+    Oid::from_str(&digit.to_string().repeat(40)).unwrap()
+}
+
+struct SetupFixture {
+    service: RepositoryService,
+    data: tempfile::TempDir,
+    root: std::path::PathBuf,
+    _directory: tempfile::TempDir,
+}
+
+impl SetupFixture {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let git = git2::Repository::init_opts(&root, &options).unwrap();
+        git.remote("origin", FETCH).unwrap();
+        drop(git);
+        service
+            .enable(EnableRepositoryRequest {
+                root: root.clone(),
+                primary_branch: "main".into(),
+                identity: Some(CommitIdentity {
+                    name: "Setup Test".into(),
+                    email: "setup@example.invalid".into(),
+                }),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        Self {
+            service,
+            data,
+            root,
+            _directory: directory,
+        }
+    }
+
+    fn db(&self) -> Connection {
+        open_registry(&self.data.path().join(REGISTRY_FILE), &mut |_| {}).unwrap()
+    }
+
+    fn registration(&self) -> i64 {
+        self.db()
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn set(&self, kind: SetupKind, published: bool) {
+        let oid = |digit: char| Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+        let id = self.registration();
+        let mut db = self.db();
+        let tx = db.transaction().unwrap();
+        record::delete(&tx, id).unwrap();
+        record::insert(
+            &tx,
+            id,
+            &SetupRecord {
+                setup_id: SETUP.parse::<ItemId>().unwrap(),
+                kind,
+                remote_name: "origin".into(),
+                primary_branch: "main".into(),
+                endpoint_digest: [7; 32],
+                configuration: CONFIGURATION.as_bytes().to_vec(),
+                base_configuration_oid: (kind == SetupKind::Change).then(|| oid('a')),
+                base_oid: published.then(|| oid('b')),
+                commit_oid: published.then(|| oid('c')),
+                published_oid: published.then(|| oid('c')),
+                request_id: RequestId::parse(REQUEST).unwrap(),
+                created_at: 1_700_000_000,
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// The local primary's configuration blob.
+    fn primary_blob(&self) -> Oid {
+        let git = git2::Repository::open(&self.root).unwrap();
+        let tree = git.revparse_single("refs/heads/main^{tree}").unwrap();
+        tree.as_tree()
+            .unwrap()
+            .get_path(std::path::Path::new(crate::canonical::CONFIG_PATH))
+            .unwrap()
+            .id()
+    }
+
+    /// Moves the local primary to a commit that holds no configuration,
+    /// as it is while a setup waits to merge.
+    fn unmerge(&self) {
+        let git = git2::Repository::open(&self.root).unwrap();
+        let empty = git.treebuilder(None).unwrap().write().unwrap();
+        let empty = git.find_tree(empty).unwrap();
+        let signature = git2::Signature::now("Setup Test", "setup@example.invalid").unwrap();
+        let commit = git
+            .commit(None, &signature, &signature, "unmerged", &empty, &[])
+            .unwrap();
+        git.reference("refs/heads/main", commit, true, "unmerge")
+            .unwrap();
+    }
+
+    /// A change record whose base is `base`.
+    fn set_change_base(&self, base: Oid) {
+        self.set(SetupKind::Change, false);
+        self.db()
+            .execute(
+                "UPDATE repository_setups SET base_configuration_oid = ?1",
+                [base.to_string()],
+            )
+            .unwrap();
+    }
+
+    /// The configuration blob the index holds for the registration, as the
+    /// primary's observation (an index refresh) leaves it.
+    fn index_shows(&self, blob: Option<Oid>) {
+        self.db()
+            .execute(
+                "UPDATE repositories SET config_blob_oid = ?1",
+                [blob.map(|oid| oid.to_string())],
+            )
+            .unwrap();
+    }
+
+    fn setups(&self) -> (Option<RepositorySetupDto>, Option<RepositorySetupDto>) {
+        let listed = self.service.list_repositories().unwrap();
+        assert_eq!(listed.items.len(), 1);
+        let inspected = self.service.inspect_repository(&self.root).unwrap();
+        (listed.items[0].setup.clone(), inspected.setup)
+    }
+}
+
+#[test]
+fn inspect_and_list_report_a_pending_setup() {
+    let f = SetupFixture::new();
+    f.unmerge();
+    // The index still shows what it showed before the setup: no
+    // configuration for a first-time setup.
+    f.index_shows(None);
+    assert_eq!(f.setups(), (None, None));
+    assert_eq!(
+        [SetupKind::Enable, SetupKind::Change].map(SetupKind::as_str),
+        ["enable", "change"]
+    );
+
+    let branch = format!("manyhands/setup/{SETUP}");
+    let expected = |kind: &str, state: &str, url: Option<String>| RepositorySetupDto {
+        id: SETUP.into(),
+        kind: kind.into(),
+        state: state.into(),
+        request_id: REQUEST.into(),
+        branch: branch.clone(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: branch.clone(),
+            target: "main".into(),
+            forge: Some("github".into()),
+            url,
+        },
+    };
+    let link = format!("https://github.com/acme/widgets/compare/main...{branch}?expand=1");
+
+    // `repo list` reads the index and the record only: the forge is
+    // named by the configuration, but its address needs the remote's
+    // URL, so the link has none. `repo inspect` has the full link.
+    f.set(SetupKind::Enable, false);
+    assert_eq!(
+        f.setups(),
+        (
+            Some(expected("enable", "recorded", None)),
+            Some(expected("enable", "recorded", Some(link.clone()))),
+        )
+    );
+    // A change begins from the blob the index shows.
+    f.index_shows(Some(oid_of('a')));
+    f.set(SetupKind::Change, true);
+    assert_eq!(
+        f.setups(),
+        (
+            Some(expected("change", "published", None)),
+            Some(expected("change", "published", Some(link))),
+        )
+    );
+    assert_eq!(
+        [SetupState::Recorded, SetupState::Published].map(SetupState::as_str),
+        ["recorded", "published"]
+    );
+}
+
+// A setup the local primary already holds is complete: `repo inspect`, which
+// reads the primary, reports none. `repo list` reads the index only: it reads
+// a setup as none once the registration's `config_blob_oid` shows it, which
+// the primary's observation (an index refresh) writes, and shows it until
+// then (design K-16).
+#[test]
+fn inspect_reads_a_complete_setup_as_none() {
+    let f = SetupFixture::new();
+    let blob = f.primary_blob();
+
+    // The fixture's primary holds a valid configuration naming `main`.
+    f.set(SetupKind::Enable, false);
+    f.index_shows(None);
+    let (listed, inspected) = f.setups();
+    assert_eq!(inspected, None);
+    assert!(listed.is_some(), "the list lags until the next refresh");
+    // The refresh shows the configuration: the first-time setup is complete.
+    f.index_shows(Some(blob));
+    let (listed, inspected) = f.setups();
+    assert_eq!((listed, inspected), (None, None));
+
+    // A change is complete once the primary's blob is not the base.
+    f.set(SetupKind::Change, false);
+    f.index_shows(Some(oid_of('a')));
+    let (listed, inspected) = f.setups();
+    assert_eq!(inspected, None);
+    assert!(listed.is_some(), "the index still shows the base blob");
+    f.index_shows(Some(blob));
+    assert_eq!(f.setups(), (None, None));
+    // An index with no blob shows no configuration at all.
+    f.index_shows(None);
+    assert!(f.setups().0.is_some());
+
+    // A change whose base is still the primary's blob is pending, and so is
+    // any setup of a primary that holds no configuration.
+    f.set_change_base(blob);
+    f.index_shows(Some(blob));
+    let (listed, inspected) = f.setups();
+    assert!(listed.is_some() && inspected.is_some());
+    f.unmerge();
+    f.set(SetupKind::Enable, false);
+    assert!(f.setups().1.is_some());
+}
+
+// A setup the registry holds but this build cannot read does not refuse the
+// reads: `repo inspect` answers for the repository whatever is wrong, and
+// `repo list` never fails for one repository's content.
+#[test]
+fn an_unreadable_setup_degrades_the_reads() {
+    for (column, value) in [
+        // Configuration bytes that are not a configuration.
+        ("configuration", rusqlite::types::Value::Blob(vec![0xff])),
+        // An ID that is not a ULID (`U` is not in the alphabet).
+        ("setup_id", rusqlite::types::Value::Text("U".repeat(26))),
+    ] {
+        let f = SetupFixture::new();
+        f.set(SetupKind::Enable, false);
+        f.db()
+            .execute(
+                &format!("UPDATE repository_setups SET {column} = ?1"),
+                [value],
+            )
+            .unwrap();
+        // A second repository, which lists as usual.
+        let other = tempfile::tempdir().unwrap();
+        let other_root = other.path().canonicalize().unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        drop(git2::Repository::init_opts(&other_root, &options).unwrap());
+        f.service
+            .enable(EnableRepositoryRequest {
+                root: other_root.clone(),
+                primary_branch: "main".into(),
+                identity: Some(CommitIdentity {
+                    name: "Setup Test".into(),
+                    email: "setup@example.invalid".into(),
+                }),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+
+        let unreadable = |problems: &[ProblemDto]| {
+            problems
+                .iter()
+                .filter(|problem| problem.code == ProblemCode::SetupUnreadable)
+                .count()
+        };
+        let inspected = f.service.inspect_repository(&f.root).unwrap();
+        assert_eq!(inspected.setup, None, "{column}");
+        assert_eq!(unreadable(&inspected.configuration.problems), 1, "{column}");
+
+        let listed = f.service.list_repositories().unwrap();
+        assert_eq!(listed.items.len(), 2, "{column}");
+        for item in &listed.items {
+            assert_eq!(item.setup, None, "{column}");
+            let broken = Path::new(&item.root) == f.root;
+            assert_eq!(
+                unreadable(&item.configuration.problems),
+                usize::from(broken),
+                "{column}: {}",
+                item.root
+            );
+        }
+    }
 }

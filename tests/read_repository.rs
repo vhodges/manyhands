@@ -10,7 +10,7 @@ use git2::{Config, ConfigLevel, Repository, RepositoryInitOptions, Signature, Ti
 use manyhands::{
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        InitialsSource, ReadError, RepositoryService,
+        InitialsSource, ProblemDto, ReadError, RepositoryErrorKind, RepositoryService,
     },
     results::{ProblemCode, ResultCode},
 };
@@ -397,6 +397,241 @@ fn inspect_repository_reports_an_unregistered_repository_without_enabling_it() {
     assert!(inspection.remotes.is_empty());
     assert!(service.list_repositories().unwrap().items.is_empty());
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
+    assert_git_transport_uninitialized();
+}
+
+/// `repo inspect` names the unfinished operations of the root it inspects,
+/// each as `operation list` does, so a person told to inspect a repository
+/// sees who holds it and whether that holder still works.
+///
+/// The probe knows one pid and the clock is fixed: the poll that holds the
+/// reservation for that pid is live, the local save of a pid the probe does
+/// not know is not. A completed row is no part of the list, and a repository
+/// that has no unfinished operation lists none.
+#[test]
+fn repo_inspect_lists_unfinished_operations_with_attribution() {
+    use support::{items, operations};
+    const LIVE_PID: i64 = 4242;
+    const DEAD_PID: i64 = 4243;
+    const REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
+
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let service = enabled
+        .service
+        .with_clock_for_testing(support::mutation::TestClock::at(operations::STORED_AT + 1))
+        .with_process_probe_for_testing(std::sync::Arc::new(operations::ProcessTable(vec![
+            u32::try_from(LIVE_PID).unwrap(),
+        ])));
+    let data = enabled.data_directory.path();
+
+    // Nothing is unfinished yet.
+    assert!(
+        service
+            .inspect_repository(&fixture.root)
+            .unwrap()
+            .operations
+            .is_empty()
+    );
+
+    let host = manyhands::repository::this_host();
+    operations::configure_remote(data);
+    operations::insert_local(
+        data,
+        Some(operations::OPERATION_C),
+        "save_document",
+        "authoring_destination_observed",
+        Some("authoring_destination_observed"),
+    );
+    items::index(data)
+        .execute(
+            "UPDATE operation_records SET item_id = ?1, context_path = root_path
+              WHERE operation_ulid = ?2",
+            [items::DOCUMENT_A, operations::OPERATION_C],
+        )
+        .unwrap();
+    operations::attribute_local(
+        data,
+        operations::OPERATION_C,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("document save"),
+            author: Some("Ada Lovelace <ada@example.invalid>"),
+            host: Some(&host),
+            pid: Some(DEAD_PID),
+            started_at: Some(operations::STORED_AT - 50),
+        },
+        None,
+    );
+    operations::insert_remote_poll(data, operations::OPERATION_B, "reserved", None, None);
+    operations::attribute_remote(
+        data,
+        operations::OPERATION_B,
+        &operations::Attribution {
+            request: Some(REQUEST_ID),
+            command: Some("poll once"),
+            author: None,
+            host: Some(&host),
+            pid: Some(LIVE_PID),
+            started_at: Some(operations::STORED_AT - 30),
+        },
+    );
+    // Finished work is not listed, and neither is a poll that ended.
+    operations::insert_local(
+        data,
+        Some(operations::OPERATION_A),
+        "refresh",
+        "completed",
+        None,
+    );
+
+    let inspection = service.inspect_repository(&fixture.root).unwrap();
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let listed = service.list_operations(&repo).unwrap().items;
+
+    assert_eq!(inspection.operations, listed);
+    let attribution: Vec<_> = inspection
+        .operations
+        .iter()
+        .map(|operation| {
+            let a = &operation.attribution;
+            (
+                operation.operation_id.clone().unwrap(),
+                a.request_id.clone(),
+                a.command.clone(),
+                a.author.clone(),
+                a.host.clone(),
+                a.pid,
+                a.started_at.clone(),
+                a.live,
+            )
+        })
+        .collect();
+    assert_eq!(
+        attribution,
+        [
+            (
+                operations::OPERATION_B.to_owned(),
+                Some(REQUEST_ID.to_owned()),
+                Some("poll once".to_owned()),
+                None,
+                Some(host.clone()),
+                Some(LIVE_PID),
+                Some("2023-11-14T22:12:50Z".to_owned()),
+                Some(true),
+            ),
+            (
+                operations::OPERATION_C.to_owned(),
+                Some(REQUEST_ID.to_owned()),
+                Some("document save".to_owned()),
+                Some("Ada Lovelace <ada@example.invalid>".to_owned()),
+                Some(host),
+                Some(DEAD_PID),
+                Some("2023-11-14T22:12:30Z".to_owned()),
+                Some(false),
+            ),
+        ]
+    );
+    let json = serde_json::to_value(&inspection).unwrap();
+    assert_eq!(json["operations"].as_array().unwrap().len(), 2);
+    assert_git_transport_uninitialized();
+}
+
+/// `repo inspect` is where every `recovery_required` points, so it answers
+/// when the operations cannot be read: an empty list and a problem that says
+/// so, which a person does not mistake for nothing being unfinished.
+/// `operation list` refuses the same registry.
+///
+/// Named edit E-84 (vh-f3wts, the final review fixes): a read audits the
+/// records it uses, and registry open audits the schema and its markers
+/// (design decision 9), so the registry that fails the audit is now an
+/// unfinished local synchronization whose record is gone, which the read's
+/// own audit refuses. A migration marker deleted under a service that has
+/// opened the registry is not audited again by that service's reads, which
+/// read the operations as they are; it is refused when a registry open
+/// audits it, as every new process does before it reads anything.
+#[test]
+fn repo_inspect_answers_with_a_problem_when_the_operations_cannot_be_read() {
+    use support::{items, operations};
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let service = &enabled.service;
+    let data = enabled.data_directory.path();
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let healthy = service.inspect_repository(&fixture.root).unwrap();
+    assert!(healthy.configuration.problems.is_empty());
+
+    type Damage<'a> = (&'a str, &'a dyn Fn(&rusqlite::Connection), ResultCode);
+    let damaged: [Damage; 2] = [
+        (
+            "a row that cannot be valid",
+            &|index| {
+                operations::insert_local_into(
+                    index,
+                    Some(operations::OPERATION_A),
+                    "other",
+                    "created",
+                    None,
+                )
+            },
+            ResultCode::InternalError,
+        ),
+        (
+            "a registry that fails the audit",
+            &|index| {
+                operations::insert_local_into(
+                    index,
+                    Some(operations::OPERATION_A),
+                    "context_sync_local",
+                    "created",
+                    None,
+                )
+            },
+            ResultCode::RecoveryRequired,
+        ),
+    ];
+    for (case, damage, refused) in damaged {
+        let index = items::index(data);
+        damage(&index);
+        drop(index);
+
+        assert_eq!(
+            service.list_operations(&repo).map(drop).unwrap_err().code(),
+            refused,
+            "{case}"
+        );
+        let inspection = service.inspect_repository(&fixture.root).unwrap();
+        assert!(inspection.operations.is_empty(), "{case}");
+        assert_eq!(
+            inspection.configuration.problems,
+            [ProblemDto {
+                code: ProblemCode::OperationsUnreadable,
+                path: None,
+                target_id: None,
+            }],
+            "{case}"
+        );
+        // Everything else the inspection says is unchanged.
+        assert_eq!(inspection.registered, healthy.registered, "{case}");
+        assert_eq!(inspection.local_branches, healthy.local_branches, "{case}");
+        assert_eq!(inspection.remotes, healthy.remotes, "{case}");
+
+        // Restore for the next case.
+        let index = items::index(data);
+        index.execute("DELETE FROM operation_records", []).unwrap();
+    }
+    // A migration marker gone: the registry open of a new process refuses it.
+    items::index(data)
+        .execute(
+            "DELETE FROM registry_migrations
+              WHERE name = 'local_context_sync_child_cascade_v2'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        RepositoryService::open_at(data).map(drop).unwrap_err().kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
     assert_git_transport_uninitialized();
 }
 
@@ -1160,6 +1395,80 @@ fn a_configuration_larger_than_the_bound_is_invalid_for_the_reads() {
     assert_eq!(over.problems.len(), 1);
     assert_eq!(over.problems[0].code, ProblemCode::MalformedConfiguration);
     assert!(!remotes.items[0].selected_for_publication);
+}
+
+/// What `integration` and `forge` hold in a configuration object, as JSON.
+fn mode_and_forge(configuration: &manyhands::repository::ConfigurationDto) -> Value {
+    let value = serde_json::to_value(configuration).unwrap();
+    json!({"integration": value["integration"], "forge": value["forge"]})
+}
+
+#[test]
+fn inspect_and_list_report_mode_and_forge() {
+    let forge_cases = [
+        (
+            "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"publish\"\nintegration = \"pull_request\"\n[forge]\nkind = \"bitbucket-cloud\"\n",
+            json!({
+                "integration": "pull_request",
+                "forge": {"kind": "bitbucket-cloud", "web_url": null, "pull_request_url": null},
+            }),
+        ),
+        // Three distinct values: a transposed column shows.
+        (
+            "format_version = 2\nprimary_branch = \"main\"\npublication_remote = \"publish\"\n[forge]\nkind = \"bitbucket-data-center\"\nweb_url = \"https://git.example.com/bitbucket\"\npull_request_url = \"https://git.example.com/compare?source={source}\"\n",
+            json!({
+                "integration": "direct",
+                "forge": {
+                    "kind": "bitbucket-data-center",
+                    "web_url": "https://git.example.com/bitbucket",
+                    "pull_request_url": "https://git.example.com/compare?source={source}",
+                },
+            }),
+        ),
+        (
+            SELECTING_CONFIGURATION,
+            json!({"integration": "direct", "forge": null}),
+        ),
+    ];
+    for (text, expected) in forge_cases {
+        let (inspected, _, listed) = configuration_reads(|config| fs::write(config, text).unwrap());
+        assert_eq!(inspected.state, ConfigurationState::Valid, "{text}");
+        assert_eq!(mode_and_forge(&inspected), expected, "inspect: {text}");
+        assert_eq!(mode_and_forge(&listed), expected, "list: {text}");
+    }
+
+    // A configuration that is not valid reports neither.
+    let (inspected, _, listed) =
+        configuration_reads(|config| fs::write(config, "not = [valid").unwrap());
+    let none = json!({"integration": null, "forge": null});
+    assert_eq!(mode_and_forge(&inspected), none);
+    assert_eq!(mode_and_forge(&listed), none);
+
+    // A valid row stored before the columns existed reads as direct.
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let index = rusqlite::Connection::open(enabled.data_directory.path().join("manyhands.sqlite3"))
+        .unwrap();
+    index
+        .execute_batch(
+            "DELETE FROM configuration_observations;
+             INSERT INTO configuration_observations
+                 (repository_id, state, primary_branch, publication_remote)
+             SELECT id, 'valid', 'trunk', 'publish' FROM repositories",
+        )
+        .unwrap();
+    let listed = enabled
+        .service
+        .list_repositories()
+        .unwrap()
+        .items
+        .remove(0)
+        .configuration;
+    assert_eq!(
+        mode_and_forge(&listed),
+        json!({"integration": "direct", "forge": null})
+    );
+    assert_git_transport_uninitialized();
 }
 
 #[test]

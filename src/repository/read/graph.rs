@@ -11,6 +11,9 @@
 //! graph from the effective copy of every ticket the index holds, and
 //! answers from that one snapshot. Nothing is stored: what a dependency
 //! resolves to and whether a ticket is ready are decided on every read.
+//! The relationship check a save makes also reads from disk, before its
+//! session, each context whose basis moved since the index stored it, and
+//! that context's tickets stand in for its stored ones (`MovedContexts`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -21,14 +24,20 @@ use super::{
     ReadinessState, ResolvedRepository, TicketFilter, UnplannableReasonCode, UnplannableReasonDto,
     UnplannableTicketDto,
     items::{
-        Related, StoredItem, behind, effective_rows, is_completely_observed, item_not_found,
-        stored_comment_targets, stored_comments_among, stored_index_state, stored_item_dto,
-        stored_items, stored_problems, ticket_list_order,
+        ObservedRows, PrimaryClosures, Related, StoredItem, behind, effective_rows,
+        is_completely_observed, item_not_found, presented_comments, stored_comment_targets,
+        stored_comments_among, stored_index_state, stored_item_dto, stored_items, stored_problems,
+        substitute_observed, ticket_list_order,
     },
 };
 use crate::{
     canonical::ItemId,
-    repository::{RepositoryOperation, RepositoryService},
+    repository::{
+        RepositoryOperation, RepositoryService, StoredContexts,
+        activity::PrimaryActivityMap,
+        discovery::{self, ContextKey, ContextObservation},
+        load_activity_map,
+    },
 };
 
 /// How many of a cycle's IDs a reason names. Every ticket on a cycle
@@ -44,8 +53,14 @@ pub(super) const CYCLE_IDS_IN_A_REASON: usize = 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TicketNode {
     pub(super) id: String,
-    /// Whether the ticket carries lifecycle closure metadata.
+    /// Whether the ticket is closed: the primary's copy of it carries
+    /// lifecycle closure metadata.
     pub(super) closed: bool,
+    /// Whether the ticket is closing: only a copy other than the primary's
+    /// carries it. Never with `closed`. Every readiness decision reads
+    /// `closed` alone, so a closing ticket counts as open for its
+    /// dependents; the readiness queries and the plan leave it out.
+    pub(super) closing: bool,
     pub(super) parent: Option<String>,
     /// In the ticket's own order.
     pub(super) deps: Vec<String>,
@@ -87,7 +102,9 @@ pub(super) struct Tree<'a> {
 /// The open tickets, in the order they can be worked.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Plan<'a> {
-    /// Batch `n` is at position `n - 1`; none is empty. IDs ascend.
+    /// Batch `n` is at position `n - 1`. IDs ascend. A closing ticket is
+    /// computed as an open one and then left out, which can leave a batch
+    /// empty, and the batch keeps its number.
     pub(super) batches: Vec<Vec<&'a str>>,
     /// In ID order, each with at least one reason.
     pub(super) unplannable: Vec<(&'a str, Vec<UnplannableReasonDto>)>,
@@ -109,6 +126,7 @@ pub(super) struct Plan<'a> {
 pub(super) struct TicketGraph {
     ids: Vec<String>,
     closed: Vec<bool>,
+    closing: Vec<bool>,
     /// In each ticket's own order, each target once.
     deps: Vec<Vec<Edge>>,
     /// The tickets that depend on each ticket, ascending.
@@ -140,12 +158,14 @@ impl TicketGraph {
         let position = |id: &str| ids.binary_search_by(|other| other.as_str().cmp(id)).ok();
         let count = ids.len();
         let mut closed = Vec::with_capacity(count);
+        let mut closing = Vec::with_capacity(count);
         let mut deps = Vec::with_capacity(count);
         let mut parents = Vec::with_capacity(count);
         let mut dependents = vec![Vec::new(); count];
         let mut children = vec![Vec::new(); count];
         for (ticket, node) in nodes.into_values().enumerate() {
             closed.push(node.closed);
+            closing.push(node.closing);
             let mut seen = BTreeSet::new();
             let mut edges = Vec::with_capacity(node.deps.len());
             for target in node.deps {
@@ -190,6 +210,7 @@ impl TicketGraph {
         Self {
             ids,
             closed,
+            closing,
             deps,
             dependents,
             children,
@@ -224,9 +245,9 @@ impl TicketGraph {
     }
 
     /// Why the open ticket at `ticket` cannot be started, one reason for
-    /// each cause: each dependency that is an open ticket and each that is
-    /// unresolved, in the ticket's own order, and then the cycle of open
-    /// tickets it is on. Empty when it is ready.
+    /// each cause: each dependency that is an open ticket, a closing one
+    /// (`closing_dependency`) or unresolved, in the ticket's own order, and
+    /// then the cycle of open tickets it is on. Empty when it is ready.
     fn blockers(&self, ticket: usize) -> Vec<ReadinessReasonDto> {
         let reason = |code, ids| ReadinessReasonDto {
             code,
@@ -237,6 +258,10 @@ impl TicketGraph {
             .iter()
             .filter_map(|edge| match edge {
                 Edge::Ticket(dependency) if self.closed[*dependency] => None,
+                Edge::Ticket(dependency) if self.closing[*dependency] => Some(reason(
+                    ReadinessReasonCode::ClosingDependency,
+                    vec![self.ids[*dependency].clone()],
+                )),
                 Edge::Ticket(dependency) => Some(reason(
                     ReadinessReasonCode::OpenDependency,
                     vec![self.ids[*dependency].clone()],
@@ -269,7 +294,8 @@ impl TicketGraph {
 
     /// `closed` for a closed ticket, whatever it depends on. An open ticket
     /// is `ready` when every dependency is a closed ticket, and `blocked`
-    /// otherwise. `None` for an ID that is no ticket's.
+    /// otherwise; a closing one is decided as an open one is. `None` for an
+    /// ID that is no ticket's.
     pub(super) fn readiness_state(&self, id: &str) -> Option<ReadinessState> {
         let ticket = self.position(id)?;
         Some(if self.closed[ticket] {
@@ -279,6 +305,22 @@ impl TicketGraph {
         } else {
             ReadinessState::Blocked
         })
+    }
+
+    /// The direct dependents of `id` that are open with every dependency
+    /// closed, in ID order, and whether the graph reads `id` as closed. While
+    /// `id` reads open, no dependent is ready. `None` for an ID that is no
+    /// ticket's.
+    pub(super) fn made_ready(&self, id: &str) -> Option<(Vec<&str>, bool)> {
+        let ticket = self.position(id)?;
+        let mut found: Vec<&str> = self.dependents[ticket]
+            .iter()
+            .filter(|dependent| self.is_ready(**dependent))
+            .map(|dependent| self.ids[*dependent].as_str())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        Some((found, self.closed[ticket]))
     }
 
     /// The ticket's readiness with its reasons, which only a blocked
@@ -294,6 +336,28 @@ impl TicketGraph {
             state: self.readiness_state(id)?,
             reasons,
         })
+    }
+
+    /// Whether the ticket is closing. `false` for an ID that is no
+    /// ticket's.
+    pub(super) fn is_closing(&self, id: &str) -> bool {
+        self.position(id).is_some_and(|ticket| self.closing[ticket])
+    }
+
+    /// What a dependency on the ticket reads as: closed, closing or open.
+    /// `None` for an ID that is no ticket's.
+    pub(super) fn dependency_state(&self, id: &str) -> Option<DependencyState> {
+        self.position(id).map(|ticket| self.state_of(ticket))
+    }
+
+    fn state_of(&self, ticket: usize) -> DependencyState {
+        if self.closed[ticket] {
+            DependencyState::Closed
+        } else if self.closing[ticket] {
+            DependencyState::Closing
+        } else {
+            DependencyState::Open
+        }
     }
 
     /// The lowest ID of the dependency cycle the ticket is on, closed
@@ -465,11 +529,7 @@ impl TicketGraph {
                     let expand = distance[ticket] == depth && !expanded[ticket];
                     let mut entry = TreeEntry {
                         id: &self.ids[ticket],
-                        state: if self.closed[ticket] {
-                            DependencyState::Closed
-                        } else {
-                            DependencyState::Open
-                        },
+                        state: self.state_of(ticket),
                         depth,
                         repeated: !expand,
                         truncated: false,
@@ -519,16 +579,27 @@ impl TicketGraph {
     }
 
     /// The batch of each plannable ticket, from 1, and 0 for every other
-    /// ticket: closed, or unplannable. A ticket's batch is one more than
-    /// the latest batch among its open dependencies, which is also the
-    /// number of tickets in the longest chain of open tickets that ends
-    /// with it.
+    /// ticket: closed, or unplannable. A ticket's batch is its own length
+    /// more than the latest batch among its open dependencies, which is
+    /// also the length of the longest chain of open tickets that ends with
+    /// it. A ticket's length is 1, and a closing ticket's is
+    /// `closing_length`: 1 for a plan, which computes with closing tickets
+    /// as open ones, and 0 for the critical path, which gives them none, so
+    /// that a closing ticket can have the batch 0 there and is still
+    /// plannable.
     ///
     /// This is Kahn's algorithm over the plannable tickets. They hold no
     /// cycle, because every ticket on one is unplannable, so each of them
     /// is given a batch.
-    fn batches(&self, unplannable: &[bool]) -> Vec<u32> {
+    fn batches(&self, unplannable: &[bool], closing_length: u32) -> Vec<u32> {
         let plannable = |ticket: usize| !self.closed[ticket] && !unplannable[ticket];
+        let length = |ticket: usize| {
+            if self.closing[ticket] {
+                closing_length
+            } else {
+                1
+            }
+        };
         let mut batch = vec![0_u32; self.ids.len()];
         let mut waiting = vec![0_usize; self.ids.len()];
         let mut queue = VecDeque::new();
@@ -541,7 +612,7 @@ impl TicketGraph {
                 )
                 .count();
             if waiting[ticket] == 0 {
-                batch[ticket] = 1;
+                batch[ticket] = length(ticket);
                 queue.push_back(ticket);
             }
         }
@@ -550,7 +621,8 @@ impl TicketGraph {
                 if !plannable(dependent) {
                     continue;
                 }
-                batch[dependent] = batch[dependent].max(batch[ticket].saturating_add(1));
+                batch[dependent] =
+                    batch[dependent].max(batch[ticket].saturating_add(length(dependent)));
                 waiting[dependent] -= 1;
                 if waiting[dependent] == 0 {
                     queue.push_back(dependent);
@@ -606,14 +678,21 @@ impl TicketGraph {
     }
 
     /// Every open ticket, once: in the batch that follows the batches of
-    /// all its open dependencies, or among the unplannable.
+    /// all its open dependencies, or among the unplannable. A closing
+    /// ticket is an open node of the computation, and then is in neither:
+    /// it is left out as a filter leaves tickets out, and a batch keeps its
+    /// number.
     pub(super) fn plan(&self) -> Plan<'_> {
         let unplannable = self.unplannable();
-        let batch = self.batches(&unplannable);
+        let batch = self.batches(&unplannable, 1);
         let mut batches: Vec<Vec<&str>> = Vec::new();
         let mut stuck = Vec::new();
         for ticket in 0..self.ids.len() {
             let id = self.ids[ticket].as_str();
+            if self.closing[ticket] {
+                // Counted in the batches of the others, and not listed.
+                continue;
+            }
             if unplannable[ticket] {
                 stuck.push((id, self.unplannable_reasons(ticket, &unplannable)));
             } else if let Some(position) = (batch[ticket] as usize).checked_sub(1) {
@@ -631,16 +710,23 @@ impl TicketGraph {
 
     /// The longest chain of plannable tickets in which each depends on the
     /// one before it, from the ticket to start with to the one that waits
-    /// for all the others. Its length is counted in tickets.
+    /// for all the others. Its length is counted in tickets, and a closing
+    /// ticket has no length: it can lie between two tickets of a chain, and
+    /// is never in one.
     ///
     /// The chain ends at the ticket in the latest batch, the lowest ID
     /// among several. Going back from there, the ticket before each one is
     /// its dependency in the batch just before its own, again the lowest
-    /// ID among several.
+    /// ID among several; a closing dependency has its own batch, which is
+    /// that of the ticket before it, and the walk goes through it.
     pub(super) fn critical_path(&self) -> Vec<&str> {
-        let batch = self.batches(&self.unplannable());
+        let unplannable = self.unplannable();
+        let batch = self.batches(&unplannable, 0);
+        // A closed or unplannable dependency has no batch and is in no chain.
+        let plannable = |ticket: usize| !self.closed[ticket] && !unplannable[ticket];
+        let length = |ticket: usize| u32::from(!self.closing[ticket]);
         let Some(mut ticket) = (0..self.ids.len())
-            .filter(|&ticket| batch[ticket] > 0)
+            .filter(|&ticket| plannable(ticket) && !self.closing[ticket])
             // The first of several equal maxima is the lowest ID.
             .rev()
             .max_by_key(|&ticket| batch[ticket])
@@ -648,12 +734,12 @@ impl TicketGraph {
             return Vec::new();
         };
         let mut chain = vec![ticket];
-        // A closed or unplannable dependency has no batch and is in no chain.
         while let Some(before) = self.deps[ticket]
             .iter()
             .filter_map(|edge| match edge {
                 Edge::Ticket(dependency)
-                    if batch[*dependency] > 0 && batch[*dependency] + 1 == batch[ticket] =>
+                    if plannable(*dependency)
+                        && batch[*dependency] + length(ticket) == batch[ticket] =>
                 {
                     Some(*dependency)
                 }
@@ -661,7 +747,9 @@ impl TicketGraph {
             })
             .min()
         {
-            chain.push(before);
+            if !self.closing[before] {
+                chain.push(before);
+            }
             ticket = before;
         }
         chain.reverse();
@@ -775,6 +863,23 @@ fn parent_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
     cycles
 }
 
+/// A ticket a closure made ready, as a report holds it: no title.
+pub(crate) struct MadeReadyTicket {
+    pub(crate) id: String,
+    pub(crate) slug: Option<String>,
+}
+
+/// What the index says a closure made ready.
+pub(crate) struct MadeReady {
+    pub(crate) tickets: Vec<MadeReadyTicket>,
+    /// Whether the answer can be relied on: every ticket was seen, the closed
+    /// one among them. When not, `tickets` is empty.
+    pub(crate) complete: bool,
+    /// Whether the index reads the ticket as closed. It may not: its copy may
+    /// be behind the closure, or a peer may have reopened it.
+    pub(crate) target_closed: bool,
+}
+
 /// What one relationship read has to answer from: the effective copy of
 /// every ticket the index holds, and what they are to each other.
 pub(super) struct Tickets<'a> {
@@ -826,6 +931,53 @@ impl Tickets<'_> {
     }
 }
 
+/// The contexts whose basis moved since the index stored them, each as it is
+/// on disk now: what a save's relationship check reads in place of what the
+/// index holds of them. Nothing of it is stored.
+pub(super) struct MovedContexts(Vec<(ContextKey, ContextObservation)>);
+
+impl MovedContexts {
+    /// Compares the basis of every context of `repo`, the primary included,
+    /// with the one the index stores, by stat and by the hash of each file
+    /// too new for its stat (`discovery::moved_contexts`), and observes each
+    /// that moved, as a refresh would. A context the index owes an indexing,
+    /// a dirty one among them, is taken to have moved. An observation left
+    /// dirty, of a context that changed while it was read, is kept all the
+    /// same: it is nearer what is on disk than the index is.
+    ///
+    /// The index is read and nothing is written to it, and the observation
+    /// hook a refresh runs before it stores is not run.
+    pub(super) fn observe(
+        service: &RepositoryService,
+        repo: &ResolvedRepository,
+    ) -> Result<Self, ReadError> {
+        let observe = || -> Result<Self, ReadError> {
+            let stored = service.read_session(RepositoryOperation::Read, |connection| {
+                Ok(StoredContexts::of(connection, repo.registration_id())?.bases())
+            })?;
+            let git = repo.open()?;
+            let mut observed = Vec::new();
+            for listed in discovery::moved_contexts(&git, repo.root(), &stored) {
+                // The primary's items take their commits from the map the
+                // index holds, brought to its head here and not stored.
+                let mut activity = match listed.key {
+                    ContextKey::Primary => load_activity_map(
+                        &service.registry_path,
+                        repo.root(),
+                        RepositoryOperation::Read,
+                    )?,
+                    ContextKey::Item(_) => PrimaryActivityMap::default(),
+                };
+                let observation =
+                    discovery::observe_context(&git, repo.root(), &listed, &mut activity);
+                observed.push((listed.key, observation));
+            }
+            Ok(Self(observed))
+        };
+        observe().map_err(|error| repo.failure(error))
+    }
+}
+
 impl RepositoryService {
     /// Runs `read` over the tickets the index holds, in one read session,
     /// so that the tickets and their edges are of one moment.
@@ -834,26 +986,43 @@ impl RepositoryService {
         repo: &ResolvedRepository,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
-        self.read_tickets_naming(repo, &[], read)
+        self.read_tickets_naming(repo, &[], None, read)
     }
 
     /// `read_tickets` for a read that is given IDs no stored edge may
-    /// name: those of `named` that are a stored comment's are known as
-    /// comments too. Nothing else differs, and with no `named` nothing
-    /// does.
+    /// name: those of `named` that are the ID of a comment of a presented
+    /// copy are known as comments too. With no `named` nothing differs.
+    ///
+    /// With `moved`, the tickets and comments of each of its contexts, as
+    /// they are on disk, stand in for what the index holds of that context,
+    /// before the effective copy of each item is chosen: the read sees them
+    /// as it would see them stored by a refresh. The IDs their edges name are
+    /// known as comments as those of `named` are. A context stored again from
+    /// a later observation since it was read keeps its stored rows
+    /// (`substitute_observed`).
     pub(super) fn read_tickets_naming<T>(
         &self,
         repo: &ResolvedRepository,
         named: &[String],
+        moved: Option<&MovedContexts>,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
-            let stored = stored_items(connection, repo)?;
-            let mut comments = stored_comment_targets(connection, repo)?;
-            comments.extend(stored_comments_among(connection, repo, named)?);
+            let mut stored = stored_items(connection, repo)?;
+            let observed = match moved {
+                Some(MovedContexts(moved)) => {
+                    substitute_observed(connection, repo, &mut stored, moved)?
+                }
+                None => ObservedRows::default(),
+            };
             let (rows, is_behind) = effective_rows(repo, &stored);
-            let related = Related::of(&rows, &comments);
+            let mut comments = stored_comment_targets(connection, repo, &rows)?;
+            let named: BTreeSet<&String> = named.iter().chain(&observed.targets).collect();
+            let named: Vec<String> = named.into_iter().cloned().collect();
+            comments.extend(stored_comments_among(connection, repo, &rows, &named)?);
+            comments.extend(presented_comments(&rows, observed.comments));
+            let related = Related::of(&rows, PrimaryClosures::of(&stored), &comments);
             let complete =
                 is_completely_observed(ItemDtoKind::Ticket, &stored_problems(connection, repo)?);
             read(&Tickets {
@@ -868,6 +1037,38 @@ impl RepositoryService {
             })
         })
         .map_err(|error| repo.failure(error))
+    }
+
+    /// What closing `id` made ready, by the index's effective copy, now.
+    /// Readiness is lifecycle closure, and a status text plays no part.
+    pub(crate) fn tickets_made_ready(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+    ) -> Result<MadeReady, ReadError> {
+        let id = id.to_string();
+        self.read_tickets(repo, |tickets| {
+            let found = tickets
+                .complete
+                .then(|| tickets.graph().made_ready(&id))
+                .flatten();
+            let complete = found.is_some();
+            let (found, target_closed) = found.unwrap_or_default();
+            Ok(MadeReady {
+                complete,
+                target_closed,
+                tickets: found
+                    .into_iter()
+                    .map(|ticket| MadeReadyTicket {
+                        id: ticket.to_owned(),
+                        slug: tickets
+                            .by_id
+                            .get(ticket)
+                            .and_then(|row| row.relationships.slug.clone()),
+                    })
+                    .collect(),
+            })
+        })
     }
 
     /// The open tickets `filter` matches, in the ticket list ordering:
@@ -888,7 +1089,14 @@ impl RepositoryService {
         filter: &TicketFilter,
     ) -> Result<ItemListDto, ReadError> {
         self.read_tickets(repo, |tickets| {
-            Ok(tickets.list(|row| row.closed_at.is_none() && filter.matches(row, tickets.graph())))
+            let graph = tickets.graph();
+            // A closed ticket is neither ready nor blocked, and a closing
+            // one, which reads as an open ticket does, is left out too.
+            Ok(tickets.list(|row| {
+                graph.readiness_state(&row.id) != Some(ReadinessState::Closed)
+                    && !graph.is_closing(&row.id)
+                    && tickets.related.matches(filter, row)
+            }))
         })
     }
 
@@ -950,10 +1158,9 @@ impl RepositoryService {
                     .collect();
                 (tree.truncated, lines)
             };
-            let row = tickets
-                .by_id
-                .get(id.as_str())
-                .ok_or_else(|| tickets.not_found(repo))?;
+            if !tickets.by_id.contains_key(id.as_str()) {
+                return Err(tickets.not_found(repo));
+            }
             let (down_truncated, dependencies) = match direction {
                 DependencyDirection::Down | DependencyDirection::Both => follow(false),
                 DependencyDirection::Up => (false, Vec::new()),
@@ -962,10 +1169,10 @@ impl RepositoryService {
                 DependencyDirection::Up | DependencyDirection::Both => follow(true),
                 DependencyDirection::Down => (false, Vec::new()),
             };
-            let state = match row.closed_at {
-                Some(_) => DependencyState::Closed,
-                None => DependencyState::Open,
-            };
+            let state = tickets
+                .graph()
+                .dependency_state(&id)
+                .unwrap_or(DependencyState::Open);
             Ok(DependencyTreeDto {
                 ticket: line(&id, state, 0, false, down_truncated || up_truncated),
                 direction,
@@ -1050,7 +1257,7 @@ impl RepositoryService {
                 tickets
                     .by_id
                     .get(*id)
-                    .is_some_and(|row| filter.matches(row, tickets.graph()))
+                    .is_some_and(|row| tickets.related.matches(filter, row))
             };
             let batches = plan
                 .batches

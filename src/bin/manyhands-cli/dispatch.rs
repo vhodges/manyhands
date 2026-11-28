@@ -58,6 +58,7 @@ fn ticket_filter(args: &ArgMatches) -> TicketFilter {
         closure: match text("closure").as_deref() {
             Some("open") => ClosureFilter::Open,
             Some("closed") => ClosureFilter::Closed,
+            Some("closing") => ClosureFilter::Closing,
             _ => ClosureFilter::All,
         },
         readiness: if flag("ready") {
@@ -580,7 +581,34 @@ pub fn dispatch(
         "item republish" => {
             return crate::collaboration::item_republish(service, session, command, args);
         }
+        "item resolve-history" => {
+            return crate::history::item_resolve(service, session, command, args);
+        }
+        "remote history" => return crate::history::remote_history(service, session, command, args),
+        "remote resolve-history" => {
+            return crate::history::remote_resolve(service, session, command, args);
+        }
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "document promote" => {
+            return crate::lifecycle::document_promote(service, session, command, args);
+        }
+        "ticket close" => return crate::lifecycle::ticket_close(service, session, command, args),
+        "ticket withdraw-closure" => {
+            return crate::lifecycle::ticket_withdraw_closure(service, session, command, args);
+        }
+        "poll once" => return crate::polling::once(service, session, command, args),
+        "poll configure" => return crate::polling::configure(service, session, command, args),
+        "poll pause" => return crate::polling::pause(service, session, command, args),
+        "poll resume" => return crate::polling::resume(service, session, command, args),
+        "context retire" => return crate::retirement::retire(service, session, command, args),
+        "context observe-local" => {
+            return crate::local_sync::observe(service, session, command, args);
+        }
+        "context show-local" => return crate::local_sync::show(service, session, command, args),
+        "context sync-local" => return crate::local_sync::sync(service, session, command, args),
+        "context resolve-local" => {
+            return crate::local_sync::resolve(service, session, command, args);
+        }
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {
@@ -591,6 +619,9 @@ pub fn dispatch(
         }
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),
+        "repo setup-cancel" => {
+            return crate::admin::repo_setup_cancel(service, session, command, args);
+        }
         "repo identity-set" => {
             return crate::admin::repo_identity_set(service, session, command, args);
         }

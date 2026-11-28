@@ -260,6 +260,45 @@ fn unrelated_histories_refuse_before_acceptance() {
     }
 }
 
+/// Git would drop the trailing comma of the first and refuse the brackets of
+/// the second. Neither is carried unchanged, so each answers as a missing
+/// identity does, before any write, and a usable one then merges as itself.
+#[test]
+fn an_unusable_identity_answers_as_a_missing_one_before_any_write() {
+    for name in ["Example Person,", "<Example Person>", " Example Person"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "merge");
+        let observation = f.observe();
+        let id = OperationId::new();
+        let c = f.context();
+        let before_tip = tip(&c);
+        let before = f.image();
+        let mut config = c.config().unwrap();
+        config.set_str("user.name", name).unwrap();
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(
+            result.code,
+            ResultCode::IdentityRequired,
+            "{name}: {result:?}"
+        );
+        assert_eq!(result.reason, Reason::IdentityRequired, "{name}");
+        assert!(!result.effects.is_durable(), "{name}");
+        no_owner(&f, id);
+        assert_eq!(tip(&c), before_tip, "{name}");
+        assert_eq!(before, f.image(), "{name}");
+        config.set_str("user.name", "Replacement").unwrap();
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::Ok,
+            "{name}"
+        );
+        assert_eq!(
+            c.find_commit(tip(&c)).unwrap().author().name(),
+            Some("Replacement")
+        );
+    }
+}
+
 #[test]
 fn identity_missing_then_set_retries_the_same_local_intent() {
     for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
@@ -1009,6 +1048,117 @@ fn local_sync_index_handoff_cannot_be_settled_by_generic_refresh() {
         execute(&f, id, &observation.observation).code,
         ResultCode::Ok
     );
+}
+
+/// A local sync whose index step finds a context changing while it observes
+/// answers that its index is pending, as it did, and marks that context
+/// dirty: its rows stay what they were, owed an indexing, and no other
+/// context, nor the repository, is marked.
+#[test]
+fn a_local_sync_index_that_races_an_edit_marks_the_raced_context_dirty() {
+    let f = Fixture::new(AuthoringKind::Document);
+    graph(&f, "merge");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncBeforeIndex,
+    );
+    let worktree = f
+        .root
+        .path()
+        .join(".manyhands/worktrees")
+        .join(f.item.to_string());
+    let raced = worktree.join("docs/local.md");
+    run::BOUNDARY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |point| {
+            if point == FailurePoint::BeforeIndexTransactionCommit {
+                fs::write(&raced, "raced\n").unwrap();
+            }
+        }))
+    });
+    let report = execute(&f, id, &observation.observation);
+    run::BOUNDARY_HOOK.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        (report.code, report.reason, report.state),
+        (
+            ResultCode::DiscoveryPending,
+            Reason::IndexPending,
+            Some(LocalSyncState::IndexPending)
+        ),
+        "{report:?}"
+    );
+    assert_eq!(report.effects.discovery, DiscoveryEffect::Pending);
+    let db = f.db();
+    let behind: bool = db
+        .query_row("SELECT refresh_required FROM repositories", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let marks = db
+        .prepare("SELECT worktree_path, dirty FROM contexts ORDER BY worktree_path")
+        .unwrap()
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let text = |path: &Path| path.to_str().unwrap().to_owned();
+    assert!(!behind);
+    assert_eq!(marks, [(text(f.root.path()), 0), (text(&worktree), 1)]);
+}
+
+/// A local sync's index step stores the one context it changed, its item's,
+/// and nothing else: the primary keeps what was stored for it, and the
+/// repository's own mark and refresh time are as they were.
+#[test]
+fn a_local_sync_indexes_only_its_own_context() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    graph(&f, "merge");
+    let observation = f.observe();
+    let db = f.db();
+    db.execute("UPDATE repositories SET refresh_required = 1", [])
+        .unwrap();
+    let repository = || {
+        db.query_row(
+            "SELECT refresh_required, refreshed_at FROM repositories",
+            [],
+            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<i64>>(1)?)),
+        )
+        .unwrap()
+    };
+    let stored = |worktree: &Path| {
+        db.query_row(
+            "SELECT basis, indexed_at, dirty FROM contexts WHERE worktree_path = ?1",
+            [worktree.to_str().unwrap()],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let worktree = f
+        .root
+        .path()
+        .join(".manyhands/worktrees")
+        .join(f.item.to_string());
+    let (repository_before, primary_before, own_before) =
+        (repository(), stored(f.root.path()), stored(&worktree));
+
+    let report = execute(&f, OperationId::new(), &observation.observation);
+
+    assert_eq!(report.code, ResultCode::Ok, "{report:?}");
+    assert_eq!(report.effects.discovery, DiscoveryEffect::Current);
+    assert_eq!(repository(), repository_before);
+    assert_eq!(stored(f.root.path()), primary_before);
+    let own = stored(&worktree);
+    assert_ne!(own.0, own_before.0, "the merge is stored");
+    assert_eq!(own.2, 0);
 }
 
 #[test]

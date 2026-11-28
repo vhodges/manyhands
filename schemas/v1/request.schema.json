@@ -102,6 +102,10 @@
             "merge_required",
             "remote_branch_deleted",
             "push_rejected",
+            "primary_has_local_commits",
+            "setup_pending",
+            "remote_primary_missing",
+            "remote_already_set_up",
             "no_selected_key",
             "key_unavailable",
             "key_rejected",
@@ -117,7 +121,8 @@
             "remote_unavailable",
             "transport_unavailable",
             "cancelled",
-            "already_applied"
+            "already_applied",
+            "already_closing"
           ]
         },
         "message": {

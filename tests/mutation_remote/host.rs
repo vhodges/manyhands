@@ -262,6 +262,10 @@ fn prepare(w: &World, mutation: &Mutation) -> Envelope<PrepareDataDto> {
             schema::check_published(HOST_REPLACEMENT_SCHEMA, &value["data"])
                 .expect("the replacement schema");
         }
+        // Of a promotion or a closure, which no case here prepares.
+        Some(PrepareDataDto::LifecycleBlocked(_)) => panic!("a host command's prepare"),
+        // Of an abandon another process's operation is in the way of.
+        Some(PrepareDataDto::Blocked(_)) => panic!("a host command's prepare"),
         None => {}
     }
     envelope

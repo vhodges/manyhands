@@ -1,0 +1,50 @@
+{
+  "code": "no_selected_key",
+  "command": "remote select",
+  "data": {
+    "branch": "manyhands/setup/<setup>",
+    "id": "<setup>",
+    "integration": "pull_request",
+    "kind": "change",
+    "pull_request": {
+      "forge": null,
+      "source": "manyhands/setup/<setup>",
+      "target": "main",
+      "url": null
+    },
+    "remote": "origin",
+    "request_id": "01M4CC0VMTTNKVYS6XWQG4CK1P",
+    "state": "recorded",
+    "type": "setup"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "No key is selected.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01M4CC0VMTTNKVYS6XWQG4CK1P"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01M4CC0VMTTNKVYS6XWQG4CK1P",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

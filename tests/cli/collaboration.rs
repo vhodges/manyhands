@@ -568,8 +568,14 @@ fn an_abandon_confirmed_after_the_row_moved_is_external_change() {
     );
 }
 
+/// A synchronization's abandon is a hand-over. While the process that
+/// reserved it, this test's, still exists, the binary, another process,
+/// takes it for that process's and gives no preview: it is `busy`. A row
+/// that names no holder, as an older build left one, is no one's: it is
+/// previewed with what its row last saw, and with no confirmation nothing
+/// is run.
 #[test]
-fn an_abandon_of_a_remote_operation_is_refused_and_changes_nothing() {
+fn an_abandon_of_a_remote_operation_needs_its_holder_gone_and_a_confirmation() {
     let world = World::new();
     let connection = items::index(world.data.path());
     connection
@@ -597,12 +603,14 @@ fn an_abandon_of_a_remote_operation_is_refused_and_changes_nothing() {
             })
             .unwrap()
     };
-    let before = (
-        support::repository_and_worktree_snapshot(&world.fixture),
-        count("remote_operation_records"),
-        count("confirmation_records"),
-        count("request_records"),
-    );
+    let stored = || {
+        (
+            support::repository_and_worktree_snapshot(&world.fixture),
+            count("remote_operation_records"),
+            count("request_records"),
+        )
+    };
+    let before = stored();
     let env = CliEnv::new(world.data.path().to_owned());
     let root = world.root.to_str().unwrap();
     let remote = remote.to_string();
@@ -619,14 +627,45 @@ fn an_abandon_of_a_remote_operation_is_refused_and_changes_nothing() {
         args.push("--json");
         args
     };
-    // Only `--prepare` reaches the library's refusal of an operation that
-    // another journal holds.
-    let refused = checked(&args(&["--prepare"]), &env, &[], 2, "invalid_input", None);
-    assert!(refused["data"].is_null());
-    // With no preview there is no confirmation to run it with. The
-    // library's consent gate (`consent`, `mutation/confirm.rs`)
-    // answers this before anything reads the operation, so it shows only
-    // that nothing is changed.
+    let busy = checked(
+        &args(&["--prepare"]),
+        &env,
+        &[],
+        5,
+        "busy",
+        Some("blocked.schema.json"),
+    );
+    assert_eq!(busy["data"]["blocker"]["operation_id"], remote.as_str());
+    assert_eq!(busy["data"]["blocker"]["live"], true);
+    assert_eq!(busy["recovery"][0]["action"], "operation.show");
+    assert_eq!(busy["recovery"][0]["operation_id"], remote.as_str());
+    assert_eq!(count("confirmation_records"), 0, "no confirmation");
+
+    connection
+        .execute(
+            "UPDATE remote_operation_records SET host = NULL, pid = NULL WHERE operation_ulid = ?1",
+            [&remote],
+        )
+        .unwrap();
+    let previewed = checked(
+        &args(&["--prepare"]),
+        &env,
+        &[],
+        0,
+        "ok",
+        Some("operation_abandon_preview.schema.json"),
+    );
+    assert_eq!(
+        previewed["data"]["details"]["action"],
+        "synchronize_context"
+    );
+    assert_eq!(
+        previewed["data"]["details"]["evidence"]["remote_ref_present"],
+        Value::Null
+    );
+    // With no confirmation presented nothing is run. The library's consent
+    // gate (`consent`, `mutation/confirm.rs`) answers this before anything
+    // reads the operation.
     checked(
         &args(&["--request-id", REQUEST_2]),
         &env,
@@ -635,15 +674,8 @@ fn an_abandon_of_a_remote_operation_is_refused_and_changes_nothing() {
         "confirmation_required",
         None,
     );
-    assert_eq!(
-        before,
-        (
-            support::repository_and_worktree_snapshot(&world.fixture),
-            count("remote_operation_records"),
-            count("confirmation_records"),
-            count("request_records"),
-        )
-    );
+    assert_eq!(count("confirmation_records"), 1, "the preview's");
+    assert_eq!(before, stored());
 }
 
 #[cfg(unix)]

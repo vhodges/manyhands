@@ -1,7 +1,8 @@
 use super::lifecycle::LifecycleKind;
+use super::record::PromotionSituation;
 use super::*;
 use crate::{
-    canonical,
+    canonical::{self, Integration},
     repository::{
         remote::{state, sync},
         *,
@@ -14,20 +15,34 @@ use std::collections::BTreeSet;
 pub(super) struct PromotionObservation {
     blockers: BTreeSet<PromotionBlocker>,
     preview: Option<DocumentPromotionPreview>,
+    /// A pull-request repository's primary already holds the document, and
+    /// nothing blocks: there is no preview to consent to (R-4).
+    held: bool,
 }
 
 impl PromotionObservation {
     pub(super) fn into_preflight(self) -> DocumentPromotionPreflight {
-        if self.blockers.is_empty() {
-            DocumentPromotionPreflight::Ready(
-                self.preview.expect("unblocked observation has a preview"),
-            )
-        } else {
+        if !self.blockers.is_empty() {
             DocumentPromotionPreflight::Blocked {
                 blockers: self.blockers.into_iter().collect(),
             }
+        } else if self.held {
+            DocumentPromotionPreflight::PrimaryHolds
+        } else {
+            DocumentPromotionPreflight::Ready(
+                self.preview.expect("unblocked observation has a preview"),
+            )
         }
     }
+}
+
+/// What one registry read gives an observation: the remote snapshot, the
+/// pending-conflict flag and, in a pull-request repository, the document's
+/// link row.
+struct StoredView {
+    snapshot: RemoteSnapshot,
+    pending: bool,
+    link: Option<crate::forge::PullRequestLink>,
 }
 
 pub(in super::super) fn unavailable(root: &Path) -> RepositoryError {
@@ -68,7 +83,12 @@ impl PreparedObservation {
         repository: &git2::Repository,
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         let fresh = self.seal.reopen(repository, &self.configuration)?;
-        let (id, snapshot, pending) = read_view(service, &self.seal.root)?;
+        let (id, view) = read_view(
+            service,
+            &self.seal.root,
+            &self.seal.item,
+            self.configuration.integration() == Integration::PullRequest,
+        )?;
         if id != self.repository_id {
             return Err(changed());
         }
@@ -77,8 +97,7 @@ impl PreparedObservation {
             &self.seal.root,
             &self.configuration,
             &self.seal.item,
-            &snapshot,
-            pending,
+            &view,
             &self.facts,
         )?
         .into_preflight())
@@ -159,6 +178,30 @@ impl ObservationSeal {
     }
 }
 
+#[cfg(test)]
+type PreviewFactsHook = Box<dyn FnMut()>;
+#[cfg(test)]
+thread_local! { static PREVIEW_FACTS_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf, PreviewFactsHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
+/// Runs `hook` each time a preview of an item of the repository at `root`
+/// reads the item's facts: once per preview, of either lifecycle.
+#[cfg(test)]
+pub(in super::super) fn set_preview_facts_hook(root: PathBuf, hook: impl FnMut() + 'static) {
+    PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().insert(root, Box::new(hook)));
+}
+/// Removes the hook `set_preview_facts_hook` set for `root`.
+#[cfg(test)]
+pub(in super::super) fn clear_preview_facts_hook(root: &Path) {
+    PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().remove(root));
+}
+#[cfg(test)]
+pub(in super::super) fn preview_facts_checkpoint(root: &Path) {
+    let hook = PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().remove(root));
+    if let Some(mut hook) = hook {
+        hook();
+        PREVIEW_FACTS_HOOKS.with(|h| h.borrow_mut().insert(root.into(), hook));
+    }
+}
+
 /// The canonical repository and its valid configuration, opened for an
 /// unleased observation.
 pub(in super::super) fn open_observation(
@@ -190,6 +233,129 @@ pub(in super::super) fn open_observation(
     Ok((repository, root, config))
 }
 
+/// What a preview's discovery yields (P-5): whether the item is of the other
+/// kind than the lifecycle's (closure's `not_ticket`, promotion's
+/// `not_document`), and the item's path in its own context, on the
+/// lifecycle's branch (`ticket_path`, `document_path`). A preview takes
+/// nothing else from beyond the item's context and the primary branch.
+pub(in super::super) struct PreviewFacts {
+    pub(in super::super) kind_mismatch: bool,
+    pub(in super::super) item_path: Option<PathBuf>,
+}
+
+/// The item's preview facts, as a whole-repository observation gave them,
+/// read from the item's own context and the primary's index rows. The
+/// item's context, while it is a valid one, holds both facts: it is
+/// observed on its own, so duplicates in its worktree are found as before.
+/// Without one, the item is of the other kind when the primary holds it so.
+/// That is read from the primary's index rows after the primary's basis
+/// check (`discovery::moved_contexts`, as "Reads that decide on other items"
+/// compares it), or from the primary on disk when its basis moved, so an
+/// outside change is read from disk. Nothing is stored. Runs outside the
+/// repository lease.
+pub(in super::super) fn item_preview_facts(
+    kind: LifecycleKind,
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<PreviewFacts, RepositoryError> {
+    #[cfg(test)]
+    preview_facts_checkpoint(root);
+    let repository = git2::Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        &[] as &[&std::ffi::OsStr],
+    )
+    .map_err(|_| unavailable(root))?;
+    let of_kind = |items: &[discovery::ObservedItem], same: bool| {
+        items
+            .iter()
+            .filter(move |i| i.id == *item && (i.kind == kind.authoring()) == same)
+            .map(|i| i.path.clone())
+            .collect::<Vec<_>>()
+    };
+    // Its context as the whole observation listed it: a directory under the
+    // worktree base named for it, read when the base is listed whole and
+    // otherwise when the base is a directory, as the listing reads one.
+    let key = ContextKey::Item(item.clone());
+    let listed = match discovery::list_contexts(&repository, root) {
+        Ok(listed) => listed.into_iter().find(|listed| listed.key == key),
+        Err(_) => std::fs::symlink_metadata(root.join(".manyhands/worktrees"))
+            .is_ok_and(|metadata| metadata.is_dir())
+            .then(|| discovery::listed_context(root, &key))
+            .flatten(),
+    };
+    let own = listed
+        .map(|listed| {
+            discovery::observe_context(
+                &repository,
+                root,
+                &listed,
+                &mut crate::repository::activity::PrimaryActivityMap::default(),
+            )
+        })
+        .filter(|observation| observation.valid);
+    if let Some(own) = own {
+        let on_branch = own.context.branch.as_deref() == Some(kind.context_branch(item).as_str());
+        return Ok(PreviewFacts {
+            kind_mismatch: !of_kind(&own.items, false).is_empty(),
+            item_path: on_branch
+                .then(|| of_kind(&own.items, true).into_iter().next())
+                .flatten(),
+        });
+    }
+    let (primary, kinds) = read_registered(service, root, |tx, id| {
+        let primary = StoredContexts::of(tx, id)
+            .map_err(RepositoryError::sqlite)?
+            .bases()
+            .into_iter()
+            .filter(|(key, _)| *key == ContextKey::Primary)
+            .collect::<Vec<_>>();
+        let mut statement = tx
+            .prepare(
+                "SELECT items.kind FROM discovered_items AS items
+                   JOIN contexts ON contexts.id = items.context_id
+                  WHERE contexts.repository_id = ?1 AND contexts.item_id IS NULL
+                    AND items.item_id = ?2",
+            )
+            .map_err(RepositoryError::sqlite)?;
+        let kinds = statement
+            .query_map(rusqlite::params![id, item.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(RepositoryError::sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(RepositoryError::sqlite)?;
+        Ok((primary, kinds))
+    })?;
+    let moved = discovery::moved_contexts(&repository, root, &primary)
+        .iter()
+        .any(|listed| listed.key == ContextKey::Primary);
+    let kind_mismatch = if moved {
+        // As a read that decides on other items observes it: its items take
+        // their commits from the map the index holds, which is not stored.
+        let mut activity = crate::repository::load_activity_map(
+            &service.registry_path,
+            root,
+            RepositoryOperation::Read,
+        )?;
+        let primary = discovery::observe_context(
+            &repository,
+            root,
+            &ListedContext::primary(root),
+            &mut activity,
+        );
+        !of_kind(&primary.items, false).is_empty()
+    } else {
+        let name = crate::repository::authoring_kind_name(kind.authoring());
+        kinds.iter().any(|stored| stored != name)
+    };
+    Ok(PreviewFacts {
+        kind_mismatch,
+        item_path: None,
+    })
+}
+
 pub(super) fn prepare(
     service: &RepositoryService,
     request: PreviewDocumentPromotionRequest,
@@ -209,48 +375,27 @@ pub(super) fn prepare_for(
     let (repository, root, config) = open_observation(kind, service, &request.root)?;
     // A read-only SQLite transaction provides one coherent history/conflict view.
     // No repository lease, reservation, refresh, migration or transport is used.
-    let (repository_id, snapshot, pending) = read_view(service, &root)?;
+    let (repository_id, view) = read_view(
+        service,
+        &root,
+        &request.item_id,
+        config.integration() == Integration::PullRequest,
+    )?;
     let (facts, seal) =
         ObservationSeal::discover(kind, &repository, &root, &config, &request.item_id, || {
-            let discovered = discovery::observe_root(&repository, &root);
-            let active = discovered
-                .active_contexts
-                .iter()
-                .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
-            DiscoveryFacts {
-                kind,
-                not_document: active.is_some_and(|a| {
-                    a.items
-                        .iter()
-                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)
-                }) || (active.is_none()
-                    && discovered
-                        .items
-                        .iter()
-                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
-                document_path: active
-                    .filter(|a| {
-                        a.context.branch.as_deref()
-                            == Some(kind.context_branch(&request.item_id).as_str())
-                    })
-                    .and_then(|a| {
-                        a.items
-                            .iter()
-                            .find(|i| i.id == request.item_id && i.kind == kind.authoring())
-                    })
-                    .map(|i| i.path.clone()),
-            }
+            item_preview_facts(kind, service, &root, &request.item_id)
         })?;
-    let preflight = observe_git(
-        &repository,
-        &root,
-        &config,
-        &request.item_id,
-        &snapshot,
-        pending,
-        &facts,
-    )?
-    .into_preflight();
+    let PreviewFacts {
+        kind_mismatch,
+        item_path,
+    } = facts?;
+    let facts = DiscoveryFacts {
+        kind,
+        not_document: kind_mismatch,
+        document_path: item_path,
+    };
+    let preflight =
+        observe_git(&repository, &root, &config, &request.item_id, &view, &facts)?.into_preflight();
     let prepared = PreparedObservation {
         preflight,
         configuration: config,
@@ -265,9 +410,26 @@ pub(super) fn prepare_for(
 fn read_view(
     service: &RepositoryService,
     root: &Path,
-) -> Result<(i64, RemoteSnapshot, bool), RepositoryError> {
-    read_view_with(service, root, |_, _| Ok(()))
-        .map(|(id, snapshot, pending, ())| (id, snapshot, pending))
+    item: &ItemId,
+    pull_request: bool,
+) -> Result<(i64, StoredView), RepositoryError> {
+    read_view_with(service, root, |tx, id| {
+        if !pull_request {
+            return Ok(None);
+        }
+        crate::repository::pull_request_links::link_of(tx, id, "document", &item.to_string())
+            .map_err(RepositoryError::sqlite)
+    })
+    .map(|(id, snapshot, pending, link)| {
+        (
+            id,
+            StoredView {
+                snapshot,
+                pending,
+                link,
+            },
+        )
+    })
 }
 /// One read-only SQLite transaction: the registration, the remote snapshot,
 /// the pending-conflict flag and whatever else `extra` reads in the same view.
@@ -276,33 +438,41 @@ pub(in super::super) fn read_view_with<T>(
     root: &Path,
     extra: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<T, RepositoryError>,
 ) -> Result<(i64, RemoteSnapshot, bool, T), RepositoryError> {
+    read_registered(service, root, |transaction, id| {
+        let snapshot = state::read_snapshot(transaction, id)?;
+        let pending = state::has_pending_conflict(transaction, id)?;
+        let extra = extra(transaction, id)?;
+        Ok((id, snapshot, pending, extra))
+    })
+}
+/// `read` in one read-only SQLite transaction, given the registration of
+/// the repository at `root`.
+fn read_registered<T>(
+    service: &RepositoryService,
+    root: &Path,
+    read: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
     let operation = RepositoryOperation::Read;
-    let (id, snapshot, pending, extra) = {
-        let _guard = cache_read_guard(&service.registry_path, root, operation)?;
-        let mut connection = open_registry_read_only(&service.registry_path)?;
-        let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
-        let id = transaction
-            .query_row(
-                "SELECT id FROM repositories WHERE root_path=?1",
-                [registry_root_key(root, operation)?],
-                |row| row.get::<_, i64>(0),
+    let _guard = cache_read_guard(&service.registry_path, root, operation)?;
+    let mut connection = open_registry_read_only(&service.registry_path)?;
+    let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
+    let id = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [registry_root_key(root, operation)?],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(RepositoryError::sqlite)?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                operation,
+                Some(root.to_owned()),
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "promotion requires a registered repository",
             )
-            .optional()
-            .map_err(RepositoryError::sqlite)?
-            .ok_or_else(|| {
-                RepositoryError::new(
-                    operation,
-                    Some(root.to_owned()),
-                    RepositoryErrorKind::RepositoryNotRegistered,
-                    "promotion requires a registered repository",
-                )
-            })?;
-        let snapshot = state::read_snapshot(&transaction, id)?;
-        let pending = state::has_pending_conflict(&transaction, id)?;
-        let extra = extra(&transaction, id)?;
-        (id, snapshot, pending, extra)
-    };
-    Ok((id, snapshot, pending, extra))
+        })?;
+    read(&transaction, id)
 }
 fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(&(bytes.len() as u64).to_be_bytes());
@@ -732,21 +902,38 @@ pub(in super::super) fn remote_facts(
     }))
 }
 
-/// D5: whether an absent tracking context was once published.
+/// D5 and decision 35: what an absent tracking context says of the remote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum RemoteContextHistory {
+    /// No fetch has seen it published: a first publication will make it.
     NeverPublished,
+    /// A fetch saw it published and a later one saw it gone.
     Deleted,
+    /// Published, or its history unknown, with no fetch that saw it gone:
+    /// the branch may stand, and a poll reads it.
     Unknown,
+    /// The evidence says the history is unknown (a repository whose cache
+    /// was lost or whose remote changed): a poll can't read it, and only
+    /// the owner's repair settles it.
+    Unresolved,
 }
+/// What an absent tracking context says of the remote. Published and then
+/// seen gone by a fetch is `Deleted`. Published with no fetch that saw it
+/// gone (a first push makes no tracking ref, decision 29) is `Unknown`: the
+/// branch may stand, and a poll reads it (decision 35).
 pub(in super::super) fn remote_context_history(
     snapshot: &RemoteSnapshot,
     kind: LifecycleKind,
     item: &ItemId,
 ) -> RemoteContextHistory {
     match snapshot.fetch_publication_evidence_for(kind.authoring(), item) {
-        RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Deleted,
-        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::ObservedPublished
+            if snapshot.context_deletion_observed(kind.authoring(), item) =>
+        {
+            RemoteContextHistory::Deleted
+        }
+        RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unresolved,
         RemotePublicationEvidence::NeverPublished => RemoteContextHistory::NeverPublished,
     }
 }
@@ -788,29 +975,21 @@ pub(in super::super) fn planned_result(
     }
 }
 
-/// Observe actual Git afresh. The caller supplies a coherently read remote
-/// snapshot and pending-conflict flag; the same function can run after sync or
-/// while the caller already holds the integration lease.
-fn observe_git(
+/// The item's context as the observation sees it: its tip and the document's
+/// path on it, with the blockers a context that is missing, nonconforming,
+/// dirty or conflicted adds (both modes read it the same way).
+fn observe_context(
     repository: &git2::Repository,
     root: &Path,
     config: &canonical::RepositoryConfig,
     item: &ItemId,
-    snapshot: &RemoteSnapshot,
-    pending: bool,
     facts: &DiscoveryFacts,
-) -> Result<PromotionObservation, RepositoryError> {
-    let mut observation = PromotionObservation {
-        blockers: BTreeSet::new(),
-        preview: None,
-    };
+    blockers: &mut BTreeSet<PromotionBlocker>,
+) -> Result<(Option<Oid>, Option<PathBuf>), RepositoryError> {
     let kind = facts.kind;
-    let blockers = &mut observation.blockers;
-    let context_branch = kind.context_branch(item);
-    let not_document = facts.not_document;
     let mut context_oid = None;
     let mut context_document_path = None;
-    if not_document {
+    if facts.not_document {
         blockers.insert(PromotionBlocker::NotADocument);
     } else {
         match context_presence(kind, repository, root, config, item)? {
@@ -844,6 +1023,37 @@ fn observe_git(
             }
         }
     }
+    Ok((context_oid, context_document_path))
+}
+
+/// Observe actual Git afresh. The caller supplies a coherently read remote
+/// snapshot and pending-conflict flag; the same function can run after sync or
+/// while the caller already holds the integration lease. A pull-request
+/// repository's observation is its own (`observe_pull_request`).
+fn observe_git(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    view: &StoredView,
+    facts: &DiscoveryFacts,
+) -> Result<PromotionObservation, RepositoryError> {
+    if config.integration() == Integration::PullRequest {
+        return observe_pull_request(repository, root, config, item, view, facts);
+    }
+    let snapshot = &view.snapshot;
+    let pending = view.pending;
+    let mut observation = PromotionObservation {
+        blockers: BTreeSet::new(),
+        preview: None,
+        held: false,
+    };
+    let kind = facts.kind;
+    let blockers = &mut observation.blockers;
+    let context_branch = kind.context_branch(item);
+    let not_document = facts.not_document;
+    let (context_oid, context_document_path) =
+        observe_context(repository, root, config, item, facts, blockers)?;
     if pending {
         blockers.insert(PromotionBlocker::ConflictPending);
     }
@@ -929,6 +1139,9 @@ fn observe_git(
             RemoteContextHistory::Unknown => {
                 blockers.insert(PromotionBlocker::HistoryUnknown);
             }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(PromotionBlocker::HistoryUnresolved);
+            }
             RemoteContextHistory::NeverPublished => {}
         }
     }
@@ -974,6 +1187,7 @@ fn observe_git(
                 },
                 cleanup,
                 expectation: PromotionExpectation::from_bytes([0; 32]),
+                pull_request: None,
             };
             preview.expectation = expectation(&preview, &new_entries);
             observation.preview = Some(preview);
@@ -1205,6 +1419,334 @@ pub(in super::super) mod digest {
             hash.update(context.as_bytes());
         }
     }
+}
+
+const PULL_REQUEST_PROMOTION_DIGEST_DOMAIN: &[u8] = b"manyhands pull request promotion v1";
+
+/// `blake3("manyhands pull request promotion v1" ‖ fields)`, framed as the
+/// direct digest is: the item, the document's path, the branch, the primary
+/// branch, the remote, `L`, `R` when it is ahead of or beside `L` (none
+/// otherwise: an `R` that is absent, equal or behind is one state, which a
+/// push of `L` settles), the situation (`first` 0, `again` 1) and the
+/// previewed link. Not the tracking primary nor the local one, which move.
+fn pull_request_expectation(preview: &DocumentPromotionPreview) -> PromotionExpectation {
+    let facts = preview
+        .pull_request
+        .as_ref()
+        .expect("a pull-request preview");
+    fn optional(hash: &mut blake3::Hasher, text: Option<&str>) {
+        match text {
+            Some(text) => {
+                hash.update(&[1]);
+                digest::field(hash, text.as_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
+    let mut hash = blake3::Hasher::new();
+    hash.update(PULL_REQUEST_PROMOTION_DIGEST_DOMAIN);
+    digest::field(&mut hash, preview.item_id.to_string().as_bytes());
+    digest::field(
+        &mut hash,
+        preview.document_path.as_os_str().as_encoded_bytes(),
+    );
+    digest::field(&mut hash, preview.context_branch.as_bytes());
+    digest::field(&mut hash, preview.primary_branch.as_bytes());
+    digest::remote(&mut hash, preview.publication_remote.as_deref());
+    hash.update(preview.context_oid.as_bytes());
+    match facts.unmerged_remote {
+        Some(oid) => {
+            hash.update(&[1]);
+            hash.update(oid.as_bytes());
+        }
+        None => {
+            hash.update(&[0]);
+        }
+    }
+    hash.update(&[match facts.situation {
+        PromotionSituation::First => 0,
+        PromotionSituation::Again => 1,
+    }]);
+    digest::field(&mut hash, facts.link.source.as_bytes());
+    digest::field(&mut hash, facts.link.target.as_bytes());
+    optional(
+        &mut hash,
+        facts.link.forge.map(canonical::ForgeKind::as_str),
+    );
+    optional(&mut hash, facts.link.url.as_deref());
+    PromotionExpectation::from_bytes(*hash.finalize().as_bytes())
+}
+
+#[cfg(test)]
+thread_local! { static DOCUMENT_PROOFS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+/// How many times this thread ran the full document proof of
+/// `primary_holds_document`, for a test that pins when it does not run.
+#[cfg(test)]
+pub(in super::super) fn document_proofs_run() -> usize {
+    DOCUMENT_PROOFS.with(std::cell::Cell::get)
+}
+
+/// R-3: whether the primary holds the document, which only its content
+/// proves. It holds it when the content proof for `tip` passes against the
+/// tracking primary, or against the local primary when that is the tracking
+/// primary or behind it (in this mode Manyhands never commits to the primary,
+/// so a local primary ahead or beside holds commits no one else has), and
+/// `R`, the remote copy of the branch, is absent, equal to `tip` or behind it
+/// (ahead or beside is another clone's work this clone has not merged).
+/// `remote_gone` reads `R` as absent: a fetch does not prune it after the
+/// branch was deleted. Reads refs and objects only, so it never fetches, and
+/// every refusal of the proof reads not held.
+pub(in super::super) fn primary_holds_document(
+    repository: &git2::Repository,
+    tip: Oid,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+) -> bool {
+    use crate::repository::context_retirement::proof;
+    #[cfg(test)]
+    DOCUMENT_PROOFS.with(|runs| runs.set(runs.get() + 1));
+    primary_holds_by(
+        repository,
+        tip,
+        tracking_primary,
+        primary_branch,
+        remote,
+        item,
+        remote_gone,
+        |primary| {
+            proof::preservation(repository, tip, primary, AuthoringKind::Document, item).is_ok()
+        },
+    )
+}
+
+/// R-9: whether `document show` still offers a document's link, the cheaper
+/// twin of `primary_holds_document` (decision 9): `true` while the primary
+/// does not hold the document. A primary R-3 may use holds it when it has a
+/// regular file at `document_path`, the document's path in `tip`, and no entry
+/// of `tip` is unheld by it (`unheld_entries`), and `R` stands as R-3
+/// requires. It compares entries only: it loads no blob and scans no other
+/// item. It differs from R-3 only in a repository with missing objects, a
+/// document ID held at two paths, a primary copy that does not parse, or a
+/// document moved on the primary (K-11); promote and `item sync` keep the full
+/// proof. Every refusal reads as outstanding, as the proof's reads not held.
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn document_link_outstanding(
+    repository: &git2::Repository,
+    tip: Oid,
+    document_path: &str,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+) -> bool {
+    use crate::repository::context_retirement::proof;
+    !primary_holds_by(
+        repository,
+        tip,
+        tracking_primary,
+        primary_branch,
+        remote,
+        item,
+        remote_gone,
+        |primary| {
+            let regular = repository
+                .find_commit(primary)
+                .and_then(|commit| commit.tree())
+                .and_then(|tree| tree.get_path(Path::new(document_path)))
+                .is_ok_and(|entry| {
+                    entry.kind() == Some(git2::ObjectType::Blob)
+                        && matches!(entry.filemode_raw(), 0o100644 | 0o100755)
+                });
+            regular && proof::unheld_entries(repository, tip, primary).is_ok_and(|e| e.is_empty())
+        },
+    )
+}
+
+/// R-3's choice of primaries and its rule for `R`, with `holds` judging one
+/// primary commit: the full proof for `primary_holds_document`, the cheap
+/// check for `document_link_outstanding`.
+#[allow(clippy::too_many_arguments)]
+fn primary_holds_by(
+    repository: &git2::Repository,
+    tip: Oid,
+    tracking_primary: Option<Oid>,
+    primary_branch: &str,
+    remote: &str,
+    item: &ItemId,
+    remote_gone: bool,
+    holds: impl Fn(Oid) -> bool,
+) -> bool {
+    let Some(tracking) = tracking_primary else {
+        return false;
+    };
+    // A ref's commit: none when it is absent, `Err` when it cannot be read.
+    let read = |name: &str| match repository
+        .find_reference(name)
+        .and_then(|reference| reference.peel_to_commit())
+    {
+        Ok(commit) => Ok(Some(commit.id())),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(_) => Err(()),
+    };
+    let reaches = |older: Oid, newer: Oid| {
+        older == newer
+            || repository
+                .graph_descendant_of(newer, older)
+                .unwrap_or(false)
+    };
+    if !remote_gone {
+        let Ok(plan) = RemoteRefPlan::from_configuration(remote, primary_branch) else {
+            return false;
+        };
+        let name = plan.context(AuthoringKind::Document, item);
+        match read(name.tracking_ref()) {
+            Ok(None) => {}
+            Ok(Some(copy)) if reaches(copy, tip) => {}
+            _ => return false,
+        }
+    }
+    let local = read(&format!("refs/heads/{primary_branch}"))
+        .ok()
+        .flatten()
+        .filter(|local| reaches(*local, tracking) && *local != tracking);
+    holds(tracking) || local.is_some_and(holds)
+}
+
+/// The pull-request repository's observation (Part B), from local state only:
+/// no network, lease or write. It decides in this order: the item is a
+/// document with a context; the blockers (the context's, a pending
+/// conflict, an unresolved history, no tracking primary, a merge in
+/// progress at the root); the primary holds the document (`already_applied`,
+/// no record); the branch's history is `Deleted`; a link row, `again`;
+/// otherwise `first`. Nothing touches the primary, so the local primary, an
+/// integration and the identity do not matter, nor does the root's state,
+/// except that a merge, rebase or cherry-pick in progress there blocks, with
+/// `primary_conflicted` and `context_conflicted`.
+fn observe_pull_request(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    view: &StoredView,
+    facts: &DiscoveryFacts,
+) -> Result<PromotionObservation, RepositoryError> {
+    let kind = facts.kind;
+    let mut observation = PromotionObservation {
+        blockers: BTreeSet::new(),
+        preview: None,
+        held: false,
+    };
+    // A pull-request configuration always has a publication remote.
+    let Some(remote) = config.publication_remote.as_deref() else {
+        return Err(unavailable(root));
+    };
+    let blockers = &mut observation.blockers;
+    let (context_oid, document_path) =
+        observe_context(repository, root, config, item, facts, blockers)?;
+    if view.pending {
+        blockers.insert(PromotionBlocker::ConflictPending);
+    }
+    // A merge, rebase or cherry-pick in progress at the root, whichever
+    // branch it is on, is what refuses a synchronization.
+    if repository.state() != git2::RepositoryState::Clean {
+        blockers.insert(PromotionBlocker::PrimaryConflicted);
+    }
+    let (mut tracking_primary, mut tracking_context) = (None, None);
+    if let Some(remote_facts) = remote_facts(kind, repository, root, config, item, None, None)? {
+        tracking_primary = remote_facts.tracking_primary;
+        tracking_context = remote_facts.tracking_context;
+        if tracking_primary.is_none() {
+            blockers.insert(PromotionBlocker::PrimaryMissing);
+        }
+    }
+    let mut history_deleted = false;
+    if tracking_context.is_none() && !facts.not_document {
+        match remote_context_history(&view.snapshot, kind, item) {
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(PromotionBlocker::HistoryUnresolved);
+            }
+            RemoteContextHistory::Deleted => history_deleted = true,
+            // The context child's fetch settles an unknown history.
+            RemoteContextHistory::Unknown | RemoteContextHistory::NeverPublished => {}
+        }
+    }
+    if !observation.blockers.is_empty() {
+        return Ok(observation);
+    }
+    let (Some(context_oid), Some(document_path)) = (context_oid, document_path) else {
+        return Err(unavailable(root));
+    };
+    if primary_holds_document(
+        repository,
+        context_oid,
+        tracking_primary,
+        &config.primary_branch,
+        remote,
+        item,
+        false,
+    ) {
+        observation.held = true;
+        return Ok(observation);
+    }
+    if history_deleted {
+        observation
+            .blockers
+            .insert(PromotionBlocker::RemoteContextDeleted);
+        return Ok(observation);
+    }
+    let (situation, link) = match &view.link {
+        Some(link) => (PromotionSituation::Again, link.clone()),
+        None => (
+            PromotionSituation::First,
+            crate::repository::closure::checkpoint::context_branch_link(
+                repository,
+                &config.primary_branch,
+                config.forge().as_ref(),
+                remote,
+                &kind.context_branch(item),
+            ),
+        ),
+    };
+    let unmerged_remote = match tracking_context {
+        Some(copy) if !ancestor(repository, copy, context_oid, root)? => Some(copy),
+        _ => None,
+    };
+    let mut preview = DocumentPromotionPreview {
+        item_id: item.clone(),
+        document_path: document_path.clone(),
+        context_branch: kind.context_branch(item),
+        context_oid,
+        primary_branch: config.primary_branch.clone(),
+        primary_oid: tracking_primary.expect("a tracking primary does not block"),
+        publication_remote: Some(remote.to_owned()),
+        tracking_primary,
+        tracking_context,
+        changes: Vec::new(),
+        // Nothing integrates: the branch is published, not merged.
+        integration: PlannedIntegration::AlreadyContained,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            remote_branch: false,
+            worktree: false,
+            local_branch: false,
+        },
+        expectation: PromotionExpectation::from_bytes([0; 32]),
+        pull_request: Some(PullRequestPromotion {
+            situation,
+            link,
+            unmerged_remote,
+            document_path,
+        }),
+    };
+    preview.expectation = pull_request_expectation(&preview);
+    observation.preview = Some(preview);
+    Ok(observation)
 }
 
 fn expectation(

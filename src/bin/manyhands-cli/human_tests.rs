@@ -19,6 +19,8 @@ fn configuration() -> ConfigurationDto {
         primary_branch: Some("main".into()),
         publication_remote: Some("origin".into()),
         problems: vec![],
+        integration: Some("direct".into()),
+        forge: None,
     }
 }
 
@@ -53,6 +55,7 @@ fn content_item() -> ItemDto {
         parent: None,
         deps: vec![],
         readiness: None,
+        pull_request: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some("\nRequested\t正文\r\n\u{1b}body without final newline".into()),
         source: Some("SOURCE_NOT_BODY".into()),
@@ -88,6 +91,7 @@ fn relationship_ticket() -> ItemDto {
             state: ClosureState::Open,
             closed_at: None,
             closed_by: None,
+            publication: None,
         }),
         readiness: Some(ReadinessDto {
             state: ReadinessState::Blocked,
@@ -315,6 +319,7 @@ fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconformi
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        publication: None,
     });
     let data = ItemListDto {
         items: vec![document, ticket, nonconforming_item()],
@@ -334,6 +339,57 @@ fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconformi
 }
 
 #[test]
+fn show_names_the_publication_and_the_pull_request_link_when_it_has_them() {
+    let mut item = content_item();
+    item.kind = ItemDtoKind::Ticket;
+    item.closure = Some(ClosureDto {
+        state: ClosureState::Closing,
+        closed_at: Some("2026-10-19T12:00:00Z".into()),
+        closed_by: Some("Ada".into()),
+        publication: Some(ClosurePublication::Pending),
+    });
+    let link = |url: Option<&str>| PullRequestDto {
+        source: "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FD0".into(),
+        target: "main".into(),
+        forge: Some("github".into()),
+        url: url.map(str::to_owned),
+    };
+    let lines = |item: &ItemDto| -> Vec<String> {
+        item_show(item)
+            .stdout
+            .lines()
+            .map(str::to_owned)
+            .take_while(|line| !line.is_empty())
+            .collect()
+    };
+    assert!(lines(&item).contains(&"Publication: pending".to_owned()));
+    assert!(
+        !lines(&item)
+            .iter()
+            .any(|line| line.contains("pull request"))
+    );
+
+    item.pull_request = Some(link(Some("https://github.com/o/r/pull/new/b")));
+    assert!(lines(&item).contains(&"pull request: https://github.com/o/r/pull/new/b".to_owned()));
+    item.pull_request = Some(link(None));
+    assert!(
+        lines(&item).contains(
+            &"open a pull request from manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FD0 into main"
+                .to_owned()
+        )
+    );
+    item.closure = Some(ClosureDto {
+        publication: None,
+        ..item.closure.unwrap()
+    });
+    assert!(
+        !lines(&item)
+            .iter()
+            .any(|line| line.starts_with("Publication"))
+    );
+}
+
+#[test]
 fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
     let mut item = content_item();
     item.kind = ItemDtoKind::Ticket;
@@ -345,6 +401,7 @@ fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        publication: None,
     });
     let output = item_show(&item);
     let (metadata, body) = output.stdout.split_once("\n\n").unwrap();
@@ -564,6 +621,7 @@ fn operation() -> OperationDto {
         worktree: Some("/repository".into()),
         updated_at: Some("2026-10-19T12:00:00Z".into()),
         failure_code: Some(OperationFailureCode::ProtocolRejected),
+        attribution: Default::default(),
     }
 }
 
@@ -571,6 +629,7 @@ fn operation() -> OperationDto {
 fn repository_list_reports_each_registration_and_index_notes() {
     let mut data = RepositoryListDto {
         items: vec![RepositorySummaryDto {
+            setup: None,
             root: "/repository".into(),
             enabled_at: Some("2026-10-19T12:00:00Z".into()),
             accessibility: Accessibility::Accessible,
@@ -603,6 +662,7 @@ fn repository_list_reports_each_registration_and_index_notes() {
 #[test]
 fn repository_inspection_reports_registration_configuration_and_remotes() {
     let data = RepositoryInspectionDto {
+        setup: None,
         selected_path: "/linked".into(),
         root: "/repository".into(),
         registered: false,
@@ -611,10 +671,12 @@ fn repository_inspection_reports_registration_configuration_and_remotes() {
         configuration: configuration(),
         identity_state: IdentityAvailability::Available,
         remotes: vec![remote()],
+        operations: vec![operation()],
     };
     contains(
         repository_inspection(&data),
         &[
+            "Operation: 01ARZ3NDEKTSV4RRFFQ69G5FA0  remote  synchronize_primary  failed",
             "/linked",
             "/repository",
             "false",
@@ -625,6 +687,54 @@ fn repository_inspection_reports_registration_configuration_and_remotes() {
             "origin",
             "[redacted]",
         ],
+    );
+}
+
+#[test]
+fn repository_inspection_names_mode_and_forge() {
+    let inspect = |integration: &str, forge: Option<ForgeDto>| {
+        repository_inspection(&RepositoryInspectionDto {
+            setup: None,
+            selected_path: "/repository".into(),
+            root: "/repository".into(),
+            registered: true,
+            head_branch: Some("main".into()),
+            local_branches: vec!["main".into()],
+            configuration: ConfigurationDto {
+                integration: Some(integration.into()),
+                forge,
+                ..configuration()
+            },
+            identity_state: IdentityAvailability::Available,
+            remotes: vec![],
+            operations: vec![],
+        })
+        .stdout
+    };
+    let forge = |kind: Option<&str>, template: Option<&str>| ForgeDto {
+        kind: kind.map(Into::into),
+        web_url: None,
+        pull_request_url: template.map(Into::into),
+    };
+
+    let cloud = inspect("pull_request", Some(forge(Some("bitbucket-cloud"), None)));
+    assert!(cloud.contains("Integration: pull_request\n"), "{cloud}");
+    assert!(cloud.contains("Forge: bitbucket-cloud\n"), "{cloud}");
+
+    let direct = inspect("direct", None);
+    assert!(direct.contains("Integration: direct\n"), "{direct}");
+    assert!(!direct.contains("Forge:"), "{direct}");
+
+    let template = inspect(
+        "direct",
+        Some(forge(
+            None,
+            Some("https://git.example.com/compare?source={source}"),
+        )),
+    );
+    assert!(
+        template.contains("Forge: https://git.example.com/compare?source={source}\n"),
+        "{template}"
     );
 }
 
@@ -929,6 +1039,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
     escaped_metadata(
         repository_list(&RepositoryListDto {
             items: vec![RepositorySummaryDto {
+                setup: None,
                 root: CONTROL_FIELD.into(),
                 enabled_at: None,
                 accessibility: Accessibility::Accessible,
@@ -966,6 +1077,7 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
     });
     escaped_metadata(
         repository_inspection(&RepositoryInspectionDto {
+            setup: None,
             root: CONTROL_FIELD.into(),
             selected_path: CONTROL_FIELD.into(),
             registered: true,
@@ -974,8 +1086,9 @@ fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
             configuration,
             identity_state: IdentityAvailability::Available,
             remotes: vec![remote],
+            operations: Vec::new(),
         }),
-        11,
+        12,
         10,
     );
 }
@@ -1042,4 +1155,101 @@ fn host_and_status_metadata_escape_controls_consistently() {
         9,
         2,
     );
+}
+
+fn pending_setup(state: &str, url: Option<&str>) -> RepositorySetupDto {
+    RepositorySetupDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        kind: "enable".into(),
+        state: state.into(),
+        request_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".into(),
+        branch: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        remote: "origin".into(),
+        integration: "pull_request".into(),
+        pull_request: PullRequestDto {
+            source: "manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            target: "main".into(),
+            forge: Some("github".into()),
+            url: url.map(Into::into),
+        },
+    }
+}
+
+#[test]
+fn repository_inspection_names_a_pending_setup() {
+    let inspect = |setup: Option<RepositorySetupDto>| {
+        repository_inspection(&RepositoryInspectionDto {
+            selected_path: "/repository".into(),
+            root: "/repository".into(),
+            registered: true,
+            head_branch: Some("main".into()),
+            local_branches: vec!["main".into()],
+            configuration: configuration(),
+            setup,
+            identity_state: IdentityAvailability::Available,
+            remotes: vec![],
+            operations: vec![],
+        })
+        .stdout
+    };
+
+    let recorded = inspect(Some(pending_setup("recorded", None)));
+    assert!(
+        recorded.contains("Setup: recorded, not published yet\n"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.contains(
+            "open a pull request from manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV into main\n"
+        ),
+        "{recorded}"
+    );
+
+    let published = inspect(Some(pending_setup(
+        "published",
+        Some("https://github.com/acme/widgets/compare/main...x"),
+    )));
+    assert!(
+        published.contains(
+            "Setup: waiting for manyhands/setup/01ARZ3NDEKTSV4RRFFQ69G5FAV to merge into main\n"
+        ),
+        "{published}"
+    );
+    assert!(
+        published.contains("pull request: https://github.com/acme/widgets/compare/main...x\n"),
+        "{published}"
+    );
+
+    let none = inspect(None);
+    assert!(
+        !none.contains("Setup:") && !none.contains("pull request"),
+        "{none}"
+    );
+}
+
+#[test]
+fn repository_list_marks_a_pending_setup() {
+    let list = |setup: Option<RepositorySetupDto>| {
+        repository_list(&RepositoryListDto {
+            items: vec![RepositorySummaryDto {
+                root: "/repository".into(),
+                enabled_at: None,
+                accessibility: Accessibility::Accessible,
+                configuration: configuration(),
+                setup,
+                index: IndexStateDto {
+                    state: IndexState::Current,
+                    refreshed_at: None,
+                },
+                problem_count: 0,
+            }],
+            complete: true,
+        })
+        .stdout
+    };
+    assert!(
+        list(Some(pending_setup("published", None))).ends_with("problems=0  setup=published\n")
+    );
+    assert!(list(Some(pending_setup("recorded", None))).ends_with("problems=0  setup=recorded\n"));
+    assert!(list(None).ends_with("problems=0\n"));
 }

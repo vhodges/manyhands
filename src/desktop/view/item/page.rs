@@ -41,7 +41,9 @@ use gpui_kit::{
     div, px,
 };
 
-use super::{ItemPane, tokens::item_colors};
+use manyhands::repository::ItemDto;
+
+use super::{ItemPane, banners, tokens::item_colors};
 use crate::desktop::{
     keys::ITEM_PAGE_CONTEXT,
     model::{editor_text::load, links::LinkTarget, navigation::OpenTarget},
@@ -334,18 +336,29 @@ impl ItemPane {
         }
     }
 
+    /// Whether `item` is a nonconforming file read by its path: the page
+    /// reads it in the read view, and its Git details are in their own
+    /// sheet, opened from the header.
+    pub(super) fn nonconforming_file(&self, item: &ItemDto) -> bool {
+        matches!(self.model.target(), OpenTarget::Inspect { .. }) && banners::nonconforming(item)
+    }
+
     /// An item tab shows the last successful read's body in its read
-    /// editor, kept during an in-flight or failed read. An Inspect tab
-    /// keeps D1's source view (`source`).
+    /// editor, kept during an in-flight or failed read. So does a
+    /// nonconforming file read by its path, with its whole file as the
+    /// body. Any other Inspect tab keeps D1's source view (`source`).
     pub(super) fn sync_read(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.model.target(), OpenTarget::Item { .. }) {
-            return;
-        }
         let Some(item) = self.model.item().rows() else {
             return;
         };
-        self.page
-            .show(item.body.as_deref(), &self.scroll, &self.images, window, cx);
+        let body = match self.model.target() {
+            OpenTarget::Item { .. } => item.body.as_deref(),
+            OpenTarget::Inspect { .. } if self.nonconforming_file(item) => item.source.as_deref(),
+            // A file that conforms now has the source view; a read view kept
+            // from when it did not is dropped.
+            OpenTarget::Inspect { .. } => None,
+        };
+        self.page.show(body, &self.scroll, &self.images, window, cx);
         self.page.note_focus(window, cx);
     }
 }
@@ -355,32 +368,21 @@ impl ItemPane {
 /// `scroll_to_top_of_item` (fact 80).
 pub(super) const DISCUSSION_CHILD: usize = 1;
 
-/// The item's scroll region, holding `page`, then `discussion`, then
-/// `end`, the selected repository's details, with the Kit's scrollbar
-/// over it, and then `over`, laid over the region after it. A press on
-/// what it scrolls is noted for the editors' caret reveals (`scroll`).
+/// The item's scroll region, holding `page`, then `discussion`, which ends
+/// it (nothing of the repository follows, Cycle 03a Part F), with the
+/// Kit's scrollbar over it, and then `over`, laid over the region after
+/// it. A press on what it scrolls is noted for the editors' caret reveals
+/// (`scroll`).
 pub(super) fn region<P: IntoElement, D: IntoElement>(
     scroll: &ContentScroll,
     page: P,
     discussion: Option<D>,
-    end: Option<AnyElement>,
     over: Vec<AnyElement>,
     cx: &App,
 ) -> impl IntoElement + use<P, D> {
     // One light thumb at rest, under the pointer and while dragged, so it
     // stays light against the page in either theme.
     let thumb = item_colors(cx).page_border_strong;
-    // The content region's padding is gone around an item tab, so the
-    // details keep their own inset from its border.
-    let end = end.map(|end| {
-        div()
-            .id("item-region-end")
-            .w_full()
-            .px_2()
-            .pt_3()
-            .pb_3()
-            .child(end)
-    });
     let pressed = scroll.clone();
     div()
         .id("item-region")
@@ -398,8 +400,7 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                 .track_scroll(scroll.handle())
                 .capture_any_mouse_down(move |_, window, _| pressed.note_press(window))
                 .child(page)
-                .children(discussion)
-                .children(end),
+                .children(discussion),
         )
         .child(
             div()

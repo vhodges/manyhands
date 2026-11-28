@@ -95,11 +95,24 @@ only `--path` accepts an optional `--context` worktree path. `path observe`
 and `ticket check` move to C3. F2's `request show`, `request cancel` and
 `host observe` join C2, and `operation abandon` joins C4.
 Amended 2026-10-20 by C2: all eighteen C2 verbs are available with the rules
-below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available;
-C4–C5 remain cataloged as planned until their delivering Cycles.
-Amended 2026-10-30 by C4 (R-1; decision 7): all eight C4 verbs are
-available, the new `item republish` among them; C5 remains cataloged as
-planned until it delivers.
+below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available, and
+C4's and C5's were then cataloged as planned until their Cycles delivered
+them. Amended 2026-10-30 by C4 (R-1; decision 7): all eight C4 verbs are
+available, the new `item republish` among them. Amended 2026-11-03 by C5
+(decision 3; R-8): all ten C5 verbs are available: the six planned ones
+(`document promote`, `ticket close` and the four `poll` mutations) and the
+four `context` verbs. No verb is cataloged as planned; see
+[Exit statuses](#exit-statuses-and-partial-completion) for
+`command_unavailable`.
+
+Amended 2026-11-06 by the [completed-context retirement follow-up](../Cycles/wave-03-completed-context-retirement.md)
+(D1–D14 approved 2026-11-04; D15, 2026-11-06): `context retire` and the
+explicit `poll once --retire-completed` option are delivered on that ticket
+branch. The catalog has **78 verbs, 42 mutating**, with **24 input-taking**
+verbs. Both existing CLI exemptions, library `context prepare` and `context
+release`, remain exempt; retirement adds no input schema or exemption. The
+[retirement contract](#completed-context-retirement) below records actual
+interfaces and recovery, not whole-feature/final-gate approval.
 
 Amended 2026-10-24 by C3: the C3 taxonomy rows below specify selectors and
 input fields. Every C3 verb requires `--repo`; only the four ID-selected
@@ -117,18 +130,30 @@ the conflict and operation verbs take `--operation-id`. Only `comment add`
 and `conflict resolve` take `--input`; the other C4 mutations refuse it as
 a usage error. No C4 verb accepts `--context`.
 
+Amended 2026-11-03 by C5 (decision 3; R-2, R-8 and R-15; the C5 design's
+Local-Sync Verbs): the four `context` rows below are new, and select and
+take input as [C5 completion options and input schemas](#c5-completion-options-and-input-schemas)
+says. Every C5 verb requires `--repo`. `document promote`, `ticket close`
+and the two local reads take `--id` or `--operation-id`; only
+`poll configure`, `context sync-local` and `context resolve-local` take
+`--input`. No C5 verb accepts `--context`. The library's `context prepare`
+and `context release` are the desktop's and stay out of the CLI catalog
+(owner question 5).
+
 | Commands | Inputs and behavior |
 | --- | --- |
-| `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
-| `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
-| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}` and `ticket_slug_prefix`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
-| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. |
+| `repo list` | Registered repositories and their latest discovery/recovery state; no network. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): each repository's `configuration` object carries the two fields described at `repo inspect`, read from the index. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): each repository's `setup` is null or its pending setup `{ id, kind, state, request_id, branch, remote, integration, pull_request }` (`schemas/v1/repository_setup.schema.json`, nullable). `kind` is `enable` for a first-time setup and `change` for a change of an enabled repository's setting. `state` is `recorded` until the remote holds the setup's branch, then `published`. `branch` is `manyhands/setup/<id>`, `remote` the setup remote's name, `integration` the intended mode, and `pull_request` the link `{ source, target, forge, url }` (`schemas/v1/pull_request.schema.json`), whose `url` is null when the forge needs the remote's URL, which this index-only read does not read. A setup that the local primary already holds reads as none, from the index's configuration blob, so a complete setup can show until the next refresh. A record that cannot be read gives `setup` null and the problem `setup_unreadable` in `configuration.problems`, as `operations_unreadable` does for `operations`; `repo remove` clears it. Human output adds ` setup=<state>` to the repository's line. |
+| `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): the `configuration` object gains `integration` and `forge`, and its schema (`schemas/v1/repository_configuration.schema.json`) requires both. `integration` is `"direct"` or `"pull_request"` when `state` is `valid` and null otherwise; a configuration without the key is direct. `forge` is `{ "kind", "web_url", "pull_request_url" }`, each a string or null, when the valid configuration has a `[forge]` table, and null otherwise. It is the configured setting, not a forge recognised from the remote. Human output adds `Integration: <mode>` for a valid configuration and, when there is a forge, `Forge: <kind>` (or `Forge: <pull_request_url>` for a setting with only a template). The index RFC and the canonical schema RFC describe the keys. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `setup` is as at `repo list`, with the full link: its `url` is built from the setup remote's fetch URL in Git's configuration and the configuration's `[forge]`, and is null when no forge is recognised and no template is set. `repo inspect` reads the local primary, so a setup it already holds reads as none. A setup record that cannot be read gives `setup` null and the problem `setup_unreadable`. Human output adds `Setup: recorded, not published yet` or `Setup: waiting for <branch> to merge into <primary>`, then the link's line: `pull request: <url>`, or `open a pull request from <branch> into <primary>` when there is no URL. |
+| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}` and `ticket_slug_prefix`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo enable` (not `repo create`, which refuses them as unknown fields) takes three more optional input fields: `publication_remote` (a remote's name), `integration` (`direct` or `pull_request`) and `forge` (an object of optional strings `kind`, `web_url` and `pull_request_url`). For a repository with no configuration the mode is `integration` when given; otherwise, when `publication_remote` is given, the default that Cycle 01's recognition gives for the remote's fetch URL and `forge` (`pull_request` for a recognised forge, else `direct`); otherwise direct. A pull-request configuration with no remote, or with an invalid forge, is `invalid_input` before anything is written, and a named remote that is missing or not SSH is `invalid_remote`. A direct enable with `publication_remote` or `forge` writes them in its "Initialize Manyhands" commit, and one without them is unchanged. A repository that already has a valid configuration (a clone) registers as before, and a supplied field that differs from the configuration is `invalid_input` with nothing written. **A pull-request enable never commits to or pushes the primary.** It checks the branch, the worktree and the identity as before (an unborn HEAD is `wrong_branch`), then registers the repository as setup pending, with no configuration, and records the setup (its intended configuration, remote and primary, and a digest of the remote's endpoints, never a URL, credential or identity), writes the supplied identity and the worktree exclusion, and publishes: it fetches the remote's primary, commits the configuration on it as "Set up Manyhands", and pushes that commit to the branch `manyhands/setup/<id>`, alone. Its preview is `setup_preview` (effects `worktree_exclusion_written`, `repository_registered`, `setup_recorded`, `setup_branch_committed` and `setup_branch_published`; the observation also binds the mode, the forge and the remote's fetch and push URLs), and contacts no remote. Its answer is `ok`, exit 0, with `publication` `published` and data `setup` (`setup_mutation`: `{ type: "setup", id, kind, state, request_id, branch, remote, integration, pull_request }`, `state` `published`), and no `commit_oid`: the setup commit is never on the local primary. Three refusals at the fetch end the setup, finally: the record and a first-time setup's registration are removed and the request is finished with the refusal in one transaction, so the same request, sent again, replays it. They are `remote_primary_missing`, `remote_already_set_up` (the remote's primary already holds a configuration: update the checkout and enable again, which registers it as a clone) and `primary_has_local_commits` (the local primary has commits the remote's lacks, with the data `primary_local_commits` of `repo sync`). Every other stop after the setup is recorded keeps the record and leaves the request accepted: it answers `partial`, exit 4, with that code and the `setup` data (`state` `recorded`), and the same request, sent again with the same confirmation, continues from the record, makes no second registration, record or branch, and pushes once. Those codes are `no_selected_key`, `key_unavailable`, `key_rejected`, `unlock_required`, `unlock_failed`, `host_approval_required` (its recovery is `host.approve`, or `host.replace` for a changed key, and `host observe` and `host approve` read the setup's remote), `transport_unavailable`, `remote_unavailable`, `busy`, `identity_required`, `recovery_required` (the remote's setup branch is at another commit, or the remote's URL changed since the setup was recorded) and `internal_error`. Two enables of one root at the same time answer `busy` to the second, and `setup_pending` on its retry. Until the setup merges the repository is registered with no configuration: `repo inspect` shows `setup`, the gated verbs answer `setup_pending` ([the pending setup gate](#pending-setup-gate)), and `poll once` finishes it. `request cancel` asks nothing of a setup request, and Ctrl-C ends the process with the request accepted; `repo setup-cancel` or `repo remove` ends the setup. |
+| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. Amended 2026-11-25 by Wave 06 Cycle 02 (decision 16): a pending setup never blocks it. It drops the setup's record with the registration, finishes every accepted `repo enable` or `remote select` request that the record names or whose operation recorded the setup as `cancelled` (and an accepted `repo setup-cancel` request as `already_applied`) in its removal transaction, with the root present or gone, and leaves both setup branches, the local one and the remote's. The same request, sent again, answers its stored `cancelled` envelope and records no second setup. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): a setup record that cannot be read (`setup_unreadable`) is cleared with the registration too. |
+| `repo setup-cancel` | Added 2026-11-25 by Wave 06 Cycle 02 (design Part H; `delivered_by` C5). Takes `--repo` only and refuses `--input`. Confirmed: its preview (`setup_cancel_preview`) reads the registry alone and names the setup, its kind, state, branch and remote, and the effects `setup_branch_deleted_remotely` (when the setup has a commit), `setup_branch_deleted`, `setup_record_removed` and, for a first-time setup, `repository_unregistered`. A repository with no setup is a no-op (`already_applied`). The confirm, under the setup lock: fetches the remote's primary once; when the primary already holds the setup it is `recovery_required` and nothing changes (run `poll once`, which finishes a merged setup); deletes the remote setup branch only while it is at the recorded commit (kept, and said so, at any other commit; a delete the server refused or lost is `push_rejected`, retryable), and observes the result on a connection of its own; deletes the local setup branch at the recorded commit and the private base ref; then in one transaction ends the record, for a first-time setup unregisters the repository as `repo remove` does, and finishes the setup's own request as `cancelled` and its own with its answer (`setup_cancel` data: `setup_id`, `kind`, `remote_branch`, `local_branch`, `unregistered`). A setup that was never pushed needs no connection. After the cancel recorded its own row, a key, unlock, host or network stop, `busy`, or another operation in the way that appears later changes nothing more and leaves the request accepted: the same request goes on. Before the row is recorded (the setup lock's `busy`, or another operation in the way at the begin) the request record is deleted, nothing was sent, and a new request starts afresh. The `recovery_required` of a merged setup names the setup in its `setup` data, which tells it from the other `recovery_required` answers. A local setup branch that HEAD names is kept (`local_branch` `kept`), as one at another commit is. A repository that is not registered, or has no setup, is `already_applied`. Not gated by a pending setup. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): its local operation's action is `cancel_setup`, so `operation list`, `operation show` and `operation abandon` name it; `request cancel` asks nothing of it; and the `recovery_required` of a merged setup offers `repo.inspect`, while its human output says to run `poll once`. |
 | `repo identity` | Inspect effective name/email and source. |
 | `repo identity-set` | Input `name`, `email`, optional nullable `initials`; missing leaves initials unchanged, null clears, a string sets. Explicitly writes repository-local Git config, never global config. Confirmation required. |
 | `remote list` | Names, redacted locations and publication selection; never echo embedded credentials. |
 | `remote add` | Input `name`, `url`; add the named configuration, without implicit publication selection. |
 | `remote remove` | Input `name`; preview tracking-reference/upstream effects and require confirmation. The publication remote is refused with `publication_remote_in_use`, so preview `publication_affected` is always false. |
-| `remote select` | Input `name` (SSH only) or `null` to clear publication selection. |
+| `remote select` | Input `name` (SSH only) or `null` to clear publication selection. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): the input also takes optional `integration` (`direct` or `pull_request`) and `forge` (an object as at `repo enable`, or null to remove the `[forge]` table; absent leaves it). The intended configuration is the primary's, with `publication_remote` set to `name` and `integration` and `forge` replaced when given, and clearing the remote of a pull-request configuration is `invalid_configuration`, before any other check. A configuration equal to the current one is `already_applied` with nothing written. A direct repository that stays direct keeps today's commit on the primary, with a forge change in the same commit, and answers `external_change` when the primary turned pull-request mode while the request waited for the lease. A direct repository that turns pull-request mode, naming any SSH remote (a first or a different one), and a pull-request repository that keeps its remote, in either mode, go through a setup branch; a pull-request repository naming another remote is `invalid_input` (the skills give the route by hand). The setup-branch path is the pull-request enable's, for a setup of kind `change`: the record holds the primary's current configuration as its start, the commit is "Change Manyhands setup" on the setup remote's primary, the answer is `ok` with data `setup`, and the primary's configuration, the local primary and HEAD do not change. Its refusals are the enable's but `remote_already_set_up`; a base whose configuration is no longer the starting one answers `external_change` (for the same remote a `poll once` comes first; for another remote, that remote's primary must hold this repository's current configuration), and a close or promotion that is unfinished or accepted, or another accepted `remote select` (a request still in flight, not this one), answers `recovery_required` naming it and starts no setup. Its stops are the enable's, owed. While a change is pending every write but the verbs refused for any setup carries on in the current mode and on the current remote. A change on the same remote completes when the local primary holds a different configuration, by a `poll once` that fast-forwards it or by a pull, and `poll once` does not say so (`repo inspect` shows `setup` null); a change on another remote is activated by `poll once` as a first-time setup is. The verb stays unconfirmed, and a selection with neither new field is unchanged. |
+| `remote history`, `remote resolve-history` | Amended 2026-11-07 by vh-hyksw (the remote history repair). `remote history` is an unjournaled read of kind unlocking read, like `host observe`: it takes `--repo` only and refuses `--input`, `--request-id`, `--prepare` and `--confirm`, and it allocates a fresh operation and request ID for every call, so a replayed terminal poll never hides a fetch. It runs one reserved, complete poll of the publication remote, with the unlock prompt at a terminal. That poll has the side effects of `poll once`: it may fast-forward a clean context and materialize one, and it never pushes. Only Ctrl-C cancels it (`request cancel` does not reach it). It then lists every context whose publication history is unknown, or that its poll just resolved, with `item_id`, `kind`, `branch`, `local_oid`, `remote_oid`, the relation of the two, the poll's `disposition`, `resolved`, and the `choices` on offer (`publish`, `release`), and `cache_loss`, the repository-wide lost-history flag. The poll's stops answer as `poll once` answers them, arm for arm. In human output a context's choices read `publish (release: desktop only)`, because a release of the context is the desktop's. `remote resolve-history` is confirmed: it clears the repository-wide lost-history flag, and then deletes the marker file, once no context reads unknown; while one does, it is `recovery_required`. |
 | `key list`, `key show` | Non-secret registrations, selection, ownership and fingerprint; show takes an opaque key ID. |
 | `key generate` | Input `label`, `protection` (`passphrase` or `none`); passphrase comes only from masked terminal interaction. |
 | `key import` | Input `label`, invocation-relative `private_key_path`, optional `public_key_path`; register by reference. |
@@ -136,9 +161,9 @@ a usage error. No C4 verb accepts `--context`.
 | `key remove`, `key delete` | Unregister only, or separately delete owned generated files. Delete requires exact effect confirmation and cleared selection. Imported deletion is rejected. |
 | `key public` | Return public-key text/fingerprint if available; never private contents. |
 | `host list`, `host inspect` | Non-secret application-global pins; inspect takes `--authority`, never `--repo`. No network observation. |
-| `host observe` | Required `--repo`, optional `--authority <host[:port]>` (bracketed IPv6, default port 22); observes configured SSH authorities without writing a pin. May unlock for authentication. Human output supplies the next approve/replace input object. |
-| `host approve`, `host replace` | Input exact `authority`, `algorithm`, `fingerprint`; replacement also requires `old_fingerprint`. Explicit confirmation, transport re-observation and authentication with the selected key are required before storing trust. |
-| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. |
+| `host observe` | Required `--repo`, optional `--authority <host[:port]>` (bracketed IPv6, default port 22); observes configured SSH authorities without writing a pin. May unlock for authentication. Human output supplies the next approve/replace input object. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): without `--authority` it takes the configuration's publication remote when there is one and the pending setup's remote otherwise, and with `--authority` the matching authority of either. It works on a setup-pending repository that has no configuration, reading the setup's remote from its record, and stops where publishing would (`no_selected_key`, `unlock_required`). |
+| `host approve`, `host replace` | Input exact `authority`, `algorithm`, `fingerprint`; replacement also requires `old_fingerprint`. Explicit confirmation, transport re-observation and authentication with the selected key are required before storing trust. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): the same choice of remote: an approval for the setup's remote verifies and authenticates through the setup's transport, and a repository with a pending setup is not gated for them. |
+| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): a document read from its active context gives the item's `pull_request` (the link record's link), in either mode, when this clone has a link row for it and the primary does not hold the document. It is null once the primary holds the document, for a document with no row or no active context, and in every list. Show's check is the cheaper twin of the content proof that promote uses: it reads the trees' entries and loads no blob, and it holds the document when a primary the pull-request rules may use (the tracking primary, or the local primary when that is the tracking primary or behind it) has a regular file at the document's path in the branch's tip and the proof's entry comparison finds nothing of the tip unheld, and the remote's copy of the branch is absent, equal to the tip or behind it. It can differ from the full proof only in a repository with missing objects, a document ID held at two paths, a primary copy that does not parse, or a document moved on the primary, and it is as fresh as the last fetch. |
 | `folder list` | List indexed document folders under `docs/`; no scan or refresh. |
 | `folder create` | Required `--input` with repository-relative `path` under `docs/`; primary-only local empty folder until content is added. |
 | `document create` | Required `--input` with `item_id` (canonical ULID), repository-relative `path`, `title`, `body`. Explicit IDs support safe automation retries; no `--id`. |
@@ -153,17 +178,47 @@ a usage error. No C4 verb accepts `--context`.
 | `ticket slug-assign` | Required `--id`, `--input` with `observation`, optional `initials`. Assign a generated code; a matching committed code is a no-op, a different held code is `slug_already_assigned`. Lifecycle-closed tickets are refused. |
 | `comment list` | `--id` selects the parent item; return one flat, ordered list of roots and replies with parent IDs and depth, then visible malformed entries. Replies are not nested. |
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`, optional `created_by`. One comment file and one checkpoint, then publication by a merging synchronization of the item's context when a publication remote is configured; no-remote means `ok` with publication pending. A retry of the same request publishes without writing again. `created_by` is the caller's when given, else the Git identity. A lifecycle-closed ticket is `ticket_closed`. Amended 2026-10-30 by C4 (dogfooding; the owner's decision): only nonconforming content the comment depends on refuses it: the comment itself, its item, or its parent chain. Each refusal keeps the code it had before, such as `item_not_found` for a broken parent chain, `occupied_path` for a comment ID another file claims, and `recovery_required` for a nonconforming item in an existing editing context. Unrelated nonconforming files, such as Markdown files under `docs/` without Manyhands front matter, or another item's or another comment's files, do not block a comment. |
-| `item sync`, `repo sync` | Deliberate item-context or primary synchronization; no input. Divergent history is merged with ordered parents, never rebased or force-pushed: an item syncs its remote context, then primary. Unsaved caller files are not implicitly submitted. A conflict stops with `recovery_required` and names its operation and next step in data. A remotely deleted item branch is `remote_branch_deleted`; only `item republish` recreates it. |
+| `item sync`, `repo sync` | Deliberate item-context or primary synchronization; no input. Divergent history is merged with ordered parents, never rebased or force-pushed: an item syncs its remote context, then primary. Unsaved caller files are not implicitly submitted. A conflict stops with `recovery_required` and names its operation and next step in data. A remotely deleted item branch is `remote_branch_deleted`; only `item republish` recreates it. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): in a pull-request repository (`configuration.integration` is `pull_request`) `repo sync` is pull-only: it fetches and fast-forwards a local primary the remote is ahead of, and never merges or pushes the primary. It answers as a direct-mode fast-forward-only sync answers: `already_applied` with `effects.publication` `current`. A local primary that has commits the remote lacks (ahead or diverged) is refused with `primary_has_local_commits`: blocked, exit 3, no recovery action, every effect `not_requested`, nothing pushed, and the refusal ends its operation and holds nothing, so the next `item sync` is not `busy` and the same request retried answers the same. Its `data` is `{ "type": "primary_local_commits", "local_commits": [{ "oid", "summary" }], "complete" }`: up to 20 of the local commits, newest first, with the full 40-character `oid`, and `complete` is false when more exist. Human output prints `local commit: <7-character oid> <summary>` for each and `note: more local commits are not listed` when `complete` is false. Amended during execution, 2026-11-24: a refusal right after the plan leaves the local primary unchanged. A refusal at the push step, when the push endpoint does not hold the fetched primary, comes after the local fast-forward (the local primary is at the fetched remote primary) and pushes nothing: with no primary at the push endpoint the list is the fetched primary's newest commits (up to 20, `complete` false if there are more), with a push endpoint behind the list is the commits it lacks, and with a push endpoint ahead the list is empty and `complete` is true. In those cases the person has no local-only commits; human output prints `note: no local-only commits are listed; the push endpoint is out of step with the fetch, so run repo sync again` for an empty list, and running `repo sync` again with a new request ID fetches again. The way out is Git work outside Manyhands: move the commits to a branch for a pull request. A direct-mode repository is unchanged, and an operation keeps the mode it began with on every later call. `item sync` is unchanged, and so are close and promote until Wave 06's later Cycles. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `item sync` of a ticket in a pull-request repository, when it publishes or finds current a branch whose ticket holds a provisional closure, answers with the data `pull_request_link` (`{ type, pull_request }`, schema `pull_request_link.schema.json`) and records the link for the item; every other `item sync` answer keeps its data. A remote synchronization of a ticket context, in either mode, never publishes a head whose ticket lacks a closure that the primary it fetched holds: a clean merge is given that closure, and a fast-forward, or a head the remote already has, answers `ticket_closed` (blocked, exit 3, no recovery action), which ends the operation. When the only conflict of the context's merge is two different closures in the ticket's file and the fetched primary holds none, the synchronization settles it itself by keeping the remote branch's closure. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): the rule above for a closing ticket gains a document arm. `item sync` of a document context in a pull-request repository with a publication remote, when it publishes or finds current the branch (not a republish), this clone has a link row for the document, and the primary does not hold the document after the synchronization (the full content proof, as `document promote` judges it), answers with the same data `pull_request_link`, built from the row's link. The document arm reads the row and never writes it, so `given_at` is not renewed and no row is made for a document that has none: this changes the sentence above that records the link for the item, which holds for a ticket only. Every other `item sync` answer of a document is unchanged, and `pull_request_link.schema.json` describes the link of a ticket or of a document. |
 | `item republish` | `--id` selects item; no input. Confirmed. The preview, from stored deletion evidence, names the branch, the remote, the last published commit and the local commit; confirming pushes exactly that local commit and integrates nothing. Without deletion evidence the preview is a no-op that says to run `item sync` first. A lifecycle-closed ticket is `ticket_closed`. |
-| `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
+| `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. Amended 2026-11-03 by C5 (decisions 6, 8, 9 and 33; R-2, R-3, R-4; the C5 design's verb sections): required `--id`, no input (R-2). `--prepare` returns the preview: kind, item, slug for a ticket that has one, branch, primary, remote, the context and primary commits, the whole branch's path changes, the planned integration, publication and cleanup and, for a closure, the planned `closed_by` and whether it is `record` or `existing`; no title, body or content. A blocked prepare names every blocker in `data.blockers`: `identity_required` alone with `repo.identity_set`, `ticket_closed` for an already closed ticket, else `recovery_required` with `repo.inspect`. Amended 2026-11-07 by vh-hyksw: the new blocker `history_unresolved` names `remote history` in human output, and `item resolve-history` is its way out. While an unfinished parent that a new request cannot supersede holds the item, a prepare is `recovery_required`, naming the holder's `request.retry`, or `operation.resume` when no record holds it (decision 33). `--confirm` executes what was consented to, as Wave 02 Cycle 09's D6 binds it: with a remote, the item's change set and the D2 relation, not the moving OIDs. Consent expires ten minutes after creation, and once accepted stands for that request. Both use the repository's configured identity only, and no `closed_by` input (decision 6). The result's data is the lifecycle DTO: `recording`, checkpoint, integration, publication and cleanup with their pending reasons, `blockers`, and for a closure `made_ready` (`{id, slug}` entries) with `made_ready_state` (`current`, `index_pending`, `index_unavailable_final`, `not_computed`, `not_applicable`), as the [relationships RFC](ticket-relationships-and-short-codes.md#queries) defines it. With no publication remote both exit 0 with publication pending, and a later `repo sync` publishes. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): not in a pull-request repository, where `repo sync` is pull-only and publishes nothing; close and promote still publish the primary there until Wave 06's later Cycles change them. Sending the same request again continues an unfinished operation under its operation ID, also after `cancelled` (decision 8), and repeats no merge, checkpoint or push already done. See [C5 evidence and known limits](#c5-evidence-and-known-limits). Amended 2026-11-22 by vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; the fast-writes design's decision 34 and planning amendment P-1): behind a live index hand-off of a sync of their own item, or, for any close or promotion, of the primary, they wait up to 5 seconds as the other per-item writers do, then answer `busy`; a stale one is answered at once, `recovery_required`. Met at the item's context child, that stop comes before integration; met at the primary's publication, the work is merged and the publication stays pending `busy`. The cleanup checks the worktree in full inside its removal. When the remote branch is to be deleted, it also checks the worktree in full before it reserves the remote, and checks its head and status just before the delete: whatever the full check refuses that is already there, a dirty worktree, an ignored nested repository or an unreadable directory, stops the close before the delete with nothing reserved, as before. Dirt that comes after the reservation still stops it before the delete, with the reservation kept (below). An ignored nested repository or an unreadable directory that appears after that first check, which a head-and-status check cannot see, stops the close only after the remote branch is deleted: the work is merged and the publication done, the cleanup is pending (`context_changed`), and the operation stands at `worktree_removing` (its `state` in `operation list`), not `remote_deleted`. Once what appeared is gone, a retry finishes the cleanup without a second delete. A worktree change that the full check refuses at removal stands at `worktree_removing` too. That stop after the delete keeps the cleanup's reservation of the remote, and so does any other stop of the cleanup once it has reserved the remote, the dirt found just before the delete and a worktree change refused at removal among them: until the same request finishes the cleanup, every local write in the repository and `index refresh` answer `recovery_required` naming the close's operation, and `poll once`, `item sync` and `repo sync` answer `busy`. A sync's hand-off that begins after the children and is still live when the cleanup's reservation has waited leaves the cleanup pending `recovery_required`, not `busy`: no cleanup answer can carry `busy` without a JSON change. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): while a setup is pending their prepare and their first call answer `setup_pending` (the gate below), as the envelope's code and not as an entry of `data.blockers`, and a change of setting is refused (`recovery_required`, naming the holder) while one of them is unfinished or accepted. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): in a pull-request repository (`integration` is `pull_request`) `ticket close` is the pull-request close and never commits to or pushes the primary; `ticket close` in a direct repository is unchanged, and `document promote` in a pull-request repository is the pull-request promote of Wave 06 Cycle 04, amended below. The pull-request close, the new `ticket withdraw-closure` and the new branch below are branch records of this same ticket-closure lifecycle (the Cycle's design, Parts D to F): the lifecycle's attempts, holds, cancellation, abandon, attribution and listing serve them. Its prepare reads local state only. The preview's data is tagged `pull_request_closure_preview` (schema `pull_request_closure_preview.schema.json`): the action (`close` or `new_branch`), the item and its slug, the branch, the primary and the remote, the context's and the tracking primary's commits, the closure (`record` with the `closed_by` text, or `existing`), `retired_context`, `unheld` and the `pull_request` link; its effects are `context_synchronized`, `closure_recorded`, `context_published` and `pull_request_link`, and for a closure the branch already holds only `context_synchronized` and `pull_request_link`. The consent digest binds the mode and the action, so a prepare made in one mode is `external_change` when confirmed in the other. Confirm synchronizes the ticket's branch with its remote copy and the remote's primary, records the closure on it as one commit, publishes the branch and answers with the data `pull_request_closure` (`action`, `closure` `{recording, closed_at}`, `checkpoint_oid`, `publication` `published` or `current`, `retired_context`, `pull_request`, `blockers`; never `closed_by`, a title or a body), and human output prints `closure: recorded <closed_at>`, `publication: <state>` and the link on its own line, as `pull request: <url>` or `open a pull request from <source> into <target>` when there is no URL. A ticket whose branch already holds a closure (its own earlier one, or another clone's) answers the new success code `already_closing`, exit 0, with the link and no closure commit. A ticket whose context's remote branch was observed deleted, and a ticket with no context, are closed through a new branch made from the remote's primary as last fetched, holding only the closure and keeping a provisional closure the old context held; the old context is retired locally, the preview's `unheld` lists each path the old branch holds that the primary does not (`not on <primary>: <change> <path>` in human output), and nothing on the remote is deleted or replaced. A remote branch that survives a merge is closed in place on that branch. The new blocker `remote_context_unmaterialized` (a remote tracking ref of the ticket's branch whose tip the tracking primary does not hold; way out `poll once`, and `repo sync` too, through the blocker `primary_ahead_of_remote`, when the local primary holds the tip) is a prepare's. A step that stops on its synchronization answers as `item sync` answers that stop, with the lifecycle's way out (the same request), and leaves the record unfinished: once its commit is written, the record holds the ticket against every other writer of it (saves, comments, `ticket repair`, `context retire`, the ticket's `context sync-local`, `item sync`) and against the poll, while its own publication goes on, and `item resolve-history` and a `conflict resolve` or `operation resume` of exactly its publication child pass the hold; a new request's prepare is `recovery_required` naming the holder, and its `next:` line names the holder's own verb (`ticket close` or `ticket withdraw-closure`) with the holder's request ID. `request cancel` and Ctrl-C answer `cancelled` and leave the record unfinished, as for a direct close, and the same request continues it. A branch record whose publication remote changed or is gone completes with `recovery_required` carrying the `pull_request_closure` data (`partial`, exit 4, once its commit is written; blocked, exit 3, before), its commit left on the local branch, and its way out is `manyhands-cli item sync --repo R --id I` once the remote is set. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): in a pull-request repository, the answers of a branch record (its preview, its confirm, a continuation, a stop, an `operation resume` that continues one) name the ticket's branch (`manyhands/ticket/<ID>`) and its worktree in `scope`, as `item sync`, `comment add` and `ticket save` do for the same commit; a direct close keeps `main`. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): in a pull-request repository `document promote` is the pull-request promote and never commits to or pushes the local or the remote primary, so the Cycle 01 sentence above that promote still publishes the primary there no longer holds. A direct repository's promote is unchanged, and a direct promote accepted before the repository switched finishes in direct mode. The pull-request promote is a branch record of the document-promotion lifecycle (a `document_promotions` row of mode `pull_request`; the Cycle's design, Parts A to D) with one child, the document's context synchronization, and no integration, no publication of the primary and no cleanup: the lifecycle's attempts, holds, cancellation, attribution and listing serve it. Its prepare reads local state only and decides in this order: not a document and no context, as before; the blockers; a document the primary holds; a remote branch observed deleted; the situation `again`, when this clone has a link row for the document, and otherwise `first`. The blockers kept are `context_nonconforming`, `context_dirty`, `context_conflicted`, `primary_conflicted` (a merge, rebase or cherry-pick in progress at the root gives both of these two blockers), `conflict_pending`, `history_unresolved`, `primary_missing` (no tracking primary; a local primary is optional), `remote_context_deleted` and the hold of an unfinished promotion of the document. `primary_not_checked_out`, `primary_dirty`, `primary_ahead_of_remote`, `context_behind_remote`, `integration_conflict`, `document_invalid_after_integration` and `identity_required` are dropped, because nothing touches the primary. `history_unknown` does not block it, unlike the direct promote and a close, which keep it as a blocker (decision 35 below): the confirm's fetch settles the history. The preview's data is tagged `pull_request_promotion_preview` (schema `pull_request_promotion_preview.schema.json`): the item, its path, the branch, the primary branch, the remote, the branch's tip (`context_oid`), the remote's copy of it (`remote_context_oid`, null unless that copy is ahead of or beside the tip), the situation and the `pull_request` link, the row's for `again` and the one built now for `first`. Its effects are always `context_synchronized`, `context_published` and `pull_request_link`, and human output adds a `Situation:` line and the link's line. A document the primary holds answers `already_applied` at prepare, outcome `noop`, with no data and no record, and there is nothing to confirm; human output prints `the primary branch already holds this document`. The primary holds it when the content proof for the branch's tip passes against the tracking primary, or against the local primary when that is the tracking primary or behind it, and the remote's copy of the branch is absent, equal to the tip or behind it. So a squash merge counts, and an edit of a merged document does not count until its own pull request merges. The consent digest has its own domain and binds the mode, the item, the path, the branch, the primary branch, the remote, the tip, the remote copy's relation to it, the situation and the previewed link, and not the primary's moving commits. A confirm after a mode switch, a save, another clone's publication fetched, a link given, for `first` a change of forge setting or remote URL, or a merge that the primary now holds is `external_change` with nothing recorded, and a new prepare after a merge answers `already_applied`. Confirm synchronizes the branch with its remote copy and the remote's primary as `item sync` does (a merge of the primary into the branch can stop with `identity_required`), publishes it and records the link, and answers with the data `pull_request_promotion` (`item_id`, `publication` `published` or `current` and null when no child completed, `primary_holds`, `pull_request` and `blockers`; never a title, a body or a path) in every finished answer. `ok` is for `first`, with the link built when the record finishes from the remote's URL and the forge setting as they are then. `already_applied` is for `again`, with the same stored link, `given_at` renewed and the row's other columns unchanged, and `publication` `published` when the synchronization published a save and `current` when it did not. `already_applied` with `primary_holds` true and no link means the primary holds the document once the child finished, or when its fetch found the branch deleted, as after a forge merge between prepare and confirm; the link row is left as it is, for retirement. `remote_branch_deleted` means the branch was deleted and the primary does not hold the document; it deletes the link row, and its way out is `item republish` and then a new `document promote --prepare`, not the same request, since the record is finished. `recovery_required` with the blocker `history_unresolved` has the way out `item resolve-history`. A branch removed outside Manyhands before the child ran answers `external_change`, as Cycle 03 answers `ContextGone`, unless the primary holds the document. Human output prints `publication: <state>` when a child completed, then the link on its own line as `pull request: <url>`, or `open a pull request from <source> into <target>` when there is no URL, or `the primary branch already holds this document` when `primary_holds` is true. A step that stops on its synchronization answers as `item sync` answers that stop (a transport, key, host, `busy`, `push_rejected`, `poll_yielding` or `identity_required` stop, or a conflict), with that stop's own data, and leaves the record unfinished: the same request continues it, `request cancel` and Ctrl-C answer `cancelled`, exit 130, and leave it unfinished, and a new request's prepare is `recovery_required` naming it. An unfinished record holds what an unfinished promotion holds (the document's prepare, `context sync-local` of every item and a change of the repository's setting made in this clone) and every retirement path skips or refuses its document: the poll's `--retire-completed` skips it, and `context retire` and the desktop's retirement answer `recovery_required` naming the promotion's operation (its operation ID is `data.blocker.operation_id`), not its request. A re-run continues over its child's own moves (a fast-forward to the remote's copy, the child's merge commits, a conflict's resolution). Before any attempt of the child pushed, a commit the child did not make (a save, a commit made with Git, a poll's fast-forward to another clone's publication), or a publication remote whose name or endpoint differs from the one the record began with, ends it as a refused record, `external_change`, and publishes nothing. A context branch removed before the child ran does not: RR7 ends the record with an answer, an ended record and not a refused one, `context_gone` (answered `external_change`, by the answer above) or, when the primary holds the document, `primary_holds` (answered `already_applied`). That end comes only while no conflict holds the child (K-19): a conflict retains the child, which cannot be let go, so the promote answers `recovery_required` and waits, and restoring the branch and its worktree lets the conflict's way out continue; it waits the same way while the acknowledgement of an unowned child's cancellation fails, until it succeeds. Once the child has completed, the record finishes with no network, no check of the remote and no live configuration, and a `request cancel` that lands then is not honoured. A child held by a conflict or an identity window continues to its own end by its way out, whatever changed since consent, and the record then finishes. While a conflict holds it and the configured publication remote differs from the child's, the conflict verbs refuse and the record waits until the remote is configured back; a poll or a synchronization that registers the change before it is undone strands the child for good, as it strands any conflicted synchronization (vh-zn1fd). The record waits the same way, until the remote is configured back, for a rename of the publication remote while an attempt of a stopped child may have pushed (K-20). A finished answer replays from its stored envelope, and a replay whose envelope was lost is rebuilt from the record's answer code, with the link row as it is then. Once the document's branch is retired, a same-request replay of a finished answer answers `recovery_required` unless the primary holds the commit the answer names: a merge commit or a fast-forward replays, and a squash does not. The vh-f3wts amendment above, on a live index hand-off of the primary, does not apply to the pull-request promote, which writes no primary: its exit owes only the document's context, and a document has no comment-publication blocker, as the direct promote has none. The recoverable answers of the pull-request promote have no row of their own in the [recovery tables](#recovery-tables). |
+| `ticket withdraw-closure` | Withdraws a ticket's closure from its branch, in either mode, in a repository with a publication remote (`publication_remote_required` otherwise): required `--id`, no input, `--prepare` and `--confirm` as `ticket close`. It writes a commit that removes the closure and publishes it, never touching primary. A ticket whose branch holds no closure answers `already_applied` at prepare with nothing to confirm; a closed primary is `ticket_closed`. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the verb is new in this Cycle and is delivered under the label `C5`. It is confirmed, takes `--repo`, `--id`, `--request-id`, `--prepare` and `--confirm`, refuses `--input`, and runs a branch record of the ticket-closure lifecycle whose action is `withdraw`, in either mode, with the catalog's autonomy column of `ticket close`. Its prepare answers `publication_remote_required` for a repository with no publication remote, before the hold below is read; `ticket_closed` (blocker `already_closed`) when the local or the tracking primary holds the closure, since withdrawing it would be a reopen; `recovery_required` naming the holder's request while an unfinished close or withdraw holds the ticket (decision 33), before `already_applied` can be answered; the closure blockers of `ticket close` where they apply; the blockers `context_missing` (a ticket with no context) and `remote_context_deleted` (a context whose remote branch was observed deleted; way out `item republish`); and `already_applied` (outcome `noop`, no data) when neither the context's ticket nor the tracking ref's holds a closure. When only the tracking ref's ticket holds a closure the withdraw is offered, and its context child brings the closure in. The preview is the `pull_request_closure_preview` of `ticket close` with the action `withdraw`, the closure `existing` and `pull_request` null; its effects are `context_synchronized`, `closure_withdrawn` and `context_published`. Confirm synchronizes the branch, commits the ticket without `closed_at` and `closed_by` (`Withdraw closure of ticket <ULID>`) on the branch, publishes it and answers `ok` with the data `pull_request_closure` (`action` `withdraw`, `closure.recording` `withdrawn`), the link record's link or null; the ticket then reads `open`, its dependents read blocked by `open_dependency`, and the link record is kept. It answers `ticket_closed` when the tracking primary holds the closure at step 3, also when the forge merged it while the withdraw ran (the withdraw's publication is then refused, or its merge of the primary restores the closure), and `remote_branch_deleted` when its publication meets a deleted branch (the withdraw stays on the local branch). Each of these in-run answers is blocked (exit 3) while nothing is written, and `partial` (exit 4, `effects.checkpoint` `committed`, and for `ticket_closed` an empty `blockers`) once the withdraw commit is written. Its stops, hold, cancellation and resume are `ticket close`'s. |
 | `index status` | Inspect cache freshness; no mutation input. |
-| `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
-| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
-| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
-| `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
-| `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
-| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, or a comment's operation; a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
+| `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. Amended 2026-11-21 by vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; the [index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21)): `index refresh` observes only the contexts whose stored basis no longer matches the disk, that are dirty or owed an indexing, that are new or have no stored basis, that hold a transient problem, or that record a file modified in a later second than they were indexed in; the others are not read. It observes with no lease held, then checks again and stores under the lease; a context that moved in between is left dirty and the refresh answers `busy`, and the next refresh observes it. A change after its first step to a context that step found unmoved is seen by the next refresh, as a change after the refresh would be. It goes on past an item's pending row that owes only its index hand-off, indexes that row's contexts and leaves the row open for its own `operation resume` or retry; a row still mid-write, and a pending row of the whole repository (such as `context sync-local`'s or the refresh row of a crashed `folder create`, `document promote` or `ticket close`), still hold it as before. `index rebuild` is unchanged. |
+| `item resolve-history` | Amended 2026-11-07 by vh-hyksw (the remote history repair). `--id` selects the item and `--as publish` records its context as never published, so that `item sync` publishes it; `--as release` is refused (`invalid_input`) and names the desktop's context release. Confirmed. A context the remote has is a no-op (`already_applied`); one published and then seen gone is `remote_branch_deleted`, naming `item republish`. The choice is the owner's: it is recorded as an explicit never-published row; resolving the last unresolved context clears the repository-wide cache-loss flag in the same transaction. If the flag is set but no contexts are unresolved, `remote resolve-history` clears it. Marker retirement follows the commit; the marker is retained while another repository remains flagged. |
+| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. Amended 2026-11-03 by C5 (decisions 5, 11, 15, 24 and 28; R-16, R-17, R-18): the four mutations are unconfirmed. Default `poll once` is one explicit fetch, clean fast-forward, materialization and index pass, which runs while paused or disabled and never pushes, checkpoints, merges or cleans up; a completed poll is `ok`, exit 0, with each target's `{target, kind, item_id, disposition, before_oid, after_oid}` in its data (no slug, R-17), dirty, diverged, malformed and deleted targets preserved and marked there (R-16). Amended 2026-11-06: **only** explicit `--retire-completed` adds guarded local retirement under the contract below; default/automatic mode remains non-destructive. Amended 2026-11-07 by vh-hyksw: a context that was never published, and is absent from the remote, reports the disposition `unpublished` (`item sync` publishes it); `history_unknown` is kept for a context whose history the evidence says is unknown. A poll's transport, key, unlock or host stop is final, and a new request polls again (R-18); a fetch meeting a held repository lease answers `busy`, and the same request polls (decision 24). No publication remote is `publication_remote_required` with nothing written. `poll configure` sets the interval, `poll pause` sets the pause, and `poll resume` clears it and any stored deadline so an eligible poll is due (decision 11), leaving the stored backoff value and the recovery suspension, which no CLI verb clears (decision 5). Each writes one field in its request's own transaction: a committed request replays, and one that never committed is a new write when resent (last commit wins, decision 15). Already so is `already_applied`, exit 0. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): for a repository whose setup is on another remote (every first-time setup, and a change that names a first or a different remote) `poll once` runs the setup poll: instead of today's poll for a first-time setup, and after today's poll of the current remote (with `--retire-completed` passed to that poll) for a change. A change on the same remote keeps today's poll alone, which fast-forwards the primary, and its completion is not reported. The setup poll reads the remote's primary and answers `ok`, exit 0, with data `setup_poll` (`{ type: "setup_poll", setup_id, outcome, integration, differs, pull_request }`), and the request is finished. `outcome` is the first that holds of: `not_published` (the setup is recorded and not on the remote; nothing is connected to), `configuration_invalid` or `primary_differs` (the remote's primary holds a configuration that cannot be read or names another primary branch), `branch_deleted` (the setup branch is gone and the primary does not hold the setup: cancel it), `waiting_for_merge`, `waiting_for_checkout` (the root is not on the primary, or not clean, untracked files counting, or the setup branch is checked out in a worktree), `diverged` (the local primary has commits the remote's lacks) and `activated`. On `activated` the local primary was fast-forwarded to the remote's, the remote-tracking ref set, the repository registered as a direct enable plus a remote selection of the merged configuration would, and the setup's record and local branch removed, with `integration` the merged mode and `differs` true when the merged file is not the one the setup intended (the merged one is in effect); a merge commit, a squash and a fast-forward of the setup commit each activate, and the remote's setup branch is left (the person's, or a later Cycle's, to delete). A setup the local primary already holds is finished by any poll, and by the gate, without being reported. A key, unlock, host or network stop is final as every poll's is, and a new request polls again. The setup poll reserves no remote operation row, so `operation list` shows none for it, and `request cancel` reaches it at its safe points. A first-time setup's poll records its attempt and next eligible time in the polling state, so the desktop schedules it by the repository's policy, and activation clears it. Human output prints `Setup: ` with the outcome in words and, while waiting, the pull-request link. |
+| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. Amended 2026-11-24 by Wave 06 Cycle 01 (vh-c2dtj): a resume that takes up a pull-only `repo sync` (one begun in a pull-request repository, which keeps that mode on every call) can answer the same `primary_has_local_commits` refusal with the same `primary_local_commits` data as `repo sync` does, because the pull-only check runs on every call of the operation. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. Amended 2026-11-03 by C5 (decision 19; R-30 to R-36): an unfinished `document promote` or `ticket close` that an accepted request holds answers `original_request_required`, naming that request, which continues it; with no record holding it, resume continues it with the record's consent, and its data is the lifecycle DTO, made-ready included. A stop it cannot get past offers `operation.resume` and `repo.inspect`, after letting a child with nothing to lose go (decision 19). A complete parent is `already_applied`; an ended or superseded one is `invalid_input`. A `poll once` an accepted request holds names that request. `request cancel` of a resume is `requested: false` (R-34). Amended 2026-11-04 by D5 (decision 10; its library part L2): `operation list`, and `repo status` with it, lists every unfinished, non-refused promotion or closure parent, held or not, with `next_action: resume`; refused and finished parents list none. Amended 2026-11-21 by vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; the [index RFC](repository-index-persistence-and-refresh.md#index-steps-and-pending-rows-amended-2026-11-21)): resuming a local operation that owes only its index hand-off indexes the contexts its row recorded when it was begun, and nothing else; a recorded context that is gone counts as indexed, and its rows are deleted. Folder create's refresh row records the primary, so its resume indexes the primary alone. Amended 2026-11-22 by vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; the fast-writes design's planning amendment P-4 and its Phase 3): a sync's index hand-off is a row of its item, with the target `synchronization-index-v1/<kind>/<item>/<oid>` (or `synchronization-index-v1/primary/<oid>` for the primary), that records the one context the sync changed or published; its resume, by the synchronization's ID, or a retry of the sync's request indexes that context alone, and completes the row with nothing observed when the context's stored basis still holds and it is not marked dirty. The exit row of a `document promote` or a `ticket close` is recorded as owing its contexts before it is claimed (once integrated, the primary and the item's context; before, the contexts its children still owe), so its resume indexes those alone. A row that records none (one an older build began, or a row of `repo enable` or of a remote command) is handed off to a refresh of the whole repository, as before. A refresh or poll that indexed those contexts meanwhile makes them read current, but does not complete the row: it stays listed until its own resume, or a retry of its request, completes it (design decision 32). Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): an operation that a setup request holds (the local row of a `repo enable` or `remote select` that recorded a setup) answers `original_request_required` to a resume, naming the request, and the same request continues it. A `repo setup-cancel`'s local row has the action `cancel_setup`. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): a branch record (a pull-request `ticket close`, a `ticket withdraw-closure` or a new branch) is a `ticket_closures` row, so `operation list` and `operation show` list it as a `close` with its step (no new action), and its live child on its own row with no next action, as a direct close's is. A resume of a branch record that its accepted request holds answers `original_request_required` naming that request, as for a direct close; a record no request holds keeps the direct close's path (`busy` naming another live holder, otherwise it is continued, in the record's own verb), and the answer of a resume that finishes a branch record is the `pull_request_closure` data. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): a pull-request `document promote` is a `document_promotions` row, so `operation list` and `operation show` list it as a `promote` with its step (`confirmed` or `context_synchronized` while it is unfinished) and its live child on its own row with no next action, as a direct promote's. A resume of one that its accepted request holds answers `original_request_required` naming that request, and the answer of a resume that finishes one is the `pull_request_promotion` data. |
+| `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. Amended 2026-11-06: a retirement-owned pending local operation instead uses the confirmed preserving/index settlement below, retains the old request identity and every residual resource, and releases its blocker only after atomic finalization. No completed-child whole-pass abandon handle. |
+| `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): a `repo enable` or `remote select` request that recorded a setup stops at no safe point, so `request cancel` asks nothing of it (`requested: false`); the verbs that end the setup finish it (`repo setup-cancel`, `repo remove`, completion). |
+| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, a comment's operation, or a `document promote` or `ticket close` operation, which names its context child (amended 2026-11-03 by C5, decision 34); a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): the record's ID of a pull-request `ticket close`, a `ticket withdraw-closure` or a new branch maps to its current child, in either of its two child slots: the context child before the record's publication child exists, the publication child after it, and the child's own ID maps back to the record. |
+| `context observe-local` | Required `--id`. Read the observation a local synchronization of the item's existing context takes: the context and committed **local** primary, with no fetch. It creates no context: an item with none is refused, and human output names `ticket save` or `document save`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
+| `context retire` | C5 follow-up, approved 2026-11-04 and amended by D15 on 2026-11-06. Required `--repo`, `--kind ticket\|document`, `--id`; no `--input` or force. Uses the ordinary unconfirmed mutation driver; common `--prepare` / `--confirm` answer `not_confirmable`. Explicit guarded local retirement after a fresh authenticated observation; ordinary child request/operation recovery only. `poll once --retire-completed` explicitly opts into the live-only loop; the default poll and its untagged data stay unchanged. |
+| `context sync-local` | Required `--id`, `--input` with `observation` from `context observe-local`. Unconfirmed. Brings committed local primary into the item's context through the closure-recovery gate's operation: no network, no primary change, no implicit context, frozen parents. A conflict stops `recovery_required` and names its operation, which `context show-local` and `context resolve-local` take. Amended 2026-11-03 by C5 (decision 3). |
+| `context show-local` | Required `--operation-id`, optional `--token`. Read a local-context synchronization: state, next step, observation and each conflicted path's token. With `--token` and `--json` only, return that path's `base`, `local`, `incoming` and `historical` (R-15); human mode refuses `--token` as a usage error. A remote synchronization's ID is `invalid_input`, naming `conflict show`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
+| `context resolve-local` | Required `--operation-id`, `--input` with `observation` and `resolutions`, one `{token, source}` per conflicted path, from `context show-local`. Unconfirmed. Writes complete sources against issued tokens and finishes the synchronization under the same request; a partial accepted resolution is finished by resending its original request with the same sources. An external-only conflict is refused before anything is written. Amended 2026-11-03 by C5 (decision 3, decision 30). |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
+
+The C5 `poll once` row's no-cleanup rule describes the default mode. The only
+exception is the explicit `--retire-completed` mode specified below; neither
+background polling nor an ordinary invocation inherits that consent.
+
+Amended 2026-11-09 by Wave 03 D6 (decision 16): this governs the CLI. The
+desktop, by the owner's decision, follows each completed poll with one ordinary
+`context retire` per reported completed item; that changes neither the CLI's
+`poll once`, its flag, nor the consent of any CLI invocation, including the
+`context retire` row above and "Execution is the new deliberate consent"
+below.
+
+### Pending setup gate
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): while a repository has a pending setup (the record that a pull-request `repo enable` or `remote select` makes, shown by `repo inspect` as `setup`), one table decides what each verb does. A first call, an acceptance and a `--prepare` are gated alike, and a re-entry of the setup's own request is not, so that request continues. A refused verb answers `setup_pending`: blocked, exit 3, the message "The repository's Manyhands setup has not merged yet.", the recovery action `repo.inspect`, no data and every effect `not_requested`, and nothing is written, no request is recorded. For `ticket close --prepare` and `document promote --prepare` it is the envelope's code, not an entry of `data.blockers`. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `ticket withdraw-closure` is gated as `ticket close` is: its prepare and its first call answer `setup_pending` the same way.
+
+| Gate | Verbs |
+| --- | --- |
+| Refused for any pending setup, first-time or a change | `ticket close`, `ticket withdraw-closure`, `document promote`, `remote select`, `remote remove`, `repo enable` |
+| Refused for a first-time setup only | `folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair`, `comment add`, `item sync`, `repo sync`, `item republish`, `item resolve-history`, `remote resolve-history`, `conflict resolve`, `context sync-local`, `context resolve-local`, `context retire` (the desktop's `context prepare` and `context release` are gated the same way) |
+| Not gated | `repo create`, `repo remove`, `repo identity-set`, `repo setup-cancel`, `remote add`, every key and host verb, `operation resume`, `operation abandon`, `poll once`, `poll configure`, `poll pause`, `poll resume`, `index refresh`, `index rebuild`, and every read |
+
+A change leaves the repository enabled, so its other writes carry on in the current mode on the current remote; a first-time setup's repository has no configuration yet, so those writes wait. A setup that the local primary already holds (a merge, a squash or a fast-forward, brought in by `poll once` or a pull) is complete: the gate finishes it first, and refuses nothing. A record that cannot be read refuses the gated verbs with `recovery_required` (recovery `repo.inspect`, no `data.blocker`), never `setup_pending`, and refuses no other verb; `repo inspect` shows `setup` null with the problem `setup_unreadable`, and `repo remove` clears it. A setup request that the gate lets through is the one that made the record. The way out of a pending setup is its merge and a `poll once`, `repo setup-cancel`, or `repo remove`, which works with the root present or gone, finishes the setup's request as `cancelled` and leaves both setup branches for the person to delete.
 
 ### Authoring reads
 
@@ -283,6 +338,8 @@ metadata, independently of free-form status text. Lists
 return all matching results in v1; silent truncation is forbidden. Paging is a
 future additive contract, not an undocumented default limit.
 
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `--closure` takes `open|closed|closing|all` (default `all`): `open` matches `open` and `closing` tickets, `closing` only `closing` ones and `closed` only `closed` ones. A ticket whose own branch's copy holds a closure that the primary's copy does not hold reads `closing`, in either mode; one whose primary's copy holds a closure reads `closed` with the primary's `closed_at` and `closed_by`. So `closure.state`, `deps[].state`, `parent.state` and a tree line's state can read `closing`, and `closure.publication` (`published` or `pending`, null in a list, for any other state and in direct mode) and the item's `pull_request` (the link record's link; null in every list, for a document and for a ticket with none) are filled by `ticket show` and `ticket show --path` only. A closing ticket counts as open for its dependents, which read blocked with the new readiness reason `closing_dependency` (in place of `open_dependency`); `ticket ready`, `ticket blocked`, `ticket plan`, `ticket critical-path` and `ticket list --ready` and `--blocked` leave closing tickets themselves out, `ticket plan` keeping every batch's number and `ticket critical-path` giving a closing ticket no length. Human `ticket show` prints `Publication: pending` or `Publication: published` and the link's line when the item has them. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): the item's `pull_request` is no longer null for every document: `document show` and `document show --path` fill it for a document read from its active context (the `document show` row above), and a ticket's stays as stated here. Every list, and a document with no link row or no active context, keep null.
+
 Repair cannot bypass identity uniqueness, a closed ticket's lifecycle fields,
 or the prohibition on reopening. Assigning an ID to marker-only content is an
 explicit adoption effect in the confirmation preview. Existing valid IDs remain
@@ -314,7 +371,7 @@ Request and confirmation IDs must be canonical ULIDs, as must `--key-id`.
 | Verbs | Required | Refused |
 | --- | --- | --- |
 | `repo create`, `repo enable`, `repo identity-set`, `remote add`, `remote remove`, `remote select`, `host approve`, `host replace` | `--repo`, `--input` | — |
-| `repo remove` | `--repo` | `--input` |
+| `repo remove`, `repo setup-cancel` | `--repo` | `--input` |
 | `key generate`, `key import` | `--input` | `--repo` |
 | `key select`, `key remove`, `key delete` | `--key-id` | `--repo`, `--input` |
 | `key clear` | — | `--repo`, `--input` |
@@ -327,6 +384,8 @@ Confirmed C2 mutations are repo create/enable/remove/identity-set, remote
 remove, key delete and host approve/replace. All other C2 mutations are
 unconfirmed. `--prepare` takes no request ID and allocates none.
 
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo setup-cancel` is a confirmed C2 mutation too.
+
 Each input-taking verb publishes a closed schema under `schemas/input/v1/`,
 named `<resource>_<verb>.schema.json` with hyphens replaced by underscores.
 The shared `commit_identity.schema.json` is reached by `$ref`. Required fields
@@ -334,11 +393,12 @@ are listed below; optional does not mean nullable unless explicitly stated.
 
 | Verb | Input fields |
 | --- | --- |
-| `repo create`, `repo enable` | Required string `primary_branch`; optional object `identity` with required strings `name`, `email`; optional string `ticket_slug_prefix`. |
+| `repo create` | Required string `primary_branch`; optional object `identity` with required strings `name`, `email`; optional string `ticket_slug_prefix`. |
+| `repo enable` | The `repo create` fields, and (amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se)) optional string `publication_remote`, optional `integration` (`direct` or `pull_request`) and optional object `forge` with optional strings `kind`, `web_url` and `pull_request_url`, closed. |
 | `repo identity-set` | Required strings `name`, `email`; optional string-or-null `initials` (unchanged/clear/set as above). |
 | `remote add` | Required strings `name`, `url`. |
 | `remote remove` | Required string `name`. |
-| `remote select` | Required string-or-null `name`; null clears the selection. |
+| `remote select` | Required string-or-null `name`; null clears the selection. Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): optional `integration` (`direct` or `pull_request`) and optional object-or-null `forge` (an absent `forge` leaves the `[forge]` table, null removes it), with the `forge` fields of `repo enable`. |
 | `key generate` | Required string `label`; required `protection`: `passphrase` or `none`. |
 | `key import` | Required strings `label`, `private_key_path`; optional string `public_key_path`. Both paths are invocation-relative. |
 | `host approve` | Required strings `authority`, `algorithm`, `fingerprint`; authority uses the host selector's syntax. |
@@ -410,6 +470,274 @@ set is `invalid_input`. The `comment add` example runs through the binary;
 the `conflict resolve` example is checked against its schema and read as
 far as the library's syntax check, since a live token cannot be stored.
 
+## C5 completion options and input schemas
+
+Amended 2026-11-03 by C5 (decision 3; R-2 and R-15; the C5 design's verb
+sections; the execution ledger's Tasks 8 and 9 findings). Selectors are
+flags and every other mutation value arrives in `--input`, as for C2–C4:
+
+| Verbs | Required | Optional | Refused |
+| --- | --- | --- | --- |
+| `document promote`, `ticket close`, `ticket withdraw-closure` | `--repo`, `--id` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll once` | `--repo` | `--retire-completed` (default false), `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll pause`, `poll resume` | `--repo` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll configure` | `--repo`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+| `context observe-local` | `--repo`, `--id` | — | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `context show-local` | `--repo`, `--operation-id` | `--token` (with `--json` only) | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `context sync-local` | `--repo`, `--id`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+| `context resolve-local` | `--repo`, `--operation-id`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+| `remote history` | `--repo` | — | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `item resolve-history` | `--repo`, `--id`, `--as` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `remote resolve-history` | `--repo` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+
+Amended 2026-11-07 by vh-hyksw: the three repair verbs join these rows. `remote history` is an unlocking read like `host observe`; the other two are confirmed mutations, and `--as` takes `publish` or `release` (the CLI answers `release` with `invalid_input`).
+
+Only `document promote` and `ticket close` are confirmed. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `ticket withdraw-closure` is confirmed too, so three C5 verbs are. The seven other C5
+mutations declare `--prepare` and `--confirm`, as every C2–C4 mutation does,
+and answer `not_confirmable`, exit 2, to either. The C5 design's option list
+for `poll once` (`--repo`, `--request-id`, `--json`) departs from this: the
+shared mode rules read `--prepare` for every mutation, so the catalog lists
+both options, and `tests/cli/inventory.rs` reads the catalog as it is.
+Execution needs `--request-id` in JSON/noninteractive mode, and prepare takes
+none. The two local reads take no request ID and refuse mutation options.
+
+| Verb | Required input | Optional input and semantics | Schema / example |
+| --- | --- | --- | --- |
+| `poll configure` | `interval_seconds`, an integer from 60 to 3600 | None. Out of range is `invalid_input`, and nothing is written. | [schema](../../schemas/input/v1/poll_configure.schema.json) / [example](../../tests/fixtures/cli_input_v1/poll_configure.json) |
+| `context sync-local` | `observation`, the string `context observe-local` returned | None. | [schema](../../schemas/input/v1/context_sync_local.schema.json) / [example](../../tests/fixtures/cli_input_v1/context_sync_local.json) |
+| `context resolve-local` | `observation`, the string `context show-local` returned; `resolutions`, a non-empty array of objects, each with exactly the strings `token` and `source`, one for every conflicted path | None. | [schema](../../schemas/input/v1/context_resolve_local.schema.json) / [example](../../tests/fixtures/cli_input_v1/context_resolve_local.json) |
+
+The tokens are the library's, tamper-checked and never stored; no diagnostic
+holds a source or a token. Every other verb takes no input: the inventory
+test lists them, and holds each input-taking verb to exactly one closed
+schema and one example that it accepts.
+
+## Completed-context retirement
+
+**Delivered contract amendment, 2026-11-06.** Authority is the existing
+[Cycle](../Cycles/wave-03-completed-context-retirement.md) D1–D14 (2026-11-04)
+and D15 (2026-11-06), not a new design approval. Source audit base
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`: ordinary binding/preserving recovery
+approved through `989a5807`, live producer through `c514d160`, CLI/acceptance
+through `37b64d17`. Task 8 final gates/whole-feature review are still owed.
+
+### Invocation and proof boundary
+
+```text
+manyhands-cli context retire --repo <root> --kind <ticket|document> --id <ULID>
+    [--request-id <ULID>] [--json] [--non-interactive]
+manyhands-cli poll once --repo <root> --retire-completed
+    [--request-id <ULID>] [--json] [--non-interactive]
+```
+
+`context retire` requires the explicit kind and canonical full item ID, not a
+slug, path or inferred current item. No `--input`, force, context selector,
+source, observation token or caller-supplied receipt is accepted. Common
+mutation `--prepare` and `--confirm` are declared but answer `not_confirmable`,
+exit **2**, not a usage error (ordinary flag/ID/mode validation still applies).
+Execution is the new deliberate consent; JSON/noninteractive execution requires
+`--request-id`. Interactive execution may allocate and print it as usual. The
+selected-key session, transport initialization, ordinary mutation driver,
+bounded-retry rule and safe-point Ctrl-C window apply; no implicit host approval
+or identity prompt is added.
+
+For a present/branch-only context, retirement requires fresh authenticated
+complete Fetch evidence of a previously Fetch-known remote context now absent,
+valid same-ID completion on **committed local primary**, positive content proof,
+and independent cleanliness/identity/lifetime checks. Standalone observation is
+read-only, adds a round trip even after a poll, and does not fetch objects or
+update primary. `closed`/`promoted` are evidence labels, not force permission.
+The [Git workflow](git-workflow-and-conflict-recovery.md#explicit-peer-context-retirement)
+owns ancestry/folded proof, the narrow open-ticket closure-field exception,
+cleanliness, nonce and current-observation/configuration guards. Unknown history,
+mere document presence, closure alone, unmatched work or ambiguous state cannot
+authorize removal. No remote ref deletion, push, checkpoint, implicit merge,
+canonical source or draft change is allowed. `context release` and its existing
+desktop navigation/discard consumers are unchanged.
+
+The optional poll flag defaults to **false**. The library uses
+`Mutation::PollOnceRetiring(PollOnceInput { root })` under the same `poll once`
+command with an added `retire_completed=true` digest field; ordinary
+`Mutation::PollOnce`, its root-only input/digest and domain
+`PollPublicationRemoteRequest` are unchanged. Changing mode under an already
+bound request is `request_mismatch`, normally exit **2**, never renewed consent.
+Only the original uninterrupted eligible live opted-in pass supplies the private
+initial Fetch input to its children. One authoritative provenance is shared,
+with **no per-child observation O** on this route. This does not mean one total
+SSH connection: current Fetch authentication/reconnect costs two upload-pack
+commands for default polling and for the measured two-child opted-in pass.
+
+### Closed output data
+
+All fields listed below are **required**, including nullable fields; each object
+is closed (`additionalProperties: false`). IDs/OIDs/timestamps are strings.
+Schemas are separate roots, not `oneOf`, optional old fields or an extension of
+the test schema interpreter. Ordinary stored untagged poll results stay valid.
+
+| Delivered Rust DTO / schema under `schemas/v1/` | Complete serialized fields |
+| --- | --- |
+| `ContextRetirementMutationDto` / [context_retirement_mutation](../../schemas/v1/context_retirement_mutation.schema.json) | `type: "context_retirement"`; `kind: document\|ticket`; strings `item_id`, `operation_id`; `state: retired\|already_absent\|refused\|pending\|preserved`; registered `code`; `worktree_removal`, `branch_removal`: `none\|possible\|observed`; boolean `materialization_settled`. |
+| Existing `PollMutationDto` / [poll_mutation](../../schemas/v1/poll_mutation.schema.json) | **Untagged, unchanged five fields:** string `operation_id`; `completion: completed\|interrupted\|cancelled`; string `completed_at`; nullable string `next_eligible_at`; `targets` array. Each target has five **required-nullable** fields (`target`, `kind`, `item_id`, `before_oid`, `after_oid`) plus the **required, non-null** `disposition` enum (existing values plus `closed`, `promoted`). |
+| `PollRetirementMutationDto` / [poll_retirement_mutation](../../schemas/v1/poll_retirement_mutation.schema.json) | `type: "poll_retirement"`; `poll`: the complete ordinary untagged DTO above; `completion: completed\|stopped`; nullable registered `stop_code`; `retirements` array. |
+| `PollRetirementItemDto` (closed object in that root) | `kind`; strings `item_id`, `request_id`; nullable string `operation_id`; `state: retired\|already_absent\|refused\|pending\|not_reached\|preserved`; nullable registered `code`; nullable `debt: cleanup\|discovery\|admission`; nullable complete `result`: the `context_retirement` DTO above. |
+
+A completed retirement report has null `stop_code` and no pending/not-reached
+entry. A not-reached entry retains its reserved request ID, but operation, code,
+debt and result are null: reservation is not acceptance. A pre-acceptance settled
+refusal may have a code without an operation/result; an accepted pending entry
+has its exact ordinary request/operation, code, debt and result. Nested results
+must agree with their outer target/operation/state/code. Missing, mixed, unknown
+or contradictory stored shapes are not permission to reconstruct authority.
+
+Preselection failures may have null data. A live host-stopped opted-in poll may
+instead return the existing [synchronization_mutation](../../schemas/v1/synchronization_mutation.schema.json)
+host root (`SynchronizationMutationDto`); that is valid `poll once` output, not
+a fabricated `poll_retirement` shape. The live error retains its precise code
+and sanitized `host.approve`/`host.replace` route, including fingerprint data
+where supplied, and replay preserves that original answer. Coarse remote-journal
+categories are only a fallback when the original boundary answer was genuinely
+lost, not a replacement for an available precise live result. No host is approved
+by retirement itself. If standalone output has no host details, `host observe`
+provides the explicit trust workflow; correcting a Final stop requires a new
+retirement request.
+
+`none` means no owned removal is established, not that a resource is present.
+`possible` means the effect boundary may have run; `observed` records the proven
+owned removal. Neither `already_absent` nor fresh branch-only execution invents
+a worktree removal. `materialization_settled` describes exact old intent/absence
+bookkeeping, not discovery freshness: it may be true while discovery is pending,
+or false in a preserved result whose discovery has settled. Consume only the
+captured completed old intent M, never a new/foreign one or current tracking/
+observation state.
+
+For retirement results the generic write, checkpoint, integration, publication
+and cleanup effects remain `not_requested`, and `commit_oid` null. The detailed
+removal flags carry cleanup evidence; non-`none` removal sets the boundary's
+`local_change`, so subsequent failure is partial/exit 4. Discovery alone is
+`current`, `pending` or `not_requested` as actually established. In particular,
+nested `poll.completion=completed` can describe a failed terminal poll; deriving
+discovery `current` after a lost boundary copy requires the exact original P's
+durable successful phase **and** outcome, not that wire field alone.
+`ContextBranchReleased`, `ContextRetirementAbsent` and
+`ContextRetirementPreserved` are noncheckpoint authoritative local steps; the
+last two distinguish an initial absence and preserving-only authority from an
+owned branch release.
+
+### Request finality, numeric exits and current recovery
+
+`R_s/S` denotes a standalone request/local operation; `R/P` the pass request/
+ordinary remote poll; `R_i/K_i` each independent ordinary `context retire`
+request/local operation. **Final** is an immutable settled request, not a claim
+that every resource was removed. **Owed** retains that item's actual unfinished
+work. Current request-attempt F2, local executor epoch, index epoch and source
+remote P/epoch are distinct fences; no matching item ID or parent receipt can
+substitute for them. No new result code, exit class or recovery-action kind is
+introduced.
+
+| Delivered phase/result | Code and numeric exit | Request standing / permitted way on |
+| --- | --- | --- |
+| Invalid flags, kind, ID, input or changed bound mode/target | `usage_error`, `invalid_id`, `invalid_input`, `not_confirmable`, `request_mismatch`: **2** before effects | No new removal authority; preserve an existing bound request. Generic partial/cancel precedence still applies. |
+| Settled before-effect proof/identity/dirty/history refusal | `external_change`, `worktree_not_clean` or `recovery_required`: **3** | Final R_s/R_i; stable refused replay, inspect/repair and use a **new** explicit request. Closure labels do not override refusal. |
+| No-effect configuration/key/unlock/host stop | `publication_remote_required`, `no_selected_key`, `key_unavailable`, `key_rejected`, `unlock_required`, `unlock_failed`, `host_approval_required`, `host_replacement_required`: **3**; `invalid_remote`: **2** | Settled Final retirement or failed P; close/fence the owned no-effect observer, correct the prerequisite and make a new request. Use supplied sanitized trust route, not implicit approval. |
+| No-effect network stop / unexpected error | `transport_unavailable`, `remote_unavailable`: **5**; `internal_error`: **1** | A settled Final stop replays; correction needs a new request. A read/storage failure that prevents settlement retains the actual obligation and current recovery instead of asserting Final. |
+| Retryable live exclusion before ordinary local claim | `busy`, `poll_yielding`: **5** | Where Accepted/Owed, retry the **same exact bound input/request**; no new target/configuration or old-pass loop authority. |
+| Standalone or child cancellation before removal | `cancelled`: **130** | Settle owned no-effect work as Final; new request for new retirement. |
+| Owned retirement and discovery settled | `ok`: **0**, state `retired` | Final ordinary request; completed replay never observes, selects or deletes a recreated context. |
+| Initial B/W/admin all absent and discovery settled | `already_applied`: **0**, state `already_absent` | Final; both removal flags `none`, no network needed, no invented owned deletion. |
+| Possible/observed partial cleanup, changed authority after removal | `recovery_required` or other failure after removal: **4**; cancellation: **130** | Owed R_s/R_i only. Original-request retry may continue only with ordinary proof/lifetime authority; otherwise inspect then confirmed preserving abandon of **S/K_i**. No rollback or surviving tokenless branch deletion across restart. |
+| All owned removal/absence M settled, discovery pending | `discovery_pending`: **4** | Owed ordinary item; same request or `operation.resume S/K_i` finishes index only, with no observation/deletion/new intent consumption. |
+| Destructive `operation resume S/K_i` | `original_request_required`: **3** | `request.retry` names **R_s/R_i**, never pass R; resume does not reconstruct destructive input. |
+| Original poll interrupted before any capture/selection | `recovery_required`: **3**, or **4** if ordinary P has durable local change; `busy`/`poll_yielding`: **5** where applicable | Existing ordinary P request recovery only. It may restart/refetch **before selection**, but a repaired/replayed P cannot mint the original live retirement capability. |
+| Original poll refresh pending, or unconfirmed original handoff after crash | `discovery_pending`: **4** | Final no-retirement report once metadata settles; later index repair cannot enable the old loop. New explicit pass required. |
+| Live target fully settled refusal | Child's own refusal code/non-success; parent can continue | R_i Final; preserve the durable row. Refusal is not batch-wide failure or a reason to roll back earlier successes. |
+| Current child owes cleanup or discovery; or A settled but B/C not reached | Parent `recovery_required`: **3** without retirement removals, **4** with possible/observed removals; `completion=stopped`, `stop_code=recovery_required`. An index-owed child has nested `code=discovery_pending`, `state=pending`, `debt=discovery`; this does **not** change the top-level parent code, while `effects.discovery=pending`. | R may be Final stopped while R_i/K_i stays Owed. Child-only current actions; not-reached IDs cannot be accepted by old R. New explicit pass for remainder. |
+| Parent cancellation at safe boundary, including after last child or empty image | `cancelled`: **130** | Stopped immutable report; completed children stay settled and real child debt remains independently Owed. Shared caller token **and** durable parent flag are honored; child-only cancellation does not automatically cancel R. |
+| Every selected same-pass success/refusal durable and handoffs settled | Parent `ok`: **0**, `completion=completed` | Completed mixed report, not all-success. Also applies when only final report-copy was lost. A settled prefix with not-reached remainder never qualifies. |
+| Confirmed preserving abandonment still indexing/finalizing | `discovery_pending`: **4** | Abandon request remains Owed, preserving-only; retry it or index-only `operation.resume K_i`, never original deletion. |
+| Preserving abandonment settled | Abandon request `ok`: **0**; old R_s/R_i `external_change`: **3** with no removal, **4** with possible/observed removal | Old identity retained; stable `preserved` partial/resource receipt, local blocker released only after atomic settlement. Parent report unchanged; later retirement is a new request with fresh proof. |
+
+The general [exit classification](#exit-statuses-and-partial-completion) remains
+authoritative: cancellation 130 precedes partial 4, which precedes a code's own
+class. Storage/access/root failures keep existing codes and actual standing;
+evidence loss is not a fresh selection. Initial absence and M/I-only continuation
+never inspect a newly recreated context for deletion. Original standalone Final
+replay never reobserves or uses release's run-as-new path.
+
+### Frozen reports, independent children and preserving escape
+
+The live loop settles each ordinary child and its index handoff before starting
+the next. Genuine item cleanup/index/integration debt stops it for repository
+exclusion; a settled refusal does not. No aggregate local journal, aggregate
+refresh debt, rollback, resumed cursor or completed-child `K_last` abandon handle
+exists. Ordinary P remains a poll operation in list/show, not a new cleanup owner.
+
+Before a stopped parent becomes Final, the common lease and one transaction
+revoke live starts/effects and persist one immutable cut with exact child
+result/debt snapshots and not-reached membership. Replaying a selected/cut parent
+only settles/copies that report; it NEVER observes again, reselects, accepts a
+reserved child, resumes cleanup or advances another item. If no cut survived,
+first metadata reconciliation creates one from states durably known **then**,
+not an invented crash-time snapshot. Only all-selected same-pass settled
+outcomes with original eligible handoff and no prior stopped cut may complete
+after loss of just the final copy. An existing stopped cut is never upgraded
+because a child recovered later. Missing/corrupt pass companions fail closed,
+not into a new ordinary P execution.
+
+A reserved but unaccepted R_i is not reached. An accepted R_i **provably never
+locally claimed** may settle metadata only, retaining identity, never reconstruct
+initial input or select current resources. Missing evidence is not that proof.
+That metadata-only settlement is not a legitimately attempted completed-pass
+refusal; it does not turn an interrupted pass into mixed success.
+A **durably selected original present worktree**, even before Git effects, may
+reenter only as ordinary R_i with fresh O/proof and exact original nonce/lifetime
+where permitted. Owned all-absence continues exact M/index work; authoritative
+I-only work requires no new advertisement. A surviving branch without lifetime
+proof refuses across restart (R-7). These routes finish **one item**, never R's
+next target. The old report's handles inspect current child state without
+rewriting historical data.
+
+For real pending retirement debt, `operation abandon --prepare` uses the existing
+confirmation workflow with required-nullable
+`OperationAbandonPreviewDto.retirement` (wire `data.details.retirement` in
+[operation_abandon_preview](../../schemas/v1/operation_abandon_preview.schema.json)).
+It is **null for ordinary old abandonment**. For retirement it is a closed
+metadata object requiring: nullable `request_id`; `phase`; integer `owner_epoch`
+(≥1), `index_owner_epoch` (≥0); both removal flags; booleans `worktree_retained`,
+`branch_retained`, `index_pending`. Retained means present **or not safely known
+absent**, not removal authority. The preview names the existing operation/target
+and binds the current state/epochs/resources; changed preview is
+`external_change`. It includes no file bodies and promises no `request_released`
+effect for retirement.
+
+Confirmation fences the old executor and its exact bound read-only observer,
+preserves every remaining resource and retains the old R_s/R_i mapping. Only
+local discovery settlement follows; receipt, abandoned journal, old request's
+`external_change` result and exact holder release Z finalize atomically **before
+unblocking**. Index/finalizer failure stays Owed and preserving-only. Live index
+owners, held effects or unrelated reservations refuse/busy rather than being
+stolen. No further deletion or new remote/generation rebinding is allowed.
+CLI and the existing generic desktop abandonment confirmation display this
+metadata; it is **not** a desktop Retire action or navigation change.
+
+Human retirement output names per-target state, removal evidence and exact
+request/operation handles. It labels the poll report `as-of-pass` separately from
+current recovery. Follow the envelope's **actual ordered actions**, including
+retry/inspection before a later preserving escape when supplied. Operation lines
+use each action's `operation_id` and established action/scope root, not frozen
+parent/child IDs or an invocation-root guess. Abandon guidance starts with
+`--prepare`, not an unconfirmed deletion command. JSON is the unchanged single
+boundary envelope. The [index-pending fixture](../../tests/fixtures/cli_v1/context_retire_index_pending.json)
+pins `[operation.resume, repo.inspect, operation.abandon]`; the
+[stopped report](../../tests/fixtures/cli_v1/poll_once_retirement_stopped_text.txt)
+pins a Final no-key stop without an invented parent resume/abandon.
+
+The [execution ledger](../plans/2026-11-04-completed-context-retirement-execution.md)
+retains exact local/CLI and one new authenticated SSH case evidence at actual
+SHAs. No final tiers, whole-feature approval, native Windows/macOS execution,
+real-profile repair or real-context retirement is claimed by this amendment.
+D6's explicit desktop/editor/draft/keyboard/recovery journeys, latest-copy read
+precedence and the separate remote-branch-deletion gap remain downstream.
+
 ## Observations, request identity and retries
 
 Show/inspect returns an opaque observation token representing the exact source,
@@ -418,6 +746,9 @@ precondition, not authentication. Writes require it for existing resources;
 creation explicitly expects absence. Stale observations produce
 `external_change`, preserving input and canonical state. There is no `--force`
 override. Caller-provided source/body never enters operation diagnostics.
+Explicit retirement is not a caller-token write: its guarded service obtains
+the fresh observation/proof itself, or consumes only the original live pass's
+sealed initial input as specified above.
 
 Every mutating execution has a request ULID. JSON/noninteractive mutation
 requires caller-supplied `--request-id`; human interactive mode may allocate one
@@ -641,6 +972,14 @@ uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 (`not_requested`, `complete`, `pending`), and nullable string `commit_oid`.
 It describes the operation including effects observed from an earlier attempt.
 
+Amended 2026-11-21 by ticket vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`; decision 8 of the [fast-writes design](../plans/2026-11-19-fast-writes-design.md)): on a write, `discovery: current` means that the contexts the write changed are indexed, not that the whole repository is. Another item changed outside Manyhands may still read stale, and is picked up by the next refresh, poll or desktop start, as the [index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21) says. On a write's own call, `discovery: pending` means one of the write's own contexts is not indexed yet; the write's other effects stand. A write that still indexes through a refresh of the whole repository (the index RFC lists them) reports `current` only when that refresh completed. A replay is more cautious: a replay of a completed create, save or move of a ticket or document, slug assignment or repair reports `current` only while the contexts its row recorded are indexed and the repository is not marked behind as a whole (`refresh_required`), and otherwise `discovery_pending` with its commit, offering `index.refresh`, so a replay may answer `discovery_pending` where the first call answered `current`. No JSON shape, result code, recovery action or schema version changes.
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): three result codes join the registry: `setup_pending` (blocked, exit 3, recovery `repo.inspect`, no data), `remote_primary_missing` and `remote_already_set_up` (blocked, exit 3, no recovery action). `setup_unreadable` is a problem code of `repo inspect` and `repo list`, not a result code. The mutation data gains the tagged shapes `setup` (`setup_mutation`), `setup_poll` and `setup_cancel`, the previews `setup_preview` and `setup_cancel_preview`, and the read shapes `repository_setup` and `pull_request`, each a published schema under `schemas/v1/`; a stored answer of a pull-request `repo enable` or `remote select` replays through `setup`. The operation action `cancel_setup` joins the action enums of `operation list`, `operation show` and the operation blockers. No recovery action is added.
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): one result code joins the registry: `already_closing` (class none, exit 0, outcome `success`, message "The ticket's branch already holds a closure.", no recovery action), appended after `already_applied` in every ordered list. The mutation data gains the tagged shapes `pull_request_closure` (`pull_request_closure_mutation`: the data of a branch record's `ok`, `already_closing`, `already_applied` at step 3, `remote_branch_deleted`, `ticket_closed` and `recovery_required` (publication remote changed or gone) answers, also of an `operation resume` that finished one) and `pull_request_link` (`item sync`'s link); a blocked prepare of the pull-request close or withdraw answers with the existing `lifecycle_blocked` shape, and a child's stop with the synchronization's own data. The preview `pull_request_closure_preview` is a published schema, `PreviewEffect` gains `context_published`, `pull_request_link` and `closure_withdrawn`, appended, and `context_created` is also a new branch's, made from either primary. `LifecycleBlocker` gains `remote_context_unmaterialized`, appended. The read shape `pull_request` (Cycle 02's) is the item's `pull_request`, and the read enums gain `closing` (`closure.state`, `deps[].state`, `parent.state`, the tree line) and `closing_dependency` (the readiness reason). The registry gains the table `pull_request_links` and the rebuilt `ticket_closures` (the index RFC). No operation action is added.
+
+Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): no result code, blocker, verb, recovery action or operation action joins the registry, and the registry gains no table. The mutation data gains the tagged shape `pull_request_promotion` (`pull_request_promotion_mutation.schema.json`: the data of every finished answer of a pull-request `document promote`, and of an `operation resume` that finished one), and the preview details the tagged shape `pull_request_promotion_preview` (`pull_request_promotion_preview.schema.json`); each is a published schema under `schemas/v1/`. A blocked prepare of the pull-request promote answers with the existing `lifecycle_blocked` shape, a prepare of a document the primary holds with `already_applied` and no data, and a child's stop with the synchronization's own data. `pull_request_link` (`item sync`'s link) also carries a document's link, and the read shape `pull_request` is also filled for a document. The `document_promotions` table is rebuilt (the index RFC).
+
 A recovery `action` is a dotted name from a closed, published registry. An
 action carries exactly its registered argument keys, or none when the result
 names no repository. Reads use `index.rebuild`, `index.refresh` and
@@ -770,6 +1109,10 @@ missing or conflicting inputs and malformed option values. An approved verb
 delivered by a later Cycle returns `command_unavailable`; human stderr names
 that Cycle. Both are input failures (exit 2), with empty scope, null data,
 no recovery actions and their fixed code messages in JSON.
+Amended 2026-11-03 by C5 (R-8): no approved verb is planned once C5
+delivers, so no command answers `command_unavailable` today. The code stays a
+CLI-only code for a later Cycle's planned verb, with an unreachable reason in
+the exit tables, and the catalog's test-only planned spec pins its answer.
 
 ### CLI-built refusals (R-6)
 
@@ -838,10 +1181,13 @@ longer the "future CLI adapter contract" this amendment first named, and
 neither is an input schema for the local library operation. The
 [closure-recovery gate](../Cycles/wave-03-closure-recovery-gate.md) delivered
 production library reads and F2 identities `context sync-local` /
-`context resolve-local`, merged at `a372edb`. These identities are absent from
-the CLI catalog/dispatch; C5 exposes them. C4's `conflict show` and
+`context resolve-local`, merged at `a372edb`. These identities were absent
+from the CLI catalog/dispatch until C5; amended 2026-11-03 by C5 (decision 3),
+C5 exposes them with `context observe-local` and `context show-local`, as the
+taxonomy rows say. C4's `conflict show` and
 `conflict resolve` take remote synchronizations only, and answer a
-local-context sync's operation ID with `invalid_input`. No CLI human-mode
+local-context sync's operation ID with `invalid_input`; since decision 34 they
+also take a lifecycle's context child, below. No CLI human-mode
 conflict artifact export/edit/import workflow or desktop in-app conflict editor
 is supplied by the gate. Existing generic operation/request inspection is not
 that workflow.
@@ -852,7 +1198,9 @@ with no fetch/push or primary mutation. It uses top-level observations and opaqu
 reads return nullable `base`, `local`, `incoming` plus `historical`, never mutable
 `current` content. Display paths are already escaped presentation strings.
 C5/D5 must adapt this local contract deliberately (amended 2026-10-30 by C4,
-decision 19, replacing "C4/D5 must adapt this contract"). C4 delivers the
+decision 19, replacing "C4/D5 must adapt this contract"). Amended 2026-11-03
+by C5 (decisions 1 and 3): C5 adapted it for the CLI with the four `context`
+verbs and delivered the lifecycle bindings; D5 consumes both after C5 merges. C4 delivers the
 separate remote-conflict wire bindings, and D5 consumes them through D4;
 C5/D5's lifecycle bindings are also downstream. See the
 [API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
@@ -929,6 +1277,27 @@ classifier's reading of the index stages, not a claim about the file's
 type: a text code file edited on both sides reads `binary`, and an add/add
 reads `delete`.
 
+Amended 2026-11-03 by C5 (decision 34): `--operation-id` may also name a
+`document promote` or `ticket close` operation, or its context child's own
+synchronization. The parent's ID reads and resolves the conflict its context
+child holds now, and a request is the same by either ID; the data's
+`operation_id` is the child's. A parent with no context child yet is
+`invalid_input`, as a synchronization that recorded no conflict is. The
+lifecycle's human answer names both verbs by the parent's ID before its own
+`next:` lines, when its blockers name the item's context conflicted as well as
+`conflict_pending`. Once the child is published, sending the same promote or
+close request again finishes it when the resolved context holds what was
+confirmed; a resolution or an outside repair that changes the confirmed change
+set makes that request answer `external_change`, ending it, and a new prepare
+is needed. An external-only conflict is repaired with Git in the context and
+the merge committed, then the same request finishes. `request cancel` of that
+request stops a resolution's publication, as the holder's does for a
+synchronization. After `key select` or `key clear` raises the generation over
+the conflict, `conflict resolve` is refused and the request has no CLI way on
+(a Known Limit).
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `--operation-id` may also name a pull-request `ticket close`, a `ticket withdraw-closure` or a new-branch operation, or the synchronization of either of its children (its context child, or its publication child once that exists). The record's ID reads and resolves the conflict of its current child, and a `conflict resolve` of exactly the publication child passes the record's hold: it publishes that child, and the record's same request then finishes. A conflict that holds two different closures and any other conflicting content stays external repair only.
+
 Resolution is set-wide (decision 12): a conflict with any noncanonical or
 structural path, or any `incompatible_closures` path, is repaired outside as
 a whole, and `conflict resolve` writes nothing of it. `conflict resolve`
@@ -972,19 +1341,27 @@ R-36):
 - **The window.** While `item sync`, `repo sync`, `item republish`,
   `comment add`, `conflict resolve` or `operation resume` runs its library
   call, the CLI installs a process-wide Ctrl-C handler, and removes it when
-  the call returns. Prompts run outside it, except the unlock prompt, which
+  the call returns. Amended 2026-11-03 by C5 (decision 8): so do
+  `document promote`, `ticket close`, `poll once`, `context sync-local` and
+  `context resolve-local`. The three policy verbs have no safe point, and
+  their one transaction is not interrupted. Prompts run outside it, except the unlock prompt, which
   reads Ctrl-C in raw mode and still answers `unlock_required`, exit 3.
   On Unix, a process that inherited an ignored `SIGINT` keeps it inside the
   window, as a Windows console handler is not called while Ctrl-C is
   ignored. The Windows handler is first compiled and checked natively after
-  merge.
+  merge. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): so does `ticket withdraw-closure`, and `ticket close` in a pull-request repository, which runs the pull-request close inside the same window.
 - **The first press** cancels the call, and the library stops at its next
   safe point: `cancelled`, exit 130, even after a durable effect, with
   effects naming what completed. A press during a blocked network call may
   instead answer `transport_unavailable` with its effects intact.
 - **One latch per run.** A press that no safe point sees, after the last
   one, leaves the run's own answer, such as `push_rejected`, and stops C2's
-  bounded retry, so no retry follows it.
+  bounded retry, so no retry follows it. Amended 2026-11-03 by C5 (the
+  controller's ruling on Task 13a's Review Focus 4): for `document promote`
+  and `ticket close`, a press after the last pre-publication safe point whose
+  primary push is then refused answers `cancelled`, 130, since the primary
+  child reads the cancellation after the failed push, and cancellation comes
+  first in the classification order. The same request then publishes.
 - **A second press** ends the process: interruption, not rollback, with no
   stored result. The interrupted request stays accepted and keeps its
   reservation, so a new request ID answers `busy` until the same request is
@@ -994,12 +1371,30 @@ R-36):
   `cancelled` result. A new request completes the work: `item sync` or
   `repo sync` for a synchronization and for a comment's or a resolution's
   publication, and a new prepare for `item republish`, whose confirmation
-  is spent.
+  is spent. Amended 2026-11-03 by C5 (decision 8): **not for `document
+  promote` or `ticket close`.** Their `cancelled` answer, exit 130, leaves
+  the lifecycle record unfinished and offers `request.retry`: the same
+  request continues it under its operation ID, before or after integration,
+  while a new request ID's prepare is held by the unfinished parent
+  (decision 33). A child with nothing to lose is let go; a retained conflict
+  or a resolution to publish stays (decision 18). `poll once` follows the
+  final rule: a new request polls again. `context sync-local` is final as
+  the gate's, and a new request with a fresh observation merges;
+  `context resolve-local` keeps its request accepted, and the same request
+  with the same sources finishes it. Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): **nor for `ticket withdraw-closure`, or for `ticket close` in a pull-request repository**: their `cancelled` answer, exit 130, leaves the record unfinished and offers `request.retry`, and the same request continues it, replacing the cancelled child with a new attempt, while a new request ID's prepare is held by the record.
 - **`request cancel`** reaches `comment add`, `item sync`, `repo sync` and
   `item republish` at their next safe point. It does not reach
   `operation resume` or `conflict resolve`, which hold no operation of their
   own; `request cancel` of the synchronization's own request does stop a
-  resolve's publication.
+  resolve's publication. Amended 2026-11-03 by C5 (decisions 8, 12 and 34):
+  it also reaches `document promote`, `ticket close`, `poll once`,
+  `context sync-local` and `context resolve-local`. For a lifecycle verb it
+  reaches the parent and its running child at their safe points, also between
+  automatic retries (decision 12), and with no parent yet the request's flag
+  stops the run at its first safe point. `request cancel` of the promote or
+  close request stops a resolution's publication of its context child
+  (decision 34). It asks nothing of `operation resume`, even while a resume
+  continues a parent (R-34). Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): it also reaches `ticket withdraw-closure` and `ticket close` in a pull-request repository, the parent and its running child at their safe points, as for a direct close.
 - **Lost stdout** exits 1. The work's effects stay, `request show` returns
   the stored result, and a replay under the same request ID makes no second
   push, file or checkpoint.
@@ -1011,6 +1406,318 @@ configuration for create/enable, or restore its committed content for remote
 select, then retry the same request. C4 owns later operation abandonment.
 Amended 2026-10-30 by C4 (R-1 and R-30): `operation abandon` is available,
 as its taxonomy row says.
+
+## Recovery tables
+
+Amended 2026-11-03 by C5 (decision 4; R-10; the C5 design's Recovery
+Tables). These tables say, for each family of verbs, what to run next after
+a recoverable answer. Help and its schema do not change (decision 4).
+
+The historical C2–C5 golden-parsed families below retain their original scope;
+the Polling family describes default `poll once`. The new `context retire` and
+explicit opted-in pass use the separate delivered
+[numeric/finality/recovery table](#request-finality-numeric-exits-and-current-recovery)
+above. It includes success, non-success, item-only resume and preserving escape
+without changing the six-family parser or pretending new fault rows have binary
+goldens. Its linked index-pending/stopped fixtures are existing Tasks 5–6 evidence.
+
+A **recoverable** code is one whose answer has a way on: its class is
+blocked (exit 3), transient (5), incomplete (4) or cancelled (130), or the
+answer is partial, exit 4, after a durable effect. Input failures (exit 2)
+and unexpected failures (exit 1) are not rows; each verb's own tests pin
+their answers and any `next:` line.
+
+Each row names:
+
+- **Verb**: one verb, or verbs that share one binding, whose golden stands
+  for each of them (decision 27; for the lifecycle verbs, `ticket close`'s,
+  while the promotion's run asserts the same answer).
+- **Code**: the result code.
+- **Next**: a recovery action the JSON envelope offers, such as
+  `request.retry`; or a `manyhands-cli <resource> <verb>` line that human
+  output prints, with its placeholders; or `none` when the answer offers
+  nothing, and its message, note or data say the way on (a selection to
+  make, a repair outside, a new request). When an answer offers several, the
+  golden holds them all, in order; the row names the one it is about.
+- **Exit**: the process exit.
+- **Golden**: under `tests/fixtures/`: a JSON envelope (`cli_v1/` from the
+  binary, or `mutation_v1/` from the mutation boundary, whose envelope the
+  binary prints unchanged), or a human transcript (`cli_v1/*.txt`).
+
+`tests/cli/recovery_tables.rs` parses these tables. Each golden must exist,
+be an answer of the row's verb, and hold the row's code, next action and
+exit. For C5's verbs every recoverable code of the C5 design's outcome
+tables has a row, or a reason below. An earlier verb's row holds a code of
+its Cycle's audit union, and every recoverable code of that union has a row
+for one of the Cycle's verbs, or a reason below.
+
+### Authoring
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `document save`, `ticket save` | `identity_required` | `repo.identity_set` | 3 | `mutation_v1/ticket_save_identity_required.json` |
+| `document save`, `ticket save` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/ticket_save_discovery_pending.json` |
+| `folder create` | `discovery_pending` | `index.refresh` | 4 | `mutation_v1/folder_create_discovery_pending.json` |
+| `document repair`, `ticket repair` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/document_repair_discovery_pending.json` |
+| `document repair`, `ticket repair` | `external_change` | `request.prepare` | 3 | `mutation_v1/document_repair_external_change.json` |
+| `document move` | `external_change` | `none` | 3 | `mutation_v1/document_move_external_change.json` |
+| `document save`, `ticket save` | `external_change` | `repo.inspect` | 3 | `mutation_v1/ticket_save_reentered_external_change.json` |
+| `document save`, `ticket save` | `busy` | `request.retry` | 5 | `mutation_v1/ticket_save_busy.json` |
+| `document save`, `ticket save` | `cancelled` | `none` | 130 | `mutation_v1/ticket_save_cancelled.json` |
+| `document save`, `ticket save` | `internal_error` | `request.retry` | 4 | `mutation_v1/ticket_save_partial.json` |
+| `document save`, `ticket save` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/ticket_save_index_unavailable.json` |
+| `index refresh` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/index_refresh_index_unavailable.json` |
+| `index refresh` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/index_refresh_repository_not_registered.json` |
+| `document save` | `repository_not_registered` | `none` | 3 | `cli_v1/document_save_repository_not_registered.json` |
+| `index rebuild` | `repository_inaccessible` | `none` | 3 | `mutation_v1/index_rebuild_repository_inaccessible.json` |
+| `ticket save` | `ticket_closed` | `none` | 3 | `cli_v1/ticket_save_ticket_closed.json` |
+| `document save`, `ticket save` | `worktree_not_clean` | `none` | 3 | `mutation_v1/ticket_save_worktree_not_clean.json` |
+| `ticket create` | `initials_required` | `repo.identity_set` | 3 | `mutation_v1/ticket_create_initials_required.json` |
+| `ticket create` | `invalid_slug_configuration` | `repo.inspect` | 3 | `mutation_v1/ticket_create_invalid_slug_configuration.json` |
+| `document repair`, `ticket repair` | `identity_ambiguous` | `none` | 3 | `cli_v1/document_repair_identity_ambiguous.json` |
+| `folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket slug-assign`, `ticket repair` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/ticket_create_setup_pending.json` |
+
+### Repository and credentials
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `repo enable` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/repo_enable_identity_required.json` |
+| `repo create` | `identity_required` | `none` | 3 | `cli_v1/repo_create_identity_required.json` |
+| `remote select` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/remote_select_identity_required_text.txt` |
+| `repo create`, `repo enable` | `confirmation_required` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_required.json` |
+| `repo create`, `repo enable` | `confirmation_not_found` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_not_found.json` |
+| `repo create`, `repo enable` | `confirmation_expired` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_expired.json` |
+| `repo create`, `repo enable` | `confirmation_used` | `none` | 3 | `mutation_v1/repo_enable_confirmation_used.json` |
+| `repo create`, `repo enable` | `external_change` | `request.prepare` | 3 | `mutation_v1/repo_enable_external_change.json` |
+| `repo identity-set` | `external_change` | `request.prepare` | 3 | `mutation_v1/repo_identity_set_external_change.json` |
+| `host approve`, `host replace` | `external_change` | `request.prepare` | 3 | `mutation_v1/host_approve_external_change.json` |
+| `repo create`, `repo enable` | `invalid_configuration` | `repo.inspect` | 3 | `mutation_v1/repo_enable_invalid_configuration.json` |
+| `repo create`, `repo enable` | `registration_pending` | `request.retry` | 4 | `mutation_v1/repo_enable_registration_pending.json` |
+| `repo create`, `repo enable` | `internal_error` | `request.retry` | 4 | `mutation_v1/repo_create_partial.json` |
+| `repo create`, `repo enable` | `worktree_conflicted` | `none` | 3 | `mutation_v1/repo_enable_worktree_conflicted.json` |
+| `repo create`, `repo enable` | `wrong_branch` | `none` | 3 | `mutation_v1/repo_enable_wrong_branch.json` |
+| `remote add` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/remote_add_discovery_pending.json` |
+| `remote select` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/remote_select_discovery_pending.json` |
+| `remote remove` | `publication_remote_in_use` | `none` | 3 | `mutation_v1/remote_remove_publication_remote_in_use.json` |
+| `host approve` | `host_mismatch` | `none` | 3 | `cli_v1/host_approve_host_mismatch.json` |
+| `host approve` | `host_replacement_required` | `host.replace` | 3 | `cli_v1/host_approve_host_replacement_required.json` |
+| `host observe` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/host_observe_repository_not_registered.json` |
+| `key generate` | `unlock_required` | `none` | 3 | `cli_v1/key_generate_unlock_required.json` |
+| `key generate` | `recovery_required` | `request.retry` | 4 | `mutation_v1/key_generate_interrupted.json` |
+| `key delete` | `recovery_required` | `request.retry` | 4 | `mutation_v1/key_delete_interrupted.json` |
+| `key remove` | `selected_key_in_use` | `none` | 3 | `mutation_v1/key_remove_selected.json` |
+| `repo enable`, `remote select`, `remote remove` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/remote_select_setup_pending.json` |
+| `repo enable`, `remote select` | `remote_primary_missing` | `none` | 3 | `mutation_v1/repo_enable_remote_primary_missing.json` |
+| `repo enable` | `no_selected_key` | `request.retry` | 4 | `mutation_v1/repo_enable_setup_recorded.json` |
+| `remote select` | `no_selected_key` | `request.retry` | 4 | `mutation_v1/remote_select_setup_recorded.json` |
+
+### Collaboration
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `comment add` | `push_rejected` | `request.retry` | 4 | `mutation_v1/comment_add_push_rejected.json` |
+| `comment add` | `ticket_closed` | `none` | 3 | `cli_v1/comment_add_ticket_closed.json` |
+| `item republish` | `ticket_closed` | `none` | 3 | `mutation_v1/item_republish_ticket_closed.json` |
+| `item republish` | `external_change` | `request.prepare` | 3 | `mutation_v1/item_republish_external_change.json` |
+| `item republish` | `publication_remote_required` | `none` | 3 | `cli_v1/item_republish_publication_remote_required.json` |
+| `item sync` | `publication_remote_required` | `none` | 3 | `mutation_v1/item_sync_publication_remote_required.json` |
+| `repo sync` | `publication_remote_required` | `none` | 3 | `cli_v1/repo_sync_publication_remote_required.json` |
+| `item sync` | `remote_branch_deleted` | `request.cancel` | 3 | `mutation_v1/item_sync_remote_branch_deleted.json` |
+| `repo sync` | `primary_has_local_commits` | `none` | 3 | `mutation_v1/repo_sync_primary_has_local_commits.json` |
+| `item sync`, `repo sync` | `host_approval_required` | `host.approve` | 3 | `mutation_v1/repo_sync_host_approval_required.json` |
+| `item sync`, `repo sync` | `host_replacement_required` | `host.replace` | 3 | `mutation_v1/repo_sync_host_replacement_required.json` |
+| `item sync`, `repo sync` | `no_selected_key` | `request.retry` | 3 | `mutation_v1/repo_sync_no_selected_key.json` |
+| `item sync`, `repo sync` | `key_unavailable` | `request.retry` | 3 | `mutation_v1/repo_sync_key_unavailable.json` |
+| `item sync`, `repo sync` | `key_rejected` | `request.retry` | 3 | `mutation_v1/repo_sync_key_rejected.json` |
+| `item sync`, `repo sync` | `unlock_required` | `request.retry` | 3 | `mutation_v1/repo_sync_unlock_required.json` |
+| `item sync`, `repo sync` | `unlock_failed` | `request.retry` | 3 | `mutation_v1/repo_sync_unlock_failed.json` |
+| `item sync`, `repo sync` | `push_rejected` | `request.retry` | 3 | `mutation_v1/repo_sync_push_rejected.json` |
+| `item sync`, `repo sync` | `recovery_required` | `repo.inspect` | 3 | `mutation_v1/repo_sync_recovery_required.json` |
+| `item sync`, `repo sync` | `poll_yielding` | `request.retry` | 5 | `mutation_v1/repo_sync_poll_yielding.json` |
+| `item sync`, `repo sync` | `transport_unavailable` | `request.retry` | 5 | `mutation_v1/repo_sync_transport_unavailable.json` |
+| `conflict resolve` | `external_change` | `none` | 3 | `mutation_v1/conflict_resolve_external_change.json` |
+| `conflict resolve` | `original_request_required` | `request.retry` | 3 | `mutation_v1/conflict_resolve_original_request_required.json` |
+| `operation resume` | `original_request_required` | `request.retry` | 3 | `mutation_v1/operation_resume_original_request_required.json` |
+| `operation abandon` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_operation_abandon_refused.json` |
+| `comment add`, `item sync`, `repo sync`, `item republish`, `conflict resolve` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/repo_sync_setup_pending.json` |
+
+### Lifecycle
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `ticket close` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/ticket_close_blocked.json` |
+| `document promote` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/document_promote_blocked.json` |
+| `document promote`, `ticket close`, `ticket withdraw-closure` | `recovery_required` | `request.retry` | 3 | `cli_v1/ticket_close_prepare_held.json` |
+| `ticket close` | `recovery_required` | `manyhands-cli ticket close` | 3 | `cli_v1/ticket_close_prepare_held_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/ticket_close_prepare_conflict_text.txt` |
+| `document promote` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli ticket save` | 3 | `cli_v1/ticket_close_prepare_context_missing_text.txt` |
+| `document promote` | `recovery_required` | `manyhands-cli document save` | 3 | `cli_v1/document_promote_prepare_context_missing_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_ahead_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_missing_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_remote_unknown_text.txt` |
+| `ticket close` | `recovery_required` | `request.retry` | 4 | `mutation_v1/ticket_close_checkpoint_merge_refused.json` |
+| `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 4 | `cli_v1/ticket_close_checkpoint_merge_refused_text.txt` |
+| `document promote` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/document_promote_identity_required.json` |
+| `ticket close` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/ticket_close_identity_required.json` |
+| `ticket close` | `ticket_closed` | `none` | 3 | `mutation_v1/ticket_close_ticket_closed.json` |
+| `ticket withdraw-closure` | `ticket_closed` | `none` | 3 | `cli_v1/ticket_withdraw_closure_ticket_closed.json` |
+| `ticket withdraw-closure` | `publication_remote_required` | `none` | 3 | `cli_v1/ticket_withdraw_closure_publication_remote_required.json` |
+| `document promote` | `push_rejected` | `request.retry` | 4 | `mutation_v1/document_promote_push_rejected.json` |
+| `ticket close` | `push_rejected` | `request.retry` | 4 | `mutation_v1/ticket_close_push_rejected.json` |
+| `document promote` | `push_rejected` | `request.retry` | 4 | `mutation_v1/document_promote_deletion_rejected.json` |
+| `ticket close` | `push_rejected` | `request.retry` | 4 | `mutation_v1/ticket_close_deletion_rejected.json` |
+| `document promote` | `discovery_pending` | `request.retry` | 4 | `mutation_v1/document_promote_discovery_pending.json` |
+| `ticket close` | `discovery_pending` | `request.retry` | 4 | `mutation_v1/ticket_close_discovery_pending.json` |
+| `document promote`, `ticket close`, `ticket withdraw-closure` | `cancelled` | `request.retry` | 130 | `mutation_v1/ticket_close_cancelled.json` |
+| `document promote`, `ticket close` | `external_change` | `request.prepare` | 3 | `mutation_v1/ticket_close_external_change.json` |
+| `document promote`, `ticket close` | `external_change` | `request.retry` | 3 | `mutation_v1/ticket_close_primary_advanced.json` |
+| `document promote`, `ticket close` | `confirmation_not_found` | `request.prepare` | 3 | `mutation_v1/ticket_close_confirmation_not_found.json` |
+| `document promote`, `ticket close` | `confirmation_expired` | `request.prepare` | 3 | `mutation_v1/ticket_close_confirmation_expired.json` |
+| `document promote`, `ticket close` | `busy` | `request.retry` | 5 | `mutation_v1/ticket_close_busy.json` |
+| `document promote`, `ticket close` | `poll_yielding` | `request.retry` | 4 | `mutation_v1/ticket_close_poll_yielding.json` |
+| `document promote`, `ticket close` | `remote_branch_deleted` | `request.cancel` | 3 | `mutation_v1/ticket_close_remote_branch_deleted.json` |
+| `document promote`, `ticket close` | `host_approval_required` | `request.retry` | 4 | `mutation_v1/ticket_close_host_approval_required.json` |
+| `document promote`, `ticket close` | `host_replacement_required` | `request.retry` | 3 | `mutation_v1/ticket_close_host_replacement_required.json` |
+| `document promote`, `ticket close` | `unlock_required` | `request.retry` | 3 | `mutation_v1/ticket_close_unlock_required.json` |
+| `document promote`, `ticket close` | `transport_unavailable` | `request.retry` | 5 | `mutation_v1/ticket_close_transport_unavailable.json` |
+| `document promote`, `ticket close`, `ticket withdraw-closure` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/ticket_close_setup_pending.json` |
+
+The refused closure checkpoint merge prints the four `context` lines, in
+order, before `request.retry` and `repo.inspect`; the walk through them,
+then the same `ticket close`, is `the_refused_merges_route_finishes_the_close`
+and `c5_lifecycle_refused_checkpoint_merge_repaired_close`. A child's
+retained conflict also prints `conflict show` and `conflict resolve` of the
+parent's operation (decision 34; `c5_lifecycle_walk_retained_conflict_close`),
+under the same `recovery_required` and `request.retry` as the row above.
+
+Amended 2026-11-25 by Wave 06 Cycle 03 (vh-gy8gz): `ticket withdraw-closure` joins this family. Where a row names it with `ticket close`, the golden is `ticket close`'s, which stands for the withdraw as it does for the promotion (decision 27); the withdraw's own goldens are the two rows above that name it alone. Every other recoverable answer of a pull-request close or withdraw is the lifecycle binding's own, or a stop of its synchronization, which answers as `item sync` answers that stop with the same request as the way out, and has no row of its own here. The way out of a branch record whose publication remote changed or is gone is `manyhands-cli item sync --repo R --id I`, which no golden here holds.
+
+Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): the pull-request `document promote` joins the sentence above that every other recoverable answer of a pull-request close or withdraw has no row of its own here, and no row or golden is added for it. Where a row above names `document promote` with `ticket close`, the golden is `ticket close`'s, as for a direct promote. The pull-request promote's other recoverable answers are the lifecycle binding's own, or a stop of its synchronization, which answers as `item sync` answers that stop with the same request as the way out: a blocked prepare (the `lifecycle_blocked` shape), `remote_branch_deleted` after the record finished (the way out is `manyhands-cli item republish --repo R --id I --prepare` and then `manyhands-cli document promote --repo R --id I --prepare`, told by the answer's data, so no golden here holds it), and `recovery_required` with the blocker `history_unresolved` (the way out is `item resolve-history`). The row `document promote, ticket close | remote_branch_deleted | request.cancel` stays the one of a promote or close whose child met the deleted branch before the record finished.
+
+### Local sync
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `context sync-local` | `discovery_pending` | `request.retry` | 4 | `cli_v1/context_sync_local_discovery_pending.json` |
+| `context sync-local` | `external_change` | `repo.inspect` | 3 | `cli_v1/context_sync_local_stale.json` |
+| `context sync-local` | `external_change` | `manyhands-cli context observe-local` | 3 | `cli_v1/context_sync_local_stale_text.txt` |
+| `context sync-local` | `worktree_not_clean` | `manyhands-cli context observe-local` | 3 | `cli_v1/context_sync_local_dirty_text.txt` |
+| `context sync-local` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/context_sync_local_identity_required.json` |
+| `context sync-local` | `recovery_required` | `manyhands-cli context show-local` | 4 | `cli_v1/context_sync_local_conflict_text.txt` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 4 | `cli_v1/context_sync_local_external_only.json` |
+| `context sync-local` | `recovery_required` | `none` | 3 | `cli_v1/context_sync_local_unrelated.json` |
+| `context sync-local` | `recovery_required` | `none` | 3 | `cli_v1/context_sync_local_closures.json` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_sync_local_unsupported.json` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_sync_local_closure_past_closing.json` |
+| `context sync-local` | `busy` | `none` | 5 | `cli_v1/context_sync_local_busy.json` |
+| `context sync-local` | `cancelled` | `none` | 130 | `cli_v1/context_sync_local_cancelled.json` |
+| `context resolve-local` | `external_change` | `manyhands-cli context show-local` | 3 | `cli_v1/context_resolve_local_stale_text.txt` |
+| `context resolve-local` | `external_change` | `request.retry` | 3 | `cli_v1/context_resolve_local_after_partial_text.txt` |
+| `context resolve-local` | `recovery_required` | `none` | 3 | `cli_v1/context_resolve_local_external_only.json` |
+| `context resolve-local` | `cancelled` | `none` | 130 | `cli_v1/context_resolve_local_cancelled.json` |
+| `context sync-local`, `context resolve-local` | `setup_pending` | `repo.inspect` | 3 | `mutation_v1/local_sync_setup_pending.json` |
+
+A synchronization cancelled at a safe point is final, and a new request,
+with a fresh observation, merges; a resolution cancelled keeps its request
+accepted, and the same request with the same sources finishes it (the
+gate's contract). An unrelated history, incompatible closures and an
+external-only conflict are repaired outside, with Git, and then the
+synchronization's request is sent again. `busy` from a cache lock held
+before acceptance names no request (C5 design, Known Limits).
+
+### Polling
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `poll once` | `publication_remote_required` | `none` | 3 | `cli_v1/poll_once_no_remote.json` |
+| `poll once` | `busy` | `request.retry` | 5 | `cli_v1/poll_once_busy.json` |
+| `poll once` | `busy` | `manyhands-cli operation resume` | 5 | `cli_v1/poll_once_busy_text.txt` |
+| `poll once` | `host_approval_required` | `host.approve` | 3 | `cli_v1/poll_once_host_stop.json` |
+| `poll once` | `unlock_required` | `none` | 3 | `cli_v1/poll_once_unlock_stop.json` |
+| `poll once` | `no_selected_key` | `none` | 3 | `mutation_v1/poll_once_key_rejected_reentered.json` |
+| `poll once` | `key_rejected` | `none` | 3 | `mutation_v1/poll_once_key_rejected.json` |
+| `poll once` | `transport_unavailable` | `none` | 5 | `mutation_v1/poll_once_transport_unavailable.json` |
+| `poll once` | `repository_inaccessible` | `none` | 3 | `mutation_v1/poll_once_repository_inaccessible.json` |
+| `poll once` | `cancelled` | `none` | 130 | `mutation_v1/poll_once_cancelled.json` |
+| `poll once` | `recovery_required` | `request.retry` | 3 | `mutation_v1/poll_once_interrupted.json` |
+| `poll once` | `poll_yielding` | `request.retry` | 5 | `mutation_v1/poll_once_poll_yielding.json` |
+| `poll once` | `discovery_pending` | `index.refresh` | 4 | `mutation_v1/poll_once_discovery_pending.json` |
+| `poll configure`, `poll pause`, `poll resume` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/poll_pause_not_registered.json` |
+| `poll configure`, `poll pause`, `poll resume` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/poll_pause_index_unavailable.json` |
+
+A poll's stop is final (R-18): `none` here means a **new request** polls
+again once the cause is corrected, by `key select`, a terminal for the
+passphrase, `host approve`, or a selected publication remote. `busy` keeps
+the request accepted, and the same request polls once the holder lets go.
+
+**History repair goldens.** Amended 2026-11-07 by vh-hyksw (the remote
+history repair). They hold no row above, because the recovery-tables test
+fixes the verbs of each family, but each is pinned by the CLI and mutation
+contract tests. Eight are under `mutation_v1/`:
+`item_resolve_history.json`, `item_resolve_history_preview.json`,
+`item_resolve_history_already_applied.json`,
+`item_resolve_history_invalid_input.json` (`--as release`: `invalid_input`,
+exit 2), `remote_resolve_history.json`,
+`remote_resolve_history_preview.json`,
+`remote_resolve_history_already_applied.json` and
+`remote_resolve_history_recovery_required.json` (a context still reads
+unknown: `recovery_required`, exit 3, `repo.inspect`). One is under
+`read_v1/`: `remote_history.json` (`ok`, exit 0, with an unresolved, a
+present and a resolved entry). A synchronization that meets unresolved
+history answers `recovery_required` with the recovery action `remote.history`
+(argument `root`) and no `request.retry`; human output prints it as
+`manyhands-cli remote history --repo <root>`. A lifecycle prepare answers
+`recovery_required` with `repo.inspect` and the blocker `history_unresolved`,
+whose way out is `resolve_history`. The registry of recovery actions gains
+`remote.history`.
+
+### Codes with no golden
+
+| Scope | Code | Reason |
+| --- | --- | --- |
+| C2 | `busy` | C2's exit table (`tests/cli/exits.rs`) reaches it through the binary (`remote add` with the lease held, row `busy`, exit 5) and pins code and exit; it records no golden. `request.retry` follows, as for every `busy`. A pull-request `repo enable`, a `remote select` on the setup path and `repo setup-cancel` also answer it, from the setup lock or the repository lease, and the same request goes on (`src/repository/setup/publish_tests.rs`, `s9_a_second_setup_operation_is_busy`). |
+| C2 | `cancelled` | C2's exit table (`tests/cli/exits.rs`) reaches it at a consent prompt (`ctrl_c_at_consent_is_cancelled_and_restores_the_terminal`, exit 130); a prompt's cancellation is CLI-built, with no stored answer to hold, and only the unused confirmation remains. |
+| C2 | `host_approval_required` | A setup's host stop, in a pull-request `repo enable`, a `remote select` on the setup path or a `repo setup-cancel` that must connect, needs an SSH server whose key is not pinned, which C2's exit table (`tests/cli/exits.rs`) has none of; the library's SSH case reaches it (`tests/mutation_remote.rs`, `a_setup_branch_is_published_activated_changed_and_cancelled`, which then approves the host); no golden. `host.approve` follows, and `host.replace` for a changed key. `host observe` reports a missing pin as data. |
+| C2 | `index_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it (`remote add` over a corrupt registry, row `index`, exit 3); no golden. The authoring row's `index.rebuild` is the same answer. |
+| C2 | `key_rejected` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_server_accepting_without_the_selected_key_is_key_rejected`, exit 3); no golden. The collaboration row's golden holds the same transport mapping. |
+| C2 | `key_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it (`observe_with_a_missing_selected_source_is_key_unavailable`, and `key delete` under an unsafe key-store lock); no golden. |
+| C2 | `primary_has_local_commits` | A pull-request `repo enable` or a `remote select` on the setup path refuses a local primary with commits the remote's primary lacks, after it fetches the remote's primary, which needs an SSH server; the library's decision test pins it (`src/repository/setup/publish_tests.rs`, `s1_to_s4_publish_decides_on_the_fetched_base`), and the C4 row's `repo sync` golden holds the same data; no golden of C2's verbs. No recovery action follows, and the setup is ended. |
+| C2 | `publication_remote_required` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`observe_without_a_publication_remote_is_publication_remote_required`); no golden; `remote select` follows. |
+| C2 | `push_rejected` | C2's exit table (`tests/cli/exits.rs`) gives the reason: a defensive host error mapping, since C2's host verification never pushes. No fixture reaches it. The one C2 verb that deletes a ref, `repo setup-cancel`, answers it for a delete the server refused or lost, with `request.retry` (`src/repository/setup/cancel_tests.rs`). |
+| C2 | `remote_already_set_up` | A pull-request `repo enable` whose remote's primary already holds a Manyhands configuration is refused after the fetch, which needs a server; the library's decision test pins it (`src/repository/setup/publish_tests.rs`, `s2_to_s4_a_refused_setup_is_ended`), and `tests/mutation_contract.rs` records the code with that reason; no golden. No recovery action follows, and the setup is ended: update the checkout and enable again, which registers it as a clone. |
+| C2 | `remote_unavailable` | C2's exit table (`tests/cli/exits.rs`) gives the reason: libgit2's NotFound has no deterministic fixture, as F2 records. |
+| C2 | `repository_inaccessible` | C2's exit table (`tests/cli/exits.rs`) reaches it (`repo remove --prepare` of an inaccessible root, row `inaccessible`, exit 3); no golden. |
+| C2 | `transport_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_wrong_passphrase_is_today_transport_unavailable_with_the_hint`, exit 5, defect `01M5E6DYJ6GN7DMW4424TH3V78`); no golden. |
+| C2 | `unlock_failed` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_rejected_key_after_the_right_passphrase_is_unlock_failed`, exit 3); no golden. |
+| C2 | `worktree_not_clean` | C2's exit table (`tests/cli/exits.rs`) reaches it (`remote select` over a dirty worktree, row `dirty`, exit 3); no golden. The authoring row's golden holds the same refusal. |
+| C3 | `confirmation_required` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it through the binary (`without_a_terminal_a_repair_needs_a_confirmation`, exit 3); no golden. `request.prepare` follows, as the repository row's golden shows. |
+| C3 | `confirmation_not_found` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`a_confirmation_presented_after_cache_loss_is_confirmation_not_found`); no golden. |
+| C3 | `confirmation_used` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`repair_confirmations_refuse_changed_input_and_another_request`); no golden. |
+| C3 | `confirmation_expired` | C3's exit table (`tests/cli/authoring_exits.rs`) gives the reason: repair consent expires after ten minutes on the library's clock, which an isolated CLI child cannot advance. |
+| C3 | `invalid_configuration` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`document_create_authoring_refusals_reach_the_binary`); no golden. `repo.inspect` follows, as the repository row's golden shows. |
+| C3 | `wrong_branch` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`document_create_authoring_refusals_reach_the_binary`); no golden. |
+| C3 | `recovery_required` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`interrupted_saves_follow_the_required_outcomes`, exit 3); no golden. |
+| C3 | `registration_pending` | C3's exit table (`tests/cli/authoring_exits.rs`) gives the reason: folder creation's pre-directory stale mark needs an injected registration failure, unavailable in the CLI child. |
+| C4 | `busy` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_conflicts_republish_busy_then_confirmed`, exit 5); no golden. `request.retry` follows. |
+| C4 | `cancelled` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_interruption_request_cancel_of_item_sync`, exit 130); no golden. A remote cancellation is final, and a new request completes the work. |
+| C4 | `confirmation_required` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`an_abandon_of_a_remote_operation_is_refused_and_changes_nothing`); no golden. |
+| C4 | `confirmation_not_found` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`an_unknown_confirmation_is_confirmation_not_found`); no golden. |
+| C4 | `confirmation_used` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_interruption_request_cancel_of_item_republish`); no golden. |
+| C4 | `confirmation_expired` | C4's exit table (`tests/cli/collaboration_exits.rs`) gives the reason: a republish or abandon confirmation expires after ten minutes on the library's clock, which an isolated CLI child cannot advance. |
+| C4 | `discovery_pending` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH, partial (`c4_interruption_index_hand_off_refused`, exit 4); no golden. |
+| C4 | `identity_required` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_without_an_identity_is_identity_required`, exit 3); no golden. `repo.identity_set` follows. |
+| C4 | `index_unavailable` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`repo_sync_on_a_corrupt_registry_is_index_unavailable`); no golden. |
+| C4 | `invalid_configuration` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| C4 | `remote_unavailable` | C4's exit table (`tests/cli/collaboration_exits.rs`) gives the reason: libgit2's NotFound has no deterministic fixture. |
+| C4 | `repository_inaccessible` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`c4_verbs_refuse_each_root`); no golden. |
+| C4 | `repository_not_registered` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`c4_verbs_refuse_each_root`); no golden. `index.rebuild` follows, as the authoring row's golden shows. |
+| C4 | `worktree_conflicted` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`repo_sync_of_a_conflicted_worktree_is_worktree_conflicted`); no golden. |
+| C4 | `worktree_not_clean` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| C4 | `wrong_branch` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| `poll once` | `remote_unavailable` | The stored `protocol_rejected` category's answer, pinned without a golden by `c5_poll_once_stored_protocol_rejected`: libgit2's NotFound, its only live source, has no deterministic fixture, and `tests/mutation_contract.rs` records the code under `CODES_NO_MUTATION_GOLDEN_HAS` and `CODES_NO_FIXTURE_CAN_PRODUCE`, which a golden would contradict without a named edit. A new request polls again. |
+
+Amended 2026-11-25 by Wave 06 Cycle 02 (vh-c97se): `repo enable`, `remote select` and `repo setup-cancel` answer the transport stops of the rows above (`key_unavailable`, `key_rejected`, `unlock_required`, `unlock_failed`, `host_replacement_required`, `transport_unavailable`, `remote_unavailable`), `busy` and `recovery_required` with the recovery actions the rows above show for them where a golden exists: a setup request that is stopped keeps its request accepted, so `request.retry` sends the same request, a host stop offers `host.approve` or `host.replace`, and a `recovery_required` offers `repo.inspect` (the merged setup's, above). The `recovery_required` of `repo setup-cancel` for a setup that the remote's primary already holds (nothing changes; run `poll once`, which finishes a merged setup; `data.type` `setup`, recovery `repo.inspect`) has no row and no table reason, because C2 already has rows for the code with other verbs, which the table cannot also hold as a reason: it needs a fetch of the remote's primary, which C2's exit table has no SSH server for, no golden holds it, and the library's outcome table pins it (`src/repository/setup/cancel_tests.rs`, `cancel_outcomes`, the cases "already merged ...: recovery_required"). The library's setup tests pin them (`src/repository/setup/publish_tests.rs`, `poll_tests.rs`, `cancel_tests.rs` and `change_tests.rs`), and the SSH case pins the host stop, the empty remote and the guarded delete over a real transport. `setup_pending` has a row in each family whose verbs the gate refuses, each with a golden. A setup's stop answers `partial`, exit 4, whatever the code's own class (`no_selected_key` above).
 
 ## Alternatives, risks and required evidence
 
@@ -1135,11 +1842,24 @@ Known limits on main, which C4 states and does not work around:
   repository's remote history unknown, and a context that was never
   published can then not be first-published from that registry
   (`01M66HFV44YXNQ7ANJVA16TQ1H`). C4's two-clone fixture selects each
-  clone's key before it enables the repository;
+  clone's key before it enables the repository. Amended 2026-11-07 by
+  vh-hyksw (`01M66HFV44YXNQ7ANJVA16TQ1H`): fixed. A key selection or
+  clearing only fences the polling configuration and keeps the remote
+  evidence; only a change of the remote's identity (its name, primary branch
+  or endpoint) forgets it, and then only for the contexts that exist, so a
+  context created later is first-published. A registry that is really lost
+  is repaired by `remote history`, `item resolve-history` and
+  `remote resolve-history`;
 - `remote select` commits the configuration but leaves the Git index stale
   for it, so the next `repo sync` answers `worktree_not_clean`
   (`01M669FJR27FRHCNPWAMD6VH4V`). C4's two-clone fixture seeds the publication
-  remote in the server's primary instead.
+  remote in the server's primary instead. Amended 2026-11-03 by C5
+  (decision 10): fixed. A successful `remote select`, its retry and its replay
+  leave the index matching the commit, and the next synchronization goes on;
+  C4's fixture seed stays. The key-before-remote limit above stays open, and
+  C5's later-publication order (`key select`, then `remote select`) does not
+  reach it. Amended 2026-11-07 by vh-hyksw: the key-before-remote limit is
+  fixed, as above.
 
 Amended 2026-10-30 by C4 (the final review's rulings). Three of C4's own
 limits, which the final review recorded:
@@ -1164,3 +1884,113 @@ limits, which the final review recorded:
 
 The [C4 design's Known Limits](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
 list the rest.
+
+### C5 evidence and known limits
+
+Amended 2026-11-03 by C5 (the C5 design's Inventory And Evidence, Journeys
+and Known Limits). The ten C5 verbs have real-binary human/JSON evidence in
+[lifecycle](../../tests/cli/lifecycle.rs), [polling](../../tests/cli/polling.rs)
+and [local sync](../../tests/cli/local_sync.rs), and two-clone SSH evidence
+in [lifecycle](../../tests/cli_remote/lifecycle.rs),
+[polling](../../tests/cli_remote/polling.rs),
+[the six journeys](../../tests/cli_remote/journeys_c5.rs) and
+[interruption](../../tests/cli_remote/interruption.rs), which holds the
+Ctrl-C, `request cancel`, lost-stdout and no-resident-worker cases. The
+[inventory](../../tests/cli/inventory.rs) accounts for every approved
+command, and the [recovery tables](#recovery-tables) test holds each row to
+its golden. The [exit table](../../tests/cli/collaboration_exits.rs)
+accounts for the audit's 46 library / 49 CLI-inclusive C5 codes by set
+equality, and reaches exits 0, 1, 2, 3, 4, 5 and 130 through the binary
+with a C5 verb. The library's outcome tables are in `tests/mutation_remote/`
+(`c5_lifecycle`, `c5_cancel`, `c5_resume`, `c5_made_ready`, `c5_poll`).
+
+Known limits C5 states and does not work around (the
+[C5 design's Known Limits](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md#known-limits)
+list them all):
+- a closure records the repository's configured identity; there is no
+  caller-chosen `closed_by` (decision 6);
+- a CLI-only user sees `recovery_suspended` with no verb to clear it
+  (decision 5), and a protected key answers `unlock_required` without a
+  terminal;
+- a retained conflict under a raised generation (`key select` or `key clear`,
+  or the domain's own poll plan failure) leaves the promote or close request
+  answering `recovery_required` with no CLI way out (decision 34 frees the
+  unfenced case);
+- a context child that holds a resolution and then meets its remote branch
+  deleted loops: `request cancel` and the same request answer `cancelled`,
+  the child is kept with its reservation, `item republish` is `busy`, and the
+  request answers `remote_branch_deleted` again;
+- a retried or superseding close reports its own pass: a close stopped on
+  `remote_context_changed` answers `index_pending`, and `ticket ready` is
+  the live view (decision 20);
+- an add/add of a ticket file that reached primary by another commit is
+  external-only: `context resolve-local` refuses it, and the repair is with
+  Git, then the synchronization's request again (decision 30);
+- with split fetch and push endpoints, before a first fetch, or with the
+  repository's lease held past 250 ms, a push does not advance tracking, and
+  promote-then-close can be refused `primary_ahead_of_remote` until
+  `poll once` (decision 29);
+- a published context with no tracking ref, which no fetch has seen gone,
+  prepares `history_unknown`, not `remote_context_deleted`, and human output
+  names `poll once`, then a new prepare; a deletion a fetch has observed,
+  once its tracking ref is gone (pruned), answers `remote_context_deleted`
+  (decision 35). Amended 2026-11-07 by vh-hyksw: that is `history_unknown`
+  for a context that was proved published. A context whose history the
+  evidence itself says is unknown (a lost cache or a changed remote) prepares
+  `history_unresolved` instead, with `repo.inspect` and human output that
+  names `remote history`: a poll cannot settle it. `item sync` of such a
+  context answers `recovery_required` with the recovery action `remote.history`
+  and no `request.retry`; only a push whose proof is not yet fetched keeps
+  `history_unknown`, and `poll once` settles that. Amended 2026-11-27 by Wave 06 Cycle 04 (vh-rphcs): in a pull-request repository `history_unknown` does not block `document promote`'s prepare, because the confirm's fetch settles the history and a deleted branch answers `remote_branch_deleted` at confirm; `ticket close` and the direct promote keep it as a blocker;
+- a contained context whose remote branch has no tracking ref keeps that
+  branch on the remote (decision 32, withdrawn);
+- policy verbs are last commit wins (decision 15); a killed poll whose
+  request ID is lost is found through `operation list`;
+- a result's `Item id:` carries no slug, while a preview shows `Slug:` and
+  `made ready:` lines show theirs.
+- a `conflict resolve` request resent by the lifecycle parent's ID after the
+  parent minted a new child attempt answers `request_mismatch`; resend it by
+  the child's ID, which its answer's data names (decision 34);
+- a synchronization whose fetch meets the repository's lease held answers
+  `internal_error`, not `busy`;
+- `document promote` and `ticket close` print `progress: connecting` in a
+  local-only run.
+
+Follow-up candidates. This is the one list of them; none is opened without
+the owner's go-ahead, and each is recorded in the C5 execution ledger:
+1. **Performance profile** (decision 31): local sync's image-proof audit,
+   which grows with stored syncs, and discovery's per-item history walk.
+   Amended 2026-11-22 by vh-f3wts (`01M7RDVNZDCCVSMWHDY9503852`): settled.
+   A command migrates the registry once, when it opens it, and that open
+   audits only the schema and the unfinished records of the local
+   synchronization journal; a guard audits the unfinished rows it scans,
+   and a completed record is audited when a read uses it. So a command no
+   longer audits every stored proof at each of its many registry opens.
+   That journal's own transactions, such as those of
+   `context observe-local` and `context sync-local`, still audit every
+   record. An item context's activity is found by a first-parent walk
+   restricted to the item's own paths that stops at the first commit
+   touching them, and the primary's from a map that is advanced by the
+   commits since its base
+   ([index RFC](repository-index-persistence-and-refresh.md#per-context-indexing-amended-2026-11-21)).
+2. **Reads by the latest copy** (decision 28's candidate B): reads take the
+   latest copy of an item by Git history across primary and every context.
+3. **Ticket reopening** (decision 28's candidate C), which needs an RFC
+   change: the MVP excludes reopening.
+4. **A resolvable canonical add/add** of a ticket file through
+   `context resolve-local` (decision 30).
+5. **Split-endpoint tracking** (decision 29): advance tracking from a
+   verified fetch-side read.
+6. **A contained context's stale remote branch** (decision 32, withdrawn):
+   delete it, guarded by stored push evidence.
+7. **C4's refused first publication:** a context's refused first push, then
+   the same `item sync` request, answers `recovery_required` and publishes
+   nothing (Task 12's C4 finding).
+8. **Synchronization meeting a held lease** answers `internal_error`, not
+   `busy` (decision 24's reading).
+9. **`progress: connecting` in a local-only run** of `document promote` and
+   `ticket close`.
+10. **`closure::checkpoint` timing flakes:** two unit tests whose
+    `ClosureRecord`s print alike failed once each under load and passed
+    alone.
+11. **`effective_identity`'s per-key cascade** (R-6, owner question 1).

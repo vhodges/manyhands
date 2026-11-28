@@ -301,6 +301,94 @@ fn a_conflict_prints_its_conflict_and_the_command_that_shows_it() {
     );
 }
 
+/// A synchronization that can't confirm the remote's history is final and
+/// offers the repair read, which is rendered as a command in place of the
+/// action's own line.
+#[test]
+fn unresolved_history_names_the_repair_read_as_a_command() {
+    let mut envelope = golden("repo_sync_recovery_required");
+    envelope.data = None;
+    envelope.recovery = vec![RecoveryAction::new(
+        RecoveryActionKind::RemoteHistory,
+        [("root", "/work/repo".into())],
+    )];
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(
+        text.contains("next: manyhands-cli remote history --repo '/work/repo'\n"),
+        "{text}"
+    );
+    assert!(!text.contains("remote.history"), "{text}");
+    assert!(!text.contains("request.retry"), "{text}");
+}
+
+/// A pull-only `repo sync` refused for local commits lists each commit as
+/// a field, and says when the list is not all of them.
+#[test]
+fn local_commits_refusal_lists_each_commit() {
+    let refusal = |commits: &[(&str, &str)], complete: bool| {
+        let mut envelope = golden("repo_sync_recovery_required");
+        envelope.code = ResultCode::PrimaryHasLocalCommits;
+        envelope.outcome = Outcome::Blocked;
+        envelope.message = ResultCode::PrimaryHasLocalCommits.message().into();
+        envelope.effects = Effects::not_requested();
+        envelope.recovery.clear();
+        envelope.data = Some(MutationDataDto::PrimaryLocalCommits(
+            PrimaryLocalCommitsDto {
+                r#type: PrimaryLocalCommitsType::PrimaryLocalCommits,
+                local_commits: commits
+                    .iter()
+                    .map(|(oid, summary)| LocalCommitDto {
+                        oid: (*oid).to_owned(),
+                        summary: (*summary).to_owned(),
+                    })
+                    .collect(),
+                complete,
+            },
+        ));
+        output(&envelope, false, &Seen::default())
+    };
+    let commits = [
+        ("0123456789abcdef0123456789abcdef01234567", "Add a thing"),
+        (
+            "fedcba9876543210fedcba9876543210fedcba98",
+            "Tab\there\nlocal commit: forged \u{1b}[31m",
+        ),
+    ];
+    let incomplete = refusal(&commits, false);
+    assert_eq!(incomplete.status, 3);
+    assert!(incomplete.stdout.is_empty());
+    assert_eq!(
+        stderr(&incomplete),
+        "error: The local primary branch has commits the remote does not have.\n\
+         code: primary_has_local_commits\n\
+         request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n\
+         operation: <operation>\n\
+         local commit: 0123456 Add a thing\n\
+         local commit: fedcba9 Tab\\there\\nlocal commit: forged \\u{1b}[31m\n\
+         note: more local commits are not listed\n"
+    );
+    no_raw_control(stderr(&incomplete));
+    // A complete list says nothing more.
+    let complete = refusal(&commits, true);
+    assert_eq!(
+        stderr(&complete),
+        stderr(&incomplete).replace("note: more local commits are not listed\n", "")
+    );
+    // No commits to list (the push endpoint is ahead of what was fetched):
+    // the refusal prints with no commit lines and no data fields, and a
+    // note saying why the list is empty.
+    let none = refusal(&[], true);
+    assert_eq!(none.status, 3);
+    assert_eq!(
+        stderr(&none),
+        "error: The local primary branch has commits the remote does not have.\n\
+         code: primary_has_local_commits\n\
+         request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n\
+         operation: <operation>\n\
+         note: no local-only commits are listed; the push endpoint is out of step with the fetch, so run repo sync again\n"
+    );
+}
+
 #[test]
 fn a_conflict_to_repair_outside_says_so() {
     let mut envelope = golden("repo_sync_recovery_required");
@@ -1154,4 +1242,62 @@ fn only_a_resume_s_deleted_branch_without_a_cancellation_carries_the_note() {
     assert_eq!(json["message"], ResultCode::RemoteBranchDeleted.message());
     assert_eq!(json["recovery"], serde_json::json!([]));
     assert!(!json.to_string().contains("reservation"));
+}
+
+/// Part H: an `item sync` that gives a ticket's pull-request link prints the
+/// link's own line, as `ticket show` and the closure verbs do, whatever else
+/// its answer says, through the field escaping.
+#[test]
+fn an_item_sync_that_gives_a_link_prints_its_line() {
+    let link = |url: Option<&str>| {
+        let data = manyhands::repository::PullRequestLinkDataDto::from_stored_for_testing(
+            &serde_json::json!({
+                "type": "pull_request_link",
+                "pull_request": {
+                    "source": "manyhands/ticket/x",
+                    "target": "main",
+                    "forge": null,
+                    "url": url,
+                },
+            }),
+        )
+        .unwrap();
+        let mut envelope = Envelope::<MutationDataDto>::classified_mutation(
+            "item sync",
+            Scope {
+                repository: Some("/work/repo".into()),
+                item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".into()),
+                ..Scope::default()
+            },
+            false,
+            ResultCode::Ok,
+            Effects::not_requested(),
+            false,
+        );
+        envelope.data = Some(MutationDataDto::PullRequestLink(Box::new(data)));
+        envelope
+    };
+    let with_url = output(
+        &link(Some("https://forge.example/pr/7")),
+        false,
+        &Seen::default(),
+    );
+    assert_eq!(with_url.status, 0);
+    assert!(
+        stdout(&with_url).contains("pull request: https://forge.example/pr/7\n"),
+        "{}",
+        stdout(&with_url)
+    );
+    let without = output(&link(None), false, &Seen::default());
+    assert!(
+        stdout(&without).contains("open a pull request from manyhands/ticket/x into main\n"),
+        "{}",
+        stdout(&without)
+    );
+    let odd = output(
+        &link(Some("https://forge.example/\u{1b}[31m")),
+        false,
+        &Seen::default(),
+    );
+    no_raw_control(stdout(&odd));
 }

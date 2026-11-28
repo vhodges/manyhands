@@ -4,7 +4,7 @@
 //! and completion. Each table's own module keeps its schema, step graph,
 //! invariants, insert and save. A statement here differs between the tables
 //! only in the table name and the lifecycle's own action and kind.
-use super::lifecycle::{LifecycleKind, LifecycleRecord, LifecycleRefusal, ParentStep};
+use super::lifecycle::{LifecycleKind, LifecycleRecord, LifecycleRefusal, ParentStep, RecordPath};
 use crate::{
     canonical::ItemId,
     repository::{
@@ -12,7 +12,8 @@ use crate::{
         RemoteOperationTarget, RepositoryError, RepositoryErrorKind, RepositoryOperation,
         RepositoryService,
         cleanup::{self, RetirementEvidence},
-        closure::record::ClosureRecord,
+        closure::record::{ClosureRecord, ClosureStep},
+        lifecycle_contexts, mark_registered_lifecycle_contexts_dirty,
         promotion::record::PromotionRecord,
         remote::{
             reservation::{self, RemoteReservation},
@@ -265,6 +266,18 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// A closure record's own step, which the runner's `ParentStep` view
+    /// folds (`closing`, `retired`): a promotion has none.
+    fn closure_step(&self) -> Option<ClosureStep> {
+        None
+    }
+    /// Whether a new request may supersede this unfinished record: only a
+    /// cleanup stop of the kinds `begin_record` replaces.
+    fn supersedable(&self) -> bool;
+    /// The closure checkpoint the record holds. A promotion writes none.
+    fn written_checkpoint(&self) -> Option<Oid> {
+        None
+    }
 }
 
 pub(in super::super) fn read_record<R: ParentRecord>(
@@ -315,11 +328,11 @@ fn bindings<R: ParentRecord>(db: &Connection, op: OperationId) -> Result<Vec<R>,
     .collect()
 }
 pub(in super::super) fn unfinished_record<R: ParentRecord>(
-    tx: &Transaction<'_>,
+    db: &Connection,
     id: i64,
     item: &ItemId,
 ) -> Result<Option<R>, RepositoryError> {
-    tx
+    db
         .query_row(
             &format!("SELECT * FROM {} WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",R::KIND.table()),
             params![id, item.to_string()],
@@ -443,22 +456,41 @@ pub(in super::super) fn supersede<R: ParentRecord>(
 pub(in super::super) enum ChildRole {
     Context,
     Primary,
+    /// A branch record's second child: the publication of its context, in
+    /// the slot a direct record's primary child has.
+    Publication,
 }
-/// A context child only from `confirmed`, a primary child only from
-/// `integrated` or `publication_pending`, for every parent kind.
-fn child_allowed(step: ParentStep, role: ChildRole) -> bool {
-    match role {
-        ChildRole::Context => step == ParentStep::Confirmed,
-        ChildRole::Primary => matches!(
-            step,
+/// The role of a record's second slot: the primary child of a direct
+/// record, the publication child of a branch record.
+fn second_role(path: RecordPath) -> ChildRole {
+    match path {
+        RecordPath::Direct => ChildRole::Primary,
+        RecordPath::Branch => ChildRole::Publication,
+    }
+}
+/// A context child only from `confirmed`, a direct record's primary child
+/// only from `integrated` or `publication_pending`, and a branch record's
+/// publication child only from `closing` or `publication_pending`.
+fn child_allowed(facts: &ParentFacts, role: ChildRole) -> bool {
+    match (facts.path, role) {
+        (_, ChildRole::Context) => facts.step == ParentStep::Confirmed,
+        (RecordPath::Direct, ChildRole::Primary) => matches!(
+            facts.step,
             ParentStep::Integrated | ParentStep::PublicationPending
         ),
+        (RecordPath::Branch, ChildRole::Publication) => matches!(
+            facts.closure_step,
+            Some(ClosureStep::Closing | ClosureStep::PublicationPending)
+        ),
+        (RecordPath::Direct, ChildRole::Publication) | (RecordPath::Branch, ChildRole::Primary) => {
+            false
+        }
     }
 }
 fn attempt_of<R: ParentRecord>(r: &R, role: ChildRole) -> (u32, Option<OperationId>) {
     match role {
         ChildRole::Context => (r.context_attempt(), r.context_sync_id()),
-        ChildRole::Primary => (r.primary_attempt(), r.primary_sync_id()),
+        ChildRole::Primary | ChildRole::Publication => (r.primary_attempt(), r.primary_sync_id()),
     }
 }
 
@@ -470,15 +502,19 @@ pub(in super::super) struct ParentFacts {
     context: (u32, Option<OperationId>),
     primary: (u32, Option<OperationId>),
     step: ParentStep,
+    path: RecordPath,
+    closure_step: Option<ClosureStep>,
     cancel_requested: bool,
 }
 impl ParentFacts {
-    fn of<R: ParentRecord>(r: R) -> Self {
+    fn of<R: ParentRecord>(r: &R) -> Self {
         Self {
             expectation: r.expectation_bytes(),
-            context: attempt_of(&r, ChildRole::Context),
-            primary: attempt_of(&r, ChildRole::Primary),
+            context: attempt_of(r, ChildRole::Context),
+            primary: attempt_of(r, ChildRole::Primary),
             step: r.step(),
+            path: r.path(),
+            closure_step: r.closure_step(),
             cancel_requested: r.cancel_requested(),
             item_id: r.item_id().clone(),
         }
@@ -491,10 +527,10 @@ impl ParentFacts {
     ) -> Result<Option<Self>, RepositoryError> {
         Ok(match kind {
             LifecycleKind::DocumentPromotion => {
-                read_record::<PromotionRecord>(db, id, parent)?.map(Self::of)
+                read_record::<PromotionRecord>(db, id, parent)?.map(|r| Self::of(&r))
             }
             LifecycleKind::TicketClosure => {
-                read_record::<ClosureRecord>(db, id, parent)?.map(Self::of)
+                read_record::<ClosureRecord>(db, id, parent)?.map(|r| Self::of(&r))
             }
         })
     }
@@ -543,6 +579,20 @@ fn fence_mismatch(kind: LifecycleKind) -> RepositoryError {
     mismatch(kind)
 }
 impl ChildExecution {
+    /// The slot this attempt runs in.
+    pub(in super::super) fn role(&self) -> ChildRole {
+        self.role
+    }
+    /// Whether this is the publication child of the branch record `parent`
+    /// of the lifecycle `kind`: the one synchronization of its ticket's
+    /// context the record's own hold lets through.
+    pub(in super::super) fn is_publication_of(
+        &self,
+        kind: LifecycleKind,
+        parent: OperationId,
+    ) -> bool {
+        self.role() == ChildRole::Publication && self.kind == kind && self.parent == parent
+    }
     pub(in super::super) fn validate_request(
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,
@@ -552,7 +602,7 @@ impl ChildExecution {
         let matches = match (&self.role, &request.target) {
             (ChildRole::Primary, crate::repository::SynchronizationTarget::Primary) => true,
             (
-                ChildRole::Context,
+                ChildRole::Context | ChildRole::Publication,
                 crate::repository::SynchronizationTarget::Context { kind, item_id },
             ) => *kind == self.kind.authoring() && item_id == &self.item,
             _ => false,
@@ -575,7 +625,7 @@ impl ChildExecution {
             .ok_or_else(|| fence_mismatch(self.kind))?;
         let (attempt, child) = match self.role {
             ChildRole::Context => parent.context,
-            ChildRole::Primary => parent.primary,
+            ChildRole::Primary | ChildRole::Publication => parent.primary,
         };
         if parent.item_id != self.item
             || parent.expectation != self.expectation
@@ -590,7 +640,7 @@ impl ChildExecution {
         if record.as_ref().is_some_and(|r| r.authority.is_some()) {
             return Ok(());
         }
-        if !child_allowed(parent.step, self.role) || (parent.cancel_requested && record.is_none()) {
+        if !child_allowed(&parent, self.role) || (parent.cancel_requested && record.is_none()) {
             return Err(fence_mismatch(self.kind));
         }
         Ok(())
@@ -644,7 +694,7 @@ pub(in super::super) fn next_attempt<R: ParentRecord>(
     role: ChildRole,
 ) -> Result<R, RepositoryError> {
     let r = read_record::<R>(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if !child_allowed(r.step(), role) {
+    if !child_allowed(&ParentFacts::of(&r), role) {
         return Err(state::recovery_required());
     }
     match child_state(tx, &r, role)? {
@@ -667,7 +717,7 @@ fn mint_attempt<R: ParentRecord>(
 ) -> Result<R, RepositoryError> {
     let (column, count) = match role {
         ChildRole::Context => ("context_sync_id", "context_attempt"),
-        ChildRole::Primary => ("primary_sync_id", "primary_attempt"),
+        ChildRole::Primary | ChildRole::Publication => ("primary_sync_id", "primary_attempt"),
     };
     let attempt = attempt_of(r, role)
         .0
@@ -718,6 +768,36 @@ pub(in super::super) fn validate_remote_identity(
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
 }
+
+/// Only the poll dispatcher supplies its actual UPDATE kind. The exception is
+/// scoped to the incoming registered repository and manual priority BEFORE any
+/// reservation write; public O and lifecycle callers use the strict path above.
+pub(in super::super) fn validate_poll_identity(
+    db: &Connection,
+    id: i64,
+    op: OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+    poll_kind: Option<state::PollKind>,
+) -> Result<(), RepositoryError> {
+    if poll_kind == Some(state::PollKind::Update)
+        && target.action() == RemoteOperationAction::Poll
+        && crate::repository::context_retirement::pass::ordinary_poll_recovery(
+            db,
+            id,
+            &op.to_string(),
+            priority,
+        )?
+    {
+        if crate::repository::local_sync::record::owned_identity(db, &op.to_string())? {
+            return Err(state::recovery_required());
+        }
+        remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
+        crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
+    } else {
+        validate_remote_identity(db, id, op, target, priority)
+    }
+}
 /// A reservation under any of one table's parent or child IDs must be
 /// exactly that binding's.
 pub(in super::super) fn remote_identity_of<R: ParentRecord>(
@@ -730,7 +810,8 @@ pub(in super::super) fn remote_identity_of<R: ParentRecord>(
     for r in bindings::<R>(db, op)? {
         let expected = if r.operation_id() == op {
             R::KIND.action()
-        } else if r.context_sync_id() == Some(op) {
+        } else if r.context_sync_id() == Some(op) || r.path() == RecordPath::Branch {
+            // A branch record's second slot publishes its context.
             RemoteOperationAction::SynchronizeContext
         } else {
             RemoteOperationAction::SynchronizePrimary
@@ -748,7 +829,10 @@ pub(in super::super) fn remote_identity_of<R: ParentRecord>(
     Ok(())
 }
 /// The local journal may never begin under a parent ID, and under a child
-/// ID only as that child's exact authoritative refresh hand-off.
+/// ID only as that child's exact authoritative refresh hand-off: a row with
+/// no target, as an older build began it. This build begins none under a
+/// child ID, whose hand-off is its parent's exit (Task 22); it takes up only
+/// what an older build began there.
 pub(in super::super) fn validate_local_identity(
     kind: LifecycleKind,
     db: &Connection,
@@ -771,17 +855,7 @@ pub(in super::super) fn validate_local_identity(
     if parent {
         return Err(mismatch(kind));
     }
-    let child: Option<i64> = db
-        .query_row(
-            &format!(
-                "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
-            ),
-            [op],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|_| state::recovery_required())?;
-    if let Some(id) = child {
+    if let Some(id) = child_repository(kind, db, op)? {
         let registered: String = db
             .query_row(
                 "SELECT root_path FROM repositories WHERE id=?1",
@@ -802,6 +876,49 @@ pub(in super::super) fn validate_local_identity(
         }
     }
     Ok(())
+}
+/// The repository of the `kind` parent whose child `op` is: its context's
+/// or its primary's synchronization. `None` when `op` is no child of that
+/// table, or the table is not there yet.
+fn child_repository(
+    kind: LifecycleKind,
+    db: &Connection,
+    op: &str,
+) -> Result<Option<i64>, RepositoryError> {
+    let table = kind.table();
+    if !crate::repository::recovery::has_table(db, table).map_err(|_| state::recovery_required())? {
+        return Ok(None);
+    }
+    db.query_row(
+        &format!(
+            "SELECT repository_id FROM {table} WHERE context_sync_id=?1 OR primary_sync_id=?1"
+        ),
+        [op],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|_| state::recovery_required())
+}
+/// Whether `op` is a lifecycle's child, a promotion's or a closure's, as
+/// its parent's record says, whoever runs it: the ID under which
+/// `validate_local_identity` lets the local journal hold only the plain
+/// refresh hand-off an older build began, with no target. Such a child
+/// begins no hand-off of its own: its parent's exit indexes what it changed
+/// (Task 22).
+pub(in super::super) fn is_child(
+    db: &Connection,
+    op: OperationId,
+) -> Result<bool, RepositoryError> {
+    let op = op.to_string();
+    for kind in [
+        LifecycleKind::DocumentPromotion,
+        LifecycleKind::TicketClosure,
+    ] {
+        if child_repository(kind, db, &op)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 pub(in super::super) fn audit<R: ParentRecord>(db: &Connection) -> Result<(), RepositoryError> {
     R::validate_schema(db)?;
@@ -838,7 +955,7 @@ pub(in super::super) fn audit<R: ParentRecord>(db: &Connection) -> Result<(), Re
                 validate_remote_identity(db, id, r.operation_id(), &remote.target, remote.priority)
                     .map_err(|_| state::recovery_required())?;
             }
-            for role in [ChildRole::Context, ChildRole::Primary] {
+            for role in [ChildRole::Context, second_role(r.path())] {
                 child_state(db, &r, role).map_err(|_| state::recovery_required())?;
             }
             let local_children=db.prepare("SELECT root_path,action,coalesce(target,''),operation_ulid FROM operation_records WHERE operation_ulid IN (?1,?2)").and_then(|mut q|q.query_map(params![context,primary],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|state::recovery_required())?;
@@ -899,10 +1016,21 @@ pub(in super::super) fn complete_record<R: ParentRecord>(
     crate::repository::recovery::invalidate_index_observations(tx, id)?;
     // Completion may be followed immediately by process exit (F11). Its
     // index-only handoff must be durable in this same transaction so replay
-    // cannot mistake pre-cleanup discovery for an already-refreshed outcome.
-    tx.execute(
-        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-        [id],
+    // cannot mistake pre-cleanup discovery for an already-refreshed outcome:
+    // the contexts it changed are marked, the retired one's until its rows go
+    // (none is marked for it once they are gone).
+    let root: String = tx
+        .query_row(
+            "SELECT root_path FROM repositories WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    mark_registered_lifecycle_contexts_dirty(
+        tx,
+        id,
+        std::path::Path::new(&root),
+        &lifecycle_contexts(r.item_id()),
     )
     .map_err(|_| state::recovery_required())?;
     tx.execute(&format!("UPDATE {} SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",R::KIND.table()),params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;

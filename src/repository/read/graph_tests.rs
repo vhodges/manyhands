@@ -1,4 +1,18 @@
+use git2::Repository;
+
 use super::*;
+use crate::{
+    repository::{
+        Mutation, MutationDataDto, ProposedRelationships, RelationshipWrite, TicketDraft,
+        TicketSaveInput,
+        basis::{Basis, BasisCheck, check},
+        command_index_tests::{
+            Fixture, OTHER, SPARE, TICKET, commit, item, ticket_path, ticket_source, write,
+        },
+        discovery::{ListedContext, listed_context, stat_basis},
+    },
+    results::ResultCode,
+};
 
 /// A ticket of the graph. IDs here are short names: the graph compares
 /// them and nothing more.
@@ -6,6 +20,7 @@ fn ticket(id: &str, deps: &[&str]) -> TicketNode {
     TicketNode {
         id: id.to_owned(),
         closed: false,
+        closing: false,
         parent: None,
         deps: deps.iter().map(|id| (*id).to_owned()).collect(),
     }
@@ -14,6 +29,14 @@ fn ticket(id: &str, deps: &[&str]) -> TicketNode {
 fn closed(id: &str, deps: &[&str]) -> TicketNode {
     TicketNode {
         closed: true,
+        ..ticket(id, deps)
+    }
+}
+
+/// A ticket only its own worktree holds the closure of.
+fn closing(id: &str, deps: &[&str]) -> TicketNode {
+    TicketNode {
+        closing: true,
         ..ticket(id, deps)
     }
 }
@@ -74,6 +97,9 @@ fn lines(graph: &TicketGraph, id: &str, upward: bool, limit: Option<u32>) -> Vec
                 match entry.state {
                     DependencyState::Unresolved => "?",
                     DependencyState::Open | DependencyState::Closed => "",
+                    DependencyState::Closing => {
+                        panic!("{}: a tree here has no closing ticket", entry.id)
+                    }
                 },
             )
         })
@@ -531,6 +557,100 @@ fn a_plan_puts_each_ticket_after_all_its_open_dependencies() {
 }
 
 #[test]
+fn a_closing_ticket_is_open_to_its_dependents_and_left_out_of_the_queries() {
+    let graph = graph([
+        closing("A", &[]),
+        ticket("B", &["A"]),
+        ticket("C", &["B"]),
+        // Waits for an ID no ticket has.
+        closing("X", &["Z"]),
+        ticket("Y", &["X"]),
+    ]);
+
+    // A closing ticket's own readiness is an open ticket's; a dependent of
+    // it is blocked for its own reason, and not for an open dependency.
+    assert_eq!(readiness(&graph, "A"), (ReadinessState::Ready, vec![]));
+    assert_eq!(
+        readiness(&graph, "B"),
+        (
+            ReadinessState::Blocked,
+            vec![("closing_dependency", names(&["A"]))]
+        )
+    );
+    assert_eq!(
+        readiness(&graph, "C"),
+        (
+            ReadinessState::Blocked,
+            vec![("open_dependency", names(&["B"]))]
+        )
+    );
+    assert_eq!(
+        readiness(&graph, "X"),
+        (
+            ReadinessState::Blocked,
+            vec![("unresolved_dependency", names(&["Z"]))]
+        )
+    );
+    assert!(graph.is_closing("A") && graph.is_closing("X"));
+    assert!(!graph.is_closing("B") && !graph.is_closing("Missing"));
+
+    // A tree line calls it closing, and it is not closed.
+    let tree = graph.tree("B", false, None).unwrap();
+    assert_eq!(
+        tree.entries
+            .iter()
+            .map(|entry| (entry.id, entry.state))
+            .collect::<Vec<_>>(),
+        [("A", DependencyState::Closing)]
+    );
+    assert_eq!(graph.made_ready("A"), Some((vec![], false)));
+
+    // The plan computes with closing tickets as open nodes and then leaves
+    // them out: a batch keeps its number, and one left empty is listed
+    // empty here, for the caller to drop. A ticket that waits for an
+    // unplannable closing ticket is unplannable, and the closing ticket is
+    // not listed.
+    let plan = graph.plan();
+    assert_eq!(plan.batches, [vec![], vec!["B"], vec!["C"]]);
+    assert_eq!(
+        unplannable(&plan),
+        [(
+            "Y".to_owned(),
+            vec![("unplannable_dependency", names(&["X"]))]
+        )]
+    );
+}
+
+#[test]
+fn critical_path_gives_closing_tickets_no_length() {
+    // The longest chain counts tickets, and a closing ticket is not one of
+    // them: B waits for A, which counts for nothing, so C and D, two
+    // tickets, are longer than B alone. Were A a ticket of the chain and
+    // dropped afterwards, B, the lower ID, would end the chain.
+    let beside = graph([
+        closing("A", &[]),
+        ticket("B", &["A"]),
+        ticket("C", &[]),
+        ticket("D", &["C"]),
+    ]);
+    assert_eq!(beside.critical_path(), ["C", "D"]);
+
+    // A closing ticket in the middle of a chain adds nothing to it and is
+    // left out of it.
+    let through = graph([
+        ticket("P", &[]),
+        closing("A", &["P"]),
+        ticket("R", &["A"]),
+        ticket("Q", &[]),
+    ]);
+    assert_eq!(through.critical_path(), ["P", "R"]);
+
+    // Only closing tickets: there is no chain.
+    let only = graph([closing("A", &[]), closing("B", &["A"])]);
+    assert!(only.critical_path().is_empty());
+}
+
+#[test]
 fn tickets_on_or_behind_a_cycle_or_an_unresolved_dependency_are_unplannable() {
     let graph = graph([
         ticket("A", &["B"]),
@@ -640,6 +760,7 @@ fn a_very_long_chain_is_walked_without_recursion() {
     let chain = graph((0..MANY).map(|number| TicketNode {
         id: numbered(number),
         closed: false,
+        closing: false,
         parent: number.checked_sub(1).map(numbered),
         deps: number.checked_sub(1).map(numbered).into_iter().collect(),
     }));
@@ -665,6 +786,7 @@ fn a_very_long_chain_is_walked_without_recursion() {
     let ring = graph((0..MANY).map(|number| TicketNode {
         id: numbered(number),
         closed: false,
+        closing: false,
         parent: Some(numbered((number + 1) % MANY)),
         deps: vec![numbered((number + 1) % MANY)],
     }));
@@ -707,6 +829,7 @@ fn a_very_wide_graph_is_walked_once() {
     nodes.push(TicketNode {
         id: sink.clone(),
         closed: false,
+        closing: false,
         parent: None,
         deps: (0..MANY).map(numbered).collect(),
     });
@@ -742,6 +865,7 @@ fn a_reason_names_a_whole_cycle_until_it_is_longer_than_a_reason_holds() {
         graph((0..length).map(|number| TicketNode {
             id: numbered(number),
             closed: false,
+            closing: false,
             parent: None,
             deps: vec![numbered((number + 1) % length)],
         }))
@@ -817,4 +941,320 @@ fn a_ticket_names_the_whole_cycle_it_is_on_in_either_field() {
     // An ID that is no ticket's is on no cycle.
     assert_eq!(graph.dependency_cycle_ids("z"), None);
     assert_eq!(graph.parent_cycle_ids("z"), None);
+}
+
+#[test]
+fn made_ready_is_the_direct_dependents_with_every_dependency_closed() {
+    let graph = graph([
+        closed("t", &[]),
+        closed("done", &[]),
+        ticket("z", &["t"]),
+        ticket("a", &["t", "done"]),
+        // Waiting for another open ticket.
+        ticket("open", &[]),
+        ticket("m", &["t", "open"]),
+        // Review Focus 3: an ID no ticket holds.
+        ticket("u", &["t", "absent"]),
+        // Named twice, and listed once.
+        ticket("twice", &["t", "t"]),
+        // Closed itself.
+        closed("c", &["t"]),
+        // Not a direct dependent, and not ready either.
+        ticket("indirect", &["z"]),
+        // Ready, and nothing to do with `t`.
+        ticket("elsewhere", &["done"]),
+    ]);
+    assert_eq!(graph.made_ready("t"), Some((vec!["a", "twice", "z"], true)));
+}
+
+#[test]
+fn made_ready_is_empty_and_says_so_for_a_ticket_that_reads_open() {
+    let graph = graph([ticket("t", &[]), ticket("d", &["t"])]);
+    assert_eq!(graph.made_ready("t"), Some((vec![], false)));
+}
+
+#[test]
+fn made_ready_never_lists_the_ticket_itself() {
+    assert_eq!(
+        graph([closed("t", &["t"])]).made_ready("t"),
+        Some((vec![], true))
+    );
+    assert_eq!(
+        graph([ticket("t", &["t"])]).made_ready("t"),
+        Some((vec![], false))
+    );
+}
+
+#[test]
+fn made_ready_has_no_answer_for_an_id_that_is_no_tickets() {
+    assert_eq!(graph([ticket("t", &[])]).made_ready("absent"), None);
+}
+
+#[test]
+fn made_ready_is_empty_with_no_dependents() {
+    assert_eq!(
+        graph([closed("t", &[])]).made_ready("t"),
+        Some((vec![], true))
+    );
+}
+
+/// A comment on B, which only a commit made outside Manyhands adds.
+const COMMENT_ON_OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD9";
+
+/// B's ticket depending on A.
+fn other_on_ticket() -> String {
+    ticket_source(OTHER, "Other", &format!("deps:\n- {TICKET}\n"))
+}
+
+/// Commits `text` at `path` in B's worktree with Git alone.
+fn commit_in_other(f: &Fixture, path: &str, text: &str) {
+    write(&f.worktree(OTHER), path, text);
+    commit(&Repository::open(f.worktree(OTHER)).unwrap(), &[path]);
+}
+
+/// B's context as listing finds it.
+fn other_context(f: &Fixture) -> ListedContext {
+    listed_context(&f.root, &ContextKey::Item(item(OTHER))).unwrap()
+}
+
+/// The basis the index stores for B's context, and when it was indexed.
+fn stored_basis_of_other(f: &Fixture) -> (Basis, i64) {
+    let (basis, indexed_at): (String, i64) = f
+        .index()
+        .query_row(
+            "SELECT basis, indexed_at FROM contexts WHERE item_id = ?1",
+            [OTHER],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    (Basis::decode(&basis).unwrap(), indexed_at)
+}
+
+/// Whether B's context holds a file written too close to when it was
+/// indexed for its stat to be trusted.
+fn other_is_racy(f: &Fixture) -> bool {
+    let (stored, indexed_at) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let now = stat_basis(&git, &f.root, &other_context(f), Some(&stored), indexed_at);
+    matches!(check(&stored, &now, indexed_at), BasisCheck::Racy(_))
+}
+
+/// B comes to depend on A by an edit its stat does not show, as within one
+/// tick of a filesystem with coarse timestamps: the stored basis is given
+/// the stat of B's files as they are after the edit, and keeps the hashes of
+/// what they held before.
+fn edit_other_under_its_stored_stat(f: &Fixture) {
+    write(&f.worktree(OTHER), &ticket_path(OTHER), &other_on_ticket());
+    let (stored, _) = stored_basis_of_other(f);
+    let git = Repository::open(&f.root).unwrap();
+    let mut now = stat_basis(&git, &f.root, &other_context(f), None, 0);
+    for file in &mut now.files {
+        file.hash = stored
+            .files
+            .iter()
+            .find(|before| before.path == file.path)
+            .and_then(|before| before.hash);
+    }
+    f.index()
+        .execute(
+            "UPDATE contexts SET basis = ?1 WHERE item_id = ?2",
+            rusqlite::params![now.encode(), OTHER],
+        )
+        .unwrap();
+}
+
+/// A save that sets a ticket's relationships checks them against every
+/// context, and reads from disk each one whose basis no longer holds since
+/// the index stored it, writing nothing to the index; `ticket check` reads
+/// the index alone. A is the fixture's `TICKET` and B its `OTHER`, each in a
+/// worktree of its own, and C its `SPARE`, on the primary only. In each case
+/// one context changes outside Manyhands, B's or the primary's, so the index
+/// still holds it as it was.
+///
+/// Every context was written moments before it was indexed, so its stat
+/// alone cannot vouch for it: a context nothing changed is not read, as its
+/// files still hold what the index hashed, and one whose file changed under
+/// the same stat is.
+#[test]
+fn a_relationship_check_reads_a_moved_context_from_disk() {
+    /// (case, how a context changes, the context that moved and is read,
+    /// what a save of A sets as its one dependency, and the code and IDs it
+    /// is refused with)
+    type Case = (
+        &'static str,
+        fn(&Fixture),
+        &'static str,
+        &'static str,
+        ResultCode,
+        &'static [&'static str],
+    );
+    let cases: [Case; 4] = [
+        (
+            "B comes to depend on A by a commit",
+            |f| commit_in_other(f, &ticket_path(OTHER), &other_on_ticket()),
+            "OTHER",
+            OTHER,
+            ResultCode::RelationshipCycle,
+            &[TICKET, OTHER],
+        ),
+        (
+            "C comes to depend on A by a commit on the primary",
+            |f| {
+                let path = ticket_path(SPARE);
+                write(
+                    &f.root,
+                    &path,
+                    &ticket_source(SPARE, "Spare", &format!("deps:\n- {TICKET}\n")),
+                );
+                commit(&Repository::open(&f.root).unwrap(), &[&path]);
+            },
+            "primary",
+            SPARE,
+            ResultCode::RelationshipCycle,
+            &[TICKET, SPARE],
+        ),
+        (
+            "a comment on B is committed",
+            |f| {
+                commit_in_other(
+                    f,
+                    &format!(".manyhands/comments/{OTHER}/{COMMENT_ON_OTHER}.md"),
+                    &format!(
+                        "---\nmanyhands_managed: true\nmanyhands_kind: comment\n\
+                         id: {COMMENT_ON_OTHER}\nitem_id: {OTHER}\n\
+                         created_at: 2026-11-01T00:00:00Z\n---\nA comment.\n"
+                    ),
+                );
+            },
+            "OTHER",
+            COMMENT_ON_OTHER,
+            ResultCode::InvalidRelationship,
+            &[COMMENT_ON_OTHER],
+        ),
+        (
+            "B comes to depend on A by an edit its stat does not show",
+            edit_other_under_its_stored_stat,
+            "OTHER",
+            OTHER,
+            ResultCode::RelationshipCycle,
+            &[TICKET, OTHER],
+        ),
+    ];
+    for (case, change, moved, target, code, rejected) in cases {
+        let f = Fixture::new();
+        let repo = f.service.resolve_repository(&f.root).unwrap();
+        let proposed = ProposedRelationships {
+            deps: vec![item(target)],
+            parent: None,
+        };
+
+        // With nothing changed since it was stored, no context is read,
+        // though B, written just before it was indexed, is racy.
+        assert!(other_is_racy(&f), "{case}");
+        let unmoved = f.watch(|| {
+            let check = f
+                .service
+                .check_ticket_relationships_reading_moved_contexts(&repo, &item(TICKET), &proposed)
+                .unwrap();
+            assert_eq!(check.rejection, None, "{case}");
+        });
+        assert!(unmoved.observed.is_empty(), "{case}: {:?}", unmoved.counts);
+
+        change(&f);
+        let index_only = f
+            .service
+            .check_ticket_relationships(&repo, &item(TICKET), &proposed)
+            .unwrap();
+        assert_eq!(index_only.rejection, None, "{case}");
+
+        let observation = f
+            .service
+            .show_item(&repo, &item(TICKET))
+            .unwrap()
+            .observation
+            .unwrap();
+        let saved = f.watch(|| {
+            let envelope = f.execute(Mutation::TicketSave(TicketSaveInput {
+                root: f.root.clone(),
+                id: item(TICKET),
+                draft: TicketDraft {
+                    title: "Ticket".to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: "open".to_owned(),
+                    project: None,
+                    team: None,
+                    body: "Body of Ticket.\n".to_owned(),
+                },
+                deps: RelationshipWrite::Set(vec![target.to_owned()]),
+                parent: RelationshipWrite::Unchanged,
+                observation,
+            }));
+            assert_eq!(envelope.code, code, "{case}: {envelope:?}");
+            let Some(MutationDataDto::Ticket(data)) = &envelope.data else {
+                panic!("{case}: no ticket data: {envelope:?}");
+            };
+            assert_eq!(data.rejected, rejected, "{case}");
+        });
+        // That context alone moved, and was read; the index is as it was.
+        assert_eq!(saved.observed, BTreeSet::from([moved]), "{case}");
+        assert_eq!(saved.after, saved.before, "{case}");
+    }
+}
+
+/// The save's check observes a moved context before its read session, and
+/// a store of that context can land between the two. A store with a later
+/// indexed time than the observation's start came from an observation begun
+/// after it: the read keeps its stored rows and does not use the one it
+/// made. A store from before the observation began is what it replaces.
+///
+/// B comes to depend on A in its worktree, outside Manyhands, and is
+/// observed. Its stored rows still hold it as depending on nothing, so
+/// whether B reads as blocked by A says which copy the read took; its
+/// indexed time is set by hand on either side of the observation's start.
+#[test]
+fn a_store_landing_after_the_check_observed_a_context_keeps_its_rows() {
+    let f = Fixture::new();
+    let repo = f.service.resolve_repository(&f.root).unwrap();
+    commit_in_other(&f, &ticket_path(OTHER), &other_on_ticket());
+    let moved = MovedContexts::observe(&f.service, &repo).unwrap();
+    let started_at = moved
+        .0
+        .iter()
+        .find(|(key, _)| *key == ContextKey::Item(item(OTHER)))
+        .map(|(_, observation)| observation.started_at_ns)
+        .expect("B moved");
+
+    // (case, B's stored indexed time, what B reads as)
+    let cases = [
+        (
+            "stored before it was observed",
+            started_at - 1,
+            ReadinessState::Blocked,
+        ),
+        (
+            "stored as it was observed",
+            started_at,
+            ReadinessState::Blocked,
+        ),
+        (
+            "stored after it was observed",
+            started_at + 1,
+            ReadinessState::Ready,
+        ),
+    ];
+    for (case, indexed_at, readiness) in cases {
+        f.index()
+            .execute(
+                "UPDATE contexts SET indexed_at = ?1 WHERE item_id = ?2",
+                rusqlite::params![indexed_at, OTHER],
+            )
+            .unwrap();
+        let read = f
+            .service
+            .read_tickets_naming(&repo, &[], Some(&moved), |tickets| {
+                Ok(tickets.graph().readiness_state(OTHER))
+            })
+            .unwrap();
+        assert_eq!(read, Some(readiness), "{case}");
+    }
 }

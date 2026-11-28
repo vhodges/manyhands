@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     canonical,
+    repository::setup::{
+        change::{Change, ChangePath, ChangeSetupRequest, Planned, path_of},
+        data as setup_data,
+    },
     results::{DiscoveryEffect, Effects, ResultCode, Scope, redact_url},
 };
 
@@ -42,7 +46,9 @@ use super::{
         records::RequestRecord,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
-    Prepared, Previewed, Ran, Standing, lost_refusal, refused, resolve_root, save,
+    Prepared, Previewed, Ran, Standing, lost_refusal, refused,
+    repo::{recorded_now, setup_ran},
+    resolve_root, save,
 };
 
 /// The input of `remote add`: the remote's name and its location, which
@@ -243,7 +249,9 @@ impl RemoteAddBinding {
                 let journal = accepted.journal_row(service);
                 let changed = changed_and_unfinished(journal.as_ref());
                 Ran {
-                    answer: self.ended_answer(code, changed, owed_hand_off(changed)),
+                    answer: self
+                        .ended_answer(code, changed, owed_hand_off(changed))
+                        .naming(service, &accepted.root(), error.blocker()),
                     standing: Standing::Stopped { journal },
                 }
             }
@@ -406,21 +414,39 @@ impl Binding for RemoteAddBinding {
 }
 
 /// The input of `remote select`: the remote to publish to, or none, which
-/// clears the selection.
+/// clears the selection; and, when given, the integration mode and the
+/// `[forge]` setting the configuration is to have (design Part F).
 pub struct RemoteSelectInput {
     pub root: PathBuf,
     pub name: Option<String>,
+    /// The mode: `None` leaves it as the configuration has it.
+    pub integration: Option<canonical::Integration>,
+    /// The `[forge]` table: the outer `None` leaves it as it is, `Some(None)`
+    /// removes it, `Some(Some(setting))` replaces it.
+    pub forge: Option<Option<canonical::ForgeSetting>>,
 }
 
 pub(crate) struct RemoteSelectBinding {
     root: PathBuf,
     name: Option<String>,
+    integration: Option<canonical::Integration>,
+    forge: Option<Option<canonical::ForgeSetting>>,
 }
 
 impl From<RemoteSelectInput> for RemoteSelectBinding {
     fn from(input: RemoteSelectInput) -> Self {
-        let RemoteSelectInput { root, name } = input;
-        Self { root, name }
+        let RemoteSelectInput {
+            root,
+            name,
+            integration,
+            forge,
+        } = input;
+        Self {
+            root,
+            name,
+            integration,
+            forge,
+        }
     }
 }
 
@@ -455,6 +481,100 @@ pub(crate) fn recorded_effects(record: &RequestRecord, accepted: &Accepted) -> E
 }
 
 impl RemoteSelectBinding {
+    /// Which way the request goes (design Part F's table), from the
+    /// primary's configuration as it is now. There is no stored route: a
+    /// request that records its setup is taken up from its row, which never
+    /// asks the file; any other asks it each time it is called.
+    ///
+    /// A configuration that cannot be read is today's direct call only for a
+    /// request that supplies neither the mode nor a forge: the domain refuses
+    /// it, as it always did. With either supplied the request is never run as
+    /// a direct one (no pull-request path commits to the local primary).
+    fn way(&self, root: &Path) -> Result<Way, ResultCode> {
+        match read_configuration_for(root, RepositoryOperation::Read) {
+            Ok(ConfigurationInspection::Valid(current)) => {
+                let change = Change {
+                    name: self.name.as_deref(),
+                    integration: self.integration,
+                    forge: self.forge.as_ref().map(Option::as_ref),
+                };
+                match path_of(&current, &change) {
+                    Ok(ChangePath::AlreadyApplied | ChangePath::Direct) => Ok(Way::Direct),
+                    Ok(ChangePath::Setup(planned)) => Ok(Way::Setup(planned)),
+                    Err(refused) => Err(refused.code()),
+                }
+            }
+            Ok(_) | Err(_) if self.integration.is_none() && self.forge.is_none() => Ok(Way::Direct),
+            Ok(_) | Err(_) => Err(ResultCode::InvalidConfiguration),
+        }
+    }
+
+    /// A request that does not go: the refusal, with what the repository
+    /// shows of its operation.
+    fn refused(&self, service: &RepositoryService, accepted: &Accepted, code: ResultCode) -> Ran {
+        Ran {
+            answer: save::Save::answer(self, code, Effects::not_requested(), &accepted.root()),
+            standing: Standing::Stopped {
+                journal: accepted.journal_row(service),
+            },
+        }
+    }
+
+    /// A pull-request selection: records the change and publishes it, or, for
+    /// a request whose row completed at `setup_recorded`, goes on from its
+    /// record (design Part K). `planned` is what a first call records.
+    fn call_setup(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        planned: Option<&Planned>,
+        recorded: bool,
+    ) -> Ran {
+        let service = call.service;
+        let root = accepted.root();
+        let request = ChangeSetupRequest {
+            root: root.clone(),
+            operation_id: accepted.operation_id,
+            request_id: accepted.request_id,
+            name: self.name.clone(),
+            planned: planned.cloned(),
+            recorded,
+        };
+        let outcome = service.change_setup(request, &|root, request_id| {
+            call.session.publish_setup(service, root, request_id)
+        });
+        match outcome {
+            Ok(outcome) => setup_ran(service, accepted, &root, outcome),
+            Err(error) => {
+                let blocker = error.blocker().cloned();
+                // A refusal before the recording is a selection's, settled as
+                // one. The row decides, as it stands when the call answers:
+                // another call of the request may have recorded the setup
+                // meanwhile, and a request that is recorded, or whose row
+                // cannot be read, is owed whatever this call was.
+                let code = outcome::repository_error_code(error.kind);
+                if !recorded && !recorded_now(service, accepted) {
+                    let mut ran = self.refused(service, accepted, code);
+                    if !recorded_now(service, accepted) {
+                        ran.answer = ran.answer.naming(service, &root, blocker.as_ref());
+                        return ran;
+                    }
+                }
+                Ran {
+                    answer: Answer {
+                        data: setup_data::of(service, &root, None),
+                        // The setup is recorded: a durable change no effect
+                        // shows, so the request is partial, never a refusal.
+                        local_change: true,
+                        ..Answer::stopped(code)
+                    }
+                    .naming(service, &root, blocker.as_ref()),
+                    standing: Standing::Owed,
+                }
+            }
+        }
+    }
+
     fn data(&self) -> MutationDataDto {
         MutationDataDto::Remote(RemoteMutationDto {
             name: self.name.clone(),
@@ -466,7 +586,12 @@ impl RemoteSelectBinding {
     /// A name that cannot be a remote's is refused before the request is
     /// accepted: the domain operation would report it as a Git failure.
     fn validate(&self) -> Result<(), Answer> {
-        let Self { root: _, name } = self;
+        let Self {
+            root: _,
+            name,
+            integration: _,
+            forge: _,
+        } = self;
         match name {
             Some(name) if !is_remote_name(name) => {
                 Err(Answer::stopped(ResultCode::InvalidRemote).with_data(self.data()))
@@ -497,11 +622,22 @@ impl save::Save for RemoteSelectBinding {
     fn holds_bytes(&self, bytes: &[u8]) -> bool {
         // Every field is named: one added to the input does not compile
         // until it is part of what the request intends or left out here.
-        let Self { root: _, name } = self;
+        let Self {
+            root: _,
+            name,
+            integration,
+            forge,
+        } = self;
+        // The whole intended file: the remote, and the mode and the forge
+        // where the request names them.
         std::str::from_utf8(bytes)
             .ok()
             .and_then(|source| canonical::parse_repository_config(source).ok())
-            .is_some_and(|config| config.publication_remote == *name)
+            .is_some_and(|config| {
+                config.publication_remote == *name
+                    && integration.is_none_or(|mode| config.integration() == mode)
+                    && forge.as_ref().is_none_or(|forge| config.forge() == *forge)
+            })
     }
 
     /// The one domain call. It takes no expectation of the file: it
@@ -524,11 +660,20 @@ impl save::Save for RemoteSelectBinding {
         service: &RepositoryService,
         accepted: &Accepted,
     ) -> Result<SaveReport, RepositoryError> {
-        let result = service.set_publication_remote(SetPublicationRemoteRequest {
-            root: accepted.root(),
-            name: self.name.clone(),
-            operation_id: accepted.operation_id,
-        });
+        let result = service.set_publication_remote_with(
+            SetPublicationRemoteRequest {
+                root: accepted.root(),
+                name: self.name.clone(),
+                operation_id: accepted.operation_id,
+            },
+            self.forge.as_ref().map(Option::as_ref),
+            // Planned again under the lease, from the configuration found there.
+            Some(&Change {
+                name: self.name.as_deref(),
+                integration: self.integration,
+                forge: self.forge.as_ref().map(Option::as_ref),
+            }),
+        );
         match result {
             Ok(outcome) => {
                 let report = SaveReport::of_publication_remote(outcome);
@@ -653,14 +798,47 @@ impl Binding for RemoteSelectBinding {
     }
 
     fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
-        let Self { root: _, name } = self;
-        builder.field(
+        let Self {
+            root: _,
+            name,
+            integration,
+            forge,
+        } = self;
+        let mut builder = builder.field(
             "name",
             match name {
                 Some(name) => FieldValue::Text(name),
                 None => FieldValue::Null,
             },
-        )
+        );
+        // Each is a field of the request only when it is supplied, so that
+        // the digest of a request that supplies neither is the one it was; a
+        // null forge (removed) is told from an absent one (unchanged).
+        if let Some(mode) = integration {
+            builder = builder.field("integration", FieldValue::Text(mode.as_str()));
+        }
+        match forge {
+            None => {}
+            Some(None) => builder = builder.field("forge", FieldValue::Null),
+            Some(Some(forge)) => {
+                fn optional(value: Option<&String>) -> FieldValue<'_> {
+                    value.map_or(FieldValue::Absent, |value| FieldValue::Text(value))
+                }
+                builder = builder
+                    .field(
+                        "forge_kind",
+                        forge
+                            .kind
+                            .map_or(FieldValue::Absent, |kind| FieldValue::Text(kind.as_str())),
+                    )
+                    .field("forge_web_url", optional(forge.web_url.as_ref()))
+                    .field(
+                        "forge_pull_request_url",
+                        optional(forge.pull_request_url.as_ref()),
+                    );
+            }
+        }
+        builder
     }
 
     fn scope(&self, repository: Option<String>, position: Option<&Position>) -> Scope {
@@ -680,6 +858,11 @@ impl Binding for RemoteSelectBinding {
         self.validate()?;
         let repository = resolve_root(service, &self.root)?;
         let root = repository.root();
+        // What the table of Part F refuses is refused before the request is
+        // accepted: nothing is recorded or written.
+        if let Err(code) = self.way(root) {
+            return Err(Answer::stopped(code).with_data(self.data()));
+        }
         let inaccessible = |_| Answer::stopped(ResultCode::RepositoryInaccessible);
         let head = git2::Repository::open(root)
             .and_then(|repository| {
@@ -700,18 +883,34 @@ impl Binding for RemoteSelectBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        save::run(self, call.service, accepted)
+        match self.way(&accepted.root()) {
+            Ok(Way::Direct) => save::run(self, call.service, accepted),
+            Ok(Way::Setup(planned)) => self.call_setup(call, accepted, Some(&planned), false),
+            Err(code) => self.refused(call.service, accepted, code),
+        }
     }
 
+    /// A request whose row completed at `setup_recorded` is taken up as
+    /// recorded (K1: `SetupRecorded` is a checkpoint, so re-entry reaches
+    /// here and never `moved`): nothing is read of the file, no digest is
+    /// compared, and the domain reads the record. A row that cannot be read
+    /// is owed, never the direct path and never a save's re-entry.
     fn reenter(
         &mut self,
         call: &CallContext<'_>,
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        save::reenter(self, call.service, accepted, journal)
-            .map(Entered::Authoring)
-            .map_err(finished_when_superseded)
+        match accepted.recorded_local_step(call.service) {
+            Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => Ok(Entered::Unfinished),
+            Err(()) => Err(Ran {
+                answer: Answer::stopped(ResultCode::RepositoryInaccessible),
+                standing: Standing::Unconfirmed,
+            }),
+            Ok(_) => save::reenter(self, call.service, accepted, journal)
+                .map(Entered::Authoring)
+                .map_err(finished_when_superseded),
+        }
     }
 
     fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
@@ -719,13 +918,38 @@ impl Binding for RemoteSelectBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, entered: &Entered) -> Ran {
-        match entered.authoring() {
-            Ok(before) => {
-                finished_when_superseded(save::rerun(self, call.service, accepted, before))
+        match accepted.recorded_local_step(call.service) {
+            Ok(Some(step)) if step.is(LocalStep::SetupRecorded) => {
+                return self.call_setup(call, accepted, None, true);
             }
-            Err(ran) => ran,
+            Ok(_) => {}
+            // Git or the journal could not say what the request has done.
+            Err(()) => {
+                return Ran {
+                    answer: Answer::stopped(ResultCode::RepositoryInaccessible),
+                    standing: Standing::Unconfirmed,
+                };
+            }
+        }
+        match self.way(&accepted.root()) {
+            Ok(Way::Setup(planned)) => self.call_setup(call, accepted, Some(&planned), false),
+            Ok(Way::Direct) => match entered.authoring() {
+                Ok(before) => {
+                    finished_when_superseded(save::rerun(self, call.service, accepted, before))
+                }
+                Err(ran) => ran,
+            },
+            Err(code) => self.refused(call.service, accepted, code),
         }
     }
+}
+
+/// Which way a selection goes.
+enum Way {
+    /// A commit on the primary, as a selection always was (or no change).
+    Direct,
+    /// A setup branch.
+    Setup(Box<Planned>),
 }
 
 /// A selection entered again that is an external change with nothing of
@@ -1263,7 +1487,9 @@ impl RemoteRemoveBinding {
                 let journal = accepted.journal_row(service);
                 let removed = self.removed_and_unfinished(&root, journal.as_ref());
                 Ran {
-                    answer: self.ended_answer(code, removed, owed_hand_off(removed)),
+                    answer: self
+                        .ended_answer(code, removed, owed_hand_off(removed))
+                        .naming(service, &accepted.root(), error.blocker()),
                     standing: Standing::Stopped { journal },
                 }
             }
@@ -1555,3 +1781,7 @@ impl Confirmed for RemoteRemoveBinding {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod tests;

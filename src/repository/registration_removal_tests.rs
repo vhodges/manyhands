@@ -1,5 +1,7 @@
 use super::*;
-use crate::repository::{CommitIdentity, EnableRepositoryRequest, LeaseKind, REGISTRY_FILE};
+use crate::repository::{
+    CommitIdentity, EnableRepositoryRequest, LeaseKind, REGISTRY_FILE, open_registry,
+};
 
 thread_local! {
     static BEFORE_CACHE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
@@ -211,6 +213,94 @@ fn an_accepted_request_without_a_domain_row_still_blocks_registry_only_removal()
     );
     assert_eq!(f.count("request_records"), 1);
     assert_eq!(f.count("repositories"), 1);
+}
+
+/// Decision 16 (K5): a setup's request and a cancellation's, whose own rows
+/// completed at their steps, are no unfinished work that stops a registry-only
+/// removal, and the removal finishes them in its transaction; any other
+/// accepted request still stops it.
+#[test]
+fn the_requests_a_removal_finishes_do_not_block_registry_only_removal() {
+    use crate::{
+        repository::{
+            OperationFamily, RequestId, RequestState,
+            request_store::{DigestSalt, IntentDigest, NewRequest, RequestOperation, ScopeKey},
+        },
+        results::ResultCode,
+    };
+    let f = Fixture::new();
+    let root = f.root.to_str().unwrap().to_owned();
+    let accept = |command: &str, step: Option<&str>| {
+        let request_id = RequestId::new();
+        let operation_id = OperationId::new();
+        let scope = ScopeKey::for_repository(&f.root).unwrap();
+        let digest =
+            IntentDigest::builder(DigestSalt::Request(request_id), command, &scope, "").finish();
+        f.service
+            .insert_request(&NewRequest {
+                request_id,
+                scope,
+                command: command.into(),
+                target: String::new(),
+                intent_digest: digest,
+                confirmation: None,
+                base_ref: None,
+                base_oid: None,
+                expected_digest: None,
+                operations: vec![RequestOperation {
+                    family: OperationFamily::Local,
+                    operation_id,
+                }],
+            })
+            .unwrap();
+        if let Some(step) = step {
+            f.db()
+                .execute(
+                    "INSERT INTO operation_records
+                        (root_path,operation_ulid,action,target,state,completed_step,observed_at)
+                     VALUES (?1,?2,'enable','','completed',?3,1)",
+                    params![root, operation_id.to_string(), step],
+                )
+                .unwrap();
+        }
+        request_id
+    };
+    let setup = accept("repo enable", Some("setup_recorded"));
+    let change = accept("remote select", Some("setup_recorded"));
+    let cancel = accept("repo setup-cancel", Some("setup_cancel_recorded"));
+    let unrelated = accept("ticket create", None);
+    // An enable that never recorded its setup is not one the removal ends.
+    let unrecorded = accept("repo enable", None);
+    f.missing();
+
+    // Another accepted request stops the removal, and nothing is finished.
+    assert_eq!(
+        f.remove().unwrap_err().kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(f.count("repositories"), 1);
+    let state = |id: RequestId| f.service.request_record(id).unwrap().unwrap().state;
+    for id in [setup, change, cancel, unrelated, unrecorded] {
+        assert_eq!(state(id), RequestState::Accepted);
+    }
+
+    // Without them it goes through, finishing the three it ends.
+    f.db()
+        .execute(
+            "DELETE FROM request_records WHERE request_ulid IN (?1, ?2)",
+            params![unrelated.to_string(), unrecorded.to_string()],
+        )
+        .unwrap();
+    assert_eq!(f.remove().unwrap(), RemoveRegistrationOutcome::Removed);
+    assert_eq!(f.count("repositories"), 0);
+    let code = |id: RequestId| {
+        let record = f.service.request_record(id).unwrap().unwrap();
+        assert_eq!(record.state, RequestState::Finished);
+        record.result.unwrap().code
+    };
+    assert_eq!(code(setup), ResultCode::Cancelled);
+    assert_eq!(code(change), ResultCode::Cancelled);
+    assert_eq!(code(cancel), ResultCode::AlreadyApplied);
 }
 
 #[test]

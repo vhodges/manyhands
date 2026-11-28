@@ -18,8 +18,19 @@ copies of AGENTS.md and skills that say rebase; current main says merge.
 (decision, ruling, settled) and the review-record columns. Use it alongside
 this skill.
 
+**Required:** follow the shared
+[Manyhands operations](../implementing-a-cycle/references/manyhands-operations.md)
+reference. Load `manyhands-overview` first, `manyhands-finding-work` to find and
+read the ticket, `manyhands-tickets` for creation and saves, and
+`manyhands-comments` for checkpoint comments. Use `manyhands-documents` only
+for independently managed documents, not to split the Cycle's source artifacts
+out of its ticket branch. Use `manyhands-recovery` for blocked CLI operations.
+
 ## 1. Start from current main
 
+- Find the existing Cycle ticket before creating anything. If none exists,
+  create one with `manyhands-tickets` before the implementation plan; let the
+  CLI create its branch and worktree. Do not create a duplicate placeholder.
 - Find the ticket's existing worktree with `git worktree list --porcelain`.
   Don't create another.
 - An old worktree carries an old AGENTS.md. After fetching, read
@@ -93,7 +104,11 @@ layout differ, follow the repo. The plan needs:
 
 - **Global Constraints:**
   - Cargo through Devenv;
-  - targeted tests between tasks, and the full suite once at the end;
+  - AGENTS.md's Testing Strategy: between tasks, only the tests a task
+    changed, by exact name; AGENTS.md's local test gate (fast tier plus the
+    SSH targets its table selects) once at the end, never the full suite;
+  - each new test at the cheapest layer that catches the regression, with
+    the reason recorded for any new SSH-harness case;
   - `--features desktop` on its own for desktop work;
   - named test edits only.
 - **Task 0:** merge main, re-check the plan's references, and start the
@@ -102,7 +117,8 @@ layout differ, follow the repo. The plan needs:
 - **A final task:**
   - run the gates and `git merge-tree --write-tree HEAD origin/main`;
   - mark the ticket review-ready;
-  - close the ticket before merge.
+  - after review approval, set the resolution status and close the ticket
+    with `ticket close`, which performs the merge.
 
 ## 5. Check before anyone else reads it
 
@@ -163,7 +179,7 @@ as settled. Don't give them your reasoning. They don't run cargo.
   planning concern, and one per review round with its counts by severity.
 - **Plan Self-Review:** map each acceptance row and ruling to its task.
 - **Ticket comment:** add the planning checkpoint comment and tick the
-  planning boxes.
+  planning boxes using `manyhands-comments` and `manyhands-tickets` respectively.
 - **Present:** follow
   [references/approval-and-handoff.md](references/approval-and-handoff.md),
   then stop.

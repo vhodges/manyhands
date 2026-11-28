@@ -3,6 +3,8 @@
 //!
 //! - a conflict's `conflict:` line, and the `conflict show` command that
 //!   looks at it;
+//! - a pull-only refusal's `local commit:` line for each commit it lists, and
+//!   a note when the list is not all of them;
 //! - a comment's note on what publishing it publishes;
 //! - a local-context sync's state, reason and next action (R-37);
 //! - for `remote_branch_deleted`, three `next:` lines: cancel the request that
@@ -45,7 +47,7 @@
 //! adds a result code or a recovery-action kind (decision 8).
 
 use crate::{
-    human_admin::{self, REPUBLISH},
+    human_admin::REPUBLISH,
     render::{self, Human, Output, field, note_lines, quoted},
 };
 use manyhands::{
@@ -73,6 +75,11 @@ pub struct Seen {
 const RESERVATION_NOTE: &str = "the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.";
 /// What a published comment also publishes (design, Human Output).
 const PUBLICATION_NOTE: &str = "publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.";
+/// A pull-only refusal that lists the newest of the local commits only.
+const MORE_COMMITS_NOTE: &str = "more local commits are not listed";
+/// Said when the refusal lists no commit: the push endpoint, not the person's
+/// primary branch, is what is out of step.
+const NO_COMMITS_NOTE: &str = "no local-only commits are listed; the push endpoint is out of step with the fetch, so run repo sync again";
 const SUPERSEDE_NOTE: &str =
     "a new conflict resolve may supersede its resolution while the paths it wrote are unchanged.";
 /// A `conflict resolve` refused with `original_request_required`: the
@@ -135,7 +142,7 @@ pub fn branch_deleted(
 }
 
 /// The `item republish` preview of `item` in the repository at `root`.
-fn republish(root: &str, item: &str) -> String {
+pub(crate) fn republish(root: &str, item: &str) -> String {
     format!(
         "manyhands-cli item republish --repo {} --id {} --prepare",
         quoted(root),
@@ -244,6 +251,37 @@ impl Lines {
                 lines.replaces_fields = true;
                 step(&mut lines, &data.conflict);
             }
+            Some(MutationDataDto::PrimaryLocalCommits(data)) => {
+                // Shown in place of the field list, which would not escape
+                // a summary as a field of its own line. Even with no commit
+                // to list the data is shown, and so left out of that list.
+                lines.replaces_fields = true;
+                lines.data.extend(data.local_commits.iter().map(|commit| {
+                    format!(
+                        "local commit: {} {}",
+                        field(commit.oid.get(..7).unwrap_or(&commit.oid)),
+                        field(&commit.summary)
+                    )
+                }));
+                if data.local_commits.is_empty() {
+                    lines.notes.push(NO_COMMITS_NOTE.into());
+                }
+                if !data.complete {
+                    lines.notes.push(MORE_COMMITS_NOTE.into());
+                }
+            }
+            // The link a ticket's pull request is opened by, as `ticket show`
+            // and the closure verbs print it, in place of its fields.
+            Some(MutationDataDto::PullRequestLink(data)) => {
+                lines.replaces_fields = true;
+                let link = manyhands::forge::PullRequestLink {
+                    source: data.pull_request.source.clone(),
+                    target: data.pull_request.target.clone(),
+                    forge: None,
+                    url: data.pull_request.url.clone(),
+                };
+                lines.data.push(field(&link.human_line()));
+            }
             Some(MutationDataDto::Comment(comment)) => {
                 // Only a checkpointed comment is published, so only a
                 // result that carries one has something to say about it.
@@ -265,6 +303,24 @@ impl Lines {
                 ]);
             }
             _ => {}
+        }
+        // A synchronization that can't tell whether the remote holds the item's
+        // branch is final and offers the repair read.
+        if let Some((index, action)) = envelope
+            .recovery
+            .iter()
+            .enumerate()
+            .find(|(_, action)| action.action == RecoveryActionKind::RemoteHistory)
+        {
+            let named = action
+                .arguments
+                .get("root")
+                .and_then(|value| value.as_str());
+            if let Some(root) = named.or(root) {
+                lines.rendered.push(index);
+                lines.next.push(crate::history::remote_history_line(root));
+                lines.notes.push(crate::history::SYNC_NOTE.into());
+            }
         }
         match envelope.code {
             ResultCode::RemoteBranchDeleted => {
@@ -333,7 +389,9 @@ impl Lines {
     }
 
     fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        // Data that replaces the field list is shown, whatever it holds.
+        !self.replaces_fields
+            && self.data.is_empty()
             && self.next.is_empty()
             && self.notes.is_empty()
             && self.lead.is_empty()
@@ -439,42 +497,23 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool, seen: &Seen)
     if lines.replaces_fields {
         shown.data = None;
     }
-    if envelope.failure_class().is_none() {
-        let mut stdout = human_admin::mutation_success(&shown).stdout;
-        stdout.push_str(&lines.body());
-        return Output {
-            stdout: stdout.into_bytes(),
-            stderr: lines.notes().into_bytes(),
-            status: render::exit_status(None),
-        };
-    }
-    let mut extra = human_admin::failure_extra(&shown, supplied);
-    extra.push_str(&lines.body());
-    // `extra` is printed before the recovery lines the refusal carries.
-    extra.push_str(&lines.lead());
-    let refusal = Envelope::<serde_json::Value> {
-        schema_version: envelope.schema_version,
-        command: envelope.command.clone(),
-        request_id: envelope.request_id.clone(),
-        operation_id: envelope.operation_id.clone(),
-        outcome: envelope.outcome,
-        code: envelope.code,
-        message: envelope.message.clone(),
-        scope: envelope.scope.clone(),
-        effects: envelope.effects.clone(),
-        data: None,
-        // C2's lines for the actions C4 did not render.
-        recovery: envelope
-            .recovery
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !lines.rendered.contains(index))
-            .map(|(_, action)| action.clone())
-            .collect(),
-    };
-    let mut output = render::failure_output(false, &refusal, Some(extra));
-    output.stderr.extend(lines.notes().into_bytes());
-    output
+    // C2's lines for the actions C4 did not render.
+    let recovery = envelope
+        .recovery
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !lines.rendered.contains(index))
+        .map(|(_, action)| action.clone())
+        .collect();
+    // The lead is printed before the recovery lines the refusal carries.
+    render::compact(
+        &shown,
+        supplied,
+        &lines.body(),
+        &lines.lead(),
+        recovery,
+        &lines.notes(),
+    )
 }
 
 #[cfg(test)]

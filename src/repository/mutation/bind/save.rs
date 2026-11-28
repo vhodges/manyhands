@@ -245,6 +245,12 @@ pub(crate) fn run<S: Save + ?Sized>(
     let root = accepted.root();
     let expected = save.expected(accepted);
     let result = save.call_domain(service, accepted);
+    // The operation the domain refused the save for, when another's row
+    // is why.
+    let blocker = result
+        .as_ref()
+        .err()
+        .and_then(|error| error.blocker().cloned());
     let file = save.context_file(&root);
     let (code, effects, standing) = match result {
         Ok(report) => {
@@ -315,7 +321,9 @@ pub(crate) fn run<S: Save + ?Sized>(
         }
     };
     Ran {
-        answer: save.answer(code, effects, &root),
+        answer: save
+            .answer(code, effects, &root)
+            .naming(service, &root, blocker.as_ref()),
         standing,
     }
 }
@@ -371,6 +379,30 @@ pub(crate) fn reenter<S: Save + ?Sized>(
                 standing: Standing::Unconfirmed,
             }),
         },
+        // The operation completed. Its commit is answered as discovered only
+        // while the contexts its row recorded are indexed. While one is
+        // dirty again (another write left it so), no operation owes the
+        // hand-off, and any refresh brings the index up to date.
+        Found::Done { commit }
+            if service.recorded_contexts_indexed(&root, accepted.operation_id) == Some(false) =>
+        {
+            let (code, effects) = SaveReport::Saved {
+                claimed: None,
+                discovered: false,
+            }
+            .result(Some(commit));
+            Err(Ran {
+                answer: Answer {
+                    recovery: crate::results::absolute_path_string(&root)
+                        .as_deref()
+                        .map(outcome::refresh_the_root)
+                        .into_iter()
+                        .collect(),
+                    ..save.answer(code, effects, &root)
+                },
+                standing: Standing::Owed,
+            })
+        }
         Found::Done { commit } => {
             let (code, effects) = settled(Some(commit));
             Err(Ran {
@@ -393,6 +425,10 @@ pub(crate) fn rerun<S: Save + ?Sized>(
 ) -> Ran {
     let root = accepted.root();
     let result = save.call_domain(service, accepted);
+    let blocker = result
+        .as_ref()
+        .err()
+        .and_then(|error| error.blocker().cloned());
     // What Git shows now.
     let after = path_evidence(save, accepted);
     let file = save.context_file(&root);
@@ -491,7 +527,9 @@ pub(crate) fn rerun<S: Save + ?Sized>(
         }
     };
     Ran {
-        answer: save.answer(code, effects, &root),
+        answer: save
+            .answer(code, effects, &root)
+            .naming(service, &root, blocker.as_ref()),
         standing,
     }
 }

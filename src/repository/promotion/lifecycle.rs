@@ -4,10 +4,10 @@
 //! Cycle 10 Task 1; its methods forward to the promotion module's existing
 //! functions and fields.
 use super::{
-    DocumentPromotionError, DocumentPromotionOutcome, DocumentPromotionPreflight,
-    DocumentPromotionPreview, DocumentPromotionResult, PlannedIntegration,
-    PreviewDocumentPromotionRequest, PromotionCleanup, PromotionExpectation, PromotionIntegration,
-    PromotionPublication, integrate, observe,
+    BranchPromotionOutcome, DocumentPromotionError, DocumentPromotionOutcome,
+    DocumentPromotionPreflight, DocumentPromotionPreview, DocumentPromotionResult,
+    PlannedIntegration, PreviewDocumentPromotionRequest, PromotionCleanup, PromotionExpectation,
+    PromotionIntegration, PromotionOutcome, PromotionPublication, answer, integrate, observe,
     record::{
         self, ChildExecution, ChildRole, ChildState, CleanupCategory, IntegrationKind,
         PromotionRecord, PromotionStep, PublicationCategory,
@@ -17,14 +17,19 @@ use crate::{
     canonical::{ItemId, RepositoryConfig},
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
-        IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError, cleanup::RetirementEvidence, remote::reservation::RemoteReservation,
+        IndexPending, OperationId, RemoteOperationAction, RemoteOperationSafePoint,
+        RepositoryError, RepositoryService, SynchronizationError, SynchronizationOutcome,
+        SynchronizationTarget,
+        cleanup::RetirementEvidence,
+        mutation::{CancellationToken, RequestId},
+        remote::{reservation::RemoteReservation, state, sync},
         transport::HostApproval,
     },
 };
 use git2::Oid;
 use rusqlite::{Connection, Transaction};
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 /// Which parent lifecycle a runner, child fence or reservation arm serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +76,44 @@ impl LifecycleKind {
     }
 }
 
+/// What stops a run besides its parent's own flag, for a run the mutation
+/// boundary makes: the call's token, and the flag `request cancel` sets on the
+/// request's record. A same-ID call clears the parent's flag, and neither of
+/// these, so a run reads them at every safe point its parent's flag is read at.
+#[derive(Clone)]
+pub(in super::super) struct CancellationProbe {
+    token: CancellationToken,
+    request: RequestId,
+}
+impl CancellationProbe {
+    pub(in super::super) fn new(token: CancellationToken, request: RequestId) -> Self {
+        Self { token, request }
+    }
+    /// Whether the call's token has been cancelled. It reads nothing, so a
+    /// transfer's callback can ask it with no registry involved.
+    pub(in super::super) fn token_asked(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    /// Whether the run has been asked to stop. The flag is read and left set:
+    /// the boundary takes it once the request has answered `cancelled`. A flag
+    /// that cannot be read is an error, and is not taken for "no".
+    pub(in super::super) fn asked(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<bool, RepositoryError> {
+        if self.token.is_cancelled() {
+            return Ok(true);
+        }
+        service
+            .cancellation_requested(self.request)
+            .map_err(|_| state::recovery_required())
+    }
+}
+
 /// The runner's kind-neutral request. Each lifecycle's public request
-/// converts into it field for field.
+/// converts into it field for field. `probe` is the boundary's, through an
+/// `_observed` entry point: the public signatures have none.
 #[derive(Clone)]
 pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) root: PathBuf,
@@ -81,6 +122,10 @@ pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) expected: E,
     pub(in super::super) approval: Option<HostApproval>,
     pub(in super::super) confirmed_identity: Option<ConfirmedCommitIdentity>,
+    pub(in super::super) probe: Option<CancellationProbe>,
+    /// The time a record that stores one is given: the builders default it
+    /// to the wall clock, and a test injects its own.
+    pub(in super::super) clock: fn() -> OffsetDateTime,
 }
 
 /// The parent steps the runner branches on, shared by every lifecycle. A
@@ -103,6 +148,79 @@ pub(in super::super) enum ParentStep {
     Superseded,
 }
 
+/// Whether a parent is left to continue under its own ID: it has not ended
+/// and no consent refusal ended it. `operation resume` continues such a
+/// parent, or names the accepted request that holds it, and the operation
+/// list offers resume for it, held or not, so the two never disagree (D5
+/// decision 10). A complete, abandoned or superseded parent owes nothing.
+pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
+    match record.step() {
+        ParentStep::Complete | ParentStep::Abandoned | ParentStep::Superseded => false,
+        ParentStep::Confirmed
+        | ParentStep::ContextSynchronized
+        | ParentStep::Integrating
+        | ParentStep::Integrated
+        | ParentStep::Published
+        | ParentStep::PublicationPending
+        | ParentStep::RemoteDeleted
+        | ParentStep::WorktreeRemoving
+        | ParentStep::WorktreeRemoved
+        | ParentStep::BranchDeleted => {
+            // Defensive: the schema CHECK ties a refusal to `abandoned`.
+            record.refusal().is_none()
+        }
+    }
+}
+
+/// Which tail of the runner a record takes. A promotion and a direct close
+/// integrate into the primary; a branch record (a pull-request close) never
+/// does, and publishes its context instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum RecordPath {
+    Direct,
+    Branch,
+}
+
+/// What a branch record's step 3 gave: the commit it records is written, or
+/// the record ended with its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchStep {
+    /// The record is at `closing`: its closure is as consented, and written
+    /// when it records one. Its publication child is next.
+    Closing,
+    /// The hook abandoned the record with its answer.
+    Finished,
+}
+
+/// Why a branch record ends before it publishes, when it is the runner that
+/// knows.
+#[derive(Clone, Copy, Debug)]
+pub(in super::super) enum BranchEnd<'a> {
+    /// The context branch is gone after its child ran.
+    ContextGone,
+    /// The context child stopped with an end it cannot get past, with
+    /// nothing written: its own error says which.
+    ContextChild(&'a SynchronizationError),
+}
+
+/// What a branch record's re-run table (Cycle 04 decision 14, the design's
+/// table RR) gives a call of its request, before its context child and
+/// again when the child stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum BranchRerun {
+    /// RR2: the context child completed: the record finishes by
+    /// `branch_step`, with no remote, endpoint, tip or cancellation check.
+    Finish,
+    /// RR7: the context branch is gone and the child did not complete: the
+    /// child is let go and the record ends as `BranchEnd::ContextGone`.
+    Gone,
+    /// RR5, RR4: the record ends refused (`external_change`) once its child
+    /// is let go, before the child runs again.
+    Refuse,
+    /// RR3, RR6, RR1: the child runs, or continues, under `child()`.
+    Run,
+}
+
 /// Exactly the parent fields the runner reads and writes.
 pub(in super::super) trait LifecycleRecord: Clone {
     type Expectation;
@@ -114,6 +232,21 @@ pub(in super::super) trait LifecycleRecord: Clone {
     fn remote_name(&self) -> Option<&str>;
     fn step(&self) -> ParentStep;
     fn set_step(&mut self, step: ParentStep);
+    /// Every record is direct but a closure's branch record.
+    fn path(&self) -> RecordPath {
+        RecordPath::Direct
+    }
+    /// A finished branch record has the answer it gave stored, and answers
+    /// from it ever after. No other record has one.
+    fn answered(&self) -> bool {
+        false
+    }
+    /// Whether the record's run begins with a child that synchronizes its
+    /// context: every record's but a new branch's, which makes its context
+    /// instead.
+    fn synchronizes_context(&self) -> bool {
+        true
+    }
     fn context_sync_id(&self) -> Option<OperationId>;
     fn primary_sync_id(&self) -> Option<OperationId>;
     fn base_oid(&self) -> Option<Oid>;
@@ -296,6 +429,9 @@ pub(in super::super) trait Lifecycle {
     type ReplacementGuard: PartialEq;
     type Outcome;
     type Output;
+    /// What a branch record's publication answers with, read once and kept
+    /// whole until it is stored with the record's completion.
+    type BranchFinish: Clone;
     const KIND: LifecycleKind;
 
     // Record storage.
@@ -323,6 +459,7 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<Self::ReplacementGuard, RepositoryError>;
     /// `observed` is the revalidated preview, `None` when the refusal came
     /// before any observation was made (a blocked or failed revalidation).
+    /// `config` is the configuration the revalidation observed with.
     #[allow(clippy::too_many_arguments)] // Promotion's refusal shape plus the observation.
     fn refuse_record(
         tx: &Transaction<'_>,
@@ -330,7 +467,7 @@ pub(in super::super) trait Lifecycle {
         op: OperationId,
         item: &ItemId,
         expectation: Self::Expectation,
-        remote: Option<&str>,
+        config: &RepositoryConfig,
         observed: Option<&Self::Preview>,
         refusal: &Self::Refusal,
     ) -> Result<Self::Record, RepositoryError>;
@@ -375,11 +512,14 @@ pub(in super::super) trait Lifecycle {
 
     // Observation.
     /// `identity` is the request's configuration-bound confirmation, which a
-    /// lifecycle whose consent binds an identity observes with.
+    /// lifecycle whose consent binds an identity observes with. `record` is
+    /// the record a continuation observes for, `None` for a new request: a
+    /// lifecycle whose observation has modes observes a record in its own.
     fn preview_request(
         root: PathBuf,
         item_id: ItemId,
         identity: Option<&ConfirmedCommitIdentity>,
+        record: Option<&Self::Record>,
     ) -> Self::PreviewRequest;
     fn preview(
         service: &RepositoryService,
@@ -397,7 +537,23 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<Self::Preflight, RepositoryError>;
     /// A ready preview, or the `Blocked` refusal of a blocked preflight.
     fn ready(preflight: Self::Preflight) -> Result<Self::Preview, Self::Refusal>;
+    /// What a new record needs of the identity, asked once its preview is
+    /// known unchanged. A refusal leaves no record. Closure needs nothing
+    /// here: its preview has checked, and a change is `ExternalChange`.
+    fn require_identity(
+        _preview: &Self::Preview,
+        _repository: &git2::Repository,
+        _confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn refusal_error(refusal: &Self::Refusal) -> Self::Error;
+    /// Whether a request of this lifecycle continues `r`. A closure verb
+    /// continues only a record of its own action; every other record is its
+    /// lifecycle's own.
+    fn continues(_r: &Self::Record) -> bool {
+        true
+    }
 
     // Integration.
     fn reconcile_integration(
@@ -467,6 +623,78 @@ pub(in super::super) trait Lifecycle {
         let _ = (service, stage);
         Ok(None)
     }
+
+    // Branch records: no integration, a publication child in its place.
+    /// Step 3 of a branch record, under its own lease: what the record
+    /// consented to is written, or the record ends with its answer.
+    fn branch_step(
+        &self,
+        service: &RepositoryService,
+        request: &LifecycleRequest<Self::Expectation>,
+        r: &Self::Record,
+    ) -> Result<BranchStep, Self::Error>;
+    /// Abandons a record at `confirmed` with the answer `end` gives.
+    fn end_branch(
+        service: &RepositoryService,
+        root: &Path,
+        r: &Self::Record,
+        end: BranchEnd<'_>,
+    ) -> Result<(), RepositoryError>;
+    /// Whether the record's branch run is decided by a re-run table
+    /// (`rerun`), not by the checks of a closure's branch record. Only a
+    /// pull-request promotion's is.
+    fn reruns_by_table(_r: &Self::Record) -> bool {
+        false
+    }
+    /// The re-run table's answer for a record `reruns_by_table`, which it
+    /// may record on the record (its accepted head, that an attempt may have
+    /// pushed). Never called for a lifecycle whose `reruns_by_table` is false.
+    fn rerun(
+        _service: &RepositoryService,
+        _root: &Path,
+        _r: &Self::Record,
+    ) -> Result<BranchRerun, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    /// Whether a new attempt of the context child of a record that re-runs
+    /// by a table may go on at its `BeforeFetch` or `BeforePush` safe point:
+    /// it began at the head the table accepted, and pushes only what its own
+    /// moves made from there (RR4).
+    fn admits_context_point(
+        _service: &RepositoryService,
+        _root: &Path,
+        _r: &Self::Record,
+        _point: RemoteOperationSafePoint,
+    ) -> Result<bool, RepositoryError> {
+        Ok(true)
+    }
+    /// Mints the publication child and moves the record to `publication_pending`,
+    /// in one transaction.
+    fn begin_publication(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+    ) -> Result<Self::Record, RepositoryError>;
+    /// What a publication child's result answers, or `None` when the stop
+    /// stands and the record stays at `publication_pending`. `child` is
+    /// `None` when no child ran, because the publication remote the record
+    /// was made for is not the one configured. `primary` is the branch the
+    /// record runs by: the one its base recorded.
+    fn branch_answer(
+        service: &RepositoryService,
+        request: &LifecycleRequest<Self::Expectation>,
+        r: &Self::Record,
+        primary: &str,
+        child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
+    ) -> Result<Option<Self::BranchFinish>, RepositoryError>;
+    fn complete_branch(
+        tx: &Transaction<'_>,
+        id: i64,
+        op: OperationId,
+        finish: &Self::BranchFinish,
+    ) -> Result<(), RepositoryError>;
+    fn branch_outcome(r: &Self::Record, publication: Option<PromotionPublication>)
+    -> Self::Outcome;
 
     // Outcome.
     fn outcome(
@@ -541,6 +769,12 @@ impl LifecycleRecord for PromotionRecord {
     }
     fn set_step(&mut self, step: ParentStep) {
         self.step = step.into();
+    }
+    fn path(&self) -> RecordPath {
+        PromotionRecord::path(self)
+    }
+    fn answered(&self) -> bool {
+        PromotionRecord::answered(self)
     }
     fn context_sync_id(&self) -> Option<OperationId> {
         self.context_sync_id
@@ -678,6 +912,15 @@ impl LifecyclePreview for DocumentPromotionPreview {
     fn tracking_primary(&self) -> Option<Oid> {
         DocumentPromotionPreview::tracking_primary(self)
     }
+    /// A pull-request promotion always runs its context child: it
+    /// synchronizes the branch with its remote copy and the remote's primary
+    /// and publishes it (R-19), contained or not.
+    fn runs_context_child(&self) -> bool {
+        // Defensive: a pull-request record does not reach this through `rerun_branch`.
+        self.pull_request().is_some()
+            || !(self.integration() == PlannedIntegration::AlreadyContained
+                && self.tracking_context().is_none())
+    }
 }
 
 pub(in super::super) struct DocumentPromotionLifecycle;
@@ -692,8 +935,9 @@ impl Lifecycle for DocumentPromotionLifecycle {
     type Observation = observe::PreparedObservation;
     type Refusal = record::Refusal;
     type ReplacementGuard = record::ReplacementGuard;
-    type Outcome = DocumentPromotionOutcome;
+    type Outcome = PromotionOutcome;
     type Output = DocumentPromotionResult;
+    type BranchFinish = std::convert::Infallible;
     const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;
 
     fn read_record(
@@ -717,9 +961,29 @@ impl Lifecycle for DocumentPromotionLifecycle {
         item: &ItemId,
         expectation: PromotionExpectation,
         remote: Option<&str>,
-        _observed: Option<&DocumentPromotionPreview>,
+        observed: Option<&DocumentPromotionPreview>,
     ) -> Result<PromotionRecord, RepositoryError> {
-        record::begin_record(tx, id, op, item, expectation, remote)
+        // A pull-request preview begins a pull-request record, with what it
+        // consented to; any other request continues its own record, in the
+        // mode it began in, or begins a direct one.
+        let Some((preview, facts)) = observed.and_then(|p| p.pull_request().map(|f| (p, f))) else {
+            return record::begin_record(tx, id, op, item, expectation, remote);
+        };
+        let remote = remote.ok_or_else(state::recovery_required)?;
+        record::begin_pull_request_record(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            Some(remote),
+            &record::PullRequestBegin {
+                consented: preview.context_oid(),
+                situation: facts.situation,
+                primary_branch: preview.primary_branch().to_owned(),
+                endpoint_digest: endpoint_digest_at_begin(tx, id, remote)?,
+            },
+        )
     }
     fn replacement_guard(
         tx: &Transaction<'_>,
@@ -734,11 +998,21 @@ impl Lifecycle for DocumentPromotionLifecycle {
         op: OperationId,
         item: &ItemId,
         expectation: PromotionExpectation,
-        remote: Option<&str>,
+        config: &RepositoryConfig,
         _observed: Option<&DocumentPromotionPreview>,
         refusal: &record::Refusal,
     ) -> Result<PromotionRecord, RepositoryError> {
-        record::refuse_record(tx, id, op, item, expectation, remote, refusal)
+        // The refused confirm's own mode: the configuration it observed in.
+        record::refuse_record_on(
+            tx,
+            id,
+            op,
+            item,
+            expectation,
+            config.publication_remote.as_deref(),
+            refusal,
+            config.integration(),
+        )
     }
     fn clear_cancellation(
         tx: &Transaction<'_>,
@@ -796,6 +1070,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         root: PathBuf,
         item_id: ItemId,
         _identity: Option<&ConfirmedCommitIdentity>,
+        _record: Option<&PromotionRecord>,
     ) -> PreviewDocumentPromotionRequest {
         PreviewDocumentPromotionRequest { root, item_id }
     }
@@ -821,6 +1096,37 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         observation.revalidate(service, repository)
     }
+    /// A planned merge commit needs a usable identity, and a request
+    /// that has none has not begun. A record's own run stays the guard.
+    fn require_identity(
+        preview: &DocumentPromotionPreview,
+        repository: &git2::Repository,
+        confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), DocumentPromotionError> {
+        // A pull-request promotion commits nothing of its own: its child's
+        // own identity stop answers as `item sync`'s does. Defensive: a
+        // pull-request record does not reach this through `rerun_branch`.
+        if preview.pull_request().is_some()
+            || preview.integration() == PlannedIntegration::AlreadyContained
+        {
+            return Ok(());
+        }
+        sync::select_committing_identity(repository, confirmation, &SynchronizationTarget::Primary)
+            .map(|_| ())
+            .map_err(|error| match error {
+                SynchronizationError::IdentityRequired {
+                    expected_configuration,
+                    ..
+                } => DocumentPromotionError::IdentityRequired {
+                    expected_configuration,
+                },
+                SynchronizationError::ExternalChange => DocumentPromotionError::ExternalChange,
+                SynchronizationError::Repository(error) => {
+                    DocumentPromotionError::Repository(error)
+                }
+                _ => DocumentPromotionError::RecoveryRequired,
+            })
+    }
     fn ready(
         preflight: DocumentPromotionPreflight,
     ) -> Result<DocumentPromotionPreview, record::Refusal> {
@@ -829,6 +1135,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
             DocumentPromotionPreflight::Blocked { blockers } => {
                 Err(record::Refusal::Blocked(blockers))
             }
+            DocumentPromotionPreflight::PrimaryHolds => Err(record::Refusal::ExternalChange),
         }
     }
     fn refusal_error(refusal: &record::Refusal) -> DocumentPromotionError {
@@ -882,25 +1189,144 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<PreIntegration, DocumentPromotionError> {
         Ok(PreIntegration::None)
     }
+    /// A pull-request record's step 3: the first answer table, which
+    /// finishes the record. It has no publication child, so the runner never
+    /// goes on to one.
+    fn branch_step(
+        &self,
+        service: &RepositoryService,
+        request: &LifecycleRequest<PromotionExpectation>,
+        r: &PromotionRecord,
+    ) -> Result<BranchStep, DocumentPromotionError> {
+        answer::finish(service, request, r)?;
+        Ok(BranchStep::Finished)
+    }
+    /// A pull-request record is run by its re-run table.
+    fn reruns_by_table(r: &PromotionRecord) -> bool {
+        r.path() == RecordPath::Branch
+    }
+    fn rerun(
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+    ) -> Result<BranchRerun, RepositoryError> {
+        super::rerun::decide(service, root, r)
+    }
+    fn admits_context_point(
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+        point: RemoteOperationSafePoint,
+    ) -> Result<bool, RepositoryError> {
+        super::rerun::admits_point(service, root, r, point)
+    }
+    /// The second answer table, for a context child that ended.
+    fn end_branch(
+        service: &RepositoryService,
+        root: &Path,
+        r: &PromotionRecord,
+        end: BranchEnd<'_>,
+    ) -> Result<(), RepositoryError> {
+        answer::end(service, root, r, end)
+    }
+    fn begin_publication(
+        _tx: &Transaction<'_>,
+        _id: i64,
+        _op: OperationId,
+    ) -> Result<PromotionRecord, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    fn branch_answer(
+        _service: &RepositoryService,
+        _request: &LifecycleRequest<PromotionExpectation>,
+        _r: &PromotionRecord,
+        _primary: &str,
+        _child: Option<&Result<SynchronizationOutcome, SynchronizationError>>,
+    ) -> Result<Option<std::convert::Infallible>, RepositoryError> {
+        Err(state::recovery_required())
+    }
+    fn complete_branch(
+        _tx: &Transaction<'_>,
+        _id: i64,
+        _op: OperationId,
+        finish: &std::convert::Infallible,
+    ) -> Result<(), RepositoryError> {
+        match *finish {}
+    }
+    /// What a finished pull-request record says: its answer, and what its
+    /// context child published, which the record holds as the child's
+    /// category and the tip the branch had once the child was done. The
+    /// runner's own `publication` is the second slot's, which it has none of.
+    fn branch_outcome(
+        r: &PromotionRecord,
+        _publication: Option<PromotionPublication>,
+    ) -> PromotionOutcome {
+        let publication = r.context_oid.and_then(|oid| match r.publication {
+            Some(PublicationCategory::Published) => Some(PromotionPublication::Published { oid }),
+            Some(PublicationCategory::AlreadyCurrent) => {
+                Some(PromotionPublication::AlreadyCurrent { oid })
+            }
+            _ => None,
+        });
+        PromotionOutcome::Branch(BranchPromotionOutcome {
+            operation_id: r.operation_id,
+            answer: r
+                .answer_code
+                .expect("a finished branch record has its answer"),
+            publication,
+        })
+    }
     fn outcome(
         r: &PromotionRecord,
         integration: PromotionIntegration,
         publication: PromotionPublication,
         cleanup: PromotionCleanup,
-    ) -> DocumentPromotionOutcome {
-        DocumentPromotionOutcome {
+    ) -> PromotionOutcome {
+        PromotionOutcome::Direct(DocumentPromotionOutcome {
             operation_id: r.operation_id,
             integration,
             publication,
             cleanup,
+        })
+    }
+    fn complete(outcome: PromotionOutcome) -> DocumentPromotionResult {
+        match outcome {
+            PromotionOutcome::Direct(outcome) => DocumentPromotionResult::Complete(outcome),
+            PromotionOutcome::Branch(outcome) => DocumentPromotionResult::Branch(outcome),
         }
     }
-    fn complete(outcome: DocumentPromotionOutcome) -> DocumentPromotionResult {
-        DocumentPromotionResult::Complete(outcome)
+    fn index_pending(outcome: PromotionOutcome) -> DocumentPromotionResult {
+        match outcome {
+            PromotionOutcome::Direct(outcome) => {
+                DocumentPromotionResult::IndexPending(IndexPending::new(outcome))
+            }
+            PromotionOutcome::Branch(outcome) => {
+                DocumentPromotionResult::BranchIndexPending(IndexPending::new(outcome))
+            }
+        }
     }
-    fn index_pending(outcome: DocumentPromotionOutcome) -> DocumentPromotionResult {
-        DocumentPromotionResult::IndexPending(IndexPending::new(outcome))
-    }
+}
+
+/// The digest of the publication remote's endpoints, read when a
+/// pull-request record begins: under the lease its revalidation held, from
+/// the repository the registration names.
+fn endpoint_digest_at_begin(
+    tx: &Transaction<'_>,
+    id: i64,
+    remote: &str,
+) -> Result<[u8; 32], RepositoryError> {
+    let root: String = tx
+        .query_row(
+            "SELECT root_path FROM repositories WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+    Ok(crate::repository::remote::observation::endpoint_digest_of(
+        &repository,
+        remote,
+    ))
 }
 
 #[cfg(test)]

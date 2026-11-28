@@ -19,6 +19,8 @@
 //! - `replay` answers from a record without running anything;
 //! - `reenter` takes up an accepted record again;
 //! - `settle` finishes, deletes or leaves the record afterwards;
+//! - `setup_gate` refuses, with `setup_pending`, the commands that must wait
+//!   for a repository's pending setup;
 //! - `reply` identifies the request and builds its envelopes;
 //! - `progress` is the sink, the token and the credentials a call is
 //!   given and how they reach a binding, and `cancel_request`;
@@ -27,6 +29,7 @@
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]
 
+use rusqlite::OptionalExtension;
 use std::sync::Arc;
 
 use time::OffsetDateTime;
@@ -40,7 +43,9 @@ use super::{
 };
 
 mod bind;
-mod command;
+// Private shared-domain authority input, not a new mutation/DTO/CLI binding.
+pub(crate) use bind::Accepted;
+pub(crate) mod command;
 mod confirm;
 mod context;
 mod dto;
@@ -56,6 +61,8 @@ mod reenter;
 mod replay;
 mod reply;
 mod settle;
+mod setup_gate;
+mod way_out;
 
 /// The synchronization a comment's operation publishes it by, for the
 /// conflict read (R-5).
@@ -64,6 +71,8 @@ pub(super) use bind::comment::comment_synchronization;
 /// source-included test target that plants a row under it.
 #[cfg(test)]
 pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
+pub(crate) use bind::poll::category_code;
+pub(in super::super) use bind::poll::poll_data as poll_report_data;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
@@ -75,14 +84,20 @@ use bind::{
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
+    lifecycle::LifecycleBinding,
     local_sync::LocalSyncBinding,
+    poll::{PollOnceBinding, PollPolicyBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
+    remote_resolve_history::RemoteResolveHistoryBinding,
     repair::RepairBinding,
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
     republish::ItemRepublishBinding,
+    resolve_history::ItemResolveHistoryBinding,
     resume::OperationResumeBinding,
+    retire::ContextRetireBinding,
+    setup_cancel::RepoSetupCancelBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
@@ -99,43 +114,241 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
+    lifecycle::{DocumentPromoteInput, TicketCloseInput, TicketWithdrawClosureInput},
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
+    poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
+    remote_resolve_history::RemoteResolveHistoryInput,
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
     republish::ItemRepublishInput,
+    resolve_history::{ItemResolveHistoryInput, ResolveHistoryChoice},
     resume::OperationResumeInput,
+    retire::ContextRetireInput,
+    setup_cancel::RepoSetupCancelInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
-    ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
-    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
-    MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
+    BlockedDto, BlockerDto, CancelDto, CommentMutationDto, CommentMutationType,
+    CommentPendingReason, ConflictNextAction, ConflictNextDto, ConflictResolutionMutationDto,
+    ConflictResolutionMutationType, ContextMutationDto, ContextRetirementMutationDto,
+    ContextRetirementMutationType, ContextRetirementState, DocumentMutationDto, HistoryMarkerState,
+    HistoryRelation, HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto,
+    IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
+    ItemResolveHistoryMutationDto, ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto,
+    KeyDeletionState, KeyGenerationState, KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker,
+    LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleIntegrationKind,
+    LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType,
+    LifecyclePathChangeDto, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
+    LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+    LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
+    LifecycleRecording, LocalCommitDto, LocalIdentityDto, MutationDataDto,
+    OperationAbandonEvidenceDto, OperationAbandonPreviewDto, OperationMutationDto,
+    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollRetirementCompletion,
+    PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState, PollRetirementMutationDto,
+    PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
-    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    PreviewIdentitySource, PrimaryLocalCommitsDto, PrimaryLocalCommitsType,
+    PullRequestClosureAction, PullRequestClosureDto, PullRequestClosureMutationDto,
+    PullRequestClosureMutationType, PullRequestClosurePreviewDto, PullRequestClosurePreviewType,
+    PullRequestClosurePublication, PullRequestClosureRecording, PullRequestLinkDataDto,
+    PullRequestLinkDataType, PullRequestPromotionMutationDto, PullRequestPromotionMutationType,
+    PullRequestPromotionPreviewDto, PullRequestPromotionPreviewType,
+    PullRequestPromotionPublication, PullRequestPromotionSituation, RemoteHistoryChoicesDto,
+    RemoteHistoryDto, RemoteHistoryEntryDto, RemoteMutationDto, RemoteRemovalPreviewDto,
+    RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
+    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SetupCancelDto, SetupCancelPreviewDto, SetupCancelType, SetupForgeDto, SetupMutationDto,
+    SetupMutationType, SetupPollDto, SetupPollType, SetupPreviewDto,
+    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(crate) use observe::absent_token;
-/// For the closed-ticket guard's tests: the code a refused domain write
-/// reports.
-#[cfg(test)]
-pub(super) use outcome::repository_error_code;
+// The codes a refused domain write and a transport stop report: the closed-ticket
+// guard's tests read the first, and `remote history` answers with both.
+pub(crate) use outcome::{repository_error_code, ssh_transport_error_code};
 pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;
+
+/// Copies only proven durable child outcomes, in metadata reconciliation's TX.
+pub(in super::super) fn finish_recorded_retirement(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    data: &ContextRetirementMutationDto,
+) -> Result<(), super::RepositoryError> {
+    let attempt: Option<u64> = tx
+        .query_row(
+            "SELECT attempt FROM request_records WHERE request_ulid=?1 AND state='accepted'",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| super::remote::state::recovery_required())?;
+    if let Some(attempt) = attempt {
+        let answer = bind::Answer {
+            local_change: data.worktree_removal != super::RetirementRemoval::None
+                || data.branch_removal != super::RetirementRemoval::None,
+            effects: crate::results::Effects {
+                discovery: if data.materialization_settled {
+                    crate::results::DiscoveryEffect::Current
+                } else {
+                    crate::results::DiscoveryEffect::NotRequested
+                },
+                ..crate::results::Effects::not_requested()
+            },
+            ..bind::Answer::stopped(data.code)
+        }
+        .with_data(MutationDataDto::ContextRetirement(data.clone()));
+        let result =
+            settle::stored_result(&answer).ok_or_else(super::remote::state::recovery_required)?;
+        if !records::finish_request(
+            tx,
+            RequestId::parse(id).map_err(|_| super::remote::state::recovery_required())?,
+            attempt,
+            &result,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(|_| super::remote::state::recovery_required())?
+        {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
 pub(super) use records::migrate as migrate_request_tables;
-pub(super) use records::{operation_owner, release_operation_owner};
+/// Finishes the accepted request of a setup that a domain call ends, in the
+/// caller's registry transaction, with `code` and `data` (the setup, or for a
+/// refusal for local commits those commits) and no effect (design K4).
+/// The setup layer never sees an `Answer`: this builds it, as
+/// `finish_recorded_retirement` does for a retirement.
+pub(in super::super) fn finish_setup_request(
+    tx: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+    request_id: RequestId,
+    code: ResultCode,
+    data: Option<MutationDataDto>,
+    now: i64,
+) -> Result<bool, super::ReadError> {
+    records::finish_accepted(
+        tx,
+        repository_id,
+        request_id,
+        &bind::Answer {
+            data,
+            ..bind::Answer::stopped(code)
+        },
+        now,
+    )
+}
+/// Finishes the accepted request of a cancellation, in the caller's registry
+/// transaction, with `ok` and what became of the setup (design Part H).
+pub(in super::super) fn finish_cancel_request(
+    tx: &rusqlite::Transaction<'_>,
+    request_id: RequestId,
+    report: &super::SetupCancelReport,
+    now: i64,
+) -> Result<bool, super::ReadError> {
+    records::finish_own_cancel(
+        tx,
+        request_id,
+        &bind::Answer {
+            data: Some(MutationDataDto::SetupCancel(Box::new(SetupCancelDto::of(
+                report,
+            )))),
+            ..bind::Answer::stopped(ResultCode::Ok)
+        },
+        now,
+    )
+}
+
+/// Finishes, in a removal's transaction, the requests the removal ends (design
+/// K5): setup requests as `cancelled`, carrying `setup`, and a cancellation's
+/// as `already_applied`.
+pub(in super::super) fn finish_requests_of_removal(
+    tx: &rusqlite::Transaction<'_>,
+    scope_key: &str,
+    setup: Option<MutationDataDto>,
+    now: i64,
+) -> Result<usize, super::ReadError> {
+    records::finish_for_removal(
+        tx,
+        scope_key,
+        &bind::Answer {
+            data: setup,
+            ..bind::Answer::stopped(ResultCode::Cancelled)
+        },
+        &bind::Answer::stopped(ResultCode::AlreadyApplied),
+        now,
+    )
+}
+pub(super) use records::finished_by_removal;
+pub(super) use records::{
+    operation_holder, operation_owner, release_operation_holder, release_operation_owner,
+};
+pub use way_out::{
+    HistoryWayOut, LifecycleWayOut, clear_cache_loss_way_out, lifecycle_prepare_way_out,
+    lifecycle_way_out, resolve_history_way_out,
+};
+
+/// Retirement's claimed refresh completes the old request without releasing its
+/// identity, in the receipt/journal/Z transaction. A stale executor cannot settle.
+pub(in super::super) fn finish_preserved_request(
+    tx: &rusqlite::Transaction<'_>,
+    operation: &str,
+    report: &super::ContextRetirementReport,
+) -> Result<(), super::RepositoryError> {
+    use rusqlite::OptionalExtension;
+    let row:Option<(String,u64,String,String)>=tx.query_row("SELECT r.request_ulid,r.attempt,c.kind,c.item_id FROM context_retirement_records c JOIN request_records r ON r.request_ulid=c.request_ulid WHERE c.operation_ulid=?1 AND r.state='accepted'",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|super::remote::state::recovery_required())?;
+    if let Some((id, attempt, kind, item)) = row {
+        let answer = bind::Answer {
+            effects: crate::results::Effects {
+                discovery: crate::results::DiscoveryEffect::Current,
+                ..crate::results::Effects::not_requested()
+            },
+            local_change: report.worktree_removal != super::RetirementRemoval::None
+                || report.branch_removal != super::RetirementRemoval::None,
+            ..bind::Answer::stopped(ResultCode::ExternalChange)
+        }
+        .with_data(MutationDataDto::ContextRetirement(
+            ContextRetirementMutationDto {
+                r#type: ContextRetirementMutationType::ContextRetirement,
+                kind: if kind == "ticket" {
+                    super::ItemDtoKind::Ticket
+                } else {
+                    super::ItemDtoKind::Document
+                },
+                item_id: item,
+                operation_id: operation.into(),
+                state: ContextRetirementState::Preserved,
+                code: ResultCode::ExternalChange,
+                worktree_removal: report.worktree_removal,
+                branch_removal: report.branch_removal,
+                materialization_settled: report.materialization_settled,
+            },
+        ));
+        let result =
+            settle::stored_result(&answer).ok_or_else(super::remote::state::recovery_required)?;
+        if !records::finish_request(
+            tx,
+            RequestId::parse(&id).map_err(|_| super::remote::state::recovery_required())?,
+            attempt,
+            &result,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(|_| super::remote::state::recovery_required())?
+        {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -157,6 +370,17 @@ impl RepositoryService {
     #[doc(hidden)]
     pub fn with_clock_for_testing(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// The same service, asking `probe` whether a process exists when an
+    /// operation read judges whether its holder still works.
+    #[doc(hidden)]
+    pub fn with_process_probe_for_testing(
+        mut self,
+        probe: Arc<dyn crate::repository::ProcessProbe>,
+    ) -> Self {
+        self.process_probe = probe;
         self
     }
 
@@ -387,10 +611,19 @@ impl RepositoryService {
     /// `data.result`.
     pub fn show_request(&self, request_id: RequestId) -> Envelope<RequestDto> {
         let shown = self.request_record(request_id).and_then(|record| {
-            record
-                .map(request_dto)
-                .transpose()?
-                .ok_or_else(|| ReadError::new(ResultCode::RequestNotFound))
+            let Some(mut record) = record else {
+                return Err(ReadError::new(ResultCode::RequestNotFound));
+            };
+            // The record links what the call itself began; rows the
+            // request began under it since name it themselves.
+            record.operations = self.read_session(RepositoryOperation::Read, |connection| {
+                records::started_operations(
+                    connection,
+                    &record.request_id.to_string(),
+                    &record.operations,
+                )
+            })?;
+            request_dto(record)
         });
         match shown {
             Ok((scope, dto)) => Envelope::read_success(REQUEST_SHOW, scope, dto),
@@ -422,6 +655,8 @@ pub enum Mutation {
     CommentAdd(CommentAddInput),
     ConflictResolve(ConflictResolveInput),
     ItemRepublish(ItemRepublishInput),
+    ItemResolveHistory(ItemResolveHistoryInput),
+    RemoteResolveHistory(RemoteResolveHistoryInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -441,6 +676,7 @@ pub enum Mutation {
     RepoEnable(RepoEnableInput),
     RemoteRemove(RemoteRemoveInput),
     RepoRemove(RepoRemoveInput),
+    RepoSetupCancel(RepoSetupCancelInput),
     KeyDelete(KeyDeleteInput),
     OperationAbandon(OperationAbandonInput),
     ItemSync(ItemSyncInput),
@@ -454,6 +690,16 @@ pub enum Mutation {
     TicketRepair(TicketRepairInput),
     ContextPrepare(ContextPrepareInput),
     ContextRelease(ContextReleaseInput),
+    ContextRetire(ContextRetireInput),
+    DocumentPromote(DocumentPromoteInput),
+    TicketClose(TicketCloseInput),
+    TicketWithdrawClosure(TicketWithdrawClosureInput),
+    PollConfigure(PollConfigureInput),
+    PollPause(PollPauseInput),
+    PollResume(PollResumeInput),
+    PollOnce(PollOnceInput),
+    /// Explicit, original-live-only retirement after the ordinary poll.
+    PollOnceRetiring(PollOnceInput),
 }
 
 impl Mutation {
@@ -469,6 +715,8 @@ impl Mutation {
             Self::CommentAdd(_) => Command::CommentAdd,
             Self::ConflictResolve(_) => Command::ConflictResolve,
             Self::ItemRepublish(_) => Command::ItemRepublish,
+            Self::ItemResolveHistory(_) => Command::ItemResolveHistory,
+            Self::RemoteResolveHistory(_) => Command::RemoteResolveHistory,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -488,6 +736,7 @@ impl Mutation {
             Self::RepoEnable(_) => Command::RepoEnable,
             Self::RemoteRemove(_) => Command::RemoteRemove,
             Self::RepoRemove(_) => Command::RepoRemove,
+            Self::RepoSetupCancel(_) => Command::RepoSetupCancel,
             Self::KeyDelete(_) => Command::KeyDelete,
             Self::OperationAbandon(_) => Command::OperationAbandon,
             Self::ItemSync(_) => Command::ItemSync,
@@ -501,6 +750,14 @@ impl Mutation {
             Self::TicketRepair(_) => Command::TicketRepair,
             Self::ContextPrepare(_) => Command::ContextPrepare,
             Self::ContextRelease(_) => Command::ContextRelease,
+            Self::ContextRetire(_) => Command::ContextRetire,
+            Self::DocumentPromote(_) => Command::DocumentPromote,
+            Self::TicketClose(_) => Command::TicketClose,
+            Self::TicketWithdrawClosure(_) => Command::TicketWithdrawClosure,
+            Self::PollConfigure(_) => Command::PollConfigure,
+            Self::PollPause(_) => Command::PollPause,
+            Self::PollResume(_) => Command::PollResume,
+            Self::PollOnce(_) | Self::PollOnceRetiring(_) => Command::PollOnce,
         }
     }
 
@@ -514,10 +771,19 @@ impl Mutation {
             | Self::CommentAdd(_)
             | Self::ConflictResolve(_) => None,
             Self::ItemRepublish(input) => Some(Box::new(ItemRepublishBinding::from(input.clone()))),
+            Self::ItemResolveHistory(input) => {
+                Some(Box::new(ItemResolveHistoryBinding::from(input.clone())))
+            }
+            Self::RemoteResolveHistory(input) => {
+                Some(Box::new(RemoteResolveHistoryBinding::from(input.clone())))
+            }
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
             Self::RepoRemove(input) => Some(Box::new(RepoRemoveBinding::from(input.clone()))),
+            Self::RepoSetupCancel(input) => {
+                Some(Box::new(RepoSetupCancelBinding::from(input.clone())))
+            }
             Self::KeyDelete(input) => Some(Box::new(KeyDeleteBinding::from(input.clone()))),
             Self::OperationAbandon(input) => {
                 Some(Box::new(OperationAbandonBinding::from(input.clone())))
@@ -529,9 +795,19 @@ impl Mutation {
             Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::DocumentRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
+            Self::DocumentPromote(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketClose(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketWithdrawClosure(input) => {
+                Some(Box::new(LifecycleBinding::from(input.clone())))
+            }
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
+            | Self::PollConfigure(_)
+            | Self::PollPause(_)
+            | Self::PollResume(_)
+            | Self::PollOnce(_)
+            | Self::PollOnceRetiring(_)
             | Self::TicketCreate(_)
             | Self::TicketSave(_)
             | Self::TicketSlugAssign(_)
@@ -549,7 +825,8 @@ impl Mutation {
             | Self::OperationResume(_)
             | Self::FolderCreate(_)
             | Self::ContextPrepare(_)
-            | Self::ContextRelease(_) => None,
+            | Self::ContextRelease(_)
+            | Self::ContextRetire(_) => None,
         }
     }
 
@@ -560,6 +837,8 @@ impl Mutation {
             Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
             Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
             Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
+            Self::ItemResolveHistory(input) => Box::new(ItemResolveHistoryBinding::from(input)),
+            Self::RemoteResolveHistory(input) => Box::new(RemoteResolveHistoryBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),
@@ -579,6 +858,7 @@ impl Mutation {
             Self::RepoEnable(input) => Box::new(RepoBinding::from(input)),
             Self::RemoteRemove(input) => Box::new(RemoteRemoveBinding::from(input)),
             Self::RepoRemove(input) => Box::new(RepoRemoveBinding::from(input)),
+            Self::RepoSetupCancel(input) => Box::new(RepoSetupCancelBinding::from(input)),
             Self::KeyDelete(input) => Box::new(KeyDeleteBinding::from(input)),
             Self::OperationAbandon(input) => Box::new(OperationAbandonBinding::from(input)),
             Self::ItemSync(input) => Box::new(SyncBinding::from(input)),
@@ -592,6 +872,17 @@ impl Mutation {
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
             Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
             Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
+            Self::ContextRetire(input) => Box::new(ContextRetireBinding::from(input)),
+            Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketWithdrawClosure(input) => Box::new(LifecycleBinding::from(input)),
+            Self::PollConfigure(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollPause(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollResume(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollOnce(input) => Box::new(PollOnceBinding::from(input)),
+            Self::PollOnceRetiring(input) => {
+                Box::new(bind::poll_retirement::PollRetirementBinding::from(input))
+            }
         }
     }
 }

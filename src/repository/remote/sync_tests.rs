@@ -217,18 +217,31 @@ fn wrong_branch_and_unmaterialized_context_are_nonmutating() {
 }
 #[test]
 fn foreign_merge_rebase_and_cherry_pick_metadata_are_refused_without_adoption() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     let head = repo.head().unwrap().target().unwrap().to_string();
     for metadata in ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"] {
         fs::write(repo.path().join(metadata), format!("{head}\n")).unwrap();
         assert!(matches!(
-            local_target(root.path(), "main", &SynchronizationTarget::Primary),
+            local_target(
+                &service,
+                root.path(),
+                "main",
+                &SynchronizationTarget::Primary
+            ),
             Err(SynchronizationError::WorktreeConflicted { .. })
         ));
         fs::remove_file(repo.path().join(metadata)).unwrap();
     }
-    assert!(local_target(root.path(), "main", &SynchronizationTarget::Primary).is_ok());
+    assert!(
+        local_target(
+            &service,
+            root.path(),
+            "main",
+            &SynchronizationTarget::Primary
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -246,7 +259,7 @@ fn applying_candidate_restart_fixture(already_at_candidate: bool) {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -399,7 +412,7 @@ fn candidate_third_head_restart_preserves_applying_evidence() {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -530,7 +543,7 @@ fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let base = repo.head().unwrap().target().unwrap();
@@ -622,6 +635,159 @@ fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation
         drop(hook);
         assert_eq!(repo.head().unwrap().target(), Some(local));
         assert_eq!(repo.refname_to_id("refs/heads/main").unwrap(), local);
+    }
+}
+
+/// R-SDD-53: the head and status check that stays before a local update.
+/// After the inspection a synchronization keeps before its ordered pass
+/// (`inspect_synchronization_local`), another writer moves the target's
+/// head or dirties its status, before the pass begins or under its lease
+/// just before the update. The pass answers as it does today, and nothing
+/// of it reaches the branch, the index or the files. (The push's own check
+/// runs on the push call's connection, which only the transport makes: the
+/// SSH-harness cases reach it, a library test cannot.)
+#[test]
+fn a_head_or_status_change_after_the_kept_inspection_refuses_the_local_update() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Change {
+        Head,
+        Status,
+    }
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum When {
+        BeforeThePass,
+        UnderTheLease,
+    }
+    // (incoming fast-forwards local, change, when)
+    let rows = [
+        (true, Change::Head, When::UnderTheLease),
+        (false, Change::Head, When::UnderTheLease),
+        (true, Change::Status, When::BeforeThePass),
+        (false, Change::Status, When::BeforeThePass),
+        (true, Change::Status, When::UnderTheLease),
+        (false, Change::Status, When::UnderTheLease),
+    ];
+    for (fast_forward, change, when) in rows {
+        let row = format!("fast_forward={fast_forward} {change:?} {when:?}");
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let parent = if fast_forward {
+            fixture.local
+        } else {
+            fixture.base
+        };
+        let incoming = child(&repository, parent, b"incoming\n");
+        fixture.fetch(incoming, 1);
+        let inspected = fixture
+            .service
+            .inspect_synchronization_local(
+                fixture.root.path(),
+                "main",
+                &SynchronizationTarget::Primary,
+            )
+            .unwrap();
+        assert_eq!(inspected, fixture.local, "{row}");
+        fixture.append_window(1, incoming).unwrap();
+        let root = fixture.root.path().to_owned();
+        let local = fixture.local;
+        // Another writer: a commit of the same tree moves the head and leaves
+        // the index and files as they are; an edit dirties the status only.
+        let write = move || {
+            let repository = git2::Repository::open(&root).unwrap();
+            match change {
+                Change::Head => {
+                    let parent = repository.find_commit(local).unwrap();
+                    let signature = repository.signature().unwrap();
+                    repository
+                        .commit(
+                            Some("HEAD"),
+                            &signature,
+                            &signature,
+                            "another writer",
+                            &parent.tree().unwrap(),
+                            &[&parent],
+                        )
+                        .unwrap();
+                }
+                Change::Status => {
+                    fs::write(root.join("fixture.txt"), b"another writer\n").unwrap();
+                }
+            }
+        };
+        let hook = match when {
+            When::BeforeThePass => {
+                write();
+                None
+            }
+            When::UnderTheLease => {
+                let mut write = Some(write);
+                Some(super::super::observation_tests::install_hook(
+                    move |point| {
+                        if point == RemoteOperationSafePoint::BeforeLocalMutation
+                            && let Some(write) = write.take()
+                        {
+                            write();
+                        }
+                    },
+                ))
+            }
+        };
+        let head = |repository: &git2::Repository| repository.refname_to_id("refs/heads/main");
+        let index = fs::read(repository.path().join("index")).unwrap();
+        let result = fixture.integrate(incoming);
+        drop(hook);
+        let after = repository.head().unwrap().target().unwrap();
+        match change {
+            Change::Head => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::ExternalChange)),
+                    "{row}: {result:?}"
+                );
+                assert_ne!(after, local, "{row}");
+                assert_eq!(
+                    repository.find_commit(after).unwrap().parent_id(0).unwrap(),
+                    local,
+                    "{row}: only the other writer's commit is on the branch"
+                );
+                assert_eq!(
+                    fs::read(fixture.root.path().join("fixture.txt")).unwrap(),
+                    b"original\n",
+                    "{row}"
+                );
+            }
+            Change::Status => {
+                assert!(
+                    matches!(result, Err(SynchronizationError::WorktreeNotClean { .. })),
+                    "{row}: {result:?}"
+                );
+                assert_eq!(after, local, "{row}");
+                assert_eq!(
+                    fs::read(fixture.root.path().join("fixture.txt")).unwrap(),
+                    b"another writer\n",
+                    "{row}"
+                );
+            }
+        }
+        assert_eq!(head(&repository).unwrap(), after, "{row}");
+        assert_eq!(
+            fs::read(fixture.root.path().join("local.txt")).unwrap(),
+            b"local\n",
+            "{row}"
+        );
+        assert_eq!(
+            fs::read(repository.path().join("index")).unwrap(),
+            index,
+            "{row}"
+        );
+        let applied: i64 = fixture
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM remote_integration_steps WHERE phase='applied'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 0, "{row}");
     }
 }
 
@@ -755,9 +921,215 @@ fn actual_commit_graph_rejections_preserve_ref_index_and_worktree_bytes() {
         Err(SynchronizationError::MergeRequired { .. })
     ));
 }
+/// The OIDs of a refusal's listed commits, in its order.
+fn listed(commits: &[(git2::Oid, String)]) -> Vec<git2::Oid> {
+    commits.iter().map(|(oid, _)| *oid).collect()
+}
+/// R-7: the commits of the local primary that the remote does not have,
+/// newest first, each with its summary line, at most 20; `complete` says
+/// whether that is all of them. Equal history lists none; a divergence
+/// lists only the local side.
+#[test]
+fn local_only_commits_lists_newest_first_and_caps_at_twenty() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    assert_eq!(
+        local_only_commits(&repo, base, base).unwrap(),
+        (Vec::new(), true),
+        "equal"
+    );
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let parent = repo.find_commit(base).unwrap();
+    let work = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "Local work\n\nIts body is not listed.\n",
+            &parent.tree().unwrap(),
+            &[&parent],
+        )
+        .unwrap();
+    let one = vec![(work, "Local work".to_owned())];
+    assert_eq!(
+        local_only_commits(&repo, work, base).unwrap(),
+        (one.clone(), true),
+        "one local commit"
+    );
+    let remote = child(&repo, base, b"remote\n");
+    assert_eq!(
+        local_only_commits(&repo, work, remote).unwrap(),
+        (one, true),
+        "diverged: only the local side"
+    );
+    let mut chain = vec![base];
+    for n in 1..=21 {
+        let next = child(&repo, *chain.last().unwrap(), format!("{n}\n").as_bytes());
+        chain.push(next);
+    }
+    let (twenty, complete) = local_only_commits(&repo, chain[20], base).unwrap();
+    assert_eq!(
+        listed(&twenty),
+        chain[1..=20].iter().rev().copied().collect::<Vec<_>>()
+    );
+    assert!(complete, "exactly twenty");
+    let (newest, complete) = local_only_commits(&repo, chain[21], base).unwrap();
+    assert_eq!(
+        listed(&newest),
+        chain[2..=21].iter().rev().copied().collect::<Vec<_>>(),
+        "the 20 newest, newest first"
+    );
+    assert!(newest.iter().all(|(_, summary)| summary == "fixture"));
+    assert!(!complete, "a 21st exists");
+}
+/// O3, O4, O8: after a plan, a pull-only operation on the primary goes on
+/// when its local primary is equal to the remote or only behind it, and is
+/// refused with the local primary's own commits when the plan would push
+/// (local ahead) or merge (diverged). A direct operation goes on in every
+/// case, as today, and so does a context target. The decision reads only
+/// the plan and the operation's stored mode, so a resumed operation whose
+/// local commits were there before a crash is refused the same way (O8).
+#[test]
+fn o3_o4_o8_pull_only_refuses_local_commits_after_a_plan() {
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    let remote = child(&repo, base, b"remote\n");
+    let local = child(&repo, base, b"local\n");
+    let ahead = child(&repo, local, b"local again\n");
+    let context = ticket_target("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    for (case, head, primary, refused) in [
+        ("equal", base, base, None),
+        ("remote ahead", base, remote, None),
+        ("local ahead", ahead, base, Some(vec![ahead, local])),
+        ("diverged", ahead, remote, Some(vec![ahead, local])),
+    ] {
+        let planned = graph_plan(
+            &repo,
+            &SynchronizationTarget::Primary,
+            head,
+            Some(primary),
+            None,
+            RemotePublicationEvidence::HistoryUnknown,
+        );
+        for pull_only in [true, false] {
+            let decided = pull_only_plan_refusal(
+                &repo,
+                pull_only,
+                &SynchronizationTarget::Primary,
+                head,
+                Some(primary),
+                &planned,
+            );
+            match (pull_only, &refused, decided) {
+                (
+                    true,
+                    Some(expected),
+                    Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }),
+                ) => {
+                    assert_eq!(listed(&commits), *expected, "{case}");
+                    assert!(
+                        commits.iter().all(|(_, summary)| summary == "fixture"),
+                        "{case}"
+                    );
+                    assert!(complete, "{case}");
+                }
+                (false, _, Ok(())) | (true, None, Ok(())) => {}
+                (_, _, other) => panic!("{case}, pull_only={pull_only}: {other:?}"),
+            }
+        }
+        // A context target is never pull-only: whatever its plan, it goes on.
+        let planned = graph_plan(
+            &repo,
+            &context,
+            head,
+            Some(primary),
+            Some(head),
+            RemotePublicationEvidence::ObservedPublished,
+        );
+        let decided = pull_only_plan_refusal(&repo, true, &context, head, Some(primary), &planned);
+        assert!(matches!(decided, Ok(())), "{case}: context: {decided:?}");
+    }
+}
+/// O9, O10: a pull-only operation's push call never pushes. A push
+/// endpoint that advertises the candidate is `AlreadyCurrent`; one behind
+/// it, beside it or advertising nothing refuses the operation, with the
+/// candidate's commits listed against the push endpoint's tip, or all of
+/// them, at most 20, when it advertises none: it lacks every one (R-15).
+/// One strictly ahead lacks none, and is refused with an empty list (a
+/// known limit: it cannot settle on a tip that is not its candidate). A
+/// pull-only operation settles `AlreadyCurrent` whatever its call would
+/// say, as on a resume after `PushVerified`, never `Published`; a direct
+/// operation settles as it does today.
+#[test]
+fn o9_o10_push_call_never_pushes_in_a_pull_only_operation() {
+    use state::SynchronizationAuthority as A;
+    let (root, _data, _service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let base = repo.head().unwrap().target().unwrap();
+    let first = child(&repo, base, b"first\n");
+    let candidate = child(&repo, first, b"candidate\n");
+    let beside = child(&repo, base, b"beside\n");
+    let past = child(&repo, candidate, b"past\n");
+    // The fixture's history is linear: the candidate's, newest first.
+    let mut history = vec![candidate];
+    while let Ok(parent) = repo
+        .find_commit(*history.last().unwrap())
+        .unwrap()
+        .parent_id(0)
+    {
+        history.push(parent);
+    }
+    assert!(history.len() < 20, "the fixture's history is short");
+    assert_eq!(
+        pull_only_push_decision(&repo, candidate, Some(candidate)).unwrap(),
+        A::AlreadyCurrent(candidate),
+        "the push endpoint holds the candidate"
+    );
+    for (case, advertised, expected) in [
+        ("behind", Some(base), vec![candidate, first]),
+        ("beside", Some(beside), vec![candidate, first]),
+        ("advertises none", None, history),
+        ("ahead", Some(past), vec![]),
+    ] {
+        let decided = pull_only_push_decision(&repo, candidate, advertised);
+        let Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }) = decided
+        else {
+            panic!("{case}: {decided:?}");
+        };
+        assert_eq!(listed(&commits), expected, "{case}");
+        assert!(complete, "{case}");
+    }
+    // Advertising none, a longer history is listed to its 20 newest.
+    let mut top = candidate;
+    let mut chain = Vec::new();
+    for n in 0..20 {
+        top = child(&repo, top, format!("{n}\n").as_bytes());
+        chain.push(top);
+    }
+    let Err(SynchronizationError::PrimaryHasLocalCommits { commits, complete }) =
+        pull_only_push_decision(&repo, top, None)
+    else {
+        panic!("a long history advertising none");
+    };
+    assert_eq!(
+        listed(&commits),
+        chain.iter().rev().copied().collect::<Vec<_>>()
+    );
+    assert!(!complete);
+    for authority in [A::Published(candidate), A::AlreadyCurrent(candidate)] {
+        assert_eq!(
+            pull_only_authority(true, authority),
+            A::AlreadyCurrent(candidate),
+            "{authority:?}"
+        );
+        assert_eq!(pull_only_authority(false, authority), authority);
+    }
+}
 #[test]
 fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     let old = repo.head().unwrap().target().unwrap();
     let new = child(&repo, old, b"advanced\n");
@@ -767,7 +1139,13 @@ fn one_expected_old_safe_fast_forward_updates_worktree_and_ref() {
         fs::read(root.path().join("fixture.txt")).unwrap(),
         b"advanced\n"
     );
-    local_target(root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+    )
+    .unwrap();
     assert!(matches!(
         fast_forward(&repo, "refs/heads/main", old, new),
         Err(SynchronizationError::ExternalChange)
@@ -792,7 +1170,7 @@ fn fixture_pins_autocrlf_locally_before_initial_staging() {
 
 #[test]
 fn fast_forward_respects_local_autocrlf_checkout_policy() {
-    let (root, _data, _service) = fixture();
+    let (root, _data, service) = fixture();
     let repo = git2::Repository::open(root.path()).unwrap();
     repo.config()
         .unwrap()
@@ -803,7 +1181,13 @@ fn fast_forward_respects_local_autocrlf_checkout_policy() {
     fast_forward(&repo, "refs/heads/main", old, new).unwrap();
     assert_eq!(repo.head().unwrap().target(), Some(new));
     assert!(fs::read(root.path().join("fixture.txt")).unwrap() == b"advanced\r\n");
-    local_target(root.path(), "main", &SynchronizationTarget::Primary).unwrap();
+    local_target(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -953,6 +1337,165 @@ fn materialized_context_uses_existing_authoring_identity_and_checks_its_own_work
         b"context dirty"
     );
 }
+/// R-SDD-52: a context tree the service accepted is not walked again for
+/// the same item. Another item, another kind or another tree is walked; a
+/// refused tree is walked each time; and the key also holds the tree's
+/// configuration blob, the validator's build and whether the item must be
+/// there, with the oldest accepted tree leaving first.
+#[test]
+fn a_tree_validation_is_cached_by_tree_kind_item_configuration_and_build() {
+    let (root, _data, service) = fixture();
+    let item_id: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+    let saved = service.save_ticket(SaveTicketRequest {
+        target: AuthoringTarget {
+            root: root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: item_id.clone(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        },
+        draft: TicketDraft {
+            title: "Fixture".into(),
+            body: "fixture".into(),
+            ticket_type: "task".into(),
+            status: "open".into(),
+            project: None,
+            team: None,
+        },
+        expected_path: ExpectedPathObservation::Missing,
+    });
+    let context = match saved.unwrap() {
+        SaveOutcome::Saved { context, .. } | SaveOutcome::IndexPending { context, .. } => context,
+        _ => panic!("missing context"),
+    };
+    let linked = git2::Repository::open(&context.worktree).unwrap();
+    let walks = || service.context_tree_validations.lock().unwrap().walks;
+    let validate = |context: &ItemContext| {
+        service.validate_context_tree(&linked, context, RepositoryOperation::RepositorySnapshot)
+    };
+    let other_kind = ItemContext {
+        kind: AuthoringKind::Document,
+        ..context.clone()
+    };
+    let other_item = ItemContext {
+        item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+        ..context.clone()
+    };
+    // (row, context, accepted, walks after the row)
+    let rows: [(&str, &ItemContext, bool, usize); 6] = [
+        ("first validation walks", &context, true, 1),
+        (
+            "the same tree and item is not walked again",
+            &context,
+            true,
+            1,
+        ),
+        (
+            "another kind under the ID is walked, and refused",
+            &other_kind,
+            false,
+            2,
+        ),
+        ("a refused tree is walked again", &other_kind, false, 3),
+        ("another item is walked, and refused", &other_item, false, 4),
+        ("the accepted item still is not walked", &context, true, 4),
+    ];
+    for (row, context, accepted, after) in rows {
+        assert_eq!(validate(context).is_ok(), accepted, "{row}");
+        assert_eq!(walks(), after, "{row}");
+    }
+    // A new commit is a new tree, walked once.
+    fs::write(context.worktree.join("new.txt"), b"new\n").unwrap();
+    commit_all(&linked);
+    assert!(validate(&context).is_ok());
+    assert_eq!(walks(), 5, "a new tree is walked");
+    assert!(validate(&context).is_ok());
+    assert_eq!(walks(), 5, "and then remembered");
+
+    // Every part of the key decides: an accepted key answers for no key that
+    // differs from it in one part.
+    let tree = linked.head().unwrap().peel_to_tree().unwrap();
+    let key = ContextTreeValidation {
+        tree: tree.id(),
+        kind: AuthoringKind::Ticket,
+        item_id: item_id.clone(),
+        configuration: Some(
+            tree.get_path(Path::new(crate::canonical::CONFIG_PATH))
+                .unwrap()
+                .id(),
+        ),
+        build: CONTEXT_TREE_VALIDATOR_BUILD,
+        require_target: true,
+    };
+    assert!(
+        service
+            .context_tree_validations
+            .lock()
+            .unwrap()
+            .accepted(&key),
+        "the service keyed what it accepted by tree, kind, item, configuration blob and build"
+    );
+    let variants = [
+        (
+            "tree",
+            ContextTreeValidation {
+                tree: git2::Oid::from_bytes(&[7; 20]).unwrap(),
+                ..key.clone()
+            },
+        ),
+        (
+            "kind",
+            ContextTreeValidation {
+                kind: AuthoringKind::Document,
+                ..key.clone()
+            },
+        ),
+        (
+            "item",
+            ContextTreeValidation {
+                item_id: "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap(),
+                ..key.clone()
+            },
+        ),
+        (
+            "configuration blob",
+            ContextTreeValidation {
+                configuration: Some(git2::Oid::from_bytes(&[8; 20]).unwrap()),
+                ..key.clone()
+            },
+        ),
+        (
+            "build",
+            ContextTreeValidation {
+                build: "another build",
+                ..key.clone()
+            },
+        ),
+        (
+            "required target",
+            ContextTreeValidation {
+                require_target: false,
+                ..key.clone()
+            },
+        ),
+    ];
+    let mut validations = ContextTreeValidations::default();
+    validations.accept(key.clone());
+    for (part, variant) in &variants {
+        assert!(!validations.accepted(variant), "{part}");
+    }
+    // Bounded: the oldest accepted tree leaves first.
+    for n in 0..CONTEXT_TREE_VALIDATIONS {
+        let mut bytes = [0; 20];
+        bytes[..8].copy_from_slice(&(n as u64 + 1).to_be_bytes());
+        validations.accept(ContextTreeValidation {
+            tree: git2::Oid::from_bytes(&bytes).unwrap(),
+            ..key.clone()
+        });
+    }
+    assert_eq!(validations.accepted.len(), CONTEXT_TREE_VALIDATIONS);
+    assert!(!validations.accepted(&key), "the oldest left first");
+}
 #[test]
 fn ref_lock_rejects_before_checkout_and_post_checkout_mismatch_is_not_rolled_back() {
     let (root, _data, _service) = fixture();
@@ -1080,7 +1623,7 @@ fn local_synchronization_binding_rejects_remote_collision_after_none_inspection_
         // Simulate the remote insertion AFTER service inspection returned None,
         // before local binding. The binder must inspect again in its transaction.
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::insert_operation(
                 tx,
                 id,
@@ -1139,7 +1682,7 @@ fn existing_remote_id_rejects_other_root_before_invalid_live_configuration() {
     let req = request(root.path());
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)?;
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
         state::insert_operation(
             tx,
             id,
@@ -1319,10 +1862,11 @@ fn local_binding_after_none_rejects_actual_other_target_service_authority() {
             ..
         }))
     ));
+    // The one binding is the first synchronization's hand-off row (E-64).
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     assert_eq!(
         db.query_row(
-            "SELECT count(*) FROM operation_records WHERE target LIKE 'synchronization-local-v1/%'",
+            "SELECT count(*) FROM operation_records WHERE target LIKE 'synchronization-index-v1/%'",
             [],
             |r| r.get::<_, i64>(0)
         )
@@ -1522,7 +2066,8 @@ fn local_binding_transaction_accepts_only_identical_complete_tag_without_rewriti
             .unwrap()
             .target()
             .unwrap();
-        let matcher = format!("{}/{oid}", local_refresh_identity(&req.target));
+        // The tag this build binds with: the hand-off target (E-65).
+        let matcher = crate::repository::recovery::synchronization_index_target(&req.target, oid);
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         db.execute("INSERT INTO operation_records(root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,'refresh',?3,?4,0)",rusqlite::params![root.path().to_str().unwrap(),req.operation_id.to_string(),matcher,status]).unwrap();
         let count: i64 = db
@@ -1839,7 +2384,7 @@ fn resolution_fixture_with_baseline_bytes(
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -1975,7 +2520,7 @@ fn context_primary_conflict_fixture() -> (
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -2331,17 +2876,19 @@ fn review_resolution_durably_requests_refresh() {
         &base.replace("base", "incoming"),
     )]);
     let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-    db.execute("UPDATE repositories SET refresh_required=0", [])
+    db.execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
         .unwrap();
     assert!(matches!(
         resolve_fixture(root.path(), &service, operation, &[base]),
         ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
     ));
+    // The primary resolved its synchronization: its context is marked.
     assert!(
-        db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-            .get::<_, bool>(
-            0
-        ))
+        db.query_row(
+            "SELECT dirty FROM contexts WHERE item_id IS NULL",
+            [],
+            |row| row.get::<_, bool>(0)
+        )
         .unwrap()
     );
 }
@@ -2578,10 +3125,20 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
             None,
         );
         let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-        db.execute("UPDATE repositories SET refresh_required=0", [])
+        db.execute_batch("UPDATE repositories SET refresh_required=0; UPDATE contexts SET dirty=0")
             .unwrap();
+        let primary_dirty = || {
+            db.query_row(
+                "SELECT dirty FROM contexts WHERE item_id IS NULL",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+        // The resolution marks the primary before its branch moves (Task
+        // 16b); the fault is in the mark its applied checkpoint makes after.
         db.execute_batch(if fault == "refresh" {
-            "CREATE TRIGGER review_fault BEFORE UPDATE OF refresh_required ON repositories WHEN NEW.refresh_required=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
+            "CREATE TRIGGER review_fault BEFORE UPDATE OF dirty ON contexts WHEN OLD.dirty=1 AND NEW.dirty=1 BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         } else {
             "CREATE TRIGGER review_fault BEFORE UPDATE OF phase ON remote_operation_records WHEN OLD.phase='reconciling' AND NEW.phase='interrupted' BEGIN SELECT RAISE(ABORT,'test fault'); END;"
         }).unwrap();
@@ -2610,13 +3167,7 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
                 .unwrap(),
                 "candidate_prepared"
             );
-            assert!(
-                !db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-                    .get::<_, bool>(
-                    0
-                ))
-                .unwrap()
-            );
+            assert!(primary_dirty(), "marked before the branch moved");
         } else {
             assert!(!repository.path().join("index.lock").exists());
             assert_eq!(
@@ -2641,13 +3192,7 @@ fn review_resolution_finalizer_and_refresh_sql_faults_retry_without_new_git_effe
                 fs::read(repository.path().join("logs/refs/heads/main")).unwrap()
             )
         );
-        assert!(
-            db.query_row("SELECT refresh_required FROM repositories", [], |row| row
-                .get::<_, bool>(
-                0
-            ))
-            .unwrap()
-        );
+        assert!(primary_dirty());
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let target = RemoteOperationTarget::for_primary_synchronization(&plan);
         let RemoteReservationOutcome::Reserved(owner) = restarted
@@ -3467,8 +4012,13 @@ fn external_repair_new_canonical_encoding_and_shape_gate_preserves_invalid_basel
             let objects = inspection_odb_inventory(&repository);
             let before = inspection_git_image(root.path());
             assert_eq!(
-                RepositoryService::validates_external_integration(&repository, &step, candidate)
-                    .unwrap(),
+                RepositoryService::validates_external_integration(
+                    &repository,
+                    &step,
+                    None,
+                    candidate
+                )
+                .unwrap(),
                 shape == "valid_code_control",
                 "{shape}"
             );
@@ -3753,7 +4303,7 @@ fn local_effect_restart_before_clean_preflight_and_transport() {
         };
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -4150,6 +4700,43 @@ fn child_file(repo: &git2::Repository, parent: git2::Oid, name: &str, bytes: &[u
         .unwrap()
 }
 
+/// A child of `parent` that adds the file at `path`, which may be nested.
+fn child_path(repo: &git2::Repository, parent: git2::Oid, path: &str, bytes: &[u8]) -> git2::Oid {
+    merge_path(repo, &[parent], path, bytes)
+}
+
+/// A commit with the parents given whose tree is the first parent's with the
+/// file at `path` set to `bytes`.
+fn merge_path(
+    repo: &git2::Repository,
+    parents: &[git2::Oid],
+    path: &str,
+    bytes: &[u8],
+) -> git2::Oid {
+    let parents = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).unwrap())
+        .collect::<Vec<_>>();
+    let tree = inspection_tree_insert(
+        repo,
+        &parents[0].tree().unwrap(),
+        path,
+        repo.blob(bytes).unwrap(),
+        0o100644,
+    );
+    let tree = repo.find_tree(tree).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    repo.commit(
+        None,
+        &sig,
+        &sig,
+        "fixture",
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
 /// number, previous intent, previous advertisement, disposition, phase, candidate.
 type PassAttemptRow = (i64, String, Option<String>, String, String, Option<String>);
 /// MERGE_HEAD, MERGE_MSG and MERGE_MODE digests with the journal phase.
@@ -4176,23 +4763,46 @@ struct PassFixture {
 
 impl PassFixture {
     fn new(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, false)
+        Self::build(local_file, local_bytes, false, false, true)
     }
 
     /// As `new`, in a repository whose base tree already holds a submodule
     /// entry and a seven-line `shared.txt` both sides can change cleanly.
     fn with_gitlink(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, false, true)
+        Self::build(local_file, local_bytes, false, true, true)
     }
 
     /// As `new`, with the publication remote also selected in the committed
     /// configuration and its endpoints bound, so the public entry point
     /// proceeds past local reconciliation to the transport boundary.
     fn published(local_file: &str, local_bytes: &[u8]) -> Self {
-        Self::build(local_file, local_bytes, true, false)
+        Self::build(local_file, local_bytes, true, false, true)
     }
 
-    fn build(local_file: &str, local_bytes: &[u8], published: bool, gitlink: bool) -> Self {
+    /// As `new`, for an operation that stopped before it recorded anything:
+    /// no `FetchPrepared`, and the row restarted as the explicit restart
+    /// leaves it, for the stored row to be reconciled from.
+    fn restarted_before_any_checkpoint(local_file: &str, local_bytes: &[u8]) -> Self {
+        let mut fixture = Self::build(local_file, local_bytes, false, false, false);
+        // The process died before its first checkpoint.
+        fixture
+            .db()
+            .execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [fixture.operation.to_string()],
+            )
+            .unwrap();
+        fixture.restart();
+        fixture
+    }
+
+    fn build(
+        local_file: &str,
+        local_bytes: &[u8],
+        published: bool,
+        gitlink: bool,
+        journaled: bool,
+    ) -> Self {
         let (root, data, service) = fixture();
         let repository = git2::Repository::open(root.path()).unwrap();
         if gitlink {
@@ -4225,7 +4835,7 @@ impl PassFixture {
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         if published {
@@ -4254,18 +4864,20 @@ impl PassFixture {
         else {
             panic!("reservation")
         };
-        service
-            .checkpoint_synchronization(
-                root.path(),
-                &owner,
-                state::SynchronizationCheckpoint::FetchPrepared,
-                &state::SynchronizationEvidence {
-                    expected_oid: Some(local),
-                    local_oid: Some(local),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        if journaled {
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(local),
+                        local_oid: Some(local),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
         Self {
             root,
             data,
@@ -5560,7 +6172,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             .synchronization_push_absence_boundary(root.path(), &owner, true)
             .unwrap()
     };
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforePush)
         .unwrap();
@@ -5572,7 +6187,10 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
             None,
         )
         .unwrap();
-    assert!(matches!(boundary(), Some(PushAbsenceBoundary::Ambiguous)));
+    assert!(matches!(
+        boundary(),
+        Some(PushAbsenceBoundary::Ambiguous { .. })
+    ));
     service
         .remote_safe_point(
             root.path(),
@@ -5600,6 +6218,514 @@ fn released_checkpoint_descendant_after_old_push_intent_opens_a_continuation_att
         state::SynchronizationAuthority::Published(descendant)
     );
     assert_eq!(legacy(&db), frozen);
+}
+
+/// Journal one context synchronization up to a Push intent at `checkpoint`
+/// (`PushPrepared`, or `PushReturned` after the `BeforePush` safe point), as a
+/// real first push of a context branch the remote has never had.
+fn journal_unanswered_context_push(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    owner: &RemoteReservation,
+    head: git2::Oid,
+    checkpoint: state::SynchronizationCheckpoint,
+) {
+    use state::SynchronizationCheckpoint as C;
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(head),
+        local_oid: Some(head),
+        ..Default::default()
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::FetchPrepared, &evidence)
+        .unwrap();
+    git2::Repository::open(root)
+        .unwrap()
+        .reference(plan.primary().tracking_ref(), head, true, "fixture")
+        .unwrap();
+    service
+        .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(plan, "refs/heads/main", head, Some(head))
+            .unwrap();
+    commit_observation_batch(service, root, owner, plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        primary_tracking_oid: Some(head),
+        push_oid: Some(head),
+        ..evidence
+    };
+    service
+        .checkpoint_synchronization(root, owner, C::PushPrepared, &evidence)
+        .unwrap();
+    if checkpoint == C::PushReturned {
+        service
+            .remote_safe_point(root, owner, RemoteOperationSafePoint::BeforePush)
+            .unwrap();
+        service
+            .checkpoint_synchronization(root, owner, C::PushReturned, &evidence)
+            .unwrap();
+    }
+}
+
+/// A restart skips `FetchPrepared`, the only checkpoint that establishes
+/// `expected_oid`, and the reconcile that follows records `local_oid` but not
+/// where the operation began. Left NULL, the row refuses a fast-forward
+/// (`LocalPrepared` moves `local_oid` and is excused only for a row that
+/// began where it stood) and takes a merge application only to become
+/// unreadable. The reconcile records the local tip it proved as the start.
+#[test]
+fn a_restarted_row_records_expected_oid_at_the_reconcile() {
+    use state::SynchronizationCheckpoint as C;
+    // Fast-forward: the remote is ahead of a clean local tip.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        assert_eq!(fixture.record().sync_evidence.expected_oid, None);
+        let ahead = child_file(&repository, fixture.local, "remote.txt", b"remote\n");
+        fixture.fetch(ahead, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        assert_eq!(evidence.local_oid, Some(fixture.local));
+        assert_eq!(evidence.expected_oid, Some(fixture.local));
+        evidence.local_oid = Some(ahead);
+        evidence.tracking_oid = Some(ahead);
+        evidence.primary_tracking_oid = Some(ahead);
+        fixture
+            .service
+            .checkpoint_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                C::LocalPrepared,
+                &evidence,
+            )
+            .unwrap();
+        assert_eq!(
+            fixture.record().sync_evidence.expected_oid,
+            Some(fixture.local)
+        );
+    }
+    // Divergence: the merge application leaves a row that still reads.
+    {
+        let fixture = PassFixture::restarted_before_any_checkpoint("local.txt", b"local\n");
+        let repository = fixture.repository();
+        let first = child_file(&repository, fixture.base, "remote-one.txt", b"one\n");
+        fixture.fetch(first, 1);
+        fixture
+            .service
+            .reconcile_synchronization(
+                fixture.root.path(),
+                &fixture.owner,
+                fixture.local,
+                fixture.local,
+                None,
+                false,
+            )
+            .unwrap();
+        fixture.append_window(1, first).unwrap();
+        let merged = fixture.integrate(first).unwrap();
+        let mut evidence = fixture.record().sync_evidence;
+        evidence.local_oid = Some(merged);
+        evidence.tracking_oid = Some(first);
+        evidence.primary_tracking_oid = Some(first);
+        fixture
+            .service
+            .checkpoint_synchronization_merge_applied(
+                fixture.root.path(),
+                &fixture.owner,
+                &evidence,
+            )
+            .unwrap();
+        let record = fixture.record();
+        assert_eq!(record.sync_checkpoint, Some(C::LocalFastForwarded));
+        assert_eq!(record.sync_evidence.expected_oid, Some(fixture.local));
+    }
+    // A recorded start is kept, by the in-memory backstop as by the reconcile.
+    let (local, other) = (
+        git2::Oid::from_bytes(&[1; 20]).unwrap(),
+        git2::Oid::from_bytes(&[2; 20]).unwrap(),
+    );
+    let mut recorded = state::SynchronizationEvidence {
+        expected_oid: Some(other),
+        ..Default::default()
+    };
+    backfill_expected_oid(&mut recorded, local);
+    assert_eq!(recorded.expected_oid, Some(other));
+    let mut missing = state::SynchronizationEvidence::default();
+    backfill_expected_oid(&mut missing, local);
+    assert_eq!(missing.expected_oid, Some(local));
+}
+
+/// A synchronization that resumes after its own first push of a context
+/// branch the remote has never had. The push endpoint advertises no context
+/// ref. Whether that is ambiguous depends on whether the push could have
+/// reached the remote: an intent still at `PushPrepared` (not known to have
+/// returned; the remote is observed before the retry) with no evidence the
+/// context was ever published is retried; one at `PushReturned`, one the remote has been seen to
+/// hold, or one another operation left behind is not ours to retry and stays
+/// ambiguous.
+#[test]
+fn an_unreturned_first_push_with_no_publication_evidence_is_retryable_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    struct Row {
+        label: &'static str,
+        own: C,
+        published: bool,
+        foreign: bool,
+        ambiguous: bool,
+    }
+    let rows = [
+        Row {
+            label: "own push_prepared, never published: retried",
+            own: C::PushPrepared,
+            published: false,
+            foreign: false,
+            ambiguous: false,
+        },
+        Row {
+            label: "own push_returned, never published: still ambiguous",
+            own: C::PushReturned,
+            published: false,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "own push_prepared, publication evidence: still ambiguous",
+            own: C::PushPrepared,
+            published: true,
+            foreign: false,
+            ambiguous: true,
+        },
+        Row {
+            label: "foreign push_prepared, never published: still ambiguous",
+            own: C::PushPrepared,
+            published: false,
+            foreign: true,
+            ambiguous: true,
+        },
+    ];
+    for row in rows {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{}: reservation", row.label)
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if row.foreign {
+            // Another operation's push intent, left behind when it stopped.
+            let earlier = reserve();
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &earlier,
+                head,
+                C::PushPrepared,
+            );
+            db.execute(
+                "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                [earlier.operation_id().to_string()],
+            )
+            .unwrap();
+        }
+        let owner = reserve();
+        if !row.foreign {
+            journal_unanswered_context_push(&service, root.path(), &plan, &owner, head, row.own);
+        }
+        if row.published {
+            // The remote was seen to hold the branch, and no longer does.
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        // A resumed synchronization counts its own journaled push as inherited;
+        // another operation's is counted whatever the resumer is.
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &owner, !row.foreign)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", row.label));
+        assert_eq!(
+            matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            row.ambiguous,
+            "{}: boundary was {}",
+            row.label,
+            match boundary {
+                None => "none (push retried)",
+                Some(PushAbsenceBoundary::Ambiguous { .. }) => "ambiguous (recovery_required)",
+                Some(PushAbsenceBoundary::Deleted) => "deleted",
+                Some(PushAbsenceBoundary::Unknown) => "unknown",
+            }
+        );
+    }
+}
+
+/// The two pushes the table above leaves ambiguous for good, each an
+/// operation's own that its resume refuses: one that returned, and one
+/// whose context the remote has been seen to hold. And a third, a push that
+/// returned as a cancellation the operation was asked for ended it: no
+/// resume takes a cancelled operation up, yet its push makes a new
+/// synchronization ambiguous where the branch is absent. Only the person
+/// can say what became of them, and a confirmed `operation abandon` is how
+/// they do:
+/// it closes the operation with its push recorded as refused
+/// (`protocol_rejected`), as a push the remote refused is recorded. A new
+/// synchronization of the context then counts that push as answered, so an
+/// absent branch at the push endpoint is no longer ambiguous for it; the
+/// table's foreign row shows that the same row, left as it was, would be.
+/// The abandon keeps the row's attribution and its owner epoch.
+#[test]
+fn a_confirmed_abandon_answers_the_push_so_a_new_synchronization_is_not_ambiguous() {
+    use state::SynchronizationCheckpoint as C;
+    for (label, checkpoint, published, cancelled) in [
+        (
+            "push_returned, never published",
+            C::PushReturned,
+            false,
+            false,
+        ),
+        (
+            "push_prepared, publication evidence",
+            C::PushPrepared,
+            true,
+            false,
+        ),
+        (
+            "cancelled as its push returned",
+            C::PushReturned,
+            false,
+            true,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let head = repository.head().unwrap().target().unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let ticket: crate::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap();
+        let target = RemoteOperationTarget::for_context(
+            &plan,
+            RemoteOperationAction::SynchronizeContext,
+            AuthoringKind::Ticket,
+            ticket.clone(),
+        )
+        .unwrap();
+        let reserve = || {
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(root.path(), OperationId::new(), &target)
+                .unwrap()
+            else {
+                panic!("{label}: reservation")
+            };
+            owner
+        };
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let stranded = reserve();
+        if cancelled {
+            // `request cancel` while the push is in flight: the push
+            // returns, and the checkpoint that records it acknowledges the
+            // cancellation, as the push's own callback does.
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                C::PushPrepared,
+            );
+            service
+                .remote_safe_point(root.path(), &stranded, RemoteOperationSafePoint::BeforePush)
+                .unwrap();
+            service
+                .request_synchronization_cancellation(root.path(), &stranded)
+                .unwrap();
+            let evidence = state::SynchronizationEvidence {
+                expected_oid: Some(head),
+                local_oid: Some(head),
+                primary_tracking_oid: Some(head),
+                push_oid: Some(head),
+                ..Default::default()
+            };
+            assert_eq!(
+                service
+                    .checkpoint_synchronization(root.path(), &stranded, C::PushReturned, &evidence)
+                    .unwrap(),
+                RemoteSafePointOutcome::Cancelled
+            );
+        } else {
+            journal_unanswered_context_push(
+                &service,
+                root.path(),
+                &plan,
+                &stranded,
+                head,
+                checkpoint,
+            );
+        }
+        if published {
+            let context = target.context_ref().unwrap();
+            db.execute(
+                "INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,publication_evidence,state,observed_at) SELECT id,?1,?2,'ticket',?3,?4,'observed_published','remotely_deleted',1 FROM repositories",
+                rusqlite::params![
+                    context.remote_ref(),
+                    context.tracking_ref(),
+                    ticket.to_string(),
+                    head.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let operation = stranded.operation_id().to_string();
+        let kept = || -> (i64, Option<String>, Option<String>, Option<i64>, Option<String>) {
+            db.query_row(
+                "SELECT owner_epoch, request_ulid, host, pid, command FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap()
+        };
+        let attribution = kept();
+        // Its own resume finds the branch absent at the push endpoint
+        // ambiguous: nothing says what became of the push. A cancelled one is
+        // no resume's, and a new synchronization finds it so.
+        let next = cancelled.then(&reserve);
+        let before = match &next {
+            Some(next) => service.synchronization_push_absence_boundary(root.path(), next, false),
+            None => service.synchronization_push_absence_boundary(root.path(), &stranded, true),
+        }
+        .unwrap();
+        assert!(
+            matches!(before, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            "{label}: ambiguous before the abandon"
+        );
+        // The new synchronization's refusal names the operation whose push it
+        // counts, which is not its own: `recovery_required`, naming it, so
+        // that its abandon can be offered. The resume of its own is refused
+        // naming nothing.
+        let error = before.unwrap().error();
+        let named = error
+            .blocker()
+            .map(|blocker| (blocker.family, blocker.operation_id));
+        if cancelled {
+            assert!(
+                matches!(
+                    &error,
+                    SynchronizationError::Repository(RepositoryError {
+                        kind: RepositoryErrorKind::RecoveryRequired,
+                        ..
+                    })
+                ),
+                "{label}: {error:?}"
+            );
+            assert_eq!(
+                named,
+                Some((
+                    crate::repository::OperationFamily::Remote,
+                    stranded.operation_id()
+                )),
+                "{label}"
+            );
+        } else {
+            assert!(
+                matches!(error, SynchronizationError::RecoveryRequired),
+                "{label}"
+            );
+            assert_eq!(named, None, "{label}");
+        }
+
+        let abandoned = service
+            .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            matches!(
+                abandoned,
+                crate::repository::bridges::abandon::RemoteAbandonOutcome::Abandoned(_)
+            ),
+            "{label}: {abandoned:?}"
+        );
+        let closed: (String, Option<String>, Option<String>, i64) = db
+            .query_row(
+                "SELECT phase, outcome, sync_checkpoint, reconciliation_required FROM remote_operation_records WHERE operation_ulid=?1",
+                [&operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            closed,
+            (
+                "cancelled".to_owned(),
+                Some("protocol_rejected".to_owned()),
+                Some(checkpoint.name().to_owned()),
+                0
+            ),
+            "{label}"
+        );
+        assert_eq!(kept(), attribution, "{label}: attribution and epoch kept");
+
+        // A new synchronization of the context is reserved, and the push the
+        // abandoned operation left is answered for it.
+        let next = next.unwrap_or_else(reserve);
+        let boundary = service
+            .synchronization_push_absence_boundary(root.path(), &next, false)
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        assert!(
+            !matches!(boundary, Some(PushAbsenceBoundary::Ambiguous { .. })),
+            "{label}: the new synchronization is not ambiguous"
+        );
+        // A second abandon finds it ended, and changes nothing.
+        assert!(matches!(
+            service
+                .abandon_remote_operation(root.path(), stranded.operation_id(), None)
+                .unwrap(),
+            crate::repository::bridges::abandon::RemoteAbandonOutcome::AlreadyEnded
+        ));
+    }
 }
 
 /// D: a context target's own gitdir is the linked worktree's. Merge metadata
@@ -6298,7 +7424,7 @@ fn new_refs_append_window_immutable_evidence() {
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let local = repository.head().unwrap().target().unwrap();
@@ -6680,6 +7806,13 @@ fn resolution_ref_transition_failure_reconciles_candidate_without_second_ref_mov
         .unwrap()
         .target()
         .unwrap();
+    // The branch moved before the checkpoint was recorded applied: the
+    // primary is marked from before the move (Task 16b).
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the resolved context's mark"
+    );
     *service.failure_point.lock().unwrap() = None;
     let restarted = RepositoryService::open_at(data.path()).unwrap();
     let ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } =
@@ -6783,7 +7916,7 @@ fn pending_context_synchronization_blocks_only_its_public_authoring_context() {
     let tree = repo.find_commit(head).unwrap().tree().unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -10024,6 +11157,291 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
     }
 }
 
+/// R-12 through the production callers' side: a ticket context's pinned window
+/// gives the validators the fetched primary, a primary target gives none.
+mod ticket_context_closure_rule {
+    use super::*;
+
+    pub(super) const PATH: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAV/ticket.md";
+
+    pub(super) fn ticket(closed: bool, body: &str) -> String {
+        let closure = if closed {
+            "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"\n"
+        } else {
+            "status: \"open\"\n"
+        };
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\ntitle: \"Ticket\"\ntype: \"task\"\n{closure}---\n\n{body}\n"
+        )
+    }
+
+    /// Both validators, through the wrappers the callers use, for a result
+    /// merging `local` and `incoming` under the recorded window's primary
+    /// side: (resolution, external integration).
+    fn verdicts(
+        service: &RepositoryService,
+        root: &Path,
+        operation: OperationId,
+        repository: &git2::Repository,
+        step: &state::IntegrationStepEvidence,
+        result: &str,
+    ) -> (bool, bool) {
+        let primary_side = service
+            .synchronization_primary_side(root, operation, step.window_number)
+            .unwrap();
+        let (local, incoming) = (step.intent.local_oid, step.intent.incoming_oid);
+        let base = repository.merge_base(local, incoming).unwrap();
+        let blob_at = |commit: git2::Oid| {
+            repository
+                .find_commit(commit)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .get_path(Path::new(PATH))
+                .ok()
+                .map(|entry| entry.id())
+        };
+        let token = merge::ConflictPathToken {
+            observation: merge::ConflictObservation::for_testing([7; 32]),
+            ordinal: 0,
+            path: PATH.as_bytes().to_vec(),
+            base: blob_at(base),
+            base_mode: Some(0o100644),
+            local: blob_at(local),
+            local_mode: Some(0o100644),
+            incoming: blob_at(incoming),
+            incoming_mode: Some(0o100644),
+        };
+        let candidate = merge_path(repository, &[local, incoming], PATH, result.as_bytes());
+        (
+            RepositoryService::validates_resolution_sides(
+                repository,
+                &token,
+                primary_side,
+                result.as_bytes(),
+            )
+            .unwrap(),
+            RepositoryService::validates_external_integration(
+                repository,
+                step,
+                primary_side,
+                candidate,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A context-stage conflict of the pass's ticket context over three
+    /// commits that hold `closed` in every side.
+    fn context_step(pass: &ContextPass, closed: bool) -> state::IntegrationStepEvidence {
+        let base = child_path(
+            &pass.repository,
+            pass.main,
+            PATH,
+            ticket(closed, "base").as_bytes(),
+        );
+        let local = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "local").as_bytes(),
+        );
+        let incoming = child_path(
+            &pass.repository,
+            base,
+            PATH,
+            ticket(closed, "incoming").as_bytes(),
+        );
+        state::IntegrationStepEvidence {
+            window_number: 1,
+            intent: state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Context,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: pass.repository.find_commit(local).unwrap().tree_id(),
+                baseline_index_digest: [0; 32],
+            },
+            phase: state::IntegrationStepPhase::ConflictPending,
+            candidate_oid: None,
+            result_oid: None,
+            observed_tree_oid: None,
+            conflict_digest: None,
+        }
+    }
+
+    #[test]
+    fn a_pinned_ticket_context_window_gives_the_fetched_primary_to_both_validators() {
+        // The fetched primary holds a closure: the result must keep exactly it.
+        let pass = ContextPass::with_primary_file(PATH, ticket(true, "primary").as_bytes());
+        let step = context_step(&pass, false);
+        let root = pass.root.path();
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 1)
+                .unwrap(),
+            Some(pass.primary_incoming)
+        );
+        // Window zero is no pinned window: it has no primary side.
+        assert_eq!(
+            pass.service
+                .synchronization_primary_side(root, pass.operation, 0)
+                .unwrap(),
+            None
+        );
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary closed, result closed: {result}"
+            );
+        }
+        // The fetched primary is open: a closure only the context holds is
+        // provisional and may be dropped.
+        let pass = ContextPass::new();
+        let step = context_step(&pass, true);
+        let root = pass.root.path();
+        for result in [false, true] {
+            assert_eq!(
+                verdicts(
+                    &pass.service,
+                    root,
+                    pass.operation,
+                    &pass.repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (true, true),
+                "primary open, result closed: {result}"
+            );
+        }
+    }
+
+    /// A primary-target synchronization is given real pinned windows too: only
+    /// the target's kind keeps them from giving a primary side.
+    #[test]
+    fn a_primary_target_pinned_window_gives_no_primary_side() {
+        let fixture = PassFixture::new("local.txt", b"local\n");
+        let incoming = child_file(&fixture.repository(), fixture.base, "incoming.txt", b"in\n");
+        fixture.fetch(incoming, 2);
+        fixture.append_window(1, incoming).unwrap();
+        let db = fixture.db();
+        assert_eq!(
+            db.query_row(
+                "SELECT kind, primary_oid FROM remote_integration_windows WHERE number=1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap(),
+            ("pinned".to_owned(), incoming.to_string())
+        );
+        assert_eq!(
+            fixture
+                .service
+                .synchronization_primary_side(fixture.root.path(), fixture.operation, 1)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_primary_target_gives_no_primary_side_and_keeps_every_side_closure() {
+        let (root, _data, service, operation, _, _) = resolution_fixture(&[(
+            PATH,
+            &ticket(true, "base"),
+            &ticket(true, "local"),
+            &ticket(true, "incoming"),
+        )]);
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let step = state::with_transaction(&service, root.path(), |tx, id| {
+            let record = state::read_operation(tx, id, operation)?.unwrap();
+            state::integration_step(tx, record.id, 0)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            service
+                .synchronization_primary_side(root.path(), operation, 0)
+                .unwrap(),
+            None
+        );
+        for (result, accepted) in [(false, false), (true, true)] {
+            assert_eq!(
+                verdicts(
+                    &service,
+                    root.path(),
+                    operation,
+                    &repository,
+                    &step,
+                    &ticket(result, "result")
+                ),
+                (accepted, accepted),
+                "primary target, result closed: {result}"
+            );
+        }
+    }
+}
+
+/// R-12 at a real call site: the preflight of `resolve_synchronization` for a
+/// ticket context's Context-stage conflict under a pinned window, whose fetched
+/// primary holds the ticket's closure.
+mod ticket_context_resolution_call_site {
+    use super::ticket_context_closure_rule::{PATH, ticket};
+    use super::*;
+
+    #[test]
+    fn resolve_synchronization_keeps_the_closure_the_pinned_primary_holds() {
+        let pass = ContextPass::with_files(
+            (PATH, ticket(true, "primary").as_bytes()),
+            (PATH, ticket(false, "incoming").as_bytes()),
+            Some((PATH, ticket(false, "local").as_bytes())),
+        );
+        let root = pass.root.path();
+        assert!(matches!(
+            pass.integrate(),
+            Err(SynchronizationError::ConflictPending { .. })
+        ));
+        let stage = pass.stage(0).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Context);
+        assert_eq!(stage.window_number, 1);
+        let repository = git2::Repository::open(pass.repository.workdir().unwrap()).unwrap();
+        let (index, head) = (
+            fs::read(repository.path().join("index")).unwrap(),
+            repository.head().unwrap().target(),
+        );
+        // The result opens the ticket the pinned primary has closed.
+        let outcome = try_resolve_fixture(
+            root,
+            &pass.service,
+            pass.operation,
+            &["", &ticket(false, "result"), ""],
+        );
+        assert_eq!(
+            outcome.unwrap(),
+            ResolveSynchronizationOutcome::ValidationFailed
+        );
+        assert_eq!(repository.head().unwrap().target(), head);
+        assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
+        // The same resolution keeping the primary's closure is accepted.
+        assert!(matches!(
+            try_resolve_fixture(
+                root,
+                &pass.service,
+                pass.operation,
+                &["", &ticket(true, "result"), ""],
+            ),
+            Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+        ));
+    }
+}
+
 mod closure_conflict_classification {
     use super::*;
 
@@ -10386,7 +11804,7 @@ fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read
     for old in values {
         for new in values {
             assert_eq!(
-                validate::preserves_item_invariants(&comment(old), &comment(new)),
+                validate::preserves_item_invariants(&comment(old), &comment(new), None),
                 old == new,
                 "{old:?} -> {new:?}"
             );
@@ -12618,6 +14036,57 @@ struct ContextPass {
 
 impl ContextPass {
     fn new() -> Self {
+        Self::with_files(
+            ("remote-primary.txt", b"primary\n"),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
+    }
+
+    /// As `new`, with the fetched primary adding `primary_path` (which may be
+    /// nested) instead of the default file.
+    fn with_primary_file(primary_path: &str, primary_bytes: &[u8]) -> Self {
+        Self::with_files(
+            (primary_path, primary_bytes),
+            ("remote-context.txt", b"context\n"),
+            None,
+        )
+    }
+
+    /// As `new`, with the fetched primary and the fetched context each adding
+    /// the file given (a path may be nested). With `diverge`, the local
+    /// context branch first gains a commit that sets that file, and the
+    /// fetched context is a sibling of it, so the file the context already
+    /// holds conflicts in the Context stage with the saved ticket as its base.
+    fn with_files(
+        primary: (&str, &[u8]),
+        context: (&str, &[u8]),
+        diverge: Option<(&str, &[u8])>,
+    ) -> Self {
+        Self::build(primary, Some(context), diverge, None)
+    }
+
+    /// As `with_files`, over a context branch whose head first sets the file
+    /// `base` gives: both fetched commits are children of that head, so it is
+    /// the merge base of every stage. With no `context` the fetched context
+    /// is that head itself, already integrated, and only the primary stage
+    /// merges.
+    fn with_base(
+        base: (&str, &[u8]),
+        primary: (&str, &[u8]),
+        context: Option<(&str, &[u8])>,
+        diverge: (&str, &[u8]),
+    ) -> Self {
+        Self::build(primary, context, Some(diverge), Some(base))
+    }
+
+    fn build(
+        primary: (&str, &[u8]),
+        context: Option<(&str, &[u8])>,
+        diverge: Option<(&str, &[u8])>,
+        base: Option<(&str, &[u8])>,
+    ) -> Self {
+        let (primary_path, primary_bytes) = primary;
         let (root, data, service) = fixture();
         let primary_repository = git2::Repository::open(root.path()).unwrap();
         primary_repository
@@ -12635,14 +14104,37 @@ impl ContextPass {
             .observation_configuration(root.path(), &plan)
             .unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })
         .unwrap();
         let repository = materialized_target(root.path(), "main", &target).unwrap();
-        let local = repository.head().unwrap().target().unwrap();
-        let context_incoming = child_file(&repository, main, "remote-context.txt", b"context\n");
-        let primary_incoming = child_file(&repository, main, "remote-primary.txt", b"primary\n");
+        let advance = |oid| {
+            let name = repository.head().unwrap().name().unwrap().to_owned();
+            repository.reference(&name, oid, true, "fixture").unwrap();
+            repository
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .unwrap();
+        };
+        let mut head = repository.head().unwrap().target().unwrap();
+        if let Some((path, bytes)) = base {
+            head = child_path(&repository, head, path, bytes);
+            advance(head);
+        }
+        let (local, context_parent) = match diverge {
+            Some((path, bytes)) => {
+                let local = child_path(&repository, head, path, bytes);
+                advance(local);
+                (local, head)
+            }
+            None => (head, main),
+        };
+        let context_incoming = match context {
+            Some((path, bytes)) => child_path(&repository, context_parent, path, bytes),
+            None => context_parent,
+        };
+        let primary_parent = if base.is_some() { head } else { main };
+        let primary_incoming = child_path(&repository, primary_parent, primary_path, primary_bytes);
         let selected = target_ref(&plan, &target);
         for (reference, oid) in [
             (plan.primary().tracking_ref(), primary_incoming),
@@ -13914,22 +15406,21 @@ fn continuation_authority_index_pending_replays_refresh_only_across_rebuild() {
     );
     *service.failure_point.lock().unwrap() = None;
     handoff(1);
-    // An ordinary rebuild under its own operation is not this handoff: it is
-    // refused until the pending refresh is resumed, and consumes nothing.
+    let left = rows_under(fixture.data.path(), fixture.operation);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].3, "failed");
+    // An ordinary rebuild under its own operation is not this handoff: it
+    // goes on past the handoff's row, which is the primary's and owes only
+    // its handoff (Table B, P-4), and consumes nothing: the row still owes it.
     let rebuild = || {
         service.rebuild_repository(crate::repository::RebuildRepositoryRequest {
             root: root.into(),
             operation_id: OperationId::new(),
         })
     };
-    assert!(matches!(
-        rebuild(),
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::RecoveryRequired,
-            ..
-        })
-    ));
+    rebuild().unwrap();
     handoff(1);
+    assert_eq!(rows_under(fixture.data.path(), fixture.operation), left);
     let mut restart = replay.clone();
     restart.restart = true;
     assert_eq!(
@@ -15695,7 +17186,7 @@ mod process_death {
 }
 
 /// The local row of a synchronization with no publication remote is
-/// left pending by a refresh that stopped, and is then abandoned. An
+/// left pending by a hand-off that stopped, and is then abandoned. An
 /// abandoned row is `completed` in the journal, which is not "the refresh
 /// was done": the repeat of the ID is refused, neither replayed as
 /// complete nor begun again, and writes nothing.
@@ -15703,9 +17194,11 @@ mod process_death {
 fn a_local_synchronization_whose_row_was_abandoned_is_refused_and_not_replayed_as_complete() {
     let (root, data, service) = fixture();
     let req = request(root.path());
+    // Its hand-off is its context's index step, which stops before its
+    // index transaction commits (E-63).
     let failing = RepositoryService::open_at_with_failure_point_for_testing(
         data.path(),
-        FailurePoint::AfterIndexClaim,
+        FailurePoint::BeforeIndexTransactionCommit,
     )
     .unwrap();
     assert!(matches!(
@@ -15858,4 +17351,2767 @@ fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
         )
         .unwrap();
     assert_eq!(row, ("completed".to_owned(), Some("abandoned".to_owned())));
+}
+/// Evidence-based unknown history ends the operation and lets the
+/// reservation go, so a sync of another context isn't busy behind it; push
+/// proof of an earlier generation, and an operation that intended a push,
+/// stay pending and resumable. Should the ending itself fail, the operation
+/// is still held, so the answer is `RecoveryRequired`, not `HistoryUnresolved`.
+/// A pull-only refusal, `PrimaryHasLocalCommits`, is ended the same way
+/// (design Part D, decision 5).
+#[test]
+fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let context = |id: &str| SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: id.parse().unwrap(),
+    };
+    for (error, push_intent, ends, expected, ending_fails) in [
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            true,
+            SynchronizationError::HistoryUnresolved,
+            false,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            true,
+        ),
+        (
+            SynchronizationError::HistoryUnresolved,
+            true,
+            false,
+            SynchronizationError::HistoryUnresolved,
+            false,
+        ),
+        (
+            SynchronizationError::HistoryUnknown,
+            false,
+            false,
+            SynchronizationError::HistoryUnknown,
+            false,
+        ),
+        (
+            SynchronizationError::RecoveryRequired,
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            false,
+        ),
+        (
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+            true,
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+        ),
+        (
+            SynchronizationError::PrimaryHasLocalCommits {
+                commits: Vec::new(),
+                complete: true,
+            },
+            false,
+            false,
+            SynchronizationError::RecoveryRequired,
+            true,
+        ),
+    ] {
+        let data = fixture_tempdir();
+        let root = fixture_tempdir();
+        let service = if ending_fails {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                crate::repository::FailurePoint::BeforeSynchronizationCancellation,
+            )
+        } else {
+            RepositoryService::open_at(data.path())
+        }
+        .unwrap();
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
+            "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+            [root.path().to_str().unwrap()]).unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let target = context("01ARZ3NDEKTSV4RRFFQ69G5FAV").operation_target(&plan);
+        let owner = match service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            other => panic!("{other:?}"),
+        };
+        let returned = service.ended_if_unresolved(root.path(), &owner, push_intent, error);
+        assert_eq!(returned.to_string(), expected.to_string());
+        let other = context("01ARZ3NDEKTSV4RRFFQ69G5FAW").operation_target(&plan);
+        let second = service
+            .reserve_remote_operation(root.path(), OperationId::new(), &other)
+            .unwrap();
+        assert_eq!(
+            matches!(second, RemoteReservationOutcome::Reserved(_)),
+            ends,
+            "{returned:?} push_intent={push_intent}"
+        );
+    }
+}
+
+/// A new synchronization waits for another operation in its way while that
+/// operation's holder is live, a poll at a time: a holder of the
+/// reservation (`Busy` once the budget is spent), or a live local row that
+/// refuses the reservation (`busy` naming it once the budget is spent). A
+/// call that takes up its own stopped operation does not wait for either:
+/// that operation holds what an earlier call did (here a checkpointed
+/// fetch), so a reservation refused there is answered at once and never
+/// tried again. None begins or changes a row.
+#[test]
+fn only_a_new_synchronization_waits_for_a_live_reservation_holder() {
+    use std::sync::atomic::AtomicU64;
+
+    /// A clock that moves only when the waiting call sleeps on it.
+    struct StepTime {
+        nanos: AtomicU64,
+        slept: AtomicU64,
+    }
+    impl crate::repository::mutation::Clock for StepTime {
+        fn now(&self) -> time::OffsetDateTime {
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap()
+                + time::Duration::nanoseconds(
+                    i64::try_from(self.nanos.load(Ordering::SeqCst)).unwrap(),
+                )
+        }
+    }
+    impl Sleeper for StepTime {
+        fn sleep(&self, duration: std::time::Duration) {
+            self.nanos.fetch_add(
+                u64::try_from(duration.as_nanos()).unwrap(),
+                Ordering::SeqCst,
+            );
+            self.slept.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    /// A process table that holds only `LIVE_PID`.
+    struct OnlyLive;
+    impl ProcessProbe for OnlyLive {
+        fn exists(&self, pid: u32) -> bool {
+            pid == LIVE_PID
+        }
+    }
+    const LIVE_PID: u32 = 4242;
+
+    for (restart, local) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (root, data, service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        repository
+            .remote("origin", "ssh://example.invalid/fixture.git")
+            .unwrap();
+        fs::write(
+            root.path().join(".manyhands/config.toml"),
+            "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        )
+        .unwrap();
+        let head = commit_all(&repository);
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let configuration = service
+            .observation_configuration(root.path(), &plan)
+            .unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
+        })
+        .unwrap();
+        let own = OperationId::new();
+        if restart {
+            // An earlier call of `own` reserved, checkpointed its fetch and
+            // was interrupted.
+            let RemoteReservationOutcome::Reserved(owner) = service
+                .reserve_remote_operation(
+                    root.path(),
+                    own,
+                    &RemoteOperationTarget::for_primary_synchronization(&plan),
+                )
+                .unwrap()
+            else {
+                panic!("the earlier call's reservation")
+            };
+            service
+                .checkpoint_synchronization(
+                    root.path(),
+                    &owner,
+                    state::SynchronizationCheckpoint::FetchPrepared,
+                    &state::SynchronizationEvidence {
+                        expected_oid: Some(head),
+                        local_oid: Some(head),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+                    [own.to_string()],
+                )
+                .unwrap();
+        }
+        let holder = OperationId::new();
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if local {
+            // Another operation's local row is unfinished, for a process of
+            // this host that exists: an index hand-off at work, its
+            // heartbeat fresh by the waiting call's clock.
+            db.execute(
+                "INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at,index_owner_epoch,host,pid)
+                 SELECT id,root_path,?1,'refresh','','indexing',1700000000,1,?2,?3 FROM repositories",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        } else {
+            // Another operation holds the reservation, for a process of
+            // this host that exists.
+            let target = RemoteOperationTarget::for_context(
+                &plan,
+                RemoteOperationAction::SynchronizeContext,
+                AuthoringKind::Ticket,
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                service
+                    .reserve_remote_operation(root.path(), holder, &target)
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+            db.execute(
+                "UPDATE remote_operation_records SET host=?2, pid=?3 WHERE operation_ulid=?1",
+                rusqlite::params![holder.to_string(), this_host(), LIVE_PID],
+            )
+            .unwrap();
+        }
+        let rows = || {
+            db.prepare("SELECT operation_ulid, phase, sync_checkpoint, owner_epoch FROM remote_operation_records ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let before = rows();
+
+        let time = Arc::new(StepTime {
+            nanos: AtomicU64::new(0),
+            slept: AtomicU64::new(0),
+        });
+        let waiting = RepositoryService::open_at(data.path())
+            .unwrap()
+            .with_clock_for_testing(time.clone())
+            .with_sleeper_for_testing(time.clone())
+            .with_wait_policy_for_testing(WaitPolicy {
+                budget: std::time::Duration::from_millis(250),
+                poll: std::time::Duration::from_millis(50),
+            })
+            .with_process_probe_for_testing(Arc::new(OnlyLive));
+        let result = waiting.synchronize_remote(
+            SynchronizeRemoteRequest {
+                operation_id: own,
+                restart,
+                ..request(root.path())
+            },
+            &mut SessionCredentials::new(NoPrompt),
+        );
+        let case = format!("restart={restart} local={local}: {result:?}");
+        match (restart, local) {
+            (_, false) => assert!(matches!(result, Err(SynchronizationError::Busy)), "{case}"),
+            (false, true) => assert!(
+                matches!(
+                    &result,
+                    Err(SynchronizationError::Repository(error))
+                        if error.kind == RepositoryErrorKind::RepositoryBusy
+                            && error.blocker().map(|blocker| (blocker.operation_id, blocker.live))
+                                == Some((holder, Some(true)))
+                ),
+                "{case}"
+            ),
+            (true, true) => assert!(
+                matches!(result, Err(SynchronizationError::RecoveryRequired)),
+                "{case}"
+            ),
+        }
+        assert_eq!(
+            time.slept.load(Ordering::SeqCst),
+            if restart { 0 } else { 5 },
+            "{case}"
+        );
+        assert_eq!(rows(), before, "{case}");
+    }
+}
+
+// A synchronization's index hand-off (P-4): its local `refresh` row, under
+// the synchronization's ID, is of the synchronization's item or of the
+// primary, and owes only its hand-off. Each synchronization here is
+// classified through its reservation's own checkpoints, as one that found
+// the remote current leaves it; its replay then runs the hand-off through
+// `synchronization_refresh`, and needs no transport.
+
+/// The item whose context the hand-off cases synchronize, and another.
+const HAND_OFF_X: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const HAND_OFF_Y: &str = "01ARZ3NDEKTSV4RRFFQ69G5FYA";
+
+/// A new ticket `item`, saved in a context of its own.
+fn save_new_ticket(
+    service: &RepositoryService,
+    root: &Path,
+    item: &str,
+) -> Result<SaveOutcome, RepositoryError> {
+    service.save_ticket(SaveTicketRequest {
+        target: AuthoringTarget {
+            root: root.into(),
+            kind: AuthoringKind::Ticket,
+            item_id: item.parse().unwrap(),
+            intent: ContextIntent::Create,
+            operation_id: OperationId::new(),
+        },
+        draft: TicketDraft {
+            title: format!("Ticket {item}"),
+            body: "body".into(),
+            ticket_type: "task".into(),
+            status: "open".into(),
+            project: None,
+            team: None,
+        },
+        expected_path: ExpectedPathObservation::Missing,
+    })
+}
+
+/// The synchronization target of the ticket `item`.
+fn ticket_target(item: &str) -> SynchronizationTarget {
+    SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: item.parse().unwrap(),
+    }
+}
+
+/// The publication remote's plan, configured in the index of `root`.
+fn configure_hand_off_plan(service: &RepositoryService, root: &Path) -> RemoteRefPlan {
+    service.configure_origin_plan_for_testing(root)
+}
+
+/// A synchronization of `target` whose push was verified and classified
+/// as finding the remote current at the primary's head: its remote row is
+/// completed and owes only its index hand-off, and no local row is under
+/// its ID yet. Returns the request that replays it, and what it came to.
+fn classified_synchronization(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    target: &SynchronizationTarget,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    classified_synchronization_under(service, root, plan, target, OperationId::new())
+}
+
+/// `classified_synchronization`, under `operation`.
+fn classified_synchronization_under(
+    service: &RepositoryService,
+    root: &Path,
+    plan: &RemoteRefPlan,
+    target: &SynchronizationTarget,
+    operation: OperationId,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    let oid = git2::Repository::open(root)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    (
+        service.classified_synchronization_for_testing(root, plan, target, operation, oid, false),
+        SynchronizationOutcome::AlreadyCurrent {
+            target: target.clone(),
+            oid,
+        },
+    )
+}
+
+/// A local row under `operation`: its target, the item it names, the
+/// contexts it owes, its state and its last step.
+type HandOffRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
+/// The local rows under `operation`, as `HandOffRow`s.
+fn rows_under(data: &Path, operation: OperationId) -> Vec<HandOffRow> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare(
+            "SELECT target, item_id, owed_contexts, state, completed_step
+               FROM operation_records WHERE operation_ulid = ?1 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([operation.to_string()], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// Whether the remote row of `operation` still owes its index hand-off.
+fn index_pending(data: &Path, operation: OperationId) -> bool {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT index_pending FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// `index_pending`, or `None` when no remote row is under `operation`, as
+/// for a synchronization with no remote to publish to.
+fn index_debt(data: &Path, operation: OperationId) -> Option<bool> {
+    use rusqlite::OptionalExtension;
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT index_pending FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+}
+
+/// A new synchronization of `target` in a repository with no publication
+/// remote, which binds its local head and hands off with nothing to
+/// publish: the request, and what it comes to.
+fn unpublished_synchronization(
+    root: &Path,
+    target: &SynchronizationTarget,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    let local_oid = match target {
+        SynchronizationTarget::Primary => git2::Repository::open(root)
+            .unwrap()
+            .refname_to_id("refs/heads/main")
+            .unwrap(),
+        SynchronizationTarget::Context { item_id, .. } => ticket_head(root, &item_id.to_string()),
+    };
+    (
+        SynchronizeRemoteRequest {
+            target: target.clone(),
+            ..request(root)
+        },
+        SynchronizationOutcome::PublishPending {
+            target: target.clone(),
+            local_oid,
+            reason: PublishPendingReason::NoPublicationRemote,
+        },
+    )
+}
+
+/// A synchronization's hand-off that stopped before its index transaction
+/// committed leaves its row of its item (of the primary, for a
+/// synchronization of the primary), `failed`, owing only its hand-off, at
+/// a time no earlier than its classification. That row holds a new
+/// synchronization of its own item, and a folder's creation when it is the
+/// primary's (design decision 19, question 7), and nothing else: another
+/// item's save, a synchronization of each other item, a whole refresh and
+/// a folder's creation behind another item's hand-off go on, and leave the
+/// row as it was. Its own retry completes it, and the item's next
+/// synchronization is then reserved. A synchronization with no remote to
+/// publish to hands off under the same row, at the local head it bound,
+/// and has no remote row.
+#[test]
+fn a_crashed_sync_hand_off_blocks_no_other_item() {
+    for (case, target, remote) in [
+        ("a sync of X", ticket_target(HAND_OFF_X), true),
+        (
+            "a sync of the primary",
+            SynchronizationTarget::Primary,
+            true,
+        ),
+        (
+            "a sync of X with no publication remote",
+            ticket_target(HAND_OFF_X),
+            false,
+        ),
+        (
+            "a sync of the primary with no publication remote",
+            SynchronizationTarget::Primary,
+            false,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let plan = configure_hand_off_plan(&service, root);
+        let classified = time::OffsetDateTime::now_utc().unix_timestamp();
+        let (replay, outcome) = if remote {
+            classified_synchronization(&service, root, &plan, &target)
+        } else {
+            unpublished_synchronization(root, &target)
+        };
+        let operation = replay.operation_id;
+
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+        assert_eq!(
+            service
+                .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome.clone())),
+            "{case}"
+        );
+        *service.failure_point.lock().unwrap() = None;
+        let oid = match &outcome {
+            SynchronizationOutcome::AlreadyCurrent { oid, .. } => *oid,
+            SynchronizationOutcome::PublishPending { local_oid, .. } => *local_oid,
+            SynchronizationOutcome::Published { .. } => unreachable!(),
+        };
+        let (hand_off, item, owed) = match &target {
+            SynchronizationTarget::Primary => (
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                r#"["primary"]"#.to_owned(),
+            ),
+            SynchronizationTarget::Context { item_id, .. } => (
+                format!("synchronization-index-v1/ticket/{item_id}/{oid}"),
+                Some(item_id.to_string()),
+                format!(r#"["{item_id}"]"#),
+            ),
+        };
+        let crashed = vec![(
+            Some(hand_off),
+            item,
+            Some(owed),
+            "failed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )];
+        assert_eq!(rows_under(data.path(), operation), crashed, "{case}");
+        let observed_at: i64 = rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT observed_at FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(observed_at >= classified, "{case}: the row's time");
+
+        // Another item's save goes on.
+        assert!(
+            matches!(
+                save_new_ticket(&service, root, HAND_OFF_Y),
+                Ok(SaveOutcome::Saved { .. })
+            ),
+            "{case}"
+        );
+        // So does a whole refresh.
+        assert!(
+            matches!(
+                service.refresh_repository(RefreshRepositoryRequest {
+                    root: root.into(),
+                    operation_id: OperationId::new(),
+                }),
+                Ok(RefreshOutcome::Refreshed { .. })
+            ),
+            "{case}"
+        );
+        // A folder's creation goes on behind another item's hand-off, and
+        // waits behind the primary's.
+        let folder = service.create_folder(CreateFolderRequest {
+            root: root.into(),
+            path: DocumentFolderPath::parse("docs/notes").unwrap(),
+            operation_id: OperationId::new(),
+        });
+        match &target {
+            SynchronizationTarget::Primary => assert!(
+                matches!(
+                    &folder,
+                    Err(error) if error.error.kind == RepositoryErrorKind::RecoveryRequired
+                        && error.error.blocker().map(|blocker| blocker.operation_id)
+                            == Some(operation)
+                ),
+                "{case}: {folder:?}"
+            ),
+            SynchronizationTarget::Context { .. } => assert!(
+                matches!(folder, Ok(CreateFolderOutcome::Created(_))),
+                "{case}: {folder:?}"
+            ),
+        }
+        // A synchronization of each other item is reserved; one of the
+        // row's own item is refused, naming the row. Each reserved one is
+        // stopped again, so that it holds the reservation no more.
+        let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for other in [
+            ticket_target(HAND_OFF_X),
+            ticket_target(HAND_OFF_Y),
+            SynchronizationTarget::Primary,
+        ] {
+            let reserved = service.reserve_remote_operation(
+                root,
+                OperationId::new(),
+                &other.operation_target(&plan),
+            );
+            if other == target {
+                assert!(
+                    matches!(
+                        &reserved,
+                        Err(error) if error.kind == RepositoryErrorKind::RecoveryRequired
+                            && error.blocker().map(|blocker| blocker.operation_id)
+                                == Some(operation)
+                    ),
+                    "{case}: a sync of {other:?}: {reserved:?}"
+                );
+                continue;
+            }
+            let Ok(RemoteReservationOutcome::Reserved(owner)) = reserved else {
+                panic!("{case}: a sync of {other:?}: {reserved:?}");
+            };
+            db.execute(
+                "UPDATE remote_operation_records SET phase = 'interrupted' WHERE operation_ulid = ?1",
+                [owner.operation_id().to_string()],
+            )
+            .unwrap();
+        }
+        assert_eq!(rows_under(data.path(), operation), crashed, "{case}");
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(true),
+            "{case}"
+        );
+
+        // Its own retry completes it.
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert_eq!(
+            rows_under(data.path(), operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(false),
+            "{case}"
+        );
+        assert!(
+            matches!(
+                service.reserve_remote_operation(
+                    root,
+                    OperationId::new(),
+                    &target.operation_target(&plan),
+                ),
+                Ok(RemoteReservationOutcome::Reserved(_))
+            ),
+            "{case}"
+        );
+    }
+}
+
+/// An older build began a synchronization's hand-off with no target, as a
+/// refresh of the whole repository, and bound a synchronization with no
+/// remote to publish to under `synchronization-local-v1/`, which it
+/// refreshed the whole repository under too. Its synchronization's replay
+/// takes that row up when it is pending, and counts it as the hand-off done
+/// when it completed, with nothing observed: either way the remote row's
+/// debt, when there is one, is cleared, and the row is the one under the
+/// ID, its target kept.
+#[test]
+fn a_hand_off_row_from_an_older_build_still_replays() {
+    for (case, state, remote) in [
+        ("pending", "failed", true),
+        ("completed", "completed", true),
+        ("pending, with no publication remote", "failed", false),
+        ("completed, with no publication remote", "completed", false),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let (replay, outcome) = if remote {
+            let plan = configure_hand_off_plan(&service, root);
+            classified_synchronization(&service, root, &plan, &target)
+        } else {
+            unpublished_synchronization(root, &target)
+        };
+        let operation = replay.operation_id;
+        let older = if remote {
+            String::new()
+        } else {
+            format!(
+                "synchronization-local-v1/ticket/{HAND_OFF_X}/{}",
+                ticket_head(root, HAND_OFF_X)
+            )
+        };
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .execute(
+                "INSERT INTO operation_records(repository_id, root_path, operation_ulid, action,
+                     target, state, observed_at)
+                 SELECT id, root_path, ?1, 'refresh', ?3, ?2, 1 FROM repositories",
+                rusqlite::params![operation.to_string(), state, older],
+            )
+            .unwrap();
+        let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = scans.clone();
+        service.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert_eq!(
+            rows_under(data.path(), operation),
+            [(Some(older), None, None, "completed".to_owned(), None)],
+            "{case}"
+        );
+        assert_eq!(
+            index_debt(data.path(), operation),
+            remote.then_some(false),
+            "{case}"
+        );
+        assert_eq!(
+            scans.load(Ordering::SeqCst),
+            usize::from(state != "completed"),
+            "{case}: observations"
+        );
+    }
+}
+
+/// A lifecycle's child, a close's or a promotion's synchronization of its
+/// item or of the primary, that is taken up under its own ID with no
+/// parent's execution (`operation resume <child>`, or a retry of it)
+/// completes: the remote row's debt is cleared. Its hand-off is its
+/// parent's (Task 22): it begins no row under its ID, observes nothing of
+/// the whole repository, and leaves what its local update marked owed for
+/// the parent's exit to index. A child is known by its parent's record, not
+/// by who runs it, so it cannot begin the per-item row that the records
+/// refuse it and be left owing a hand-off that no resume can make.
+#[test]
+fn a_lifecycle_child_taken_up_under_its_own_id_completes_its_hand_off() {
+    use crate::repository::{
+        ClosureExpectation, PromotionExpectation,
+        closure::record::{self as closure, ClosureKind, ClosureStep},
+        promotion::record::{self as promotion, ChildRole, IntegrationKind, PromotionStep},
+    };
+    const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDC";
+    let document = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: DOCUMENT.parse().unwrap(),
+    };
+    for (case, close, role, target) in [
+        (
+            "a close's context child",
+            true,
+            ChildRole::Context,
+            ticket_target(HAND_OFF_X),
+        ),
+        (
+            "a close's primary child",
+            true,
+            ChildRole::Primary,
+            SynchronizationTarget::Primary,
+        ),
+        (
+            "a promotion's context child",
+            false,
+            ChildRole::Context,
+            document.clone(),
+        ),
+        (
+            "a promotion's primary child",
+            false,
+            ChildRole::Primary,
+            SynchronizationTarget::Primary,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let plan = configure_hand_off_plan(&service, root);
+        let head = git2::Repository::open(root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        // The parent's record, at the step its child of `role` is begun
+        // at: confirmed for the context's, integrated for the primary's.
+        let primary = role == ChildRole::Primary;
+        let child = state::with_transaction(&service, root, |tx, id| {
+            let (context, primary_child) = if close {
+                let mut r = closure::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &HAND_OFF_X.parse().unwrap(),
+                    ClosureExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                    ClosureKind::Existing,
+                )?;
+                if primary {
+                    r.context_oid = Some(head);
+                    r.step = ClosureStep::ContextSynchronized;
+                    closure::save_record(tx, id, &r)?;
+                    r.base_oid = Some(head);
+                    r.integration_kind = Some(IntegrationKind::Merged);
+                    r.step = ClosureStep::Integrating;
+                    closure::save_record(tx, id, &r)?;
+                    r.integration_oid = Some(head);
+                    r.step = ClosureStep::Integrated;
+                    closure::save_record(tx, id, &r)?;
+                }
+                let r = closure::next_attempt(tx, id, r.operation_id, role)?;
+                (r.context_sync_id, r.primary_sync_id)
+            } else {
+                let mut r = promotion::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &DOCUMENT.parse().unwrap(),
+                    PromotionExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                )?;
+                if primary {
+                    r.context_oid = Some(head);
+                    r.step = PromotionStep::ContextSynchronized;
+                    promotion::save_record(tx, id, &r)?;
+                    r.base_oid = Some(head);
+                    r.integration_kind = Some(IntegrationKind::Merged);
+                    r.step = PromotionStep::Integrating;
+                    promotion::save_record(tx, id, &r)?;
+                    r.integration_oid = Some(head);
+                    r.step = PromotionStep::Integrated;
+                    promotion::save_record(tx, id, &r)?;
+                }
+                let r = promotion::next_attempt(tx, id, r.operation_id, role)?;
+                (r.context_sync_id, r.primary_sync_id)
+            };
+            Ok(if primary { primary_child } else { context }.unwrap())
+        })
+        .unwrap();
+        let (replay, outcome) =
+            classified_synchronization_under(&service, root, &plan, &target, child);
+        // What the child's local update marked, as `mark_local_update` marks
+        // it: its parent's exit indexes it.
+        let context = hand_off_context(&target);
+        crate::repository::mark_contexts_dirty(
+            &service.registry_path,
+            root,
+            std::slice::from_ref(&context),
+            RepositoryOperation::RepositorySnapshot,
+        )
+        .unwrap();
+        let scans = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = scans.clone();
+        crate::repository::discovery::set_scan_hook(root.to_owned(), move || {
+            counted.set(counted.get() + 1)
+        });
+
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        crate::repository::discovery::clear_scan_hook(root);
+        assert!(
+            rows_under(data.path(), child).is_empty(),
+            "{case}: rows under its ID"
+        );
+        assert!(!index_pending(data.path(), child), "{case}");
+        assert_eq!(scans.get(), 0, "{case}: whole-repository observations");
+        assert!(
+            !service.contexts_indexed(root, std::slice::from_ref(&context)),
+            "{case}: the child's context is its parent's to index"
+        );
+    }
+}
+
+/// `operation resume <child>` of a lifecycle's child is answered by the
+/// synchronization's binding. Its parent is not running in that call, so a
+/// child that completed while the index does not hold the context its local
+/// update changed indexes that context itself, in the one step its parent's
+/// exit runs (`index_lifecycle_exit`, R-SDD-66), and is answered as a
+/// completed child was: `already_applied` here, discovery current. A child
+/// whose context is indexed takes no step. When the step fails, it is
+/// answered as a completed save's replay is (R-SDD-16): `discovery_pending`
+/// offering only `index refresh`, with no row left pending, so that refresh
+/// is not refused, and nothing owed. When the step's row is left at work,
+/// so that it is not closed and would refuse that refresh, it is answered
+/// as a synchronization whose hand-off is owed: `discovery_pending`,
+/// offering nothing, so no refresh; the row is taken up under its own ID.
+/// No row is ever begun under the child's ID.
+#[test]
+fn an_own_id_resume_of_a_lifecycle_child_indexes_its_own_context() {
+    use crate::repository::{
+        CancellationToken, ClosureExpectation, Mutation, MutationCall, NoProgress,
+        OperationResumeInput, RequestId,
+        closure::record::{self as closure, ClosureKind},
+        promotion::record::ChildRole,
+    };
+    use crate::results::{DiscoveryEffect, RecoveryActionKind, ResultCode};
+    /// The local refresh rows: `(ID, state, owed contexts)`.
+    fn refresh_rows(data: &Path) -> Vec<(i64, String, Option<String>)> {
+        rusqlite::Connection::open(data.join(REGISTRY_FILE))
+            .unwrap()
+            .prepare(
+                "SELECT id, state, owed_contexts FROM operation_records WHERE action = 'refresh'",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    /// How the child's own index step is stopped, if it is.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Step {
+        Completes,
+        /// It fails, and its row is closed.
+        Fails,
+        /// It stops once it has claimed its row, which is left as a call
+        /// at work leaves it: not closed.
+        LeftAtWork,
+    }
+    for (case, owed, step) in [
+        ("its context owed", true, Step::Completes),
+        ("its context indexed", false, Step::Completes),
+        ("its index step failing", true, Step::Fails),
+        ("its index step's row left at work", true, Step::LeftAtWork),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let plan = configure_hand_off_plan(&service, root);
+        let target = ticket_target(HAND_OFF_X);
+        let context = hand_off_context(&target);
+        let child = state::with_transaction(&service, root, |tx, id| {
+            let r = closure::begin_record(
+                tx,
+                id,
+                OperationId::new(),
+                &HAND_OFF_X.parse().unwrap(),
+                ClosureExpectation::from_bytes([7; 32]),
+                Some("origin"),
+                ClosureKind::Existing,
+            )?;
+            Ok(closure::next_attempt(tx, id, r.operation_id, ChildRole::Context)?.context_sync_id)
+        })
+        .unwrap()
+        .unwrap();
+        classified_synchronization_under(&service, root, &plan, &target, child);
+        if owed {
+            // What the child's local update marked (`mark_local_update`).
+            crate::repository::mark_contexts_dirty(
+                &service.registry_path,
+                root,
+                std::slice::from_ref(&context),
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        let before = refresh_rows(data.path());
+        let resuming = match step {
+            Step::Completes => RepositoryService::open_at(data.path()).unwrap(),
+            Step::Fails => RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                FailurePoint::BeforeIndexTransactionCommit,
+            )
+            .unwrap(),
+            Step::LeftAtWork => RepositoryService::open_at_with_failure_point_for_testing(
+                data.path(),
+                FailurePoint::AfterIndexClaim,
+            )
+            .unwrap(),
+        };
+        let taken_up = resuming.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation: Mutation::OperationResume(OperationResumeInput {
+                    root: root.to_owned(),
+                    operation_id: child,
+                }),
+            },
+            &mut SessionCredentials::new(NoPrompt),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        let actions = taken_up
+            .recovery
+            .iter()
+            .map(|action| action.action)
+            .collect::<Vec<_>>();
+        let begun = refresh_rows(data.path())
+            .into_iter()
+            .filter(|row| !before.contains(row))
+            .collect::<Vec<_>>();
+        assert_eq!(taken_up.command, "operation resume", "{case}");
+        if step == Step::LeftAtWork {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::DiscoveryPending,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Pending,
+                "{case}"
+            );
+            // No refresh, which the row left at work would refuse.
+            assert!(actions.is_empty(), "{case}: {taken_up:?}");
+            let [(row, state, _)] = begun.as_slice() else {
+                panic!("{case}: index steps {begun:?}");
+            };
+            assert_eq!(state, "indexing", "{case}: the row was not left as it was");
+            assert!(
+                !service.contexts_indexed(root, std::slice::from_ref(&context)),
+                "{case}"
+            );
+            // Once its heartbeat is old, the row is taken up under its own
+            // ID, which indexes the context.
+            let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE id = ?1",
+                [row],
+            )
+            .unwrap();
+            let operation: String = db
+                .query_row(
+                    "SELECT operation_ulid FROM operation_records WHERE id = ?1",
+                    [row],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    service
+                        .resume_hand_off(RefreshRepositoryRequest {
+                            root: root.to_owned(),
+                            operation_id: OperationId::parse(&operation).unwrap(),
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ),
+                "{case}"
+            );
+        } else if step == Step::Fails {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::DiscoveryPending,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Pending,
+                "{case}"
+            );
+            assert_eq!(actions, [RecoveryActionKind::IndexRefresh], "{case}");
+            assert!(
+                begun.iter().all(|(_, state, _)| state == "completed"),
+                "{case}: a row left pending: {begun:?}"
+            );
+            assert!(
+                !service.contexts_indexed(root, std::slice::from_ref(&context)),
+                "{case}"
+            );
+            // The refresh it offers is not refused, and indexes the context.
+            assert!(
+                matches!(
+                    service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: root.to_owned(),
+                            operation_id: OperationId::new(),
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ),
+                "{case}"
+            );
+        } else {
+            assert_eq!(
+                taken_up.code,
+                ResultCode::AlreadyApplied,
+                "{case}: {taken_up:?}"
+            );
+            assert_eq!(
+                taken_up.effects.discovery,
+                DiscoveryEffect::Current,
+                "{case}"
+            );
+            assert!(actions.is_empty(), "{case}: {taken_up:?}");
+            let owing = format!("[\"{HAND_OFF_X}\"]");
+            if owed {
+                assert!(
+                    matches!(begun.as_slice(), [(_, state, Some(recorded))] if state == "completed" && *recorded == owing),
+                    "{case}: index steps {begun:?}"
+                );
+            } else {
+                assert!(begun.is_empty(), "{case}: index steps {begun:?}");
+            }
+        }
+        assert!(
+            service.contexts_indexed(root, std::slice::from_ref(&context)),
+            "{case}: the context is not indexed"
+        );
+        assert!(
+            rows_under(data.path(), child).is_empty(),
+            "{case}: rows under its ID"
+        );
+        assert!(!index_pending(data.path(), child), "{case}");
+    }
+}
+
+/// `operation resume` of a plain synchronization's index hand-off, by the
+/// synchronization's ID, not a retry of its request (`docs/RFC/
+/// cli-contract.md`, `operation resume`, amended 2026-11-22): the hand-off
+/// stopped once its row of its item was begun. The resume is answered by
+/// the synchronization's own binding, which runs that hand-off alone: it
+/// completes the row with nothing observed while the context's stored basis
+/// holds and it is not marked dirty, and otherwise indexes that one context.
+/// Either way the remote row's debt is cleared and no other context is
+/// touched.
+#[test]
+fn an_operation_resume_of_a_sync_s_hand_off_indexes_only_its_context() {
+    use crate::repository::{
+        CancellationToken, Mutation, MutationCall, NoProgress, OperationResumeInput, RequestId,
+    };
+    use crate::results::{DiscoveryEffect, ResultCode};
+    for (case, dirty) in [
+        (
+            "its context's basis holds and it is not marked dirty",
+            false,
+        ),
+        ("its context marked dirty", true),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let (replay, outcome) =
+            unchanged_synchronization(&service, root, &target, oid, Unchanged::Current);
+        let operation = replay.operation_id;
+        // The hand-off stops once its row of its item is begun.
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::AfterCheckpointBeforeIndexStep);
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome)),
+            "{case}"
+        );
+        *service.failure_point.lock().unwrap() = None;
+        let owing = format!(r#"["{HAND_OFF_X}"]"#);
+        assert!(
+            matches!(
+                rows_under(data, operation).as_slice(),
+                [(_, _, Some(owed), state, _)] if *owed == owing && state != "completed"
+            ),
+            "{case}: {:?}",
+            rows_under(data, operation)
+        );
+        assert_eq!(index_debt(data, operation), Some(true), "{case}");
+        if dirty {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+                    [HAND_OFF_X],
+                )
+                .unwrap();
+        }
+        let context = stored_context(data, Some(HAND_OFF_X));
+        let other = stored_context(data, Some(HAND_OFF_Y));
+        let primary = stored_context(data, None);
+        let mut taken_up = None;
+        let observed = observations_while(
+            &[
+                root.to_owned(),
+                ticket_worktree(root, HAND_OFF_X),
+                ticket_worktree(root, HAND_OFF_Y),
+            ],
+            || {
+                taken_up = Some(service.execute(
+                    MutationCall {
+                        request_id: RequestId::new(),
+                        confirmation: None,
+                        mutation: Mutation::OperationResume(OperationResumeInput {
+                            root: root.to_owned(),
+                            operation_id: operation,
+                        }),
+                    },
+                    &mut SessionCredentials::new(NoPrompt),
+                    &mut NoProgress,
+                    &CancellationToken::new(),
+                ));
+            },
+        );
+        let taken_up = taken_up.unwrap();
+        assert_eq!(taken_up.command, "operation resume", "{case}");
+        assert_eq!(
+            taken_up.code,
+            ResultCode::AlreadyApplied,
+            "{case}: {taken_up:?}"
+        );
+        assert_eq!(
+            taken_up.effects.discovery,
+            DiscoveryEffect::Current,
+            "{case}"
+        );
+        assert_eq!(observed, [0, usize::from(dirty), 0], "{case}: observations");
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert_eq!(index_debt(data, operation), Some(false), "{case}");
+        if dirty {
+            assert_eq!(
+                stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+                Some(0),
+                "{case}: the context"
+            );
+        } else {
+            assert_eq!(
+                stored_context(data, Some(HAND_OFF_X)),
+                context,
+                "{case}: the context's rows"
+            );
+        }
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_Y)),
+            other,
+            "{case}: Y's rows"
+        );
+        assert_eq!(
+            stored_context(data, None),
+            primary,
+            "{case}: the primary's rows"
+        );
+    }
+}
+
+/// Whether a synchronization taken up under its own ID owes its context's
+/// indexing to a lifecycle parent (`lifecycle_child_owes_its_parent`): it
+/// does while it is a child, as its parent's record says, and the index does
+/// not hold its context. A parent's record that cannot be read is read as
+/// a child's, so a dirty context is never answered `current` (decision 8);
+/// the index still guards the answer, so a context it holds owes nothing.
+#[test]
+fn a_child_whose_parent_record_cannot_be_read_owes_its_parent_while_its_context_is_dirty() {
+    use crate::repository::{
+        ClosureExpectation,
+        closure::record::{self as closure, ClosureKind},
+        promotion::record::ChildRole,
+    };
+    // (the case, a child of a close, its parent's record read, its context
+    // marked dirty, whether it owes its parent)
+    for (case, child, readable, dirty, owes) in [
+        ("a child, its context dirty", true, true, true, true),
+        ("a child, its context indexed", true, true, false, false),
+        ("no child, its context dirty", false, true, true, false),
+        (
+            "its parent's record unreadable, its context dirty",
+            true,
+            false,
+            true,
+            true,
+        ),
+        (
+            "its parent's record unreadable, its context indexed",
+            true,
+            false,
+            false,
+            false,
+        ),
+    ] {
+        let (root, _data, service) = fixture();
+        let root = root.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let context = hand_off_context(&target);
+        let operation = if child {
+            state::with_transaction(&service, root, |tx, id| {
+                let r = closure::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &HAND_OFF_X.parse().unwrap(),
+                    ClosureExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                    ClosureKind::Existing,
+                )?;
+                Ok(
+                    closure::next_attempt(tx, id, r.operation_id, ChildRole::Context)?
+                        .context_sync_id,
+                )
+            })
+            .unwrap()
+            .unwrap()
+        } else {
+            OperationId::new()
+        };
+        if dirty {
+            crate::repository::mark_contexts_dirty(
+                &service.registry_path,
+                root,
+                std::slice::from_ref(&context),
+                RepositoryOperation::RepositorySnapshot,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            service.contexts_indexed(root, std::slice::from_ref(&context)),
+            !dirty,
+            "{case}: the fixture"
+        );
+        if !readable {
+            state::hold_registry_for_testing(root, true);
+        }
+        let owed = service.lifecycle_child_owes_its_parent(root, operation, &target);
+        state::release_registries_for_testing();
+        assert_eq!(owed, owes, "{case}");
+    }
+}
+
+/// A step of a synchronization's hand-off that is refused for its ID
+/// (`OperationMismatch`, `OperationAbandoned`) is answered as that refusal,
+/// which no resume or retry gets past; any other failure is owed, and is
+/// reported as `IndexPending` for the same request to complete.
+#[test]
+fn a_hand_off_step_answers_a_refusal_of_its_id_and_owes_any_other_failure() {
+    use RepositoryErrorKind as Kind;
+    let failed = |kind| {
+        Err(RepositoryError::new(
+            RepositoryOperation::RefreshRepository,
+            None,
+            kind,
+            "hand-off step",
+        ))
+    };
+    assert!(matches!(hand_off_step(Ok(true)), Ok(true)));
+    assert!(matches!(hand_off_step(Ok(false)), Ok(false)));
+    for kind in [Kind::OperationMismatch, Kind::OperationAbandoned] {
+        assert!(
+            matches!(
+                hand_off_step(failed(kind)),
+                Err(SynchronizationError::Repository(error)) if error.kind == kind
+            ),
+            "{kind:?}"
+        );
+    }
+    for kind in [
+        Kind::RecoveryRequired,
+        Kind::RepositoryBusy,
+        Kind::IndexUnavailable,
+        Kind::RepositoryNotRegistered,
+        Kind::Io,
+        Kind::Sqlite,
+        Kind::Git,
+        Kind::InjectedFailure,
+    ] {
+        assert!(matches!(hand_off_step(failed(kind)), Ok(false)), "{kind:?}");
+    }
+}
+
+/// A synchronization admitted while another item's save is mid-write
+/// completes its hand-off past it (carry C-4): its row is of its own item,
+/// which that save does not hold, where an older build's whole-repository
+/// row was held by it. The save's row is left as it was, and so is what
+/// the index stores of the save's context: the hand-off indexes its own
+/// context only, so it neither observes nor stores the file the save has
+/// written and not yet committed.
+#[test]
+fn a_sync_s_hand_off_completes_while_another_item_s_write_is_mid_write() {
+    let (root, data, service) = fixture();
+    let root = root.path();
+    save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+    save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+    let plan = configure_hand_off_plan(&service, root);
+    let (replay, outcome) =
+        classified_synchronization(&service, root, &plan, &ticket_target(HAND_OFF_X));
+    let writing = OperationId::new();
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(
+        "INSERT INTO operation_records(repository_id, root_path, operation_ulid, action, target,
+             item_id, state, completed_step, observed_at)
+         SELECT id, root_path, ?1, 'save_ticket', ?2, ?3, 'authoring_destination_observed',
+                'authoring_destination_observed', 1
+           FROM repositories",
+        rusqlite::params![
+            writing.to_string(),
+            format!(
+                "authoring-context-v1/ticket/{HAND_OFF_Y}/Edit\0.manyhands/tickets/{HAND_OFF_Y}/ticket.md"
+            ),
+            HAND_OFF_Y
+        ],
+    )
+    .unwrap();
+    // The file the save has written, as a save at that step leaves it.
+    let written = ticket_worktree(root, HAND_OFF_Y)
+        .join(format!(".manyhands/tickets/{HAND_OFF_Y}/ticket.md"));
+    let text = fs::read_to_string(&written).unwrap();
+    fs::write(
+        &written,
+        text.replace(&format!("title: Ticket {HAND_OFF_Y}"), "title: Mid-write"),
+    )
+    .unwrap();
+    let stored = stored_context(data.path(), Some(HAND_OFF_Y));
+    let titles = stored_titles(data.path(), HAND_OFF_Y);
+    let before = rows_under(data.path(), writing);
+    let operation = replay.operation_id;
+    let observed = observations_while(&[ticket_worktree(root, HAND_OFF_Y)], || {
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome)
+        );
+    });
+    assert_eq!(observed, [0], "the mid-write context's observations");
+    assert_eq!(stored_context(data.path(), Some(HAND_OFF_Y)), stored);
+    assert_eq!(stored_titles(data.path(), HAND_OFF_Y), titles);
+    assert_eq!(
+        rows_under(data.path(), operation)
+            .into_iter()
+            .map(|(target, item, _, state, _)| (target, item, state))
+            .collect::<Vec<_>>(),
+        [(
+            Some(format!(
+                "synchronization-index-v1/ticket/{HAND_OFF_X}/{}",
+                git2::Repository::open(root)
+                    .unwrap()
+                    .head()
+                    .unwrap()
+                    .target()
+                    .unwrap()
+            )),
+            Some(HAND_OFF_X.to_owned()),
+            "completed".to_owned()
+        )]
+    );
+    assert!(!index_pending(data.path(), operation));
+    assert_eq!(rows_under(data.path(), writing), before);
+}
+
+// Task 16b: what a synchronization's index hand-off indexes. A merge or a
+// fast-forward indexes the contexts it changed; a synchronization that
+// changed nothing locally records its hand-off with nothing observed while
+// its context's basis holds and it is not marked dirty, and otherwise
+// indexes that context alone.
+
+/// What the index stores for the context of `item` (the primary's, for
+/// `None`): its basis, when it was indexed, and its mark.
+type StoredContext = (Option<String>, Option<i64>, i64);
+
+fn stored_context(data: &Path, item: Option<&str>) -> Option<StoredContext> {
+    use rusqlite::OptionalExtension;
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT basis, indexed_at, dirty FROM contexts WHERE item_id IS ?1",
+            [item],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
+/// Every context the index stores, by item (`None` for the primary).
+fn stored_contexts(data: &Path) -> Vec<(Option<String>, StoredContext)> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare("SELECT item_id, basis, indexed_at, dirty FROM contexts ORDER BY item_id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// The titles the index stores for the context of `item`.
+fn stored_titles(data: &Path, item: &str) -> Vec<String> {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .prepare(
+            "SELECT d.title FROM discovered_items d JOIN contexts c ON c.id = d.context_id
+              WHERE c.item_id = ?1 ORDER BY d.title",
+        )
+        .unwrap()
+        .query_map([item], |row| row.get::<_, Option<String>>(0))
+        .unwrap()
+        .map(|title| title.unwrap().unwrap_or_default())
+        .collect()
+}
+
+/// The worktree of the ticket `item`'s context under `root`.
+fn ticket_worktree(root: &Path, item: &str) -> PathBuf {
+    crate::repository::item_context(root, AuthoringKind::Ticket, item.parse().unwrap()).worktree
+}
+
+/// How many times each of the contexts at `paths` (the root for the
+/// primary, a worktree for an item) is observed while `run` runs.
+fn observations_while(paths: &[PathBuf], run: impl FnOnce()) -> Vec<usize> {
+    let counts = paths
+        .iter()
+        .map(|path| {
+            let count = std::rc::Rc::new(std::cell::Cell::new(0));
+            let counted = count.clone();
+            crate::repository::discovery::set_context_scan_hook(path.clone(), move || {
+                counted.set(counted.get() + 1)
+            });
+            count
+        })
+        .collect::<Vec<_>>();
+    run();
+    for path in paths {
+        crate::repository::discovery::clear_scan_hook(path);
+    }
+    counts.iter().map(|count| count.get()).collect()
+}
+
+/// The head of the branch of the ticket `item`'s context.
+fn ticket_head(root: &Path, item: &str) -> git2::Oid {
+    git2::Repository::open(root)
+        .unwrap()
+        .refname_to_id(&format!("refs/heads/manyhands/ticket/{item}"))
+        .unwrap()
+}
+
+/// The ticket `item`'s file in its context is given the title `title` and
+/// committed there, outside Manyhands.
+fn commit_title_outside(root: &Path, item: &str, title: &str) -> git2::Oid {
+    let worktree = ticket_worktree(root, item);
+    let path = format!(".manyhands/tickets/{item}/ticket.md");
+    let text = fs::read_to_string(worktree.join(&path)).unwrap();
+    let retitled = text.replace(&format!("title: Ticket {item}"), &format!("title: {title}"));
+    assert_ne!(retitled, text, "the fixture's title line");
+    fs::write(worktree.join(&path), retitled).unwrap();
+    let repository = git2::Repository::open(&worktree).unwrap();
+    let mut index = repository.index().unwrap();
+    index.add_path(Path::new(&path)).unwrap();
+    index.write().unwrap();
+    let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let parent = repository.head().unwrap().peel_to_commit().unwrap();
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "outside",
+            &tree,
+            &[&parent],
+        )
+        .unwrap()
+}
+
+/// A context synchronization merges the remote context and then the primary
+/// into its context: that local update marks the context dirty, and its
+/// hand-off indexes that context alone. The primary, moved and not marked,
+/// is neither observed nor stored; the context is stored and its mark
+/// cleared; and the hand-off row of the item completes, clearing the remote
+/// row's debt.
+#[test]
+fn a_sync_that_merged_main_indexes_only_its_context() {
+    let pass = ContextPass::new();
+    let root = pass.root.path();
+    let data = pass.data.path();
+    let SynchronizationTarget::Context { item_id, .. } = &pass.target else {
+        panic!("a context target")
+    };
+    let item = item_id.to_string();
+    let primary = stored_context(data, None);
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+
+    let merged = pass.integrate().unwrap();
+    assert_eq!(pass.parents(merged)[1], pass.primary_incoming);
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the local update marks its context"
+    );
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(pass.local),
+        local_oid: Some(merged),
+        tracking_oid: Some(pass.context_incoming),
+        primary_tracking_oid: Some(pass.primary_incoming),
+        push_oid: Some(merged),
+        push_advertised_oid: Some(merged),
+    };
+    pass.service
+        .checkpoint_synchronization_merge_applied(root, &pass.owner, &evidence)
+        .unwrap();
+    pass.service
+        .checkpoint_synchronization(
+            root,
+            &pass.owner,
+            state::SynchronizationCheckpoint::PushVerified,
+            &evidence,
+        )
+        .unwrap();
+    pass.service
+        .classify_synchronization(root, &pass.owner, Authority::Published(merged))
+        .unwrap();
+
+    let mut replay = request(root);
+    replay.operation_id = pass.operation;
+    replay.target = pass.target.clone();
+    let observed = observations_while(&[root.to_owned(), ticket_worktree(root, &item)], || {
+        assert_eq!(
+            pass.service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(SynchronizationOutcome::Published {
+                target: pass.target.clone(),
+                oid: merged,
+            })
+        );
+    });
+    assert_eq!(
+        observed,
+        [0, 1],
+        "the primary's and the context's observations"
+    );
+    assert_eq!(stored_context(data, None), primary, "the primary's rows");
+    assert_eq!(
+        stored_context(data, Some(&item)).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+    assert_eq!(
+        rows_under(data, pass.operation),
+        [(
+            Some(format!("synchronization-index-v1/ticket/{item}/{merged}")),
+            Some(item.clone()),
+            Some(format!(r#"["{item}"]"#)),
+            "completed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )]
+    );
+    assert!(!index_pending(data, pass.operation));
+}
+
+/// How a hand-off case's synchronization came to its hand-off having changed
+/// nothing locally: classified through its reservation as having published,
+/// or as having found the remote current; or, with no publication remote,
+/// bound to its local head with nothing to publish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unchanged {
+    Published,
+    Current,
+    Unpublished,
+}
+
+/// The request that hands off a synchronization of `target` at `oid` that
+/// came to its hand-off as `came` says, and what it comes to.
+fn unchanged_synchronization(
+    service: &RepositoryService,
+    root: &Path,
+    target: &SynchronizationTarget,
+    oid: git2::Oid,
+    came: Unchanged,
+) -> (SynchronizeRemoteRequest, SynchronizationOutcome) {
+    if came == Unchanged::Unpublished {
+        let (request, outcome) = unpublished_synchronization(root, target);
+        assert!(
+            matches!(
+                &outcome,
+                SynchronizationOutcome::PublishPending { local_oid, .. } if *local_oid == oid
+            ),
+            "the local head bound"
+        );
+        return (request, outcome);
+    }
+    let published = came == Unchanged::Published;
+    let replay = service.classified_synchronization_for_testing(
+        root,
+        &configure_hand_off_plan(service, root),
+        target,
+        OperationId::new(),
+        oid,
+        published,
+    );
+    let target = target.clone();
+    let outcome = if published {
+        SynchronizationOutcome::Published { target, oid }
+    } else {
+        SynchronizationOutcome::AlreadyCurrent { target, oid }
+    };
+    (replay, outcome)
+}
+
+/// A synchronization that changed nothing locally, whether it published,
+/// found the remote current or had no remote to publish to, of an item or
+/// of the primary, records its hand-off with nothing observed: its
+/// context's basis holds and the context is not marked dirty, so its row of
+/// its item completes, and no context's rows, nor the repository's refresh
+/// time, change.
+#[test]
+fn a_push_only_sync_records_its_hand_off_without_observing() {
+    for (case, target, came) in [
+        (
+            "a sync of X that published",
+            ticket_target(HAND_OFF_X),
+            Unchanged::Published,
+        ),
+        (
+            "a sync of X that found the remote current",
+            ticket_target(HAND_OFF_X),
+            Unchanged::Current,
+        ),
+        (
+            "a sync of the primary that published",
+            SynchronizationTarget::Primary,
+            Unchanged::Published,
+        ),
+        (
+            "a sync of X with no publication remote",
+            ticket_target(HAND_OFF_X),
+            Unchanged::Unpublished,
+        ),
+        (
+            "a sync of the primary with no publication remote",
+            SynchronizationTarget::Primary,
+            Unchanged::Unpublished,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let oid = match &target {
+            SynchronizationTarget::Primary => git2::Repository::open(root)
+                .unwrap()
+                .refname_to_id("refs/heads/main")
+                .unwrap(),
+            SynchronizationTarget::Context { .. } => ticket_head(root, HAND_OFF_X),
+        };
+        let (replay, outcome) = unchanged_synchronization(&service, root, &target, oid, came);
+        let operation = replay.operation_id;
+        let contexts = stored_contexts(data);
+        let refreshed_at = |data: &Path| -> Option<i64> {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .query_row("SELECT refreshed_at FROM repositories", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        let refreshed = refreshed_at(data);
+        let hooked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hooked.clone();
+        service.set_observation_hook_for_testing(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let observed = observations_while(
+            &[root.to_owned(), ticket_worktree(root, HAND_OFF_X)],
+            || {
+                assert_eq!(
+                    service
+                        .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                        .unwrap(),
+                    SynchronizationResult::Complete(outcome),
+                    "{case}"
+                );
+            },
+        );
+        assert_eq!(observed, [0, 0], "{case}: observations");
+        assert_eq!(
+            hooked.load(Ordering::SeqCst),
+            0,
+            "{case}: the observation hook"
+        );
+        assert_eq!(
+            stored_contexts(data),
+            contexts,
+            "{case}: the index's contexts"
+        );
+        assert_eq!(refreshed_at(data), refreshed, "{case}: the refresh time");
+        let (hand_off, item, owed) = match &target {
+            SynchronizationTarget::Primary => (
+                format!("synchronization-index-v1/primary/{oid}"),
+                None,
+                r#"["primary"]"#.to_owned(),
+            ),
+            SynchronizationTarget::Context { item_id, .. } => (
+                format!("synchronization-index-v1/ticket/{item_id}/{oid}"),
+                Some(item_id.to_string()),
+                format!(r#"["{item_id}"]"#),
+            ),
+        };
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(target, item, owed, state, _)| (target, item, owed, state))
+                .collect::<Vec<_>>(),
+            [(Some(hand_off), item, Some(owed), "completed".to_owned())],
+            "{case}"
+        );
+        assert_eq!(
+            index_debt(data, operation),
+            (came != Unchanged::Unpublished).then_some(false),
+            "{case}"
+        );
+    }
+}
+
+/// A synchronization that changed nothing locally indexes its context when
+/// that context's basis no longer holds (a commit made in it outside
+/// Manyhands, which the synchronization pushed, or, with no publication
+/// remote, bound) or the context is marked dirty (as a conflict's
+/// resolution leaves it): that context alone, once. Another item's context
+/// that moved too is neither observed nor stored.
+#[test]
+fn a_push_only_sync_indexes_a_context_whose_basis_moved() {
+    for (case, moved_basis, came) in [
+        (
+            "a commit made in the context outside Manyhands",
+            true,
+            Unchanged::Published,
+        ),
+        ("the context marked dirty", false, Unchanged::Published),
+        (
+            "a commit made in the context outside Manyhands, with no publication remote",
+            true,
+            Unchanged::Unpublished,
+        ),
+        (
+            "the context marked dirty, with no publication remote",
+            false,
+            Unchanged::Unpublished,
+        ),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        save_new_ticket(&service, root, HAND_OFF_Y).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        commit_title_outside(root, HAND_OFF_Y, "Moved Y");
+        let title = if moved_basis {
+            commit_title_outside(root, HAND_OFF_X, "Moved X");
+            "Moved X".to_owned()
+        } else {
+            rusqlite::Connection::open(data.join(REGISTRY_FILE))
+                .unwrap()
+                .execute(
+                    "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+                    [HAND_OFF_X],
+                )
+                .unwrap();
+            format!("Ticket {HAND_OFF_X}")
+        };
+        let other = stored_context(data, Some(HAND_OFF_Y));
+        let primary = stored_context(data, None);
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let (replay, outcome) = unchanged_synchronization(&service, root, &target, oid, came);
+        let operation = replay.operation_id;
+        let observed = observations_while(
+            &[
+                root.to_owned(),
+                ticket_worktree(root, HAND_OFF_X),
+                ticket_worktree(root, HAND_OFF_Y),
+            ],
+            || {
+                assert_eq!(
+                    service
+                        .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                        .unwrap(),
+                    SynchronizationResult::Complete(outcome),
+                    "{case}"
+                );
+            },
+        );
+        assert_eq!(observed, [0, 1, 0], "{case}: observations");
+        assert_eq!(stored_titles(data, HAND_OFF_X), [title], "{case}");
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+            Some(0),
+            "{case}"
+        );
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_Y)),
+            other,
+            "{case}: Y's rows"
+        );
+        assert_eq!(
+            stored_context(data, None),
+            primary,
+            "{case}: the primary's rows"
+        );
+        assert_eq!(
+            rows_under(data, operation)
+                .into_iter()
+                .map(|(_, _, _, state, _)| state)
+                .collect::<Vec<_>>(),
+            ["completed"],
+            "{case}"
+        );
+        assert_eq!(
+            index_debt(data, operation),
+            (came != Unchanged::Unpublished).then_some(false),
+            "{case}"
+        );
+    }
+}
+
+/// A synchronization's hand-off row is begun, owing its item's context, at
+/// a time no earlier than its synchronization's classification, and that
+/// time is what decides whether a context stored while the row is open is
+/// current (design decision 32, carry C-5). The hand-off stops once its row
+/// is begun, before its index step. A whole refresh then stores the context,
+/// which the synchronization's local update left dirty. Stored from an
+/// observation that began in a later second than the row's time, the
+/// context reads current while the row is open; stored from one that began
+/// before the row's time, it is still owed. Either way the row is left as
+/// it was, and the synchronization's retry completes it.
+#[test]
+fn a_context_stored_after_a_sync_s_hand_off_began_reads_current() {
+    for (case, dated_by, current) in [
+        ("stored in a later second than the row's time", -2, true),
+        ("stored before the row's time", 60, false),
+    ] {
+        let (root, data, service) = fixture();
+        let root = root.path();
+        let data = data.path();
+        save_new_ticket(&service, root, HAND_OFF_X).unwrap();
+        service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.into(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        let target = ticket_target(HAND_OFF_X);
+        let oid = ticket_head(root, HAND_OFF_X);
+        let replay = service.classified_synchronization_for_testing(
+            root,
+            &configure_hand_off_plan(&service, root),
+            &target,
+            OperationId::new(),
+            oid,
+            false,
+        );
+        let classified = time::OffsetDateTime::now_utc().unix_timestamp();
+        let operation = replay.operation_id;
+        let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE contexts SET dirty = 1 WHERE item_id = ?1",
+            [HAND_OFF_X],
+        )
+        .unwrap();
+        let outcome = SynchronizationOutcome::AlreadyCurrent {
+            target: target.clone(),
+            oid,
+        };
+
+        *service.failure_point.lock().unwrap() = Some(FailurePoint::AfterCheckpointBeforeIndexStep);
+        assert_eq!(
+            service
+                .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::IndexPending(IndexPending::new(outcome.clone())),
+            "{case}"
+        );
+        let stopped = time::OffsetDateTime::now_utc().unix_timestamp();
+        let begun = vec![(
+            Some(format!(
+                "synchronization-index-v1/ticket/{HAND_OFF_X}/{oid}"
+            )),
+            Some(HAND_OFF_X.to_owned()),
+            Some(format!(r#"["{HAND_OFF_X}"]"#)),
+            "authoritative_observed".to_owned(),
+            Some("authoritative_observed".to_owned()),
+        )];
+        assert_eq!(rows_under(data, operation), begun, "{case}");
+        let observed_at: i64 = db
+            .query_row(
+                "SELECT observed_at FROM operation_records WHERE operation_ulid = ?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            (classified..=stopped).contains(&observed_at),
+            "{case}: the row's time {observed_at}, classified at {classified}"
+        );
+        assert!(
+            !service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            "{case}: owed by the row"
+        );
+
+        db.execute(
+            "UPDATE operation_records SET observed_at = observed_at + ?2
+              WHERE operation_ulid = ?1",
+            rusqlite::params![operation.to_string(), dated_by],
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                service.refresh_repository(RefreshRepositoryRequest {
+                    root: root.into(),
+                    operation_id: OperationId::new(),
+                }),
+                Ok(RefreshOutcome::Refreshed { .. })
+            ),
+            "{case}"
+        );
+        assert_eq!(
+            stored_context(data, Some(HAND_OFF_X)).map(|(_, _, dirty)| dirty),
+            Some(0),
+            "{case}: stored by the refresh"
+        );
+        assert_eq!(rows_under(data, operation), begun, "{case}: the row");
+        assert_eq!(
+            service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            current,
+            "{case}"
+        );
+
+        assert_eq!(
+            service
+                .synchronize_remote(replay, &mut SessionCredentials::new(NoPrompt))
+                .unwrap(),
+            SynchronizationResult::Complete(outcome),
+            "{case}"
+        );
+        assert!(
+            service.contexts_indexed(root, &[ContextKey::Item(HAND_OFF_X.parse().unwrap())]),
+            "{case}: after the retry"
+        );
+        assert!(!index_pending(data, operation), "{case}");
+    }
+}
+
+/// A synchronization stopped after it recorded its local update's intent
+/// and before it marked the context it updates (or with that mark failed),
+/// the context stored as it was: nothing marks it and no local row owes it,
+/// so it reads current. The restart
+/// makes the update the stopped call did not (`reconcile_pending_candidate`
+/// fast-forwards to the recorded merge), and that update marks its context
+/// as the first call's would have: it reads as owed an indexing from the
+/// update until something indexes it, through a push that would follow.
+#[test]
+fn a_restarted_sync_s_local_update_marks_its_context() {
+    let (root, data, service) = fixture();
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let plan = configure_hand_off_plan(&service, root.path());
+    let base = repo.head().unwrap().target().unwrap();
+    fs::write(root.path().join("local.txt"), b"local\n").unwrap();
+    let local = commit_all(&repo);
+    repo.set_head_detached(base).unwrap();
+    repo.checkout_tree(&repo.find_object(base, None).unwrap(), None)
+        .unwrap();
+    fs::write(root.path().join("incoming.txt"), b"incoming\n").unwrap();
+    let incoming = commit_all(&repo);
+    repo.set_head("refs/heads/main").unwrap();
+    repo.reference("refs/heads/main", local, true, "fixture")
+        .unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let tree = repo.find_commit(local).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let candidate = repo
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[
+                &repo.find_commit(local).unwrap(),
+                &repo.find_commit(incoming).unwrap(),
+            ],
+        )
+        .unwrap();
+    // The primary, as it is before the synchronization, is stored.
+    assert!(matches!(
+        service.refresh_repository(RefreshRepositoryRequest {
+            root: root.path().into(),
+            operation_id: OperationId::new(),
+        }),
+        Ok(RefreshOutcome::Refreshed { .. })
+    ));
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("reservation"),
+    };
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(local),
+        local_oid: Some(local),
+        tracking_oid: Some(incoming),
+        primary_tracking_oid: Some(incoming),
+        ..state::SynchronizationEvidence::default()
+    };
+    service
+        .checkpoint_synchronization(
+            root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &evidence,
+        )
+        .unwrap();
+    service
+        .remote_safe_point(root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", incoming, None).unwrap();
+    commit_observation_batch(&service, root.path(), &owner, &plan, &[observation], 1).unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: tree.id(),
+                baseline_index_digest: index_digest(tree.id()),
+            },
+        )
+        .unwrap();
+    // The intent of the effect is recorded; the call stops before it marks
+    // the primary, and before Git is touched.
+    service
+        .begin_synchronization_integration_effect(root.path(), &owner, 0, Some(candidate))
+        .unwrap();
+    assert_eq!(repo.head().unwrap().target(), Some(local));
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(0)
+    );
+    assert!(
+        service.contexts_indexed(root.path(), &[ContextKey::Primary]),
+        "stored, unmarked and owed by no row"
+    );
+
+    let resumed = match service
+        .restart_remote_synchronization(root.path(), owner.operation_id(), &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        _ => panic!("restart"),
+    };
+    let mut resume_evidence = state::with_transaction(&service, root.path(), |tx, id| {
+        state::read_operation(tx, id, owner.operation_id())
+    })
+    .unwrap()
+    .unwrap()
+    .sync_evidence;
+    let pending = reconcile_pending_candidate(
+        &service,
+        root.path(),
+        "main",
+        &SynchronizationTarget::Primary,
+        &resumed,
+        &mut resume_evidence,
+    )
+    .unwrap()
+    .expect("candidate evidence");
+    assert_eq!(pending.oid, candidate);
+    assert_eq!(repo.head().unwrap().target(), Some(candidate));
+    assert_eq!(
+        stored_context(data.path(), None).map(|(_, _, dirty)| dirty),
+        Some(1),
+        "the restart's update marks the primary"
+    );
+    assert!(
+        !service.contexts_indexed(root.path(), &[ContextKey::Primary]),
+        "the primary is owed an indexing from the restart's update"
+    );
+}
+
+/// A repository in pull-request mode whose publication remote is `origin`,
+/// with its plan configured as a refresh leaves it. A synchronization of it
+/// goes as far as its transport, which no key reaches.
+fn pull_request_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    origin_fixture(
+        "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    )
+}
+
+/// `pull_request_fixture`, with `configuration` committed as the
+/// repository's configuration.
+fn origin_fixture(
+    configuration: &str,
+) -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    let (root, data, service) = fixture();
+    let repository = git2::Repository::open(root.path()).unwrap();
+    repository
+        .remote("origin", "ssh://example.invalid/fixture.git")
+        .unwrap();
+    fs::write(root.path().join(".manyhands/config.toml"), configuration).unwrap();
+    commit_all(&repository);
+    service.configure_origin_plan_for_testing(root.path());
+    (root, data, service)
+}
+
+/// The `pull_only` its row's INSERT stored for `operation`.
+fn stored_pull_only(data: &Path, operation: OperationId) -> i64 {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .unwrap()
+        .query_row(
+            "SELECT pull_only FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// O11, O12, O13 (R-11, R-14): in a pull-request repository, the
+/// synchronization's own new operation on the primary stores `pull_only`
+/// 1 in its INSERT, and in a direct-mode repository 0; an operation on a
+/// context, a poll, a lifecycle's
+/// primary child and the public `reserve_remote_operation` store 0. The
+/// read helper answers what the row stored, whatever the configuration
+/// says now: a pull-only operation stays pull-only after the repository
+/// goes back to direct mode, and a direct one stays direct in a
+/// pull-request repository. The stored value cannot be changed.
+#[test]
+fn o11_o12_o13_the_mode_is_inserted_once_and_read_back() {
+    use crate::repository::{
+        PromotionExpectation,
+        promotion::record::{self as promotion, ChildRole, IntegrationKind, PromotionStep},
+    };
+    let session = || SessionCredentials::new(NoPrompt);
+
+    // A new `repo sync`'s operation: its mode is the configuration's.
+    let (root, data, service) = pull_request_fixture();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let primary = request(root.path());
+    let result = service.synchronize_remote(primary.clone(), &mut session());
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), primary.operation_id), 1);
+    // Back to direct mode: the operation taken up again is still pull-only.
+    fs::write(
+        root.path().join(".manyhands/config.toml"),
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    )
+    .unwrap();
+    commit_all(&git2::Repository::open(root.path()).unwrap());
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .restart_remote_synchronization(
+            root.path(),
+            primary.operation_id,
+            &RemoteOperationTarget::for_primary_synchronization(&plan),
+        )
+        .unwrap()
+    else {
+        panic!("the pull-only operation taken up again")
+    };
+    assert!(
+        service
+            .synchronization_pull_only(root.path(), &owner)
+            .unwrap(),
+        "O11: stays pull-only"
+    );
+    // Never updated: the row keeps what its INSERT stored.
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE remote_operation_records SET pull_only = 0 WHERE operation_ulid = ?1",
+            [primary.operation_id.to_string()],
+        )
+        .is_err()
+    );
+    assert_eq!(stored_pull_only(data.path(), primary.operation_id), 1);
+
+    // The same operation in a direct-mode repository, with the mode left
+    // out or written, is direct.
+    for configuration in [
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+        "format_version = 2\nintegration = \"direct\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n",
+    ] {
+        let (root, data, service) = origin_fixture(configuration);
+        let direct = request(root.path());
+        let result = service.synchronize_remote(direct.clone(), &mut session());
+        assert!(
+            matches!(result, Err(SynchronizationError::Transport(_))),
+            "{configuration}: {result:?}"
+        );
+        assert_eq!(
+            stored_pull_only(data.path(), direct.operation_id),
+            0,
+            "{configuration}"
+        );
+    }
+
+    // A direct operation in a pull-request repository stays direct.
+    let (root, data, service) = pull_request_fixture();
+    let direct = OperationId::new();
+    let RemoteReservationOutcome::Reserved(owner) = service
+        .reserve_remote_operation(
+            root.path(),
+            direct,
+            &RemoteOperationTarget::for_primary_synchronization(&plan),
+        )
+        .unwrap()
+    else {
+        panic!("the public reservation")
+    };
+    assert_eq!(stored_pull_only(data.path(), direct), 0);
+    assert!(
+        !service
+            .synchronization_pull_only(root.path(), &owner)
+            .unwrap(),
+        "O12: stays direct"
+    );
+
+    // An `item sync`'s operation, of a context, is direct.
+    let (root, data, service) = pull_request_fixture();
+    let context = SynchronizeRemoteRequest {
+        target: materialize_local_context(&service, root.path()),
+        ..request(root.path())
+    };
+    let result = service.synchronize_remote(context.clone(), &mut session());
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), context.operation_id), 0);
+
+    // A promotion's primary child is direct, as close's is.
+    let (root, data, service) = pull_request_fixture();
+    let head = git2::Repository::open(root.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    let parent = state::with_transaction(&service, root.path(), |tx, id| {
+        let mut r = promotion::begin_record(
+            tx,
+            id,
+            OperationId::new(),
+            &"01ARZ3NDEKTSV4RRFFQ69G5FDC".parse().unwrap(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+        )?;
+        r.context_oid = Some(head);
+        r.step = PromotionStep::ContextSynchronized;
+        promotion::save_record(tx, id, &r)?;
+        r.base_oid = Some(head);
+        r.integration_kind = Some(IntegrationKind::Merged);
+        r.step = PromotionStep::Integrating;
+        promotion::save_record(tx, id, &r)?;
+        r.integration_oid = Some(head);
+        r.step = PromotionStep::Integrated;
+        promotion::save_record(tx, id, &r)?;
+        promotion::next_attempt(tx, id, r.operation_id, ChildRole::Primary)
+    })
+    .unwrap();
+    let execution = promotion::child_execution(&parent, ChildRole::Primary).unwrap();
+    let child = parent.primary_sync_id.unwrap();
+    let result = service.synchronize_promotion_child_observed(
+        SynchronizeRemoteRequest {
+            operation_id: child,
+            ..request(root.path())
+        },
+        &mut session(),
+        &mut Unobserved,
+        &execution,
+    );
+    assert!(
+        matches!(result, Err(SynchronizationError::Transport(_))),
+        "{result:?}"
+    );
+    assert_eq!(stored_pull_only(data.path(), child), 0);
+
+    // A poll is direct.
+    let (root, data, service) = pull_request_fixture();
+    let poll = OperationId::new();
+    assert!(matches!(
+        service
+            .reserve_remote_poll(
+                root.path(),
+                poll,
+                &RemoteOperationTarget::for_poll(&plan),
+                RemoteOperationPriority::Poll,
+            )
+            .unwrap(),
+        reservation::RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(
+            _
+        ))
+    ));
+    assert_eq!(stored_pull_only(data.path(), poll), 0);
+    assert!(
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .execute(
+                "UPDATE remote_operation_records SET pull_only = 1 WHERE operation_ulid = ?1",
+                [poll.to_string()],
+            )
+            .is_err()
+    );
+    assert_eq!(stored_pull_only(data.path(), poll), 0);
+}
+
+/// R-30 and Part G in a ticket context's remote synchronization: the closure
+/// the fetched primary holds is kept, and a conflict of two provisional
+/// closures settles with the remote's.
+mod primary_closure_in_a_ticket_context {
+    use super::ticket_context_closure_rule::PATH;
+    use super::*;
+
+    /// A ticket as a product save writes it, holding `closure` (`closed_at`,
+    /// `closed_by`) when it has one.
+    fn canonical_ticket(closure: Option<(&str, &str)>) -> String {
+        crate::canonical::serialize_item(&crate::canonical::CanonicalItem::Ticket(
+            crate::canonical::Ticket {
+                id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+                title: "Ticket".into(),
+                ticket_type: "task".into(),
+                status: "open".into(),
+                project: None,
+                team: None,
+                closed_at: closure.map(|(at, _)| {
+                    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+                        .unwrap()
+                }),
+                closed_by: closure.map(|(_, by)| by.to_owned()),
+                body: "body\n".into(),
+                unknown: serde_yaml::Mapping::new(),
+            },
+        ))
+        .unwrap()
+    }
+
+    const ORIGINAL: (&str, &str) = ("2026-01-01T00:00:00Z", "original author");
+    const OTHER: (&str, &str) = ("2026-02-01T00:00:00Z", "other author");
+
+    fn ticket_at(repository: &git2::Repository, commit: git2::Oid) -> String {
+        let blob = repository
+            .find_commit(commit)
+            .unwrap()
+            .tree()
+            .unwrap()
+            .get_path(Path::new(PATH))
+            .unwrap()
+            .id();
+        String::from_utf8(repository.find_blob(blob).unwrap().content().to_vec()).unwrap()
+    }
+
+    /// The context stage: two different provisional closures, one in the
+    /// local branch and one in the fetched context, conflict in the ticket
+    /// alone. The stage settles it, as a clean merge commit with the remote's
+    /// closure, installing no conflict (G1).
+    #[test]
+    fn a_context_stage_settles_a_closure_only_conflict() {
+        let ours = canonical_ticket(Some(ORIGINAL));
+        let theirs = canonical_ticket(Some(OTHER));
+        let pass = ContextPass::with_files(
+            ("remote-primary.txt", b"primary\n"),
+            (PATH, theirs.as_bytes()),
+            Some((PATH, ours.as_bytes())),
+        );
+        let merged = pass.integrate().unwrap();
+        let stage = pass.stage(0).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Context);
+        assert_eq!(stage.phase, state::IntegrationStepPhase::Applied);
+        let context_merge = stage.result_oid.unwrap();
+        assert_eq!(
+            pass.parents(context_merge),
+            [pass.local, pass.context_incoming]
+        );
+        assert_eq!(ticket_at(&pass.repository, context_merge), theirs);
+        assert_eq!(ticket_at(&pass.repository, merged), theirs);
+        assert_eq!(pass.repository.state(), git2::RepositoryState::Clean);
+        assert!(!pass.repository.index().unwrap().has_conflicts());
+        assert_eq!(
+            pass.stage(1).unwrap().phase,
+            state::IntegrationStepPhase::Applied
+        );
+        assert_eq!(pass.head(), merged);
+    }
+
+    /// The primary stage: the context branch withdrew a closure its base and
+    /// the fetched primary hold, and the merge of the primary into it is
+    /// clean, so it would keep the withdraw. The commit holds the primary's
+    /// closure (G7).
+    #[test]
+    fn a_primary_stage_keeps_the_primary_closure() {
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let withdrawn = canonical_ticket(None);
+        let pass = ContextPass::with_base(
+            (PATH, closed.as_bytes()),
+            ("remote-primary.txt", b"primary\n"),
+            None,
+            (PATH, withdrawn.as_bytes()),
+        );
+        assert_eq!(ticket_at(&pass.repository, pass.local), withdrawn);
+        assert_eq!(ticket_at(&pass.repository, pass.primary_incoming), closed);
+        let merged = pass.integrate().unwrap();
+        assert!(pass.stage(0).is_some());
+        let stage = pass.stage(1).unwrap();
+        assert_eq!(stage.intent.stage, merge::IntegrationStage::Primary);
+        assert_eq!(stage.result_oid, Some(merged));
+        assert_eq!(
+            pass.parents(merged),
+            [pass.local, pass.primary_incoming],
+            "a merge commit, not a fast-forward"
+        );
+        assert_eq!(ticket_at(&pass.repository, merged), closed);
+        assert_eq!(pass.repository.state(), git2::RepositoryState::Clean);
+    }
+
+    /// G8, through R-30's push decision (`push_unless_unclosed`), the tail the
+    /// plan path and the merging path both end in, from the refusal to the push:
+    /// `promotion_test_drive_local_bound` runs only `integrate_divergence`
+    /// and cannot. The local branch withdrew a closure and the fetched
+    /// primary holds it, so nothing was merged to give it back: the head is
+    /// not pushed, an `item sync` is ended and a lifecycle child kept.
+    #[test]
+    fn a_fast_forward_that_drops_the_primary_closure_is_not_published() {
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let withdrawn = canonical_ticket(None);
+        let other_closure = canonical_ticket(Some(OTHER));
+        let document = SynchronizationTarget::Context {
+            kind: AuthoringKind::Document,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        };
+        let pass = ContextPass::new();
+        let repository = &pass.repository;
+        let closed_commit = child_path(repository, pass.main, PATH, closed.as_bytes());
+        let withdraw = child_path(repository, closed_commit, PATH, withdrawn.as_bytes());
+        let reclosed = child_path(repository, closed_commit, PATH, other_closure.as_bytes());
+        let primary_open = child_path(repository, pass.main, PATH, withdrawn.as_bytes());
+        let primary_without = child_path(repository, pass.main, "other.txt", b"other\n");
+        // candidate, fetched primary, target, refused.
+        for (case, candidate, primary, target, refused) in [
+            (
+                "a withdraw on the primary's closure",
+                withdraw,
+                closed_commit,
+                &pass.target,
+                true,
+            ),
+            (
+                "another closure",
+                reclosed,
+                closed_commit,
+                &pass.target,
+                true,
+            ),
+            (
+                "the head holds the closure",
+                closed_commit,
+                closed_commit,
+                &pass.target,
+                false,
+            ),
+            (
+                "the primary holds none",
+                withdraw,
+                primary_open,
+                &pass.target,
+                false,
+            ),
+            (
+                "the primary holds no ticket",
+                withdraw,
+                primary_without,
+                &pass.target,
+                false,
+            ),
+            (
+                "a primary target",
+                withdraw,
+                closed_commit,
+                &SynchronizationTarget::Primary,
+                false,
+            ),
+            (
+                "a document context",
+                withdraw,
+                closed_commit,
+                &document,
+                false,
+            ),
+        ] {
+            let decided = primary_closure_push_refusal(repository, target, candidate, primary);
+            assert_eq!(
+                matches!(decided, Err(SynchronizationError::TicketClosed)),
+                refused,
+                "{case}: {decided:?}"
+            );
+        }
+        // The tail of the synchronization, from the refusal to the push
+        // (`push_unless_unclosed`), with a push that records its calls: a
+        // refused head never reaches it. An item sync ends, as unresolved
+        // history ends it; a lifecycle child is kept for its parent. A head
+        // that holds the primary's closure is pushed once.
+        for (keep, refused) in [(false, true), (true, true), (false, false)] {
+            let pass = ContextPass::new();
+            let repository = &pass.repository;
+            let closed_commit = child_path(repository, pass.main, PATH, closed.as_bytes());
+            let withdraw = child_path(repository, closed_commit, PATH, withdrawn.as_bytes());
+            let head = if refused { withdraw } else { closed_commit };
+            let pushes = std::cell::Cell::new(0);
+            let answer = pass.service.push_unless_unclosed(
+                pass.root.path(),
+                &pass.owner,
+                keep,
+                repository,
+                &pass.target,
+                head,
+                closed_commit,
+                || {
+                    pushes.set(pushes.get() + 1);
+                    Ok(true)
+                },
+            );
+            if refused {
+                assert!(
+                    matches!(answer, Err(SynchronizationError::TicketClosed)),
+                    "keep={keep}: {answer:?}"
+                );
+                assert_eq!(pushes.get(), 0, "keep={keep}: the push is never called");
+            } else {
+                assert!(matches!(answer, Ok(true)), "{answer:?}");
+                assert_eq!(pushes.get(), 1, "a head that holds the closure is pushed");
+            }
+            let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+            let other = SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap(),
+            }
+            .operation_target(&plan);
+            let second = pass
+                .service
+                .reserve_remote_operation(pass.root.path(), OperationId::new(), &other)
+                .unwrap();
+            // Only a refusal that is not kept ends the operation.
+            assert_eq!(
+                matches!(second, RemoteReservationOutcome::Reserved(_)),
+                refused && !keep,
+                "keep={keep} refused={refused}"
+            );
+        }
+    }
+
+    /// Part D's merged branch whose remote branch survives: when the primary
+    /// holds the branch's work path by path, the merge of the fetched primary
+    /// is clean and its tree is the primary's, closure and all, which R-30
+    /// leaves as it is. Pins unchanged behaviour (exempt from fail-first).
+    #[test]
+    fn a_proven_merge_merges_the_primary_in_cleanly() {
+        let (root, _data, _service) = fixture();
+        let repository = git2::Repository::open(root.path()).unwrap();
+        let main = repository.head().unwrap().target().unwrap();
+        let closed = canonical_ticket(Some(ORIGINAL));
+        let target = SynchronizationTarget::Context {
+            kind: AuthoringKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+        };
+        // The branch's two commits, and the forge's squash of them.
+        let work = child_path(&repository, main, "work.txt", b"work\n");
+        let branch = child_path(&repository, work, PATH, closed.as_bytes());
+        let squashed = child_path(&repository, main, PATH, closed.as_bytes());
+        let primary = child_path(&repository, squashed, "work.txt", b"work\n");
+        // Another change of a path the primary holds differently is no proof.
+        let unproven = child_path(&repository, branch, "work.txt", b"more work\n");
+        let merge = |local| {
+            let prepared = prepare_clean_merge(root.path(), local, primary).unwrap();
+            keep_primary_closure(
+                root.path(),
+                &target,
+                merge::IntegrationStage::Primary,
+                local,
+                primary,
+                primary,
+                prepared,
+            )
+            .unwrap()
+        };
+        assert!(matches!(merge(unproven), MergePreparation::Conflict));
+        let MergePreparation::Clean(prepared) = merge(branch) else {
+            panic!("the proven merge is clean")
+        };
+        let tree = prepare::import_prepared_tree(&repository, &prepared).unwrap();
+        assert_eq!(tree, repository.find_commit(primary).unwrap().tree_id());
+        let result = repository.find_tree(tree).unwrap();
+        let blob = result.get_path(Path::new(PATH)).unwrap().id();
+        assert_eq!(
+            repository.find_blob(blob).unwrap().content(),
+            closed.as_bytes()
+        );
+    }
 }

@@ -130,6 +130,9 @@ impl IndexBinding {
             Some(_) => otherwise,
             None => ResultCode::InternalError,
         };
+        // The operation the domain refused the call for, when another's
+        // row is why.
+        let mut blocker = None;
         let code = match self.verb {
             Verb::Refresh => {
                 match service.refresh_repository(RefreshRepositoryRequest { root, operation_id }) {
@@ -142,13 +145,22 @@ impl IndexBinding {
                             read => read,
                         },
                     },
-                    Err(error) => outcome::repository_error_code(error.kind),
+                    Err(error) => {
+                        blocker = error.blocker().cloned();
+                        outcome::repository_error_code(error.kind)
+                    }
                 }
             }
             Verb::Rebuild => {
-                match service.rebuild_repository(RebuildRepositoryRequest { root, operation_id }) {
+                match service.rebuild_repository(RebuildRepositoryRequest {
+                    root: root.clone(),
+                    operation_id,
+                }) {
                     Ok(_) => done(ResultCode::Busy),
-                    Err(error) => outcome::repository_error_code(error.kind),
+                    Err(error) => {
+                        blocker = error.blocker().cloned();
+                        outcome::repository_error_code(error.kind)
+                    }
                 }
             }
         };
@@ -159,7 +171,7 @@ impl IndexBinding {
             };
         }
         Ran {
-            answer: Answer::stopped(code),
+            answer: Answer::stopped(code).naming(service, &accepted.root(), blocker.as_ref()),
             standing: Standing::Stopped {
                 journal: accepted.journal_row(service),
             },

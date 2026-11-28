@@ -25,9 +25,11 @@
 mod document;
 mod facts;
 mod fields;
+mod git;
 mod ticket;
 
 pub(super) use self::fields::SheetFields;
+use self::git::{GIT_DESCRIPTION, GIT_DETAILS};
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
@@ -48,7 +50,10 @@ use super::{ChipField, ItemPane, text};
 use crate::desktop::{
     keys::ITEM_SHEET_CONTEXT,
     model::{edit::fields::Field, navigation::OpenTarget, relationships::NONE},
-    view::relationships::OpenRelated,
+    view::{
+        frame::{self, Header},
+        relationships::OpenRelated,
+    },
 };
 
 pub(crate) const TICKET_DETAILS: &str = "Ticket details";
@@ -77,9 +82,8 @@ pub(crate) const FACTS: &str = "Facts";
 pub(crate) const PROBLEMS: &str = "Problems";
 pub(crate) const NOT_CLOSED: &str = "Not closed. Use Close ticket… to close it.";
 
-/// The sheet's width (fact 61).
+/// The sheet's narrowest width (fact 61).
 const WIDTH: f32 = 440.;
-const TITLE_SIZE: f32 = 15.;
 const LABEL_SIZE: f32 = 12.;
 /// Between the body's rows.
 const GAP: f32 = 14.;
@@ -183,11 +187,17 @@ impl ItemPane {
         let kind = self
             .shown_kind(item.as_ref())
             .unwrap_or(ItemDtoKind::Ticket);
+        // A nonconforming file's sheet holds its Git details alone.
+        let git = item
+            .as_ref()
+            .is_some_and(|item| self.nonconforming_file(item));
         let heading = match kind {
+            _ if git => GIT_DETAILS,
             ItemDtoKind::Ticket => TICKET_DETAILS,
             ItemDtoKind::Document => DOCUMENT_DETAILS,
         };
         let rows = match (&item, kind) {
+            (Some(item), _) if git => self.git_rows(item, cx),
             (Some(item), ItemDtoKind::Ticket) => self.ticket_rows(item, window, cx),
             (Some(item), ItemDtoKind::Document) => self.document_rows(item, window, cx),
             (None, _) => Vec::new(),
@@ -199,6 +209,7 @@ impl ItemPane {
         // review; a kept session views the saved copy.
         let editing = self.editing();
         let (description, note) = match (editing, kind) {
+            _ if git => (GIT_DESCRIPTION, READ_ONLY),
             (true, ItemDtoKind::Ticket) => (EDITING_TICKET, SAVED_WITH_TICKET),
             (true, ItemDtoKind::Document) => (EDITING_DOCUMENT, SAVED_WITH_DOCUMENT),
             (false, _) if self.opening_new_item() => (NOT_CREATED_YET, READ_ONLY_UNTIL_READY),
@@ -211,11 +222,6 @@ impl ItemPane {
             .gap(px(GAP))
             .py(px(vertical))
             .px(px(horizontal))
-            .child(
-                text("sheet-description", description)
-                    .text_sm()
-                    .text_color(muted),
-            )
             .children(rows);
         // R-38: the session's text the controls hold is drawn only in a
         // draft section.
@@ -241,12 +247,18 @@ impl ItemPane {
                     .on_click(|_, window, cx| window.close_sheet(cx)),
             );
         sheet
-            .size(px(WIDTH))
-            .title(
-                text("sheet-heading", heading)
-                    .text_size(px(TITLE_SIZE))
-                    .font_weight(FontWeight::SEMIBOLD),
-            )
+            .size(frame::sheet_width(window, WIDTH))
+            // The heading and the description, on the common frame (Wave 04
+            // Cycle 05a design A5): the description moved out of the body.
+            .title(frame::sheet_header(
+                Header {
+                    icon: None,
+                    title: heading.into(),
+                    description: Some(description.into()),
+                    ids: ("sheet-heading", Some("sheet-description")),
+                },
+                cx,
+            ))
             .footer(footer)
             // The Kit's body grows with what it holds and scrolls on a handle
             // of its own. Laid over it, out of its flow, the sheet scrolls on

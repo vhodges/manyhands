@@ -96,10 +96,22 @@ const DESIGN: &[(&str, &[&str])] = &[
         &[
             "document promote",
             "ticket close",
+            "ticket withdraw-closure",
             "poll once",
             "poll configure",
             "poll pause",
             "poll resume",
+            "context observe-local",
+            "context show-local",
+            "context sync-local",
+            "context resolve-local",
+            "context retire",
+            // The remote history repair (vh-hyksw) joined this row.
+            "item resolve-history",
+            "remote history",
+            "remote resolve-history",
+            // Wave 06 Cycle 02: a pending setup is cancelled.
+            "repo setup-cancel",
         ],
     ),
 ];
@@ -218,7 +230,7 @@ fn catalog_publishes_only_the_available_verbs_options_and_requirements() {
         }
         if (resource, verb) == ("ticket", "list") {
             expected.extend([
-                ("--closure", Some("open|closed|all"), false),
+                ("--closure", Some("open|closed|closing|all"), false),
                 ("--slug", Some("code"), false),
                 ("--ready", None, false),
                 ("--blocked", None, false),
@@ -245,6 +257,21 @@ fn catalog_publishes_only_the_available_verbs_options_and_requirements() {
         );
         assert_eq!(actual, expected.into_iter().collect(), "options for {name}");
     }
+}
+
+/// R-8: nothing stays planned, and the test-only spec has what a planned verb
+/// has.
+#[test]
+fn nothing_is_planned_and_the_test_only_spec_is_in_no_catalog() {
+    assert!(
+        !COMMANDS
+            .iter()
+            .any(|command| matches!(command.availability, Availability::Planned(_)))
+    );
+    assert_eq!(PLANNED.availability, Availability::Planned("C9"));
+    assert_eq!(PLANNED.repo, None);
+    assert!(PLANNED.options.is_empty());
+    assert!(find(PLANNED.resource, PLANNED.verb).is_none());
 }
 
 #[test]
