@@ -26,12 +26,34 @@ const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;
 categories!(PromotionStep {
     Confirmed=>"confirmed", ContextSynchronized=>"context_synchronized", Integrating=>"integrating",
     Integrated=>"integrated", Published=>"published", PublicationPending=>"publication_pending",
-    RemoteDeleted=>"remote_deleted", WorktreeRemoving=>"worktree_removing", WorktreeRemoved=>"worktree_removed",
+    RemoteDeleting=>"remote_deleting", RemoteDeleted=>"remote_deleted", WorktreeRemoving=>"worktree_removing", WorktreeRemoved=>"worktree_removed",
     BranchDeleted=>"branch_deleted", Complete=>"complete", Abandoned=>"abandoned", Superseded=>"superseded"
 });
 impl PromotionStep {
     pub(in super::super) fn terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Abandoned | Self::Superseded)
+    }
+    /// A cleanup record's graph (R-28). With a remote, `confirmed` goes to the
+    /// delete (`remote_deleting`) or past it when there is none to make
+    /// (`remote_deleted`); without one it goes to the worktree. It may be
+    /// abandoned before the removal begins. It is never superseded, and
+    /// `complete` is written by the completion's own SQL.
+    pub(in super::super) fn cleanup_permits(self, next: Self, remote: bool) -> bool {
+        use PromotionStep::*;
+        if self.terminal() {
+            return false;
+        }
+        self == next
+            || match (self, next) {
+                (Confirmed, Abandoned)
+                | (WorktreeRemoving, WorktreeRemoved)
+                | (WorktreeRemoved, BranchDeleted) => true,
+                (Confirmed, RemoteDeleting | RemoteDeleted)
+                | (RemoteDeleting, RemoteDeleted | Abandoned)
+                | (RemoteDeleted, WorktreeRemoving) => remote,
+                (Confirmed, WorktreeRemoving) => !remote,
+                _ => false,
+            }
     }
     /// The step graph of a record in `mode`. A pull-request promotion
     /// synchronizes its context and finishes: it never integrates, publishes
@@ -94,6 +116,13 @@ categories!(PromotionAnswer {
     Promoted=>"promoted", AlreadyPromoted=>"already_promoted", PrimaryHolds=>"primary_holds",
     RemoteBranchDeleted=>"remote_branch_deleted", HistoryUnresolved=>"history_unresolved", ContextGone=>"context_gone"
 });
+// What a promotion record does: `cleanup` is `context cleanup`'s record, which
+// is never superseded and runs no integration, publication or child.
+categories!(PromotionAction { Promote=>"promote", Cleanup=>"cleanup" });
+// What a cleanup record found of the remote context branch when it deleted it,
+// stored with the step that follows, and what its answer and replay are built
+// from (R-42). `none` is no delete to make: no remote, or no `R`.
+categories!(RemoteBranchOutcome { Deleted=>"deleted", Absent=>"absent", Unneeded=>"none" });
 // Whether the document had a link row when the pull-request promotion was
 // consented to.
 categories!(PromotionSituation { First=>"first", Again=>"again" });
@@ -166,11 +195,25 @@ pub(in super::super) struct PromotionRecord {
     /// An attempt of the context child may have pushed (RR3). Once set, it
     /// stays set.
     pub context_pushed: bool,
+    /// `promote` for every record but a `context cleanup`'s, which has its own
+    /// path whatever mode it recorded.
+    pub action: PromotionAction,
+    /// A cleanup record's digest of the `unheld` list its consent bound; its
+    /// `context_oid` is `L`, its `remote_context_oid` is `R`, and its
+    /// `primary_branch` and `endpoint_digest` are what it began with. All
+    /// immutable from insert.
+    pub unheld_digest: Option<[u8; 32]>,
+    /// A cleanup record's outcome of the remote delete, stored once, with the
+    /// step after it.
+    pub remote_branch: Option<RemoteBranchOutcome>,
 }
 impl PromotionRecord {
-    /// A pull-request record takes the branch path: it publishes its context
-    /// and never integrates.
+    /// A cleanup record has its own path. A pull-request record takes the
+    /// branch path: it publishes its context and never integrates.
     pub(in super::super) fn path(&self) -> RecordPath {
+        if self.action == PromotionAction::Cleanup {
+            return RecordPath::Cleanup;
+        }
         match self.integration_mode {
             Integration::Direct => RecordPath::Direct,
             Integration::PullRequest => RecordPath::Branch,
@@ -198,6 +241,8 @@ impl std::fmt::Debug for PromotionRecord {
             .field("answer_code", &self.answer_code)
             .field("situation", &self.situation)
             .field("context_pushed", &self.context_pushed)
+            .field("action", &self.action)
+            .field("remote_branch", &self.remote_branch)
             .finish()
     }
 }
@@ -234,7 +279,9 @@ const SCHEMA_V2:&str="CREATE TABLE document_promotions (
     CHECK((step='abandoned')=(refusal_category IS NOT NULL)),
     CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL))
 )";
-const SCHEMA:&str="CREATE TABLE document_promotions (
+/// The table as the `wave_06_promotion_modes_v1` rebuild left it, frozen: the
+/// cleanup rebuild renames it away, and `V3_COLUMNS` are its columns.
+const SCHEMA_V3:&str="CREATE TABLE document_promotions (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
     item_id TEXT NOT NULL CHECK(length(item_id)=26),
@@ -280,12 +327,71 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK(step!='complete' OR integration_mode='direct' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current'))),
     CHECK(consented_context_oid IS NOT NULL OR (accepted_context_oid IS NULL AND context_pushed=0))
 )";
+const SCHEMA:&str="CREATE TABLE document_promotions (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
+    item_id TEXT NOT NULL CHECK(length(item_id)=26),
+    expectation BLOB NOT NULL CHECK(typeof(expectation)='blob' AND length(expectation)=32),
+    remote_name TEXT,
+    step TEXT NOT NULL CHECK(step IN ('confirmed','context_synchronized','integrating','integrated','published','publication_pending','remote_deleting','remote_deleted','worktree_removing','worktree_removed','branch_deleted','complete','abandoned','superseded')),
+    context_attempt INTEGER NOT NULL DEFAULT 0 CHECK(context_attempt BETWEEN 0 AND 4294967295),
+    context_sync_id TEXT UNIQUE CHECK(length(context_sync_id)=26),
+    primary_attempt INTEGER NOT NULL DEFAULT 0 CHECK(primary_attempt BETWEEN 0 AND 4294967295),
+    primary_sync_id TEXT UNIQUE CHECK(length(primary_sync_id)=26),
+    base_oid TEXT CHECK(length(base_oid)=40 AND base_oid NOT GLOB '*[^0-9a-f]*' AND base_oid!='0000000000000000000000000000000000000000'),
+    context_oid TEXT CHECK(length(context_oid)=40 AND context_oid NOT GLOB '*[^0-9a-f]*' AND context_oid!='0000000000000000000000000000000000000000'),
+    integration_oid TEXT CHECK(length(integration_oid)=40 AND integration_oid NOT GLOB '*[^0-9a-f]*' AND integration_oid!='0000000000000000000000000000000000000000'),
+    integration_kind TEXT CHECK(integration_kind IN ('merged','already_contained')),
+    remote_context_oid TEXT CHECK(length(remote_context_oid)=40 AND remote_context_oid NOT GLOB '*[^0-9a-f]*' AND remote_context_oid!='0000000000000000000000000000000000000000'),
+    publication_category TEXT CHECK(publication_category IN ('published','already_current','no_publication_remote','conflict','rejected','transport','identity','busy','yielding','cancelled','recovery_required')),
+    cleanup_category TEXT CHECK(cleanup_category IN ('awaiting_publication','context_changed','ignored_files','remote_context_changed','remote_deletion_transport','remote_deletion_rejected','remote_deletion_configuration','remote_deletion_key','remote_deletion_unlock','remote_deletion_host','recovery_required','cancelled')),
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+    updated_at INTEGER NOT NULL CHECK(updated_at>=0),
+    refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 131071),
+    integration_mode TEXT NOT NULL DEFAULT 'direct' CHECK(integration_mode IN ('direct','pull_request')),
+    answer_code TEXT CHECK(answer_code IN ('promoted','already_promoted','primary_holds','remote_branch_deleted','history_unresolved','context_gone')),
+    consented_context_oid TEXT CHECK(length(consented_context_oid)=40 AND consented_context_oid NOT GLOB '*[^0-9a-f]*' AND consented_context_oid!='0000000000000000000000000000000000000000'),
+    situation TEXT CHECK(situation IN ('first','again')),
+    primary_branch TEXT CHECK(primary_branch IS NULL OR (typeof(primary_branch)='text' AND length(primary_branch) BETWEEN 1 AND 255)),
+    endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
+    accepted_context_oid TEXT CHECK(length(accepted_context_oid)=40 AND accepted_context_oid NOT GLOB '*[^0-9a-f]*' AND accepted_context_oid!='0000000000000000000000000000000000000000'),
+    context_pushed INTEGER NOT NULL DEFAULT 0 CHECK(context_pushed IN (0,1)),
+    action TEXT NOT NULL DEFAULT 'promote' CHECK(action IN ('promote','cleanup')),
+    unheld_digest BLOB CHECK(unheld_digest IS NULL OR (typeof(unheld_digest)='blob' AND length(unheld_digest)=32)),
+    remote_branch TEXT CHECK(remote_branch IS NULL OR remote_branch IN ('deleted','absent','none')),
+    CHECK((context_attempt=0)=(context_sync_id IS NULL)),
+    CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
+    CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
+    CHECK(primary_sync_id IS NULL OR (primary_sync_id!=operation_id AND primary_sync_id IS NOT context_sync_id)),
+    CHECK((step='abandoned')=(refusal_category IS NOT NULL)),
+    CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL)),
+    CHECK(action='cleanup' OR ((consented_context_oid IS NULL)=(situation IS NULL) AND (consented_context_oid IS NULL)=(primary_branch IS NULL) AND (consented_context_oid IS NULL)=(endpoint_digest IS NULL))),
+    CHECK(integration_mode='pull_request' OR (consented_context_oid IS NULL AND answer_code IS NULL)),
+    CHECK(integration_mode='direct' OR action='cleanup' OR step='abandoned' OR consented_context_oid IS NOT NULL),
+    CHECK(integration_mode='direct' OR action='cleanup' OR (base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND cleanup_category IS NULL AND primary_attempt=0 AND step NOT IN ('integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted','superseded'))),
+    CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
+    CHECK(answer_code IS NULL OR step='complete' OR refusal_category='reconfirmation_required'),
+    CHECK(answer_code IS NULL OR consented_context_oid IS NOT NULL),
+    CHECK(step!='complete' OR integration_mode='direct' OR action='cleanup' OR (answer_code IS NOT NULL AND publication_category IS NOT NULL AND publication_category IN ('published','already_current'))),
+    CHECK(consented_context_oid IS NOT NULL OR (accepted_context_oid IS NULL AND context_pushed=0)),
+    CHECK(action!='cleanup' OR (base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND publication_category IS NULL AND answer_code IS NULL AND consented_context_oid IS NULL AND situation IS NULL AND accepted_context_oid IS NULL AND context_pushed=0 AND context_attempt=0 AND primary_attempt=0 AND context_oid IS NOT NULL AND unheld_digest IS NOT NULL AND primary_branch IS NOT NULL AND (endpoint_digest IS NULL)=(remote_name IS NULL) AND step NOT IN ('context_synchronized','integrating','integrated','published','publication_pending','superseded'))),
+    CHECK(action='cleanup' OR (unheld_digest IS NULL AND remote_branch IS NULL AND step!='remote_deleting')),
+    CHECK(action!='cleanup' OR (remote_branch IS NOT NULL)=(step IN ('remote_deleted','worktree_removing','worktree_removed','branch_deleted','complete'))),
+    CHECK(remote_branch IS NULL OR (remote_branch='none')=(remote_context_oid IS NULL)),
+    CHECK(step!='remote_deleting' OR remote_context_oid IS NOT NULL),
+    CHECK(action!='cleanup' OR refusal_category IS NULL OR refusal_category='external_change')
+)";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const BLOCKERS_MARKER: &str = "promotion_refusal_blockers_v2";
 const MODES_MARKER: &str = "wave_06_promotion_modes_v1";
+const CLEANUP_MARKER: &str = "wave_06_promotion_cleanup_v1";
 /// The 21 columns `SCHEMA_V2` has, in table order: what a table that
 /// predates the mode carries into the rebuild.
 const V2_COLUMNS: &str = "repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers";
+/// The 29 columns `SCHEMA_V3` has, in table order: what a table that predates
+/// the cleanup action carries into the rebuild.
+const V3_COLUMNS: &str = "repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,integration_mode,answer_code,consented_context_oid,situation,primary_branch,endpoint_digest,accepted_context_oid,context_pushed";
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let mut created = false;
     let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_document_promotions')",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
@@ -336,11 +442,31 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
         // the rest null; the index goes first, and the rows are copied in
         // rowid order, the order the records were made in.
         if !created {
-            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_modes; {SCHEMA}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM document_promotions_before_modes ORDER BY rowid; DROP TABLE document_promotions_before_modes;")).map_err(|_| state::recovery_required())?;
+            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_modes; {SCHEMA_V3}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM document_promotions_before_modes ORDER BY rowid; DROP TABLE document_promotions_before_modes;")).map_err(|_| state::recovery_required())?;
         }
         tx.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [MODES_MARKER],
+        )
+        .map_err(|_| state::recovery_required())?;
+    }
+    let cleaned: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CLEANUP_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !cleaned {
+        // The cleanup action, step and columns: rebuild a table that predates
+        // them. Its rows read `promote`, the column's default, with the rest
+        // null; the index goes first, and the rows are copied in rowid order.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO document_promotions_before_cleanup; {SCHEMA}; {INDEX}; INSERT INTO document_promotions({V3_COLUMNS}) SELECT {V3_COLUMNS} FROM document_promotions_before_cleanup ORDER BY rowid; DROP TABLE document_promotions_before_cleanup;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CLEANUP_MARKER],
         )
         .map_err(|_| state::recovery_required())?;
     }
@@ -386,6 +512,14 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<PromotionRecord, RepositoryError> {
             .transpose()?,
         accepted_context_oid: row.oid("accepted_context_oid")?,
         context_pushed: row.flag("context_pushed")?,
+        action: PromotionAction::parse(&row.text("action")?)?,
+        unheld_digest: row
+            .0
+            .get::<_, Option<Vec<u8>>>("unheld_digest")
+            .map_err(|_| state::recovery_required())?
+            .map(|digest| digest.try_into().map_err(|_| state::recovery_required()))
+            .transpose()?,
+        remote_branch: row.category("remote_branch", RemoteBranchOutcome::parse)?,
     };
     validate(&r)?;
     Ok(r)
@@ -436,9 +570,10 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
     {
         return Err(state::recovery_required());
     }
-    match r.integration_mode {
-        Integration::Direct => validate_direct(r)?,
-        Integration::PullRequest => validate_pull_request(r)?,
+    match r.path() {
+        RecordPath::Direct => validate_direct(r)?,
+        RecordPath::Branch => validate_pull_request(r)?,
+        RecordPath::Cleanup => validate_cleanup(r)?,
     }
     if let Some(name) = &r.remote_name {
         crate::repository::RemoteRefPlan::from_configuration(name, "main")
@@ -446,6 +581,70 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
     }
     if let Some(refusal) = &r.refusal {
         refusal.encoded()?;
+    }
+    Ok(())
+}
+/// A cleanup record (R-28, the table's CHECKs read again): none of a
+/// promotion's effects, the begin-time facts set and immutable, and the
+/// outcome of the remote delete stored from `remote_deleted` on, `none`
+/// exactly when there was no `R`.
+fn validate_cleanup(r: &PromotionRecord) -> Result<(), RepositoryError> {
+    use PromotionStep::*;
+    if r.base_oid.is_some()
+        || r.integration_oid.is_some()
+        || r.integration_kind.is_some()
+        || r.publication.is_some()
+        || r.answer_code.is_some()
+        || r.consented_context_oid.is_some()
+        || r.situation.is_some()
+        || r.accepted_context_oid.is_some()
+        || r.context_pushed
+        || r.context_attempt != 0
+        || r.primary_attempt != 0
+        || r.context_oid.is_none()
+        || r.unheld_digest.is_none()
+        || r.endpoint_digest.is_some() != r.remote_name.is_some()
+        || matches!(
+            r.step,
+            ContextSynchronized
+                | Integrating
+                | Integrated
+                | Published
+                | PublicationPending
+                | Superseded
+        )
+        || r.primary_branch.as_deref().is_none_or(|branch| {
+            branch.is_empty()
+                || branch.len() > 255
+                || r.remote_name.as_deref().is_some_and(|remote| {
+                    crate::repository::RemoteRefPlan::from_configuration(remote, branch).is_err()
+                })
+        })
+        // The outcome comes with the step after the delete, whole.
+        || r.remote_branch.is_some()
+            != matches!(
+                r.step,
+                RemoteDeleted | WorktreeRemoving | WorktreeRemoved | BranchDeleted | Complete
+            )
+        || r.remote_branch.is_some_and(|outcome| {
+            (outcome == RemoteBranchOutcome::Unneeded) != r.remote_context_oid.is_none()
+        })
+        || r.step == RemoteDeleting && r.remote_context_oid.is_none()
+        // Only a cleanup that ended refuses, and only for an external change.
+        || r.refusal.as_ref().is_some_and(|refusal| *refusal != Refusal::ExternalChange)
+        // A stop is a cleanup's own, at a step that can stop.
+        || r.cleanup.is_some()
+            && !matches!(
+                r.step,
+                Confirmed
+                    | RemoteDeleting
+                    | RemoteDeleted
+                    | WorktreeRemoving
+                    | WorktreeRemoved
+                    | BranchDeleted
+            )
+    {
+        return Err(state::recovery_required());
     }
     Ok(())
 }
@@ -602,6 +801,16 @@ pub(in super::super) fn records(
 ) -> Result<Vec<PromotionRecord>, RepositoryError> {
     parent::records(db, id)
 }
+/// Only a direct record's cleanup stop may be superseded: a pull-request
+/// record has none, and a cleanup record never is (R-33).
+fn supersedable(old: &PromotionRecord) -> bool {
+    old.path() == RecordPath::Direct && old.cleanup.is_some_and(CleanupCategory::supersedable)
+}
+/// What a request answers when it names another verb's record: the one its
+/// ID and digest found is not the one it continues.
+pub(in super::super) fn action_mismatch() -> RepositoryError {
+    parent::mismatch(KIND)
+}
 pub(in super::super) type ReplacementGuard = parent::ReplacementGuard<PromotionRecord>;
 pub(in super::super) fn replacement_guard(
     tx: &Transaction<'_>,
@@ -623,7 +832,7 @@ pub(in super::super) fn begin_record(
         return Ok(existing);
     }
     if let Some(old) = parent::unfinished_record::<PromotionRecord>(tx, id, item)? {
-        if !old.cleanup.is_some_and(CleanupCategory::supersedable) {
+        if !supersedable(&old) {
             return Err(parent::busy(KIND));
         }
         parent::supersede(tx, id, &old)?;
@@ -722,7 +931,7 @@ pub(in super::super) fn refuse_record_on(
         return Ok(existing);
     }
     if parent::unfinished_record::<PromotionRecord>(tx, id, item)?
-        .is_some_and(|old| !old.cleanup.is_some_and(CleanupCategory::supersedable))
+        .is_some_and(|old| !supersedable(&old))
     {
         return Err(parent::busy(KIND));
     }
@@ -780,9 +989,18 @@ pub(in super::super) fn save_record(
     {
         return Err(parent::mismatch(KIND));
     }
-    if !old
-        .step
-        .permits(r.step, r.remote_name.is_some(), old.integration_mode)
+    let permitted = match old.path() {
+        RecordPath::Cleanup => old.step.cleanup_permits(r.step, r.remote_name.is_some()),
+        RecordPath::Direct | RecordPath::Branch => {
+            old.step
+                .permits(r.step, r.remote_name.is_some(), old.integration_mode)
+        }
+    };
+    if !permitted
+        || old.action != r.action
+        || old.unheld_digest != r.unheld_digest
+        || !remote_branch_kept_or_written(&old, r)
+        || old.path() == RecordPath::Cleanup && old.remote_context_oid != r.remote_context_oid
         || old.integration_mode != r.integration_mode
         || old.answer_code != r.answer_code
         || old.consented_context_oid != r.consented_context_oid
@@ -800,8 +1018,23 @@ pub(in super::super) fn save_record(
     }
     validate(r)?;
     let (refusal, mask) = Refusal::encoded_columns(r.refusal.as_ref())?;
-    tx.execute("UPDATE document_promotions SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12) WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE document_promotions SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12),remote_branch=?13 WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now(),r.remote_branch.map(RemoteBranchOutcome::name)]).map_err(|_|state::recovery_required())?;
     Ok(())
+}
+/// Whether a save keeps a record's stored outcome of the remote delete, or
+/// writes it: a cleanup record's goes from none to a value once, with the step
+/// that follows the delete (`confirmed | remote_deleting → remote_deleted`), or
+/// with `confirmed → worktree_removing` when there is no remote, and never
+/// changes after. Every other record keeps none.
+fn remote_branch_kept_or_written(old: &PromotionRecord, new: &PromotionRecord) -> bool {
+    use PromotionStep::*;
+    old.remote_branch == new.remote_branch
+        || old.action == PromotionAction::Cleanup
+            && old.remote_branch.is_none()
+            && (matches!(old.step, Confirmed | RemoteDeleting) && new.step == RemoteDeleted
+                || old.step == Confirmed
+                    && new.step == WorktreeRemoving
+                    && new.remote_name.is_none())
 }
 
 /// What a finished pull-request promotion tells the link record, which the
@@ -989,7 +1222,7 @@ pub(in super::super) fn note_context_pushed(
 impl ParentRecord for PromotionRecord {
     const KIND: LifecycleKind = KIND;
     fn supersedable(&self) -> bool {
-        self.cleanup.is_some_and(CleanupCategory::supersedable)
+        supersedable(self)
     }
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)

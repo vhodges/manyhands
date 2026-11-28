@@ -304,9 +304,10 @@ impl Lifecycle for TicketClosureLifecycle {
         }
         Ok(r)
     }
-    /// A close's verb continues only a record of its own: not a withdraw's.
+    /// A close's verb continues only a record of its own: not a withdraw's
+    /// or a cleanup's.
     fn continues(r: &ClosureRecord) -> bool {
-        r.action != ClosureAction::Withdraw
+        !matches!(r.action, ClosureAction::Withdraw | ClosureAction::Cleanup)
     }
     fn replacement_guard(
         tx: &Transaction<'_>,

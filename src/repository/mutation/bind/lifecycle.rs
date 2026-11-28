@@ -376,6 +376,8 @@ fn branch_effects(
                 PreviewEffect::PullRequestLink,
             ]);
         }
+        // A cleanup record is no branch record: it previews its own effects.
+        ClosureAction::Cleanup => {}
     }
     effects
 }
@@ -434,11 +436,14 @@ fn unoffered_answer(observed: &Observed) -> Option<Answer> {
     }
 }
 
-fn closure_action(action: ClosureAction) -> PullRequestClosureAction {
+/// The action a pull-request closure's answer names. A cleanup record is no
+/// pull-request closure, and has none: its callers answer `recovery_required`.
+fn closure_action(action: ClosureAction) -> Option<PullRequestClosureAction> {
     match action {
-        ClosureAction::Close => PullRequestClosureAction::Close,
-        ClosureAction::Withdraw => PullRequestClosureAction::Withdraw,
-        ClosureAction::NewBranch => PullRequestClosureAction::NewBranch,
+        ClosureAction::Close => Some(PullRequestClosureAction::Close),
+        ClosureAction::Withdraw => Some(PullRequestClosureAction::Withdraw),
+        ClosureAction::NewBranch => Some(PullRequestClosureAction::NewBranch),
+        ClosureAction::Cleanup => None,
     }
 }
 
@@ -458,7 +463,9 @@ fn branch_preview(
     PullRequestClosurePreviewDto {
         r#type: PullRequestClosurePreviewType::PullRequestClosurePreview,
         root: root.to_owned(),
-        action: closure_action(record.action),
+        // `preview` refuses a cleanup action before it builds this.
+        action: closure_action(record.action)
+            .expect("a branch preview is of a pull-request closure"),
         item_id: item.to_string(),
         slug,
         branch: ready
@@ -1037,6 +1044,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         outcome: &BranchClosureOutcome,
         index_pending: bool,
     ) -> Ran {
+        let Some(action) = closure_action(outcome.action()) else {
+            return Ran {
+                answer: Answer::stopped(ResultCode::RecoveryRequired),
+                standing: Standing::Owed,
+            };
+        };
         self.branch_record.store(true, Ordering::Relaxed);
         let code = branch_code(outcome.answer());
         let wrote = outcome.checkpoint_oid().is_some();
@@ -1066,7 +1079,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 | ResultCode::RemoteBranchDeleted
                 | ResultCode::TicketClosed
         ) || outcome.answer() == BranchAnswer::RemoteChanged)
-            .then(|| self.branch_data(service, &accepted.root(), outcome));
+            .then(|| self.branch_data(service, &accepted.root(), action, outcome));
         branch_ran(accepted, code, index_pending, effects, data)
     }
 
@@ -1217,6 +1230,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         &self,
         service: &RepositoryService,
         root: &Path,
+        action: PullRequestClosureAction,
         outcome: &BranchClosureOutcome,
     ) -> MutationDataDto {
         let link = resolve_root(service, root).ok().and_then(|repository| {
@@ -1234,7 +1248,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         });
         MutationDataDto::PullRequestClosure(Box::new(PullRequestClosureMutationDto {
             r#type: PullRequestClosureMutationType::PullRequestClosure,
-            action: closure_action(outcome.action()),
+            action,
             closure: PullRequestClosureDto {
                 recording: match outcome.recording() {
                     BranchRecording::Recorded => PullRequestClosureRecording::Recorded,
@@ -1797,6 +1811,9 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let key = ScopeKey::for_repository(&self.root)
             .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
         if let (Some(record), Some(closure)) = (&ready.record, &ready.closure) {
+            if closure_action(record.action).is_none() {
+                return Err(Answer::stopped(ResultCode::RecoveryRequired));
+            }
             // A label from the index, as the direct preview's is.
             let slug = self.slug_of(call.service, &root);
             return Ok(Previewed {
@@ -1973,9 +1990,9 @@ fn parent_integrated(
     primary: Option<&str>,
     parent: &ParentView<LifecycleBlocker>,
 ) -> bool {
-    // A branch record never integrates: whatever its step, nothing reached
-    // primary.
-    if parent.path == RecordPath::Branch {
+    // A branch record never integrates, nor does a cleanup record: whatever
+    // its step, nothing reached primary.
+    if matches!(parent.path, RecordPath::Branch | RecordPath::Cleanup) {
         return false;
     }
     match parent.step {
@@ -1991,7 +2008,10 @@ fn parent_integrated(
         ParentStep::Integrating => parent
             .integration
             .is_some_and(|commit| evidence::still_reachable(root, primary, commit)),
-        ParentStep::Confirmed | ParentStep::ContextSynchronized | ParentStep::Abandoned => false,
+        ParentStep::Confirmed
+        | ParentStep::ContextSynchronized
+        | ParentStep::RemoteDeleting
+        | ParentStep::Abandoned => false,
     }
 }
 

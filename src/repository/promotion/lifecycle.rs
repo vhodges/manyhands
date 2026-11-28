@@ -139,6 +139,8 @@ pub(in super::super) enum ParentStep {
     Integrated,
     Published,
     PublicationPending,
+    /// A cleanup record's: the remote delete may have been sent (R-35).
+    RemoteDeleting,
     RemoteDeleted,
     WorktreeRemoving,
     WorktreeRemoved,
@@ -162,6 +164,7 @@ pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
         | ParentStep::Integrated
         | ParentStep::Published
         | ParentStep::PublicationPending
+        | ParentStep::RemoteDeleting
         | ParentStep::RemoteDeleted
         | ParentStep::WorktreeRemoving
         | ParentStep::WorktreeRemoved
@@ -174,11 +177,13 @@ pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
 
 /// Which tail of the runner a record takes. A promotion and a direct close
 /// integrate into the primary; a branch record (a pull-request close) never
-/// does, and publishes its context instead.
+/// does, and publishes its context instead; a `context cleanup`'s record
+/// (whatever mode it recorded) runs neither and has its own runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum RecordPath {
     Direct,
     Branch,
+    Cleanup,
 }
 
 /// What a branch record's step 3 gave: the commit it records is written, or
@@ -716,6 +721,7 @@ impl From<PromotionStep> for ParentStep {
             PromotionStep::Integrated => Self::Integrated,
             PromotionStep::Published => Self::Published,
             PromotionStep::PublicationPending => Self::PublicationPending,
+            PromotionStep::RemoteDeleting => Self::RemoteDeleting,
             PromotionStep::RemoteDeleted => Self::RemoteDeleted,
             PromotionStep::WorktreeRemoving => Self::WorktreeRemoving,
             PromotionStep::WorktreeRemoved => Self::WorktreeRemoved,
@@ -735,6 +741,7 @@ impl From<ParentStep> for PromotionStep {
             ParentStep::Integrated => Self::Integrated,
             ParentStep::Published => Self::Published,
             ParentStep::PublicationPending => Self::PublicationPending,
+            ParentStep::RemoteDeleting => Self::RemoteDeleting,
             ParentStep::RemoteDeleted => Self::RemoteDeleted,
             ParentStep::WorktreeRemoving => Self::WorktreeRemoving,
             ParentStep::WorktreeRemoved => Self::WorktreeRemoved,
@@ -966,24 +973,34 @@ impl Lifecycle for DocumentPromotionLifecycle {
         // A pull-request preview begins a pull-request record, with what it
         // consented to; any other request continues its own record, in the
         // mode it began in, or begins a direct one.
-        let Some((preview, facts)) = observed.and_then(|p| p.pull_request().map(|f| (p, f))) else {
-            return record::begin_record(tx, id, op, item, expectation, remote);
+        let r = match observed.and_then(|p| p.pull_request().map(|f| (p, f))) {
+            None => record::begin_record(tx, id, op, item, expectation, remote)?,
+            Some((preview, facts)) => {
+                let remote = remote.ok_or_else(state::recovery_required)?;
+                record::begin_pull_request_record(
+                    tx,
+                    id,
+                    op,
+                    item,
+                    expectation,
+                    Some(remote),
+                    &record::PullRequestBegin {
+                        consented: preview.context_oid(),
+                        situation: facts.situation,
+                        primary_branch: preview.primary_branch().to_owned(),
+                        endpoint_digest: endpoint_digest_at_begin(tx, id, remote)?,
+                    },
+                )?
+            }
         };
-        let remote = remote.ok_or_else(state::recovery_required)?;
-        record::begin_pull_request_record(
-            tx,
-            id,
-            op,
-            item,
-            expectation,
-            Some(remote),
-            &record::PullRequestBegin {
-                consented: preview.context_oid(),
-                situation: facts.situation,
-                primary_branch: preview.primary_branch().to_owned(),
-                endpoint_digest: endpoint_digest_at_begin(tx, id, remote)?,
-            },
-        )
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
+        }
+        Ok(r)
+    }
+    /// A promote's verb continues only a record of its own: not a cleanup's.
+    fn continues(r: &PromotionRecord) -> bool {
+        r.action == record::PromotionAction::Promote
     }
     fn replacement_guard(
         tx: &Transaction<'_>,
@@ -1003,7 +1020,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         refusal: &record::Refusal,
     ) -> Result<PromotionRecord, RepositoryError> {
         // The refused confirm's own mode: the configuration it observed in.
-        record::refuse_record_on(
+        let r = record::refuse_record_on(
             tx,
             id,
             op,
@@ -1012,7 +1029,11 @@ impl Lifecycle for DocumentPromotionLifecycle {
             config.publication_remote.as_deref(),
             refusal,
             config.integration(),
-        )
+        )?;
+        if !Self::continues(&r) {
+            return Err(record::action_mismatch());
+        }
+        Ok(r)
     }
     fn clear_cancellation(
         tx: &Transaction<'_>,

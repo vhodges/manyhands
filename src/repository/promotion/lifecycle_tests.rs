@@ -74,6 +74,7 @@ fn shared_view(step: record::PromotionStep) -> ParentStep {
         P::Integrated => ParentStep::Integrated,
         P::Published => ParentStep::Published,
         P::PublicationPending => ParentStep::PublicationPending,
+        P::RemoteDeleting => ParentStep::RemoteDeleting,
         P::RemoteDeleted => ParentStep::RemoteDeleted,
         P::WorktreeRemoving => ParentStep::WorktreeRemoving,
         P::WorktreeRemoved => ParentStep::WorktreeRemoved,
@@ -116,6 +117,9 @@ fn promotion_steps_map_to_the_shared_step_view() {
         endpoint_digest: None,
         accepted_context_oid: None,
         context_pushed: false,
+        action: record::PromotionAction::Promote,
+        unheld_digest: None,
+        remote_branch: None,
     };
     let all = [
         (P::Confirmed, "confirmed"),
@@ -124,6 +128,7 @@ fn promotion_steps_map_to_the_shared_step_view() {
         (P::Integrated, "integrated"),
         (P::Published, "published"),
         (P::PublicationPending, "publication_pending"),
+        (P::RemoteDeleting, "remote_deleting"),
         (P::RemoteDeleted, "remote_deleted"),
         (P::WorktreeRemoving, "worktree_removing"),
         (P::WorktreeRemoved, "worktree_removed"),

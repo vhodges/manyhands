@@ -77,6 +77,9 @@ pub enum ClosureAction {
     Close,
     Withdraw,
     NewBranch,
+    /// `context cleanup`'s record: it has a path of its own, whatever mode it
+    /// recorded.
+    Cleanup,
 }
 impl ClosureAction {
     pub(in super::super) fn name(self) -> &'static str {
@@ -84,6 +87,7 @@ impl ClosureAction {
             Self::Close => "close",
             Self::Withdraw => "withdraw",
             Self::NewBranch => "new_branch",
+            Self::Cleanup => "cleanup",
         }
     }
     pub(in super::super) fn parse(text: &str) -> Result<Self, RepositoryError> {
@@ -91,6 +95,7 @@ impl ClosureAction {
             "close" => Ok(Self::Close),
             "withdraw" => Ok(Self::Withdraw),
             "new_branch" => Ok(Self::NewBranch),
+            "cleanup" => Ok(Self::Cleanup),
             _ => Err(state::recovery_required()),
         }
     }

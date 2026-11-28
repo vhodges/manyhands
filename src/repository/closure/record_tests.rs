@@ -87,10 +87,10 @@ fn rejected(tx: &Transaction<'_>, op: OperationId, assignment: &str) -> bool {
     refused
 }
 
-/// How many of the closure table's three migration markers are set.
+/// How many of the closure table's four migration markers are set.
 fn marker(db: &Connection) -> i64 {
     db.query_row(
-        "SELECT count(*) FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1')",
+        "SELECT count(*) FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1','wave_06_closure_cleanup_v1')",
         [],
         |r| r.get(0),
     )
@@ -100,9 +100,9 @@ fn marker(db: &Connection) -> i64 {
 #[test]
 fn migration_is_all_or_nothing_and_idempotent() {
     let mut db = db();
-    db.execute_batch("DROP TABLE ticket_closures; DELETE FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1');").unwrap();
+    db.execute_batch("DROP TABLE ticket_closures; DELETE FROM registry_migrations WHERE name IN ('cycle_10_ticket_closures','closure_refusal_blockers_v2','wave_06_closure_modes_v1','wave_06_closure_cleanup_v1');").unwrap();
     // A failure anywhere in the migration leaves neither table, index nor marker.
-    db.execute_batch("CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='wave_06_closure_modes_v1' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;").unwrap();
+    db.execute_batch("CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='wave_06_closure_cleanup_v1' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;").unwrap();
     assert!(migrate_registry(&mut db).is_err());
     let leftovers: i64 = db
         .query_row(
@@ -115,8 +115,8 @@ fn migration_is_all_or_nothing_and_idempotent() {
     assert_eq!(marker(&db), 0);
     db.execute_batch("DROP TRIGGER marker_fault").unwrap();
     migrate_registry(&mut db).unwrap();
-    // A fresh registry is created at the newest layout and carries all three markers.
-    assert_eq!(marker(&db), 3);
+    // A fresh registry is created at the newest layout and carries all four markers.
+    assert_eq!(marker(&db), 4);
     // A second run changes nothing.
     let changes = db.total_changes();
     let tx = db.transaction().unwrap();
@@ -124,7 +124,7 @@ fn migration_is_all_or_nothing_and_idempotent() {
     tx.commit().unwrap();
     migrate_registry(&mut db).unwrap();
     assert_eq!(db.total_changes(), changes);
-    assert_eq!(marker(&db), 3);
+    assert_eq!(marker(&db), 4);
     audit(&db).unwrap();
     // A half-created table, or a marked but missing one, fails closed.
     for marked in [false, true] {
@@ -1302,6 +1302,10 @@ fn no_closed_by_column_or_value() {
             "pending_ref",
             "answer_code",
             "consented_context_oid",
+            "unheld_digest",
+            "primary_branch",
+            "endpoint_digest",
+            "remote_branch",
         ]
     );
     let tx = db.transaction().unwrap();
@@ -1779,7 +1783,7 @@ fn closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
     let old = refuse(&tx, &refusal(ClosureBlocker::ContextDirty));
     // The table as v1 left it: the v2 layout with the mask one bit narrower.
     tx.execute_batch(&format!(
-        "DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO before; {}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('closure_refusal_blockers_v2','wave_06_closure_modes_v1');",
+        "DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO before; {}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('closure_refusal_blockers_v2','wave_06_closure_modes_v1','wave_06_closure_cleanup_v1');",
         SCHEMA_V2.replace("4194303", "2097151")
     ))
     .unwrap();
@@ -1793,9 +1797,13 @@ fn closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
         let rebuilt = read(&tx, old.operation_id);
         assert_eq!(rebuilt.refusal, old.refusal);
         assert_eq!(rebuilt.path(), RecordPath::Direct);
-        // Both rebuilds ran once: all three markers, one each.
-        assert_eq!(marker(&tx), 3);
-        for name in ["closure_refusal_blockers_v2", "wave_06_closure_modes_v1"] {
+        // All three rebuilds ran once: all four markers, one each.
+        assert_eq!(marker(&tx), 4);
+        for name in [
+            "closure_refusal_blockers_v2",
+            "wave_06_closure_modes_v1",
+            "wave_06_closure_cleanup_v1",
+        ] {
             let marked: i64 = tx
                 .query_row(
                     "SELECT count(*) FROM registry_migrations WHERE name=?1",
@@ -1914,6 +1922,10 @@ fn branch_record(action: ClosureAction, step: ClosureStep) -> ClosureRecord {
         pending_ref: None,
         answer_code: None,
         consented_context_oid: None,
+        unheld_digest: None,
+        primary_branch: None,
+        endpoint_digest: None,
+        remote_branch: None,
     }
 }
 
@@ -1924,7 +1936,7 @@ fn branch_record(action: ClosureAction, step: ClosureStep) -> ClosureRecord {
 fn branch_records_rebuild_and_keep_direct_rows() {
     let mut db = db();
     db.execute_batch(&format!(
-        "DROP INDEX ticket_closures_unfinished; DROP TABLE ticket_closures; {SCHEMA_V2}; {INDEX}; DELETE FROM registry_migrations WHERE name='wave_06_closure_modes_v1';"
+        "DROP INDEX ticket_closures_unfinished; DROP TABLE ticket_closures; {SCHEMA_V2}; {INDEX}; DELETE FROM registry_migrations WHERE name IN ('wave_06_closure_modes_v1','wave_06_closure_cleanup_v1');"
     ))
     .unwrap();
     // Direct rows at four steps, as the older layout stored them.
@@ -2659,4 +2671,851 @@ fn a_new_branch_retires_before_it_closes_and_is_abandoned_without_its_ref() {
         )),
         RepositoryErrorKind::RecoveryRequired
     );
+}
+
+/// A row of any action, straight in SQL, returning the schema's answer: the
+/// identity columns of `branch_row`, with `columns` replacing or adding to
+/// them. `NULL` as a value clears an identity column.
+fn try_row(
+    tx: &Transaction<'_>,
+    item: &str,
+    action: &str,
+    step: &str,
+    columns: &[(&str, &str)],
+) -> rusqlite::Result<OperationId> {
+    let op = OperationId::new();
+    let mut cells: Vec<(String, String)> = [
+        ("repository_id", "1".to_owned()),
+        ("operation_id", format!("'{op}'")),
+        ("item_id", format!("'{item}'")),
+        ("expectation", format!("x'{}'", "07".repeat(32))),
+        ("remote_name", "'origin'".to_owned()),
+        ("step", format!("'{step}'")),
+        ("updated_at", "1".to_owned()),
+        ("integration_mode", "'pull_request'".to_owned()),
+        ("action", format!("'{action}'")),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value))
+    .collect();
+    for (name, value) in columns {
+        let value = value.replace("{op}", &op.to_string());
+        match cells.iter().position(|(n, _)| n == name) {
+            Some(at) => cells[at].1 = value,
+            None => cells.push(((*name).to_owned(), value)),
+        }
+    }
+    let (names, values): (Vec<_>, Vec<_>) = cells.into_iter().unzip();
+    tx.execute_batch(&format!(
+        "INSERT INTO ticket_closures({}) VALUES({})",
+        names.join(","),
+        values.join(",")
+    ))
+    .map(|()| op)
+}
+
+/// Whether saving `r` is accepted. The save is rolled back.
+fn saves(tx: &Transaction<'_>, r: &ClosureRecord) -> bool {
+    tx.execute_batch("SAVEPOINT probe").unwrap();
+    let saved = save_record(tx, 1, r).is_ok();
+    tx.execute_batch("ROLLBACK TO probe; RELEASE probe")
+        .unwrap();
+    saved
+}
+
+/// P7, R-28, R-29, R-33. A registry whose table is today's (`SCHEMA_V3`),
+/// holding a row of every step and of every action, is rebuilt once: every row
+/// reads its old action and step, byte for byte, with the four new columns
+/// null; a second run changes nothing, and a half-done migration fails
+/// closed. A cleanup row then keeps to its CHECKs, its step graph and its
+/// immutables, in either mode, and holds no context.
+#[test]
+fn cleanup_records_rebuild_once() {
+    use crate::repository::{
+        closure::lifecycle::{TicketClosureLifecycle, TicketWithdrawLifecycle},
+        promotion::lifecycle::Lifecycle,
+    };
+    let (o1, o2, o3, o4, o5) = (q('1'), q('2'), q('3'), q('4'), q('5'));
+    let ts = "'2023-11-14T22:13:20Z'";
+    let blob = format!("x'{}'", "0a".repeat(32));
+    let mut db = db();
+    db.execute_batch(&format!(
+        "DROP INDEX ticket_closures_unfinished; DROP TABLE ticket_closures; {SCHEMA_V3}; {INDEX}; DELETE FROM registry_migrations WHERE name='{CLEANUP_MARKER}';"
+    ))
+    .unwrap();
+    // Rows of every step of a direct close, and one of every branch action.
+    let record = [("closure_kind", "'record'")];
+    let synchronized = [("closure_kind", "'record'"), ("context_oid", &o1[..])];
+    let closing = [
+        ("closure_kind", "'record'"),
+        ("context_oid", &o1[..]),
+        ("base_oid", &o2[..]),
+        ("closed_at", ts),
+        ("closure_oid", &o3[..]),
+    ];
+    let integrating = [&closing[..], &[("integration_kind", "'merged'")]].concat();
+    let integrated = [&integrating[..], &[("integration_oid", &o4[..])]].concat();
+    let published = [&integrated[..], &[("publication_category", "'published'")]].concat();
+    let pending = [&integrated[..], &[("publication_category", "'transport'")]].concat();
+    let abandoned = [("refusal_category", "'external_change'")];
+    let direct: [(&str, &[(&str, &str)]); 14] = [
+        ("confirmed", &record),
+        ("context_synchronized", &synchronized),
+        ("closing", &closing),
+        ("integrating", &integrating),
+        ("integrated", &integrated),
+        ("published", &published),
+        ("publication_pending", &pending),
+        ("remote_deleted", &published),
+        ("worktree_removing", &published),
+        ("worktree_removed", &published),
+        ("branch_deleted", &published),
+        ("complete", &published),
+        ("abandoned", &abandoned),
+        ("superseded", &record),
+    ];
+    let existing = [
+        ("closure_kind", "'existing'"),
+        ("context_oid", &o1[..]),
+        ("base_oid", &o2[..]),
+    ];
+    let withdraw = [&existing[..], &[("withdraw_oid", &o5[..])]].concat();
+    let built = [
+        ("closure_kind", "'record'"),
+        ("closed_at", ts),
+        ("closure_oid", &o3[..]),
+        ("retired_oid", &o4[..]),
+        ("pending_ref", "'refs/manyhands/closures/{op}'"),
+    ];
+    let tx = db.transaction().unwrap();
+    let mut old: Vec<(OperationId, ClosureAction, Integration, ClosureStep)> = Vec::new();
+    for (n, (step, columns)) in direct.iter().enumerate() {
+        let columns = [&[("integration_mode", "'direct'")][..], columns].concat();
+        let op = try_row(&tx, &item_n(n as u8), "close", step, &columns).unwrap();
+        old.push((
+            op,
+            ClosureAction::Close,
+            Integration::Direct,
+            ClosureStep::parse(step).unwrap(),
+        ));
+    }
+    for (n, (action, step, columns)) in [
+        ("close", "publication_pending", &existing[..]),
+        ("withdraw", "closing", &withdraw[..]),
+        ("new_branch", "confirmed", &built[..]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut columns = columns.to_vec();
+        if step == "publication_pending" {
+            columns.push(("publication_category", "'transport'"));
+        }
+        let op = try_row(&tx, &item_n(20 + n as u8), action, step, &columns).unwrap();
+        old.push((
+            op,
+            ClosureAction::parse(action).unwrap(),
+            Integration::PullRequest,
+            ClosureStep::parse(step).unwrap(),
+        ));
+    }
+    assert_eq!(old.len(), 17);
+    tx.commit().unwrap();
+    let dump = |db: &Connection, columns: &str| -> Vec<Vec<rusqlite::types::Value>> {
+        let mut q = db
+            .prepare(&format!(
+                "SELECT {columns} FROM ticket_closures ORDER BY rowid"
+            ))
+            .unwrap();
+        let count = q.column_count();
+        q.query_map([], |row| {
+            (0..count)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+    };
+    let before = dump(&db, V3_COLUMNS);
+    assert_eq!(before.len(), 17);
+    assert_eq!(dump(&db, "*")[0].len(), 32);
+    assert_eq!(V3_COLUMNS.split(',').count(), 32);
+    // A V3 table has no `cleanup` action, and no `remote_deleting` step.
+    assert!(
+        db.execute("UPDATE ticket_closures SET action='cleanup'", [])
+            .is_err()
+    );
+    migrate_registry(&mut db).unwrap();
+    // One rebuild: every old row byte for byte, reading its old action, step
+    // and mode; the four new columns null; the marker once.
+    assert_eq!(dump(&db, V3_COLUMNS), before);
+    for (op, action, mode, step) in &old {
+        let r = read(&db.unchecked_transaction().unwrap(), *op);
+        assert_eq!(
+            (r.action, r.integration_mode, r.step),
+            (*action, *mode, *step)
+        );
+        assert_ne!(r.path(), RecordPath::Cleanup);
+        // Each verb still continues its own record, and only that.
+        assert_eq!(
+            TicketClosureLifecycle::continues(&r),
+            r.action != ClosureAction::Withdraw
+        );
+        assert_eq!(
+            TicketWithdrawLifecycle::continues(&r),
+            r.action == ClosureAction::Withdraw
+        );
+        assert_eq!(
+            (
+                r.unheld_digest,
+                &r.primary_branch,
+                r.endpoint_digest,
+                r.remote_branch
+            ),
+            (None, &None, None, None)
+        );
+    }
+    assert_eq!(marker_of(&db, CLEANUP_MARKER), 1);
+    audit(&db).unwrap();
+    let changes = db.total_changes();
+    migrate_registry(&mut db).unwrap();
+    assert_eq!(db.total_changes(), changes, "a second run changes nothing");
+    assert_eq!(dump(&db, V3_COLUMNS), before);
+    // A half-done migration fails closed: the marker with a table that is not
+    // the new one, and a table of the old layout left under the rename's name.
+    {
+        let mut half = self::db();
+        half.execute_batch(&format!(
+            "DROP INDEX ticket_closures_unfinished; DROP TABLE ticket_closures; {SCHEMA_V3}; {INDEX};"
+        ))
+        .unwrap();
+        assert_eq!(
+            migrate_registry(&mut half).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "marked, but still the old table"
+        );
+        half.execute_batch(&format!(
+            "DELETE FROM registry_migrations WHERE name='{CLEANUP_MARKER}'; CREATE TABLE ticket_closures_before_cleanup(x);"
+        ))
+        .unwrap();
+        assert_eq!(
+            migrate_registry(&mut half).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "a leftover table of the rebuild"
+        );
+        // A fault at the marker undoes the whole rebuild.
+        half.execute_batch(&format!(
+            "DROP TABLE ticket_closures_before_cleanup; CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='{CLEANUP_MARKER}' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
+        ))
+        .unwrap();
+        assert!(migrate_registry(&mut half).is_err());
+        assert_eq!(marker_of(&half, CLEANUP_MARKER), 0);
+        let stored: String = half
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='ticket_closures'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, SCHEMA_V3, "still the old table");
+        half.execute_batch("DROP TRIGGER marker_fault").unwrap();
+        migrate_registry(&mut half).unwrap();
+        assert_eq!(marker_of(&half, CLEANUP_MARKER), 1);
+    }
+
+    // A cleanup row's CHECKs, in either mode.
+    let tx = db.transaction().unwrap();
+    let mut n = 100u8;
+    let mut next = || {
+        n += 1;
+        item_n(n)
+    };
+    let base = |extra: &[(&'static str, String)]| -> Vec<(&'static str, String)> {
+        let mut cells: Vec<(&'static str, String)> = vec![
+            ("context_oid", q('1')),
+            ("unheld_digest", format!("x'{}'", "0a".repeat(32))),
+            ("primary_branch", "'main'".to_owned()),
+            ("endpoint_digest", format!("x'{}'", "0b".repeat(32))),
+        ];
+        for (name, value) in extra {
+            match cells.iter().position(|(n, _)| n == name) {
+                Some(at) => cells[at].1 = value.clone(),
+                None => cells.push((name, value.clone())),
+            }
+        }
+        cells
+    };
+    let cleanup = |tx: &Transaction<'_>,
+                   item: &str,
+                   mode: &str,
+                   step: &str,
+                   extra: &[(&'static str, String)]|
+     -> rusqlite::Result<OperationId> {
+        let cells = base(extra);
+        let mode_text = format!("'{mode}'");
+        let mut columns: Vec<(&str, &str)> = vec![("integration_mode", mode_text.as_str())];
+        columns.extend(cells.iter().map(|(n, v)| (*n, v.as_str())));
+        try_row(tx, item, "cleanup", step, &columns)
+    };
+    let s = |text: &str| text.to_owned();
+    let none = || s("NULL");
+    let remoteless = [("remote_name", none()), ("endpoint_digest", none())];
+    let with_r = [("remote_context_oid", o5.clone())];
+    let deleted = [
+        ("remote_context_oid", o5.clone()),
+        ("remote_branch", s("'deleted'")),
+    ];
+    for mode in ["direct", "pull_request"] {
+        let accepted: Vec<Case<'_>> = vec![
+            ("with a remote and R", "confirmed", with_r.to_vec()),
+            ("with a remote and no R", "confirmed", vec![]),
+            ("without a remote", "confirmed", remoteless.to_vec()),
+            ("deleting", "remote_deleting", with_r.to_vec()),
+            ("deleted", "remote_deleted", deleted.to_vec()),
+            (
+                "absent",
+                "remote_deleted",
+                vec![
+                    ("remote_context_oid", o5.clone()),
+                    ("remote_branch", s("'absent'")),
+                ],
+            ),
+            (
+                "nothing to delete",
+                "remote_deleted",
+                vec![("remote_branch", s("'none'"))],
+            ),
+            ("worktree removing", "worktree_removing", deleted.to_vec()),
+            ("worktree removed", "worktree_removed", deleted.to_vec()),
+            ("branch deleted", "branch_deleted", deleted.to_vec()),
+            ("complete", "complete", deleted.to_vec()),
+            (
+                "no remote at the worktree",
+                "worktree_removing",
+                [&remoteless[..], &[("remote_branch", s("'none'"))]].concat(),
+            ),
+            (
+                "a stop at the worktree",
+                "worktree_removing",
+                [
+                    &deleted[..],
+                    &[("cleanup_category", s("'context_changed'"))],
+                ]
+                .concat(),
+            ),
+            (
+                "a stop while deleting",
+                "remote_deleting",
+                [
+                    &with_r[..],
+                    &[("cleanup_category", s("'remote_deletion_transport'"))],
+                ]
+                .concat(),
+            ),
+            (
+                "abandoned",
+                "abandoned",
+                vec![("refusal_category", s("'external_change'"))],
+            ),
+        ];
+        for (label, step, extra) in &accepted {
+            let op = cleanup(&tx, &next(), mode, step, extra)
+                .unwrap_or_else(|e| panic!("{mode} {label}: {e}"));
+            let r = read(&tx, op);
+            assert_eq!(r.path(), RecordPath::Cleanup, "{mode} {label}");
+            assert_eq!(r.action, ClosureAction::Cleanup, "{mode} {label}");
+            assert_eq!(r.integration_mode.as_str(), mode, "{mode} {label}");
+            assert_eq!(r.step.name(), *step, "{mode} {label}");
+            assert_eq!(r.closure_kind, None);
+            assert_eq!(r.merged_context(), Some(oid('1')), "{mode} {label}");
+            assert_eq!(r.unheld_digest, Some([0x0a; 32]));
+            assert_eq!(r.primary_branch.as_deref(), Some("main"));
+            assert_eq!(r.endpoint_digest.is_some(), r.remote_name.is_some());
+            assert!(!r.supersedable(), "{mode} {label}: never superseded");
+            assert!(
+                !TicketClosureLifecycle::continues(&r) && !TicketWithdrawLifecycle::continues(&r),
+                "{mode} {label}: neither the close nor the withdraw continues it"
+            );
+            assert_eq!(
+                deletion_reservation_required(&r),
+                r.remote_name.is_some(),
+                "{mode} {label}"
+            );
+            assert_eq!(
+                written_closure_holder(&tx, 1, &r.item_id).unwrap(),
+                None,
+                "{mode} {label}: a cleanup holds no branch"
+            );
+        }
+        let junk = s("'31'");
+        let sync = s("'01ARZ3NDEKTSV4RRFFQ69G5FB0'");
+        let refused: Vec<Case<'_>> = vec![
+            (
+                "a closure effect",
+                "confirmed",
+                vec![("closure_kind", s("'record'"))],
+            ),
+            (
+                "a closed_at",
+                "confirmed",
+                vec![("closed_at", s(ts)), ("closure_oid", o3.clone())],
+            ),
+            ("a base", "confirmed", vec![("base_oid", o2.clone())]),
+            (
+                "an integration",
+                "confirmed",
+                vec![
+                    ("integration_oid", o4.clone()),
+                    ("integration_kind", s("'merged'")),
+                ],
+            ),
+            (
+                "a publication",
+                "confirmed",
+                vec![("publication_category", s("'published'"))],
+            ),
+            (
+                "a context attempt",
+                "confirmed",
+                vec![
+                    ("context_attempt", s("1")),
+                    ("context_sync_id", sync.clone()),
+                ],
+            ),
+            (
+                "a primary attempt",
+                "confirmed",
+                vec![
+                    ("primary_attempt", s("1")),
+                    ("primary_sync_id", sync.clone()),
+                ],
+            ),
+            (
+                "a withdraw",
+                "confirmed",
+                vec![("withdraw_oid", o5.clone())],
+            ),
+            (
+                "a retirement",
+                "confirmed",
+                vec![("retired_oid", o4.clone())],
+            ),
+            (
+                "an answer",
+                "complete",
+                [&deleted[..], &[("answer_code", s("'merged'"))]].concat(),
+            ),
+            (
+                "a consented head",
+                "confirmed",
+                vec![("consented_context_oid", o1.clone())],
+            ),
+            ("no L", "confirmed", vec![("context_oid", none())]),
+            (
+                "no unheld digest",
+                "confirmed",
+                vec![("unheld_digest", none())],
+            ),
+            (
+                "a short unheld digest",
+                "confirmed",
+                vec![("unheld_digest", junk.clone())],
+            ),
+            (
+                "no primary branch",
+                "confirmed",
+                vec![("primary_branch", none())],
+            ),
+            (
+                "an empty primary branch",
+                "confirmed",
+                vec![("primary_branch", s("''"))],
+            ),
+            (
+                "a remote and no endpoint",
+                "confirmed",
+                vec![("endpoint_digest", none())],
+            ),
+            (
+                "an endpoint and no remote",
+                "confirmed",
+                vec![("remote_name", none())],
+            ),
+            ("closing", "closing", vec![]),
+            ("context_synchronized", "context_synchronized", vec![]),
+            ("integrating", "integrating", vec![]),
+            ("integrated", "integrated", vec![]),
+            ("published", "published", vec![]),
+            ("publication_pending", "publication_pending", vec![]),
+            ("retired", "retired", vec![]),
+            ("superseded", "superseded", vec![]),
+            (
+                "an outcome at confirmed",
+                "confirmed",
+                vec![("remote_branch", s("'none'"))],
+            ),
+            (
+                "an outcome while deleting",
+                "remote_deleting",
+                [&with_r[..], &[("remote_branch", s("'deleted'"))]].concat(),
+            ),
+            ("no outcome once deleted", "remote_deleted", with_r.to_vec()),
+            (
+                "no outcome at the worktree",
+                "worktree_removing",
+                with_r.to_vec(),
+            ),
+            ("no outcome at complete", "complete", with_r.to_vec()),
+            (
+                "none with an R",
+                "remote_deleted",
+                vec![
+                    ("remote_context_oid", o5.clone()),
+                    ("remote_branch", s("'none'")),
+                ],
+            ),
+            (
+                "deleted with no R",
+                "remote_deleted",
+                vec![("remote_branch", s("'deleted'"))],
+            ),
+            (
+                "an unknown outcome",
+                "remote_deleted",
+                vec![("remote_branch", s("'gone'"))],
+            ),
+            ("deleting with no R", "remote_deleting", vec![]),
+            (
+                "a blocked refusal",
+                "abandoned",
+                vec![
+                    ("refusal_category", s("'blocked'")),
+                    ("refusal_blockers", s("1")),
+                ],
+            ),
+            (
+                "a reconfirmation refusal",
+                "abandoned",
+                vec![("refusal_category", s("'reconfirmation_required'"))],
+            ),
+            (
+                "a refusal on a live record",
+                "confirmed",
+                vec![("refusal_category", s("'external_change'"))],
+            ),
+        ];
+        // A table reports every row it gets wrong.
+        let accepted_wrongly: Vec<&str> = refused
+            .iter()
+            .filter(|(_, step, extra)| cleanup(&tx, &next(), mode, step, extra).is_ok())
+            .map(|(label, _, _)| *label)
+            .collect();
+        assert!(
+            accepted_wrongly.is_empty(),
+            "{mode}: the schema accepts {accepted_wrongly:?}"
+        );
+    }
+    // Only a cleanup row has them: every other action refuses the columns and
+    // the step.
+    for (action, mode, step, extra) in [
+        (
+            "close",
+            "direct",
+            "confirmed",
+            ("unheld_digest", blob.as_str()),
+        ),
+        ("close", "direct", "confirmed", ("primary_branch", "'main'")),
+        (
+            "withdraw",
+            "pull_request",
+            "closing",
+            ("remote_branch", "'none'"),
+        ),
+        (
+            "close",
+            "direct",
+            "remote_deleting",
+            ("remote_context_oid", o5.as_str()),
+        ),
+        (
+            "new_branch",
+            "pull_request",
+            "remote_deleting",
+            ("remote_context_oid", o5.as_str()),
+        ),
+    ] {
+        let mut columns = vec![
+            ("integration_mode", format!("'{mode}'")),
+            ("closure_kind", "'record'".to_owned()),
+            (extra.0, extra.1.to_owned()),
+        ];
+        if action == "withdraw" {
+            columns.extend([
+                ("closure_kind", "'existing'".to_owned()),
+                ("context_oid", o1.clone()),
+                ("base_oid", o2.clone()),
+                ("withdraw_oid", o5.clone()),
+            ]);
+        }
+        let columns: Vec<(&str, &str)> = columns.iter().map(|(n, v)| (*n, v.as_str())).collect();
+        assert!(
+            try_row(&tx, &next(), action, step, &columns).is_err(),
+            "{action} {step} {}",
+            extra.0
+        );
+    }
+    // The step graph: with a remote, `confirmed` goes to the delete or past it
+    // when there is none to make; without one, to the worktree; either may be
+    // abandoned before the removal; nothing is superseded or restarted.
+    let steps = [
+        "confirmed",
+        "context_synchronized",
+        "closing",
+        "integrating",
+        "integrated",
+        "published",
+        "publication_pending",
+        "remote_deleting",
+        "remote_deleted",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleted",
+        "retired",
+        "complete",
+        "abandoned",
+        "superseded",
+    ];
+    let mut wrong: Vec<String> = Vec::new();
+    for remote in [true, false] {
+        let graph: &[(&str, &str)] = if remote {
+            &[
+                ("confirmed", "remote_deleting"),
+                ("confirmed", "remote_deleted"),
+                ("remote_deleting", "remote_deleted"),
+                ("remote_deleted", "worktree_removing"),
+                ("worktree_removing", "worktree_removed"),
+                ("worktree_removed", "branch_deleted"),
+                ("confirmed", "abandoned"),
+                ("remote_deleting", "abandoned"),
+            ]
+        } else {
+            &[
+                ("confirmed", "worktree_removing"),
+                ("worktree_removing", "worktree_removed"),
+                ("worktree_removed", "branch_deleted"),
+                ("confirmed", "abandoned"),
+            ]
+        };
+        for from in steps {
+            for to in steps {
+                let (a, b) = (
+                    ClosureStep::parse(from).unwrap(),
+                    ClosureStep::parse(to).unwrap(),
+                );
+                let expected = !a.terminal() && (from == to || graph.contains(&(from, to)));
+                if a.cleanup_permits(b, remote) != expected {
+                    wrong.push(format!(
+                        "{from} -> {to}, remote {remote}: expected {expected}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "the graph differs at {wrong:#?}");
+    // The immutables: a save changes the step and the outcome, nothing else.
+    let op = cleanup(&tx, &next(), "pull_request", "confirmed", &with_r).unwrap();
+    let mut r = read(&tx, op);
+    let moved = |r: &ClosureRecord, change: &dyn Fn(&mut ClosureRecord)| {
+        let mut r = r.clone();
+        change(&mut r);
+        r
+    };
+    assert!(saves(&tx, &r), "unchanged");
+    for (label, change) in [
+        (
+            "L",
+            &(|r: &mut ClosureRecord| r.context_oid = Some(oid('9')))
+                as &dyn Fn(&mut ClosureRecord),
+        ),
+        ("R", &|r| r.remote_context_oid = None),
+        ("the unheld digest", &|r| r.unheld_digest = Some([1; 32])),
+        ("the primary branch", &|r| {
+            r.primary_branch = Some("dev".into())
+        }),
+        ("the endpoint digest", &|r| {
+            r.endpoint_digest = Some([1; 32])
+        }),
+        ("the action", &|r| r.action = ClosureAction::Close),
+        ("the mode", &|r| r.integration_mode = Integration::Direct),
+    ] {
+        assert!(!saves(&tx, &moved(&r, change)), "{label} is immutable");
+    }
+    let to = |r: &ClosureRecord, step, outcome| {
+        moved(r, &|r| {
+            r.step = step;
+            r.remote_branch = outcome;
+        })
+    };
+    use ClosureStep::*;
+    assert!(
+        !saves(&tx, &to(&r, WorktreeRemoving, None)),
+        "not past the delete"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, RemoteDeleting, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "no outcome before the delete is known"
+    );
+    assert!(
+        !saves(&tx, &to(&r, RemoteDeleted, None)),
+        "an outcome with the delete"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, RemoteDeleted, Some(RemoteBranchOutcome::Unneeded))
+        ),
+        "none says there was no R"
+    );
+    assert!(
+        !saves(&tx, &to(&r, Complete, Some(RemoteBranchOutcome::Deleted))),
+        "complete is its own write"
+    );
+    assert!(!saves(&tx, &to(&r, Superseded, None)), "never superseded");
+    assert!(
+        !saves(
+            &tx,
+            &moved(&r, &|r| r.refusal = Some(Refusal::ExternalChange))
+        ),
+        "a refusal is for the abandoned"
+    );
+    r = to(&r, RemoteDeleting, None);
+    save_record(&tx, 1, &r).unwrap();
+    assert!(!saves(&tx, &to(&r, Confirmed, None)), "no step back");
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "the delete first"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &moved(&to(&r, Abandoned, None), &|r| r.refusal =
+                Some(Refusal::Blocked(vec![ClosureBlocker::ContextDirty])))
+        ),
+        "only an external change ends a cleanup"
+    );
+    r = to(&r, RemoteDeleted, Some(RemoteBranchOutcome::Absent));
+    save_record(&tx, 1, &r).unwrap();
+    assert!(
+        !saves(
+            &tx,
+            &moved(&r, &|r| r.remote_branch =
+                Some(RemoteBranchOutcome::Deleted))
+        ),
+        "the outcome is stored once"
+    );
+    assert!(!saves(&tx, &moved(&r, &|r| r.remote_branch = None)));
+    for step in [WorktreeRemoving, WorktreeRemoved, BranchDeleted] {
+        r = to(&r, step, r.remote_branch);
+        save_record(&tx, 1, &r).unwrap();
+    }
+    assert_eq!(
+        read(&tx, op).remote_branch,
+        Some(RemoteBranchOutcome::Absent)
+    );
+    // With no remote the outcome is `none`, written with the step to the worktree.
+    let op = cleanup(&tx, &next(), "direct", "confirmed", &remoteless).unwrap();
+    let r = read(&tx, op);
+    assert!(
+        !saves(&tx, &to(&r, RemoteDeleting, None)),
+        "no delete to make"
+    );
+    assert!(
+        !saves(&tx, &to(&r, WorktreeRemoving, None)),
+        "the outcome goes with the step"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "none says there was no R"
+    );
+    save_record(
+        &tx,
+        1,
+        &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Unneeded)),
+    )
+    .unwrap();
+    // Abandoned from `confirmed`, with the external change.
+    let op = cleanup(&tx, &next(), "direct", "confirmed", &[]).unwrap();
+    let r = read(&tx, op);
+    let ended = moved(&to(&r, Abandoned, None), &|r| {
+        r.refusal = Some(Refusal::ExternalChange)
+    });
+    save_record(&tx, 1, &ended).unwrap();
+    assert!(read(&tx, op).step.terminal());
+    // A cleanup record holds no branch: the holder reads a branch record at
+    // its step and ignores a cleanup one at every step, alone or beside one.
+    let other = item_n(250);
+    branch_row(
+        &tx,
+        &other,
+        "close",
+        "closing",
+        &[
+            ("closure_kind", "'existing'"),
+            ("context_oid", &o1),
+            ("base_oid", &o2),
+        ],
+    );
+    assert!(
+        written_closure_holder(&tx, 1, &item(&other))
+            .unwrap()
+            .is_some()
+    );
+    for step in [
+        "confirmed",
+        "remote_deleting",
+        "remote_deleted",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleted",
+    ] {
+        let item_text = next();
+        let extra = if matches!(step, "confirmed" | "remote_deleting") {
+            &with_r[..]
+        } else {
+            &deleted[..]
+        };
+        cleanup(&tx, &item_text, "pull_request", step, extra).unwrap();
+        let item = item(&item_text);
+        assert!(
+            !written_closure_unfinished(&tx, 1, &item).unwrap(),
+            "{step}"
+        );
+        assert_eq!(
+            written_closure_holder(&tx, 1, &item).unwrap(),
+            None,
+            "{step}"
+        );
+    }
+}
+
+/// A cleanup test's row: its label, its step and the columns it sets.
+type Case<'a> = (&'a str, &'a str, Vec<(&'static str, String)>);
+/// How many times the registry has recorded the migration `name`.
+fn marker_of(db: &Connection, name: &str) -> i64 {
+    db.query_row(
+        "SELECT count(*) FROM registry_migrations WHERE name=?1",
+        [name],
+        |r| r.get(0),
+    )
+    .unwrap()
 }

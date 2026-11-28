@@ -464,7 +464,8 @@ pub(in super::super) enum ChildRole {
 /// record, the publication child of a branch record.
 fn second_role(path: RecordPath) -> ChildRole {
     match path {
-        RecordPath::Direct => ChildRole::Primary,
+        // A cleanup record mints no child: its slot is never used.
+        RecordPath::Direct | RecordPath::Cleanup => ChildRole::Primary,
         RecordPath::Branch => ChildRole::Publication,
     }
 }
@@ -473,6 +474,7 @@ fn second_role(path: RecordPath) -> ChildRole {
 /// publication child only from `closing` or `publication_pending`.
 fn child_allowed(facts: &ParentFacts, role: ChildRole) -> bool {
     match (facts.path, role) {
+        (RecordPath::Cleanup, _) => false,
         (_, ChildRole::Context) => facts.step == ParentStep::Confirmed,
         (RecordPath::Direct, ChildRole::Primary) => matches!(
             facts.step,

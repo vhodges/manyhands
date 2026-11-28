@@ -702,6 +702,9 @@ fn privacy_column_inventory_for_both_new_tables() {
                 "endpoint_digest",
                 "accepted_context_oid",
                 "context_pushed",
+                "action",
+                "unheld_digest",
+                "remote_branch",
             ],
         ),
         (
@@ -1517,7 +1520,7 @@ fn promotion_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
     let old = refused_promotion(&tx, vec![PromotionBlocker::ContextDirty]);
     // The table as v1 left it: the v2 layout with the mask one bit narrower.
     tx.execute_batch(&format!(
-        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('promotion_refusal_blockers_v2','wave_06_promotion_modes_v1');",
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('promotion_refusal_blockers_v2','wave_06_promotion_modes_v1','wave_06_promotion_cleanup_v1');",
         SCHEMA_V2.replace("131071", "65535")
     ))
     .unwrap();
@@ -1661,7 +1664,7 @@ fn promotion_modes_migration_rebuilds_a_v2_table_once() {
     );
     // The table as the v2 rebuild left it, with the modes marker not yet run.
     tx.execute_batch(&format!(
-        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {SCHEMA_V2}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before ORDER BY rowid; DROP TABLE before; DELETE FROM registry_migrations WHERE name='{MODES_MARKER}';"
+        "DROP INDEX document_promotions_unfinished; ALTER TABLE document_promotions RENAME TO before; {SCHEMA_V2}; {INDEX}; INSERT INTO document_promotions({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM before ORDER BY rowid; DROP TABLE before; DELETE FROM registry_migrations WHERE name IN ('{MODES_MARKER}','{CLEANUP_MARKER}');"
     ))
     .unwrap();
     assert_eq!(dump(&tx, "*").first().map(Vec::len), Some(21));
@@ -1733,6 +1736,7 @@ fn promotion_modes_migration_rebuilds_a_v2_table_once() {
         "cycle_09_document_promotions",
         "promotion_refusal_blockers_v2",
         MODES_MARKER,
+        CLEANUP_MARKER,
     ] {
         assert_eq!(marker_count(&tx, marker), 1, "{marker}");
     }
@@ -1816,6 +1820,9 @@ fn pull_request(step: PromotionStep, item: &str) -> PromotionRecord {
         endpoint_digest: Some([9; 32]),
         accepted_context_oid: None,
         context_pushed: false,
+        action: PromotionAction::Promote,
+        unheld_digest: None,
+        remote_branch: None,
     }
 }
 
@@ -3249,4 +3256,715 @@ fn pull_request_begin_and_finish_write_their_columns() {
         Ok(())
     })
     .unwrap();
+}
+
+/// A cleanup test's row: its label, its step and the columns it sets.
+type Case<'a> = (&'a str, &'a str, Vec<(&'static str, String)>);
+type Change = dyn Fn(&mut PromotionRecord);
+/// The `n`th test document: a valid ULID of its own.
+fn doc_n(n: u8) -> String {
+    const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    format!(
+        "01ARZ3NDEKTSV4RRFFQ69G5F{}{}",
+        ALPHABET[usize::from(n / 32)] as char,
+        ALPHABET[usize::from(n % 32)] as char
+    )
+}
+/// `digit` repeated as a quoted SQL OID literal.
+fn quoted(digit: char) -> String {
+    format!("'{}'", digit.to_string().repeat(40))
+}
+/// A row of either action, straight in SQL, returning the schema's answer:
+/// the identity columns, with `columns` replacing or adding to them. `NULL`
+/// as a value clears an identity column.
+fn try_row(
+    tx: &Transaction<'_>,
+    item: &str,
+    step: &str,
+    columns: &[(&str, &str)],
+) -> rusqlite::Result<OperationId> {
+    let op = OperationId::new();
+    let mut cells: Vec<(String, String)> = [
+        ("repository_id", "1".to_owned()),
+        ("operation_id", format!("'{op}'")),
+        ("item_id", format!("'{item}'")),
+        ("expectation", format!("x'{}'", "07".repeat(32))),
+        ("remote_name", "'origin'".to_owned()),
+        ("step", format!("'{step}'")),
+        ("updated_at", "1".to_owned()),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value))
+    .collect();
+    for (name, value) in columns {
+        match cells.iter().position(|(n, _)| n == name) {
+            Some(at) => cells[at].1 = (*value).to_owned(),
+            None => cells.push(((*name).to_owned(), (*value).to_owned())),
+        }
+    }
+    let (names, values): (Vec<_>, Vec<_>) = cells.into_iter().unzip();
+    tx.execute_batch(&format!(
+        "INSERT INTO document_promotions({}) VALUES({})",
+        names.join(","),
+        values.join(",")
+    ))
+    .map(|()| op)
+}
+/// Whether saving `r` is accepted. The save is rolled back.
+fn saves(tx: &Transaction<'_>, r: &PromotionRecord) -> bool {
+    tx.execute_batch("SAVEPOINT probe").unwrap();
+    let saved = save_record(tx, 1, r).is_ok();
+    tx.execute_batch("ROLLBACK TO probe; RELEASE probe")
+        .unwrap();
+    saved
+}
+
+/// P7, R-28, R-29, R-33. A registry whose table is today's (`SCHEMA_V3`),
+/// holding a row of every step and of both modes, is rebuilt once: every row
+/// reads as the promotion it was, byte for byte, with the new columns null or
+/// defaulted; a second run changes nothing, and a half-done migration fails
+/// closed. A cleanup row then keeps to its CHECKs, its step graph and its
+/// immutables, in either mode, and is never superseded.
+#[test]
+fn cleanup_records_rebuild_once() {
+    use crate::repository::promotion::lifecycle::{
+        DocumentPromotionLifecycle, Lifecycle, LifecycleRecord,
+    };
+    let (o1, o2, o3, o5) = (quoted('1'), quoted('2'), quoted('3'), quoted('5'));
+    let blob = |byte: &str| format!("x'{}'", byte.repeat(32));
+    let mut db = db();
+    db.execute_batch(&format!(
+        "DROP INDEX document_promotions_unfinished; DROP TABLE document_promotions; {SCHEMA_V3}; {INDEX}; DELETE FROM registry_migrations WHERE name='{CLEANUP_MARKER}';"
+    ))
+    .unwrap();
+    // Direct rows at every step, and the pull-request rows the mode has.
+    let synchronized = [("context_oid", &o1[..])];
+    let integrating = [
+        ("context_oid", &o1[..]),
+        ("base_oid", &o2[..]),
+        ("integration_kind", "'merged'"),
+    ];
+    let integrated = [&integrating[..], &[("integration_oid", &o3[..])]].concat();
+    let published = [&integrated[..], &[("publication_category", "'published'")]].concat();
+    let pending = [&integrated[..], &[("publication_category", "'transport'")]].concat();
+    let abandoned = [("refusal_category", "'external_change'")];
+    let direct: [(&str, &[(&str, &str)]); 13] = [
+        ("confirmed", &[]),
+        ("context_synchronized", &synchronized),
+        ("integrating", &integrating),
+        ("integrated", &integrated),
+        ("published", &published),
+        ("publication_pending", &pending),
+        ("remote_deleted", &published),
+        ("worktree_removing", &published),
+        ("worktree_removed", &published),
+        ("branch_deleted", &published),
+        ("complete", &published),
+        ("abandoned", &abandoned),
+        ("superseded", &[]),
+    ];
+    let tx = db.transaction().unwrap();
+    let mut old: Vec<(OperationId, Integration, PromotionStep)> = Vec::new();
+    for (n, (step, columns)) in direct.iter().enumerate() {
+        let op = try_row(&tx, &doc_n(n as u8), step, columns).unwrap();
+        old.push((op, Integration::Direct, PromotionStep::parse(step).unwrap()));
+    }
+    for (n, step) in [
+        PromotionStep::Confirmed,
+        PromotionStep::ContextSynchronized,
+        PromotionStep::Complete,
+        PromotionStep::Abandoned,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = pull_request(step, &doc_n(20 + n as u8));
+        insert_row(&tx, &r).unwrap();
+        old.push((r.operation_id, Integration::PullRequest, step));
+    }
+    assert_eq!(old.len(), 17);
+    tx.commit().unwrap();
+    let before = dump(&db, V3_COLUMNS);
+    assert_eq!(before.len(), 17);
+    assert_eq!(dump(&db, "*")[0].len(), 29);
+    assert_eq!(V3_COLUMNS.split(',').count(), 29);
+    // A V3 table has no `cleanup` action, and no `remote_deleting` step.
+    assert!(
+        db.execute("UPDATE document_promotions SET step='remote_deleting'", [])
+            .is_err()
+    );
+    migrate_registry(&mut db).unwrap();
+    // One rebuild: every old row byte for byte, reading as a promotion in its
+    // mode and step; the new columns null, and the action `promote`.
+    assert_eq!(dump(&db, V3_COLUMNS), before);
+    let tx = db.transaction().unwrap();
+    for (op, mode, step) in &old {
+        let r = read_record(&tx, 1, *op).unwrap().unwrap();
+        assert_eq!((r.integration_mode, r.step), (*mode, *step));
+        assert_eq!(r.action, PromotionAction::Promote);
+        assert_ne!(r.path(), RecordPath::Cleanup);
+        assert!(DocumentPromotionLifecycle::continues(&r));
+        assert_eq!((r.unheld_digest, r.remote_branch), (None, None));
+    }
+    tx.rollback().unwrap();
+    assert_eq!(marker_count(&db, CLEANUP_MARKER), 1);
+    audit(&db).unwrap();
+    let changes = db.total_changes();
+    migrate_registry(&mut db).unwrap();
+    assert_eq!(db.total_changes(), changes, "a second run changes nothing");
+    assert_eq!(dump(&db, V3_COLUMNS), before);
+    // A half-done migration fails closed: the marker with a table that is not
+    // the new one, a table of the rebuild left under its rename's name, and a
+    // fault at the marker, which undoes the whole rebuild.
+    {
+        let mut half = self::db();
+        half.execute_batch(&format!(
+            "DROP INDEX document_promotions_unfinished; DROP TABLE document_promotions; {SCHEMA_V3}; {INDEX};"
+        ))
+        .unwrap();
+        assert_eq!(
+            migrate_registry(&mut half).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "marked, but still the old table"
+        );
+        half.execute_batch(&format!(
+            "DELETE FROM registry_migrations WHERE name='{CLEANUP_MARKER}'; CREATE TABLE document_promotions_before_cleanup(x);"
+        ))
+        .unwrap();
+        assert_eq!(
+            migrate_registry(&mut half).unwrap_err().kind,
+            RepositoryErrorKind::RecoveryRequired,
+            "a leftover table of the rebuild"
+        );
+        half.execute_batch(&format!(
+            "DROP TABLE document_promotions_before_cleanup; CREATE TRIGGER marker_fault BEFORE INSERT ON registry_migrations WHEN NEW.name='{CLEANUP_MARKER}' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
+        ))
+        .unwrap();
+        assert!(migrate_registry(&mut half).is_err());
+        assert_eq!(marker_count(&half, CLEANUP_MARKER), 0);
+        let stored: String = half
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='document_promotions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, SCHEMA_V3, "still the old table");
+        half.execute_batch("DROP TRIGGER marker_fault").unwrap();
+        migrate_registry(&mut half).unwrap();
+        assert_eq!(marker_count(&half, CLEANUP_MARKER), 1);
+    }
+
+    // A cleanup row's CHECKs, in either mode.
+    let tx = db.transaction().unwrap();
+    let mut n = 100u8;
+    let mut next = || {
+        n += 1;
+        doc_n(n)
+    };
+    let s = |text: &str| text.to_owned();
+    let none = || s("NULL");
+    let cleanup = |tx: &Transaction<'_>,
+                   item: &str,
+                   mode: &str,
+                   step: &str,
+                   extra: &[(&'static str, String)]|
+     -> rusqlite::Result<OperationId> {
+        let mut cells: Vec<(&'static str, String)> = vec![
+            ("integration_mode", format!("'{mode}'")),
+            ("action", s("'cleanup'")),
+            ("context_oid", o1.clone()),
+            ("unheld_digest", blob("0a")),
+            ("primary_branch", s("'main'")),
+            ("endpoint_digest", blob("0b")),
+        ];
+        for (name, value) in extra {
+            match cells.iter().position(|(n, _)| n == name) {
+                Some(at) => cells[at].1 = value.clone(),
+                None => cells.push((name, value.clone())),
+            }
+        }
+        let columns: Vec<(&str, &str)> = cells.iter().map(|(n, v)| (*n, v.as_str())).collect();
+        try_row(tx, item, step, &columns)
+    };
+    let remoteless = [("remote_name", none()), ("endpoint_digest", none())];
+    let with_r = [("remote_context_oid", o5.clone())];
+    let deleted = [
+        ("remote_context_oid", o5.clone()),
+        ("remote_branch", s("'deleted'")),
+    ];
+    for mode in ["direct", "pull_request"] {
+        let accepted: Vec<Case<'_>> = vec![
+            ("with a remote and R", "confirmed", with_r.to_vec()),
+            ("with a remote and no R", "confirmed", vec![]),
+            ("without a remote", "confirmed", remoteless.to_vec()),
+            ("deleting", "remote_deleting", with_r.to_vec()),
+            ("deleted", "remote_deleted", deleted.to_vec()),
+            (
+                "absent",
+                "remote_deleted",
+                vec![
+                    ("remote_context_oid", o5.clone()),
+                    ("remote_branch", s("'absent'")),
+                ],
+            ),
+            (
+                "nothing to delete",
+                "remote_deleted",
+                vec![("remote_branch", s("'none'"))],
+            ),
+            ("worktree removing", "worktree_removing", deleted.to_vec()),
+            ("worktree removed", "worktree_removed", deleted.to_vec()),
+            ("branch deleted", "branch_deleted", deleted.to_vec()),
+            ("complete", "complete", deleted.to_vec()),
+            (
+                "no remote at the worktree",
+                "worktree_removing",
+                [&remoteless[..], &[("remote_branch", s("'none'"))]].concat(),
+            ),
+            (
+                "a stop at the worktree",
+                "worktree_removing",
+                [
+                    &deleted[..],
+                    &[("cleanup_category", s("'context_changed'"))],
+                ]
+                .concat(),
+            ),
+            (
+                "a stop while deleting",
+                "remote_deleting",
+                [
+                    &with_r[..],
+                    &[("cleanup_category", s("'remote_deletion_transport'"))],
+                ]
+                .concat(),
+            ),
+            (
+                "abandoned",
+                "abandoned",
+                vec![("refusal_category", s("'external_change'"))],
+            ),
+        ];
+        for (label, step, extra) in &accepted {
+            let op = cleanup(&tx, &next(), mode, step, extra)
+                .unwrap_or_else(|e| panic!("{mode} {label}: {e}"));
+            let r = read_record(&tx, 1, op).unwrap().unwrap();
+            assert_eq!(r.path(), RecordPath::Cleanup, "{mode} {label}");
+            assert_eq!(r.action, PromotionAction::Cleanup, "{mode} {label}");
+            assert_eq!(r.integration_mode.as_str(), mode, "{mode} {label}");
+            assert_eq!(r.step.name(), *step, "{mode} {label}");
+            assert_eq!(r.merged_context(), Some(oid()), "{mode} {label}");
+            assert_eq!(r.unheld_digest, Some([0x0a; 32]));
+            assert_eq!(r.primary_branch.as_deref(), Some("main"));
+            assert_eq!(r.endpoint_digest.is_some(), r.remote_name.is_some());
+            assert_eq!(r.consented_context_oid, None);
+            assert!(
+                !ParentRecord::supersedable(&r),
+                "{mode} {label}: never superseded"
+            );
+            assert!(
+                !DocumentPromotionLifecycle::continues(&r),
+                "{mode} {label}: a promote does not continue it"
+            );
+            // A promote that meets the record by its ID and digest is refused.
+            assert!(
+                DocumentPromotionLifecycle::begin_record(
+                    &tx,
+                    1,
+                    op,
+                    &r.item_id,
+                    PromotionExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                    None,
+                )
+                .is_err(),
+                "{mode} {label}: a promote's begin finds a cleanup record"
+            );
+            assert_eq!(
+                r.remote_deletion_required(),
+                r.remote_name.is_some(),
+                "{mode} {label}"
+            );
+        }
+        let sync = s("'01ARZ3NDEKTSV4RRFFQ69G5FB0'");
+        let refused: Vec<Case<'_>> = vec![
+            ("a base", "confirmed", vec![("base_oid", o2.clone())]),
+            (
+                "an integration",
+                "confirmed",
+                vec![
+                    ("integration_oid", o3.clone()),
+                    ("integration_kind", s("'merged'")),
+                ],
+            ),
+            (
+                "a publication",
+                "confirmed",
+                vec![("publication_category", s("'published'"))],
+            ),
+            (
+                "a context attempt",
+                "confirmed",
+                vec![
+                    ("context_attempt", s("1")),
+                    ("context_sync_id", sync.clone()),
+                ],
+            ),
+            (
+                "a primary attempt",
+                "confirmed",
+                vec![
+                    ("primary_attempt", s("1")),
+                    ("primary_sync_id", sync.clone()),
+                ],
+            ),
+            (
+                "an answer",
+                "complete",
+                [&deleted[..], &[("answer_code", s("'promoted'"))]].concat(),
+            ),
+            (
+                "a consented head",
+                "confirmed",
+                vec![("consented_context_oid", o1.clone())],
+            ),
+            (
+                "a situation",
+                "confirmed",
+                vec![("situation", s("'first'"))],
+            ),
+            (
+                "an accepted head",
+                "confirmed",
+                vec![("accepted_context_oid", o1.clone())],
+            ),
+            (
+                "a pushed context",
+                "confirmed",
+                vec![("context_pushed", s("1"))],
+            ),
+            ("no L", "confirmed", vec![("context_oid", none())]),
+            (
+                "no unheld digest",
+                "confirmed",
+                vec![("unheld_digest", none())],
+            ),
+            (
+                "a short unheld digest",
+                "confirmed",
+                vec![("unheld_digest", s("x'31'"))],
+            ),
+            (
+                "no primary branch",
+                "confirmed",
+                vec![("primary_branch", none())],
+            ),
+            (
+                "an empty primary branch",
+                "confirmed",
+                vec![("primary_branch", s("''"))],
+            ),
+            (
+                "a remote and no endpoint",
+                "confirmed",
+                vec![("endpoint_digest", none())],
+            ),
+            (
+                "an endpoint and no remote",
+                "confirmed",
+                vec![("remote_name", none())],
+            ),
+            ("context_synchronized", "context_synchronized", vec![]),
+            ("integrating", "integrating", vec![]),
+            ("integrated", "integrated", vec![]),
+            ("published", "published", vec![]),
+            ("publication_pending", "publication_pending", vec![]),
+            ("superseded", "superseded", vec![]),
+            (
+                "an outcome at confirmed",
+                "confirmed",
+                vec![("remote_branch", s("'none'"))],
+            ),
+            (
+                "an outcome while deleting",
+                "remote_deleting",
+                [&with_r[..], &[("remote_branch", s("'deleted'"))]].concat(),
+            ),
+            ("no outcome once deleted", "remote_deleted", with_r.to_vec()),
+            (
+                "no outcome at the worktree",
+                "worktree_removing",
+                with_r.to_vec(),
+            ),
+            ("no outcome at complete", "complete", with_r.to_vec()),
+            (
+                "none with an R",
+                "remote_deleted",
+                vec![
+                    ("remote_context_oid", o5.clone()),
+                    ("remote_branch", s("'none'")),
+                ],
+            ),
+            (
+                "deleted with no R",
+                "remote_deleted",
+                vec![("remote_branch", s("'deleted'"))],
+            ),
+            (
+                "an unknown outcome",
+                "remote_deleted",
+                vec![("remote_branch", s("'gone'"))],
+            ),
+            ("deleting with no R", "remote_deleting", vec![]),
+            (
+                "a blocked refusal",
+                "abandoned",
+                vec![
+                    ("refusal_category", s("'blocked'")),
+                    ("refusal_blockers", s("1")),
+                ],
+            ),
+            (
+                "a reconfirmation refusal",
+                "abandoned",
+                vec![("refusal_category", s("'reconfirmation_required'"))],
+            ),
+            (
+                "a refusal on a live record",
+                "confirmed",
+                vec![("refusal_category", s("'external_change'"))],
+            ),
+        ];
+        // A table reports every row it gets wrong.
+        let accepted_wrongly: Vec<&str> = refused
+            .iter()
+            .filter(|(_, step, extra)| cleanup(&tx, &next(), mode, step, extra).is_ok())
+            .map(|(label, _, _)| *label)
+            .collect();
+        assert!(
+            accepted_wrongly.is_empty(),
+            "{mode}: the schema accepts {accepted_wrongly:?}"
+        );
+    }
+    // Only a cleanup row has them: a promote refuses the columns and the step.
+    for (step, mode, extra) in [
+        ("confirmed", "direct", ("unheld_digest", blob("0a"))),
+        ("confirmed", "direct", ("remote_branch", s("'none'"))),
+        (
+            "remote_deleting",
+            "direct",
+            ("remote_context_oid", o5.clone()),
+        ),
+        (
+            "remote_deleting",
+            "pull_request",
+            ("remote_context_oid", o5.clone()),
+        ),
+    ] {
+        let mode = format!("'{mode}'");
+        let columns = [
+            ("integration_mode", mode.as_str()),
+            (extra.0, extra.1.as_str()),
+        ];
+        assert!(
+            try_row(&tx, &next(), step, &columns).is_err(),
+            "a promote at {step} with {}",
+            extra.0
+        );
+    }
+    // The step graph, as the closure's.
+    let steps = [
+        "confirmed",
+        "context_synchronized",
+        "integrating",
+        "integrated",
+        "published",
+        "publication_pending",
+        "remote_deleting",
+        "remote_deleted",
+        "worktree_removing",
+        "worktree_removed",
+        "branch_deleted",
+        "complete",
+        "abandoned",
+        "superseded",
+    ];
+    let mut wrong: Vec<String> = Vec::new();
+    for remote in [true, false] {
+        let graph: &[(&str, &str)] = if remote {
+            &[
+                ("confirmed", "remote_deleting"),
+                ("confirmed", "remote_deleted"),
+                ("remote_deleting", "remote_deleted"),
+                ("remote_deleted", "worktree_removing"),
+                ("worktree_removing", "worktree_removed"),
+                ("worktree_removed", "branch_deleted"),
+                ("confirmed", "abandoned"),
+                ("remote_deleting", "abandoned"),
+            ]
+        } else {
+            &[
+                ("confirmed", "worktree_removing"),
+                ("worktree_removing", "worktree_removed"),
+                ("worktree_removed", "branch_deleted"),
+                ("confirmed", "abandoned"),
+            ]
+        };
+        for from in steps {
+            for to in steps {
+                let (a, b) = (
+                    PromotionStep::parse(from).unwrap(),
+                    PromotionStep::parse(to).unwrap(),
+                );
+                let expected = !a.terminal() && (from == to || graph.contains(&(from, to)));
+                if a.cleanup_permits(b, remote) != expected {
+                    wrong.push(format!(
+                        "{from} -> {to}, remote {remote}: expected {expected}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "the graph differs at {wrong:#?}");
+    // The immutables: a save changes the step and the outcome, nothing else.
+    let op = cleanup(&tx, &next(), "pull_request", "confirmed", &with_r).unwrap();
+    let mut r = read_record(&tx, 1, op).unwrap().unwrap();
+    let moved = |r: &PromotionRecord, change: &dyn Fn(&mut PromotionRecord)| {
+        let mut r = r.clone();
+        change(&mut r);
+        r
+    };
+    assert!(saves(&tx, &r), "unchanged");
+    let changes: [(&str, &Change); 8] = [
+        ("L", &|r| {
+            r.context_oid = Some(git2::Oid::from_str(&"9".repeat(40)).unwrap())
+        }),
+        ("R", &|r| r.remote_context_oid = None),
+        ("the unheld digest", &|r| r.unheld_digest = Some([1; 32])),
+        ("the primary branch", &|r| {
+            r.primary_branch = Some("dev".into())
+        }),
+        ("the endpoint digest", &|r| {
+            r.endpoint_digest = Some([1; 32])
+        }),
+        ("the action", &|r| r.action = PromotionAction::Promote),
+        ("the mode", &|r| r.integration_mode = Integration::Direct),
+        ("the consented head", &|r| {
+            r.consented_context_oid = Some(oid())
+        }),
+    ];
+    for (label, change) in changes {
+        assert!(!saves(&tx, &moved(&r, change)), "{label} is immutable");
+    }
+    let to = |r: &PromotionRecord, step, outcome| {
+        moved(r, &|r| {
+            r.step = step;
+            r.remote_branch = outcome;
+        })
+    };
+    use PromotionStep::*;
+    assert!(
+        !saves(&tx, &to(&r, WorktreeRemoving, None)),
+        "not past the delete"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, RemoteDeleting, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "no outcome before the delete is known"
+    );
+    assert!(
+        !saves(&tx, &to(&r, RemoteDeleted, None)),
+        "an outcome with the delete"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, RemoteDeleted, Some(RemoteBranchOutcome::Unneeded))
+        ),
+        "none says there was no R"
+    );
+    assert!(
+        !saves(&tx, &to(&r, Complete, Some(RemoteBranchOutcome::Deleted))),
+        "complete is its own write"
+    );
+    assert!(!saves(&tx, &to(&r, Superseded, None)), "never superseded");
+    assert!(
+        !saves(
+            &tx,
+            &moved(&r, &|r| r.refusal = Some(Refusal::ExternalChange))
+        ),
+        "a refusal is for the abandoned"
+    );
+    r = to(&r, RemoteDeleting, None);
+    save_record(&tx, 1, &r).unwrap();
+    assert!(!saves(&tx, &to(&r, Confirmed, None)), "no step back");
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "the delete first"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &moved(&to(&r, Abandoned, None), &|r| r.refusal =
+                Some(Refusal::Blocked(vec![PromotionBlocker::ContextDirty])))
+        ),
+        "only an external change ends a cleanup"
+    );
+    r = to(&r, RemoteDeleted, Some(RemoteBranchOutcome::Absent));
+    save_record(&tx, 1, &r).unwrap();
+    assert!(
+        !saves(
+            &tx,
+            &moved(&r, &|r| r.remote_branch =
+                Some(RemoteBranchOutcome::Deleted))
+        ),
+        "the outcome is stored once"
+    );
+    assert!(!saves(&tx, &moved(&r, &|r| r.remote_branch = None)));
+    for step in [WorktreeRemoving, WorktreeRemoved, BranchDeleted] {
+        r = to(&r, step, r.remote_branch);
+        save_record(&tx, 1, &r).unwrap();
+    }
+    assert_eq!(
+        read_record(&tx, 1, op).unwrap().unwrap().remote_branch,
+        Some(RemoteBranchOutcome::Absent)
+    );
+    // With no remote the outcome is `none`, written with the step to the worktree.
+    let op = cleanup(&tx, &next(), "direct", "confirmed", &remoteless).unwrap();
+    let r = read_record(&tx, 1, op).unwrap().unwrap();
+    assert!(
+        !saves(&tx, &to(&r, RemoteDeleting, None)),
+        "no delete to make"
+    );
+    assert!(
+        !saves(&tx, &to(&r, WorktreeRemoving, None)),
+        "the outcome goes with the step"
+    );
+    assert!(
+        !saves(
+            &tx,
+            &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Deleted))
+        ),
+        "none says there was no R"
+    );
+    save_record(
+        &tx,
+        1,
+        &to(&r, WorktreeRemoving, Some(RemoteBranchOutcome::Unneeded)),
+    )
+    .unwrap();
+    // Abandoned from `confirmed`, with the external change.
+    let op = cleanup(&tx, &next(), "direct", "confirmed", &[]).unwrap();
+    let r = read_record(&tx, 1, op).unwrap().unwrap();
+    let ended = moved(&to(&r, Abandoned, None), &|r| {
+        r.refusal = Some(Refusal::ExternalChange)
+    });
+    save_record(&tx, 1, &ended).unwrap();
+    assert!(read_record(&tx, 1, op).unwrap().unwrap().step.terminal());
 }

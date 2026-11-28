@@ -2178,6 +2178,9 @@ pub(super) fn branch_expectation_with_head(
         ClosureAction::Close => 0,
         ClosureAction::Withdraw => 1,
         ClosureAction::NewBranch => 2,
+        // Unreachable: only a cleanup record has the action, and none has an
+        // observation here.
+        ClosureAction::Cleanup => 3,
     }]);
     digest::field(&mut hash, o.item_id.to_string().as_bytes());
     digest::field(&mut hash, o.context_branch.as_bytes());

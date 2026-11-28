@@ -16,7 +16,7 @@ use crate::{
         promotion::{
             lifecycle::{LifecycleKind, LifecycleRecord, ParentStep, RecordPath},
             lifecycle_record::{self as parent, Blocker, ParentRecord, categories},
-            record::{CleanupCategory, IntegrationKind, PublicationCategory},
+            record::{CleanupCategory, IntegrationKind, PublicationCategory, RemoteBranchOutcome},
         },
         pull_request_links,
         remote::{
@@ -37,7 +37,7 @@ const KIND: LifecycleKind = LifecycleKind::TicketClosure;
 categories!(ClosureStep {
     Confirmed=>"confirmed", ContextSynchronized=>"context_synchronized", Closing=>"closing",
     Integrating=>"integrating", Integrated=>"integrated", Published=>"published",
-    PublicationPending=>"publication_pending", RemoteDeleted=>"remote_deleted",
+    PublicationPending=>"publication_pending", RemoteDeleting=>"remote_deleting", RemoteDeleted=>"remote_deleted",
     WorktreeRemoving=>"worktree_removing", WorktreeRemoved=>"worktree_removed",
     BranchDeleted=>"branch_deleted", Retired=>"retired", Complete=>"complete", Abandoned=>"abandoned",
     Superseded=>"superseded"
@@ -93,6 +93,28 @@ impl ClosureStep {
                 && (self, next) == (ContextSynchronized, Integrating)
             || (!remote && matches!((self, next), (PublicationPending, WorktreeRemoving)))
     }
+    /// A cleanup record's graph (R-28). With a remote, `confirmed` goes to the
+    /// delete (`remote_deleting`) or past it when there is none to make
+    /// (`remote_deleted`); without one it goes to the worktree. It may be
+    /// abandoned before the removal begins. It is never superseded, and
+    /// `complete` is written by the completion's own SQL.
+    pub(in super::super) fn cleanup_permits(self, next: Self, remote: bool) -> bool {
+        use ClosureStep::*;
+        if self.terminal() {
+            return false;
+        }
+        self == next
+            || match (self, next) {
+                (Confirmed, Abandoned)
+                | (WorktreeRemoving, WorktreeRemoved)
+                | (WorktreeRemoved, BranchDeleted) => true,
+                (Confirmed, RemoteDeleting | RemoteDeleted)
+                | (RemoteDeleting, RemoteDeleted | Abandoned)
+                | (RemoteDeleted, WorktreeRemoving) => remote,
+                (Confirmed, WorktreeRemoving) => !remote,
+                _ => false,
+            }
+    }
     /// A branch record's graph, per action: no integration and no remote
     /// delete, a publication child in their place, and never superseded.
     /// `new_branch` retires the old branch first (`BranchDeleted →
@@ -125,6 +147,8 @@ impl ClosureStep {
                         | (Retired, Closing)
                         | (Confirmed | BranchDeleted | Retired, Abandoned)
                 ),
+                // A cleanup record has its own graph: `cleanup_permits`.
+                ClosureAction::Cleanup => false,
             }
     }
 }
@@ -141,6 +165,7 @@ impl From<ClosureStep> for ParentStep {
             ClosureStep::Integrated => Self::Integrated,
             ClosureStep::Published => Self::Published,
             ClosureStep::PublicationPending => Self::PublicationPending,
+            ClosureStep::RemoteDeleting => Self::RemoteDeleting,
             ClosureStep::RemoteDeleted => Self::RemoteDeleted,
             ClosureStep::WorktreeRemoving => Self::WorktreeRemoving,
             ClosureStep::WorktreeRemoved => Self::WorktreeRemoved,
@@ -160,6 +185,7 @@ impl From<ParentStep> for ClosureStep {
             ParentStep::Integrated => Self::Integrated,
             ParentStep::Published => Self::Published,
             ParentStep::PublicationPending => Self::PublicationPending,
+            ParentStep::RemoteDeleting => Self::RemoteDeleting,
             ParentStep::RemoteDeleted => Self::RemoteDeleted,
             ParentStep::WorktreeRemoving => Self::WorktreeRemoving,
             ParentStep::WorktreeRemoved => Self::WorktreeRemoved,
@@ -251,10 +277,24 @@ pub(in super::super) struct ClosureRecord {
     pub answer_code: Option<BranchAnswer>,
     /// The context head the branch observation's digest bound at confirm.
     pub consented_context_oid: Option<Oid>,
+    /// A cleanup record's digest of the `unheld` list its consent bound; its
+    /// `context_oid` is `L` and its `remote_context_oid` is `R`. With
+    /// `primary_branch` and `endpoint_digest`, what it began with, all
+    /// immutable from insert (R-28).
+    pub unheld_digest: Option<[u8; 32]>,
+    pub primary_branch: Option<String>,
+    pub endpoint_digest: Option<[u8; 32]>,
+    /// A cleanup record's outcome of the remote delete, stored once, with the
+    /// step after it (R-42).
+    pub remote_branch: Option<RemoteBranchOutcome>,
 }
 impl ClosureRecord {
     pub(in super::super) fn path(&self) -> RecordPath {
-        if (self.integration_mode, self.action) == (Integration::Direct, ClosureAction::Close) {
+        if self.action == ClosureAction::Cleanup {
+            RecordPath::Cleanup
+        } else if (self.integration_mode, self.action)
+            == (Integration::Direct, ClosureAction::Close)
+        {
             RecordPath::Direct
         } else {
             RecordPath::Branch
@@ -312,6 +352,7 @@ impl std::fmt::Debug for ClosureRecord {
             .field("retired_oid", &self.retired_oid)
             .field("answer_code", &self.answer_code)
             .field("adopted_context_oid", &self.adopted_context_oid)
+            .field("remote_branch", &self.remote_branch)
             .field("integration_oid", &self.integration_oid)
             .field("publication", &self.publication)
             .field("cleanup", &self.cleanup)
@@ -362,7 +403,9 @@ const SCHEMA_V2:&str="CREATE TABLE ticket_closures (
     CHECK(adopted_context_oid IS NULL OR (closure_oid IS NOT NULL AND adopted_context_oid!=closure_oid AND closure_kind IS 'record')),
     CHECK(step!='closing' OR (closure_kind IS 'record' AND closed_at IS NOT NULL AND base_oid IS NOT NULL AND context_oid IS NOT NULL))
 )";
-const SCHEMA:&str="CREATE TABLE ticket_closures (
+/// The table as the `wave_06_closure_modes_v1` rebuild left it, frozen: the
+/// cleanup rebuild renames it away, and `V3_COLUMNS` are its columns.
+const SCHEMA_V3:&str="CREATE TABLE ticket_closures (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
     item_id TEXT NOT NULL CHECK(length(item_id)=26),
@@ -421,13 +464,86 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
     CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
     CHECK(step!='complete' OR (integration_mode='direct' AND action='close') OR answer_code IS NOT NULL)
 )";
+const SCHEMA:&str="CREATE TABLE ticket_closures (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
+    item_id TEXT NOT NULL CHECK(length(item_id)=26),
+    expectation BLOB NOT NULL CHECK(typeof(expectation)='blob' AND length(expectation)=32),
+    remote_name TEXT,
+    step TEXT NOT NULL CHECK(step IN ('confirmed','context_synchronized','closing','integrating','integrated','published','publication_pending','remote_deleting','remote_deleted','worktree_removing','worktree_removed','branch_deleted','retired','complete','abandoned','superseded')),
+    context_attempt INTEGER NOT NULL DEFAULT 0 CHECK(context_attempt BETWEEN 0 AND 4294967295),
+    context_sync_id TEXT UNIQUE CHECK(length(context_sync_id)=26),
+    primary_attempt INTEGER NOT NULL DEFAULT 0 CHECK(primary_attempt BETWEEN 0 AND 4294967295),
+    primary_sync_id TEXT UNIQUE CHECK(length(primary_sync_id)=26),
+    base_oid TEXT CHECK(length(base_oid)=40 AND base_oid NOT GLOB '*[^0-9a-f]*' AND base_oid!='0000000000000000000000000000000000000000'),
+    context_oid TEXT CHECK(length(context_oid)=40 AND context_oid NOT GLOB '*[^0-9a-f]*' AND context_oid!='0000000000000000000000000000000000000000'),
+    integration_oid TEXT CHECK(length(integration_oid)=40 AND integration_oid NOT GLOB '*[^0-9a-f]*' AND integration_oid!='0000000000000000000000000000000000000000'),
+    integration_kind TEXT CHECK(integration_kind IN ('merged','already_contained')),
+    remote_context_oid TEXT CHECK(length(remote_context_oid)=40 AND remote_context_oid NOT GLOB '*[^0-9a-f]*' AND remote_context_oid!='0000000000000000000000000000000000000000'),
+    publication_category TEXT CHECK(publication_category IN ('published','already_current','no_publication_remote','conflict','rejected','transport','identity','busy','yielding','cancelled','recovery_required')),
+    cleanup_category TEXT CHECK(cleanup_category IN ('awaiting_publication','context_changed','ignored_files','remote_context_changed','remote_deletion_transport','remote_deletion_rejected','remote_deletion_configuration','remote_deletion_key','remote_deletion_unlock','remote_deletion_host','recovery_required','cancelled')),
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+    updated_at INTEGER NOT NULL CHECK(updated_at>=0),
+    refusal_category TEXT CHECK(refusal_category IN ('blocked','external_change','reconfirmation_required')),
+    refusal_blockers INTEGER CHECK(refusal_blockers BETWEEN 1 AND 4194303),
+    closure_kind TEXT CHECK(closure_kind IN ('record','existing')),
+    closed_at TEXT CHECK(closed_at IS NULL OR (typeof(closed_at)='text' AND length(closed_at)=20 AND closed_at GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z')),
+    closure_oid TEXT CHECK(length(closure_oid)=40 AND closure_oid NOT GLOB '*[^0-9a-f]*' AND closure_oid!='0000000000000000000000000000000000000000'),
+    adopted_context_oid TEXT CHECK(length(adopted_context_oid)=40 AND adopted_context_oid NOT GLOB '*[^0-9a-f]*' AND adopted_context_oid!='0000000000000000000000000000000000000000'),
+    integration_mode TEXT NOT NULL DEFAULT 'direct' CHECK(integration_mode IN ('direct','pull_request')),
+    action TEXT NOT NULL DEFAULT 'close' CHECK(action IN ('close','withdraw','new_branch','cleanup')),
+    withdraw_oid TEXT CHECK(length(withdraw_oid)=40 AND withdraw_oid NOT GLOB '*[^0-9a-f]*' AND withdraw_oid!='0000000000000000000000000000000000000000'),
+    retired_oid TEXT CHECK(length(retired_oid)=40 AND retired_oid NOT GLOB '*[^0-9a-f]*' AND retired_oid!='0000000000000000000000000000000000000000'),
+    pending_ref TEXT CHECK(pending_ref IS NULL OR pending_ref='refs/manyhands/closures/'||operation_id),
+    answer_code TEXT CHECK(answer_code IS NULL OR (typeof(answer_code)='text' AND length(answer_code) BETWEEN 1 AND 64 AND answer_code NOT GLOB '*[^a-z_]*')),
+    consented_context_oid TEXT CHECK(length(consented_context_oid)=40 AND consented_context_oid NOT GLOB '*[^0-9a-f]*' AND consented_context_oid!='0000000000000000000000000000000000000000'),
+    unheld_digest BLOB CHECK(unheld_digest IS NULL OR (typeof(unheld_digest)='blob' AND length(unheld_digest)=32)),
+    primary_branch TEXT CHECK(primary_branch IS NULL OR (typeof(primary_branch)='text' AND length(primary_branch) BETWEEN 1 AND 255)),
+    endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32)),
+    remote_branch TEXT CHECK(remote_branch IS NULL OR remote_branch IN ('deleted','absent','none')),
+    CHECK((context_attempt=0)=(context_sync_id IS NULL)),
+    CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
+    CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
+    CHECK(primary_sync_id IS NULL OR (primary_sync_id!=operation_id AND primary_sync_id IS NOT context_sync_id)),
+    CHECK((step='abandoned')=(refusal_category IS NOT NULL)),
+    CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL)),
+    CHECK(closure_kind IS NOT NULL OR step='abandoned' OR action='cleanup'),
+    CHECK((closed_at IS NULL)=(closure_oid IS NULL)),
+    CHECK(closed_at IS NULL OR closure_kind IS 'record' OR action='new_branch'),
+    CHECK(adopted_context_oid IS NULL OR (closure_oid IS NOT NULL AND adopted_context_oid!=closure_oid AND closure_kind IS 'record' AND integration_mode='direct' AND action='close')),
+    CHECK(step!='closing' OR (base_oid IS NOT NULL AND context_oid IS NOT NULL AND (
+        (action='close' AND closure_kind IS 'record' AND closed_at IS NOT NULL)
+     OR (action='close' AND integration_mode='pull_request' AND closure_kind IS 'existing' AND closed_at IS NULL)
+     OR (action='withdraw' AND closure_kind IS 'existing' AND closed_at IS NULL AND withdraw_oid IS NOT NULL)
+     OR (action='new_branch' AND closed_at IS NOT NULL)))),
+    CHECK(action!='new_branch' OR integration_mode='pull_request'),
+    CHECK((integration_mode='direct' AND action='close') OR (integration_oid IS NULL AND integration_kind IS NULL AND step NOT IN ('integrating','integrated') AND (step!='remote_deleted' OR action='cleanup'))),
+    CHECK(NOT (integration_mode='direct' AND action='close') OR (withdraw_oid IS NULL AND retired_oid IS NULL AND pending_ref IS NULL AND answer_code IS NULL AND consented_context_oid IS NULL AND step!='retired')),
+    CHECK(step NOT IN ('worktree_removing','worktree_removed','branch_deleted','retired') OR (integration_mode='direct' AND action='close' AND step!='retired') OR action='new_branch' OR (action='cleanup' AND step!='retired')),
+    CHECK(step!='context_synchronized' OR action NOT IN ('new_branch','cleanup')),
+    CHECK(withdraw_oid IS NULL OR (action='withdraw' AND step NOT IN ('confirmed','context_synchronized'))),
+    CHECK(retired_oid IS NULL OR action='new_branch'),
+    CHECK(pending_ref IS NULL OR (action='new_branch' AND closure_oid IS NOT NULL AND step NOT IN ('complete','abandoned','superseded'))),
+    CHECK(answer_code IS NULL OR step IN ('complete','abandoned')),
+    CHECK(step!='complete' OR (integration_mode='direct' AND action='close') OR action='cleanup' OR answer_code IS NOT NULL),
+    CHECK(action!='cleanup' OR (closure_kind IS NULL AND closed_at IS NULL AND base_oid IS NULL AND integration_oid IS NULL AND integration_kind IS NULL AND publication_category IS NULL AND context_attempt=0 AND primary_attempt=0 AND adopted_context_oid IS NULL AND withdraw_oid IS NULL AND retired_oid IS NULL AND pending_ref IS NULL AND answer_code IS NULL AND consented_context_oid IS NULL AND context_oid IS NOT NULL AND unheld_digest IS NOT NULL AND primary_branch IS NOT NULL AND (endpoint_digest IS NULL)=(remote_name IS NULL) AND step NOT IN ('context_synchronized','closing','integrating','integrated','published','publication_pending','retired','superseded'))),
+    CHECK(action='cleanup' OR (unheld_digest IS NULL AND primary_branch IS NULL AND endpoint_digest IS NULL AND remote_branch IS NULL AND step!='remote_deleting')),
+    CHECK(action!='cleanup' OR (remote_branch IS NOT NULL)=(step IN ('remote_deleted','worktree_removing','worktree_removed','branch_deleted','complete'))),
+    CHECK(remote_branch IS NULL OR (remote_branch='none')=(remote_context_oid IS NULL)),
+    CHECK(step!='remote_deleting' OR remote_context_oid IS NOT NULL),
+    CHECK(action!='cleanup' OR refusal_category IS NULL OR refusal_category='external_change')
+)";
 const INDEX: &str = "CREATE UNIQUE INDEX ticket_closures_unfinished ON ticket_closures(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
 const MARKER: &str = "cycle_10_ticket_closures";
 const BLOCKERS_MARKER: &str = "closure_refusal_blockers_v2";
 const MODES_MARKER: &str = "wave_06_closure_modes_v1";
+const CLEANUP_MARKER: &str = "wave_06_closure_cleanup_v1";
 /// The 25 columns `SCHEMA_V2` has, in table order: what a table that
 /// predates the path columns carries into the rebuild.
 const V2_COLUMNS: &str = "repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,closure_kind,closed_at,closure_oid,adopted_context_oid";
+/// The 32 columns `SCHEMA_V3` has, in table order: what a table that predates
+/// the cleanup action carries into the rebuild.
+const V3_COLUMNS: &str = "repository_id,operation_id,item_id,expectation,remote_name,step,context_attempt,context_sync_id,primary_attempt,primary_sync_id,base_oid,context_oid,integration_oid,integration_kind,remote_context_oid,publication_category,cleanup_category,cancel_requested,updated_at,refusal_category,refusal_blockers,closure_kind,closed_at,closure_oid,adopted_context_oid,integration_mode,action,withdraw_oid,retired_oid,pending_ref,answer_code,consented_context_oid";
 
 /// All or nothing inside the registry-schema transaction, marked once.
 pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
@@ -483,11 +599,31 @@ pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryEr
         // rows are copied in rowid order, which `close_found_deleted` reads as
         // the order the records were made in (ruling 51a).
         if !created {
-            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_modes; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM ticket_closures_before_modes ORDER BY rowid; DROP TABLE ticket_closures_before_modes;")).map_err(|_| state::recovery_required())?;
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_modes; {SCHEMA_V3}; {INDEX}; INSERT INTO ticket_closures({V2_COLUMNS}) SELECT {V2_COLUMNS} FROM ticket_closures_before_modes ORDER BY rowid; DROP TABLE ticket_closures_before_modes;")).map_err(|_| state::recovery_required())?;
         }
         tx.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [MODES_MARKER],
+        )
+        .map_err(|_| state::recovery_required())?;
+    }
+    let cleaned: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CLEANUP_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| state::recovery_required())?;
+    if !cleaned {
+        // The cleanup action, step and columns: rebuild a table that predates
+        // them. Its rows keep their action, the new columns null; the index
+        // goes first, and the rows are copied in rowid order.
+        if !created {
+            tx.execute_batch(&format!("DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO ticket_closures_before_cleanup; {SCHEMA}; {INDEX}; INSERT INTO ticket_closures({V3_COLUMNS}) SELECT {V3_COLUMNS} FROM ticket_closures_before_cleanup ORDER BY rowid; DROP TABLE ticket_closures_before_cleanup;")).map_err(|_| state::recovery_required())?;
+        }
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CLEANUP_MARKER],
         )
         .map_err(|_| state::recovery_required())?;
     }
@@ -546,9 +682,24 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<ClosureRecord, RepositoryError> {
         pending_ref: row.opt("pending_ref")?,
         answer_code: row.category("answer_code", BranchAnswer::parse)?,
         consented_context_oid: row.oid("consented_context_oid")?,
+        unheld_digest: digest_column(&row, "unheld_digest")?,
+        primary_branch: row.opt("primary_branch")?,
+        endpoint_digest: digest_column(&row, "endpoint_digest")?,
+        remote_branch: row.category("remote_branch", RemoteBranchOutcome::parse)?,
     };
     validate(&r)?;
     Ok(r)
+}
+/// A 32-byte digest column, or none.
+fn digest_column(
+    row: &parent::Row<'_, '_>,
+    name: &str,
+) -> Result<Option<[u8; 32]>, RepositoryError> {
+    row.0
+        .get::<_, Option<Vec<u8>>>(name)
+        .map_err(|_| state::recovery_required())?
+        .map(|digest| digest.try_into().map_err(|_| state::recovery_required()))
+        .transpose()
 }
 fn parse_mode(text: &str) -> Result<Integration, RepositoryError> {
     match text {
@@ -584,7 +735,7 @@ fn validate(r: &ClosureRecord) -> Result<(), RepositoryError> {
         .flatten()
         .any(|o| o.is_zero())
         // confirmed: the closure effect is known from the observation.
-        || r.closure_kind.is_none() && r.step != Abandoned
+        || r.closure_kind.is_none() && r.step != Abandoned && r.action != ClosureAction::Cleanup
         // closed_at and closure_oid are written together.
         || r.closed_at.is_some() != r.closure_oid.is_some()
         || r.closed_at.is_some_and(|at| at.offset() != UtcOffset::UTC || at.nanosecond() != 0)
@@ -595,6 +746,7 @@ fn validate(r: &ClosureRecord) -> Result<(), RepositoryError> {
     match r.path() {
         RecordPath::Direct => validate_direct(r)?,
         RecordPath::Branch => validate_branch(r)?,
+        RecordPath::Cleanup => validate_cleanup(r)?,
     }
     if let Some(name) = &r.remote_name {
         crate::repository::RemoteRefPlan::from_configuration(name, "main")
@@ -605,13 +757,83 @@ fn validate(r: &ClosureRecord) -> Result<(), RepositoryError> {
     }
     Ok(())
 }
+/// A cleanup record (R-28, the table's CHECKs read again): none of a closure's
+/// effects, the begin-time facts set and immutable, and the outcome of the
+/// remote delete stored from `remote_deleted` on, `none` exactly when there
+/// was no `R`.
+fn validate_cleanup(r: &ClosureRecord) -> Result<(), RepositoryError> {
+    use ClosureStep::*;
+    if r.closure_kind.is_some()
+        || r.closed_at.is_some()
+        || r.base_oid.is_some()
+        || r.integration_oid.is_some()
+        || r.integration_kind.is_some()
+        || r.publication.is_some()
+        || r.context_attempt != 0
+        || r.primary_attempt != 0
+        || r.adopted_context_oid.is_some()
+        || r.withdraw_oid.is_some()
+        || r.retired_oid.is_some()
+        || r.pending_ref.is_some()
+        || r.answer_code.is_some()
+        || r.consented_context_oid.is_some()
+        || r.context_oid.is_none()
+        || r.unheld_digest.is_none()
+        || r.endpoint_digest.is_some() != r.remote_name.is_some()
+        || matches!(
+            r.step,
+            ContextSynchronized
+                | Closing
+                | Integrating
+                | Integrated
+                | Published
+                | PublicationPending
+                | Retired
+                | Superseded
+        )
+        || r.primary_branch.as_deref().is_none_or(|branch| {
+            branch.is_empty()
+                || branch.len() > 255
+                || r.remote_name.as_deref().is_some_and(|remote| {
+                    crate::repository::RemoteRefPlan::from_configuration(remote, branch).is_err()
+                })
+        })
+        // The outcome comes with the step after the delete, whole.
+        || r.remote_branch.is_some()
+            != matches!(
+                r.step,
+                RemoteDeleted | WorktreeRemoving | WorktreeRemoved | BranchDeleted | Complete
+            )
+        || r.remote_branch.is_some_and(|outcome| {
+            (outcome == RemoteBranchOutcome::Unneeded) != r.remote_context_oid.is_none()
+        })
+        || r.step == RemoteDeleting && r.remote_context_oid.is_none()
+        // Only a cleanup that ended refuses, and only for an external change.
+        || r.refusal.as_ref().is_some_and(|refusal| *refusal != Refusal::ExternalChange)
+        // A stop is a cleanup's own, at a step that can stop.
+        || r.cleanup.is_some()
+            && !matches!(
+                r.step,
+                Confirmed
+                    | RemoteDeleting
+                    | RemoteDeleted
+                    | WorktreeRemoving
+                    | WorktreeRemoved
+                    | BranchDeleted
+            )
+    {
+        return Err(state::recovery_required());
+    }
+    Ok(())
+}
 /// A direct record: today's rules, and none of a branch record's columns.
 fn validate_direct(r: &ClosureRecord) -> Result<(), RepositoryError> {
     use ClosureStep::*;
     let record = r.closure_kind == Some(ClosureKind::Record);
     let synchronized =
         matches!(r.step, ContextSynchronized | Closing) || r.step.integrating_or_later();
-    if r.withdraw_oid.is_some()
+    if r.step == RemoteDeleting
+        || r.withdraw_oid.is_some()
         || r.retired_oid.is_some()
         || r.pending_ref.is_some()
         || r.answer_code.is_some()
@@ -676,7 +898,7 @@ fn validate_branch(r: &ClosureRecord) -> Result<(), RepositoryError> {
     if r.integration_oid.is_some()
         || r.integration_kind.is_some()
         || r.adopted_context_oid.is_some()
-        || matches!(r.step, Integrating | Integrated | RemoteDeleted | Superseded)
+        || matches!(r.step, Integrating | Integrated | RemoteDeleting | RemoteDeleted | Superseded)
         || r.step == ContextSynchronized && new_branch
         || matches!(r.step, Retired | WorktreeRemoving | WorktreeRemoved | BranchDeleted)
             && !new_branch
@@ -695,6 +917,8 @@ fn validate_branch(r: &ClosureRecord) -> Result<(), RepositoryError> {
                     !record && r.closed_at.is_none() && r.withdraw_oid.is_some()
                 }
                 ClosureAction::NewBranch => r.closed_at.is_some(),
+                // Not a branch record: `path()` sends a cleanup to its own rules.
+                ClosureAction::Cleanup => false,
             }
         // closed_at before closing: only a new branch builds its commit early.
         || r.closed_at.is_some() && !record && !new_branch
@@ -1009,8 +1233,14 @@ pub(in super::super) fn save_record(
             .step
             .permits(r.step, r.remote_name.is_some(), old.closure_kind),
         RecordPath::Branch => old.step.branch_permits(r.step, old.action),
+        RecordPath::Cleanup => old.step.cleanup_permits(r.step, r.remote_name.is_some()),
     };
     if !permitted
+        || old.unheld_digest != r.unheld_digest
+        || old.primary_branch != r.primary_branch
+        || old.endpoint_digest != r.endpoint_digest
+        || !remote_branch_kept_or_written(&old, r)
+        || old.path() == RecordPath::Cleanup && old.remote_context_oid != r.remote_context_oid
         || r.cancel_requested != old.cancel_requested
         || old.closed_at != r.closed_at
         || old.closure_oid != r.closure_oid
@@ -1036,8 +1266,23 @@ pub(in super::super) fn save_record(
     }
     validate(r)?;
     let (refusal, mask) = Refusal::encoded_columns(r.refusal.as_ref())?;
-    tx.execute("UPDATE ticket_closures SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12) WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12),remote_branch=?13 WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now(),r.remote_branch.map(RemoteBranchOutcome::name)]).map_err(|_|state::recovery_required())?;
     Ok(())
+}
+/// Whether a save keeps a record's stored outcome of the remote delete, or
+/// writes it: a cleanup record's goes from none to a value once, with the step
+/// that follows the delete (`confirmed | remote_deleting → remote_deleted`), or
+/// with `confirmed → worktree_removing` when there is no remote, and never
+/// changes after. Every other record keeps none.
+fn remote_branch_kept_or_written(old: &ClosureRecord, new: &ClosureRecord) -> bool {
+    use ClosureStep::*;
+    old.remote_branch == new.remote_branch
+        || old.action == ClosureAction::Cleanup
+            && old.remote_branch.is_none()
+            && (matches!(old.step, Confirmed | RemoteDeleting) && new.step == RemoteDeleted
+                || old.step == Confirmed
+                    && new.step == WorktreeRemoving
+                    && new.remote_name.is_none())
 }
 /// `context_synchronized → closing` for a `record` closure, in one SQL write
 /// with its base, `closed_at` (whole UTC seconds) and the checkpoint commit
@@ -1613,9 +1858,15 @@ pub(in super::super) fn reconcile_completion(
 /// A branch record deletes nothing: it reserves no parent row for a remote
 /// delete.
 fn deletion_reservation_required(r: &ClosureRecord) -> bool {
-    r.path() == RecordPath::Direct
-        && r.remote_name.is_some()
-        && !(r.context_attempt == 0 && r.remote_context_oid.is_none())
+    match r.path() {
+        RecordPath::Direct => {
+            r.remote_name.is_some() && !(r.context_attempt == 0 && r.remote_context_oid.is_none())
+        }
+        RecordPath::Branch => false,
+        // A cleanup record deletes the remote branch whenever it has a remote:
+        // what it finds there is its stored outcome (R-42).
+        RecordPath::Cleanup => r.remote_name.is_some(),
+    }
 }
 /// C1, C9: the remote context branch never receives a closure checkpoint.
 /// From `closing` until retirement the ticket context may hold one, so a
@@ -1642,7 +1893,7 @@ pub(in super::super) fn written_closure_holder(
     {
         return Ok(None);
     }
-    let held: Option<(String, String, String)> = db.query_row("SELECT operation_id,integration_mode,action FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND ((integration_mode='direct' AND action='close' AND step IN ('closing','integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted')) OR (NOT (integration_mode='direct' AND action='close') AND step NOT IN ('complete','abandoned','superseded') AND (step NOT IN ('confirmed','context_synchronized') OR (action='new_branch' AND closure_oid IS NOT NULL)))) LIMIT 1",params![id,item.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|state::recovery_required())?;
+    let held: Option<(String, String, String)> = db.query_row("SELECT operation_id,integration_mode,action FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND ((integration_mode='direct' AND action='close' AND step IN ('closing','integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted')) OR (NOT (integration_mode='direct' AND action='close') AND action!='cleanup' AND step NOT IN ('complete','abandoned','superseded') AND (step NOT IN ('confirmed','context_synchronized') OR (action='new_branch' AND closure_oid IS NOT NULL)))) LIMIT 1",params![id,item.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|state::recovery_required())?;
     held.map(|(operation, mode, action)| {
         let direct = mode == "direct" && action == "close";
         Ok((

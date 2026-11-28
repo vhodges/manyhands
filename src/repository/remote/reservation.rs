@@ -456,7 +456,7 @@ fn closure_holds_context(
                             operation_id,
                         )?)
                     }
-                    Some((_, RecordPath::Direct)) => true,
+                    Some((_, RecordPath::Direct | RecordPath::Cleanup)) => true,
                 },
             )
         }
