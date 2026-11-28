@@ -465,9 +465,14 @@ const POLL_DISPOSITION_SCHEMA_16: &str = poll_disposition_catalog!(
 const POLL_DISPOSITION_SCHEMA_17: &str = poll_disposition_catalog!(
     "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','not_reached'"
 );
-const POLL_DISPOSITION_SCHEMA: &str = poll_disposition_catalog!(
+const POLL_DISPOSITION_SCHEMA_18: &str = poll_disposition_catalog!(
     "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','unpublished','not_reached'"
 );
+const POLL_DISPOSITION_SCHEMA: &str = poll_disposition_catalog!(
+    "'current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','unpublished','not_reached','merged','unheld'"
+);
+const POLL_DISPOSITION_UNPUBLISHED_MARKER: &str = "remote_poll_dispositions_unpublished_v1";
+const POLL_DISPOSITION_MERGED_MARKER: &str = "wave_06_poll_dispositions_merged_v1";
 const POLL_DISPOSITION_OBJECTS: &[(&str, &str)] = &[
     ("TABLE", "remote_poll_dispositions"),
     ("TRIGGER", "remote_poll_disposition_owner_immutable"),
@@ -587,15 +592,23 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
     if !((objects == 0 && columns == 0) || (objects == 2 && columns == 2)) {
         return Err(recovery_required());
     }
-    let marked = if super::super::recovery::has_table(tx, "registry_migrations")
-        .map_err(|_| recovery_required())?
-    {
-        tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1')", [], |r| r.get::<_,bool>(0)).map_err(|_| recovery_required())?
-    } else {
-        false
+    let has_markers = super::super::recovery::has_table(tx, "registry_migrations")
+        .map_err(|_| recovery_required())?;
+    let marker = |name: &str| -> Result<bool, RepositoryError> {
+        if !has_markers {
+            return Ok(false);
+        }
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [name],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(|_| recovery_required())
     };
+    let marked = marker(POLL_DISPOSITION_UNPUBLISHED_MARKER)?;
+    let merged_marked = marker(POLL_DISPOSITION_MERGED_MARKER)?;
     if objects == 0 {
-        if marked {
+        if marked || merged_marked {
             return Err(recovery_required());
         }
         validate_poll_disposition_dependencies(tx)?;
@@ -610,16 +623,20 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
     } else {
         validate_poll_time_columns(tx)?;
-        let (source, source_marked) = [
-            (POLL_DISPOSITION_SCHEMA, true),
-            (POLL_DISPOSITION_SCHEMA_15, false),
-            (POLL_DISPOSITION_SCHEMA_16, true),
-            (POLL_DISPOSITION_SCHEMA_17, false),
+        // Each frozen catalog with the pair of markers it carries: the
+        // `unpublished` marker came with 16 and 18, the `merged` marker only
+        // with the current catalog.
+        let (source, source_marked, source_merged) = [
+            (POLL_DISPOSITION_SCHEMA, true, true),
+            (POLL_DISPOSITION_SCHEMA_18, true, false),
+            (POLL_DISPOSITION_SCHEMA_15, false, false),
+            (POLL_DISPOSITION_SCHEMA_16, true, false),
+            (POLL_DISPOSITION_SCHEMA_17, false, false),
         ]
         .into_iter()
-        .find(|(schema, _)| validate_poll_disposition_envelope(tx, schema).is_ok())
+        .find(|(schema, _, _)| validate_poll_disposition_envelope(tx, schema).is_ok())
         .ok_or_else(recovery_required)?;
-        if marked != source_marked {
+        if marked != source_marked || merged_marked != source_merged {
             return Err(recovery_required());
         }
         // Only trusted frozen catalog text supplies this IN list. Match source
@@ -641,8 +658,14 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
     }
     tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
         .map_err(|_| recovery_required())?;
-    if !marked {
-        tx.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')",[]).map_err(|_|recovery_required())?;
+    for (name, present) in [
+        (POLL_DISPOSITION_UNPUBLISHED_MARKER, marked),
+        (POLL_DISPOSITION_MERGED_MARKER, merged_marked),
+    ] {
+        if !present {
+            tx.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [name])
+                .map_err(|_| recovery_required())?;
+        }
     }
     validate_poll_disposition_schema(tx)?;
     Ok(())

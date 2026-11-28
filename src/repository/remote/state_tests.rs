@@ -422,14 +422,15 @@ fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reo
         ALTER TABLE remote_operation_records DROP COLUMN poll_kind;",
     )
     .unwrap();
-    // This historical envelope also predates the unpublished migration marker.
+    // This historical envelope also predates the unpublished and merged
+    // migration markers.
     assert_eq!(
         db.execute(
-            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            "DELETE FROM registry_migrations WHERE name IN ('remote_poll_dispositions_unpublished_v1','wave_06_poll_dispositions_merged_v1')",
             []
         )
         .unwrap(),
-        1
+        2
     );
     for _ in 0..2 {
         let reopened = RepositoryService::open_at(data.path()).unwrap();
@@ -582,11 +583,11 @@ fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_row
     );
     assert_eq!(
         db.execute(
-            "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+            "DELETE FROM registry_migrations WHERE name IN ('remote_poll_dispositions_unpublished_v1','wave_06_poll_dispositions_merged_v1')",
             []
         )
         .unwrap(),
-        1
+        2
     );
     let before = db
         .query_row(
@@ -663,16 +664,20 @@ const LEGACY_POLL_DISPOSITIONS: &str = r#"
 "#;
 
 fn historical_disposition_schema(profile: u8) -> String {
-    assert!([15, 16, 17, 18].contains(&profile));
+    assert!((15..=19).contains(&profile));
     let mut schema = LEGACY_POLL_DISPOSITIONS.to_owned();
-    if matches!(profile, 17 | 18) {
+    if matches!(profile, 17..=19) {
         schema = schema.replace(
             "'remotely_deleted',",
             "'remotely_deleted','closed','promoted',",
         );
     }
-    if matches!(profile, 16 | 18) {
+    if matches!(profile, 16 | 18 | 19) {
         schema = schema.replace("'history_unknown',", "'history_unknown','unpublished',");
+    }
+    // Profile 19 is the current catalog: Wave 06 Cycle 05 appended these two.
+    if profile == 19 {
+        schema = schema.replace("'not_reached'", "'not_reached','merged','unheld'");
     }
     schema
 }
@@ -683,12 +688,19 @@ fn install_historical_dispositions(db: &Connection, profile: u8) {
         .unwrap();
     db.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM old_dispositions; DROP TABLE old_dispositions;").unwrap();
     db.execute(
-        "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'",
+        "DELETE FROM registry_migrations WHERE name IN ('remote_poll_dispositions_unpublished_v1','wave_06_poll_dispositions_merged_v1')",
         [],
     )
     .unwrap();
-    if matches!(profile, 16 | 18) {
+    if matches!(profile, 16 | 18 | 19) {
         db.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')", []).unwrap();
+    }
+    if profile == 19 {
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES('wave_06_poll_dispositions_merged_v1')",
+            [],
+        )
+        .unwrap();
     }
 }
 
@@ -711,15 +723,16 @@ fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() 
         "history_unknown",
         "not_reached",
     ];
-    for profile in [15, 16, 17, 18] {
+    // 19 is the current catalog; 18 is the one before `merged` and `unheld`.
+    for profile in [15, 16, 17, 18, 19] {
         let (data, _, service, op) = review_completed_state();
         drop(service);
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         let mut values = legacy.to_vec();
-        if matches!(profile, 17 | 18) {
+        if matches!(profile, 17..=19) {
             values.extend(["closed", "promoted"]);
         }
-        if matches!(profile, 16 | 18) {
+        if matches!(profile, 16 | 18 | 19) {
             values.push("unpublished");
         }
         for (ordinal, value) in values.iter().enumerate() {
@@ -792,6 +805,320 @@ fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() 
     }
 }
 
+/// Design Part D's truth table of the two disposition markers, one table row
+/// per line, each from a registry whose frozen catalog holds a row of every
+/// value of its own enum. A refusal leaves the registry byte for byte as it
+/// was; an upgrade keeps every row and ends on the current catalog with both
+/// markers; the current catalog accepts `merged` and `unheld`.
+#[test]
+fn the_poll_disposition_catalog_upgrades_by_its_truth_table() {
+    const UNPUBLISHED: &str = "remote_poll_dispositions_unpublished_v1";
+    const MERGED: &str = "wave_06_poll_dispositions_merged_v1";
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Expect {
+        Unchanged,
+        Upgraded,
+        Created,
+        Refused,
+    }
+    #[derive(Clone, Copy)]
+    enum Setup {
+        // The registry as a new open leaves it.
+        Untouched,
+        // A frozen catalog (15 to 18; 19 is the current one) with rows.
+        Catalog(u8),
+        // The whole envelope gone, as before any disposition catalog.
+        NoObjects,
+    }
+    use Expect::*;
+    use Setup::*;
+    let mut table: Vec<(String, Setup, bool, bool, Expect)> = vec![
+        ("new registry".into(), Untouched, true, true, Unchanged),
+        ("15 unmarked".into(), Catalog(15), false, false, Upgraded),
+        ("17 unmarked".into(), Catalog(17), false, false, Upgraded),
+        (
+            "16 unpublished-marked".into(),
+            Catalog(16),
+            true,
+            false,
+            Upgraded,
+        ),
+        (
+            "18 unpublished-marked".into(),
+            Catalog(18),
+            true,
+            false,
+            Upgraded,
+        ),
+        (
+            "current, both markers".into(),
+            Catalog(19),
+            true,
+            true,
+            Unchanged,
+        ),
+        (
+            "current without unpublished".into(),
+            Catalog(19),
+            false,
+            true,
+            Refused,
+        ),
+        (
+            "current without merged".into(),
+            Catalog(19),
+            true,
+            false,
+            Refused,
+        ),
+        (
+            "current without either".into(),
+            Catalog(19),
+            false,
+            false,
+            Refused,
+        ),
+        (
+            "no objects, neither marker".into(),
+            NoObjects,
+            false,
+            false,
+            Created,
+        ),
+        (
+            "no objects, unpublished marker".into(),
+            NoObjects,
+            true,
+            false,
+            Refused,
+        ),
+        (
+            "no objects, merged marker".into(),
+            NoObjects,
+            false,
+            true,
+            Refused,
+        ),
+        (
+            "no objects, both markers".into(),
+            NoObjects,
+            true,
+            true,
+            Refused,
+        ),
+    ];
+    for profile in 15..=18 {
+        for unpublished in [false, true] {
+            // Any other catalog with the merged marker present.
+            table.push((
+                format!("{profile} unpublished={unpublished} with the merged marker"),
+                Catalog(profile),
+                unpublished,
+                true,
+                Refused,
+            ));
+        }
+    }
+    for (profile, unpublished) in [(15, true), (17, true), (16, false), (18, false)] {
+        // An unpublished marker that contradicts its catalog.
+        table.push((
+            format!("{profile} unpublished={unpublished} contradicts its catalog"),
+            Catalog(profile),
+            unpublished,
+            false,
+            Refused,
+        ));
+    }
+    let old_values = |profile: u8| -> Vec<&'static str> {
+        let mut values = vec![
+            "current",
+            "fast_forwarded",
+            "local_ahead",
+            "diverged",
+            "dirty",
+            "conflicted",
+            "inaccessible",
+            "materialized",
+            "nonconforming",
+            "blocked_by_local_state",
+            "materialization_incomplete",
+            "malformed",
+            "remotely_deleted",
+            "history_unknown",
+            "not_reached",
+        ];
+        if matches!(profile, 17..=19) {
+            values.extend(["closed", "promoted"]);
+        }
+        if matches!(profile, 16 | 18 | 19) {
+            values.push("unpublished");
+        }
+        values
+    };
+    let image = |db: &Connection| -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+        let values = |sql: &str| {
+            let mut query = db.prepare(sql).unwrap();
+            let columns = query.column_count();
+            query
+                .query_map([], |r| {
+                    (0..columns)
+                        .map(|column| r.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let tables = db
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut image = vec![values(
+            "SELECT type,name,tbl_name,rootpage,sql FROM sqlite_master ORDER BY name",
+        )];
+        for table in tables {
+            image.push(values(&format!(
+                "SELECT rowid,* FROM \"{}\" ORDER BY rowid",
+                table.replace('"', "\"\"")
+            )));
+        }
+        image
+    };
+    let rows = |db: &Connection| -> Vec<(i64, String)> {
+        db.prepare("SELECT ordinal,disposition FROM remote_poll_dispositions ORDER BY ordinal")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let markers = |db: &Connection| -> Vec<String> {
+        db.prepare("SELECT name FROM registry_migrations WHERE name IN (?1,?2) ORDER BY name")
+            .unwrap()
+            .query_map([UNPUBLISHED, MERGED], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let schema_version = |db: &Connection| -> i64 {
+        db.query_row("PRAGMA schema_version", [], |r| r.get(0))
+            .unwrap()
+    };
+    let mut failures = Vec::new();
+    for (case, setup, unpublished, merged, expect) in table {
+        let (data, _, service, op) = review_completed_state();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        match setup {
+            Untouched => {}
+            Catalog(profile) => {
+                install_historical_dispositions(&db, profile);
+                for (ordinal, value) in old_values(profile).iter().enumerate() {
+                    db.execute("INSERT OR REPLACE INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,disposition,before_oid,after_oid,observed_at) VALUES(1,?1,?2,'malformed',?3,?4,?4,124)", params![op.to_string(), ordinal as i64, value, ADVERTISED]).unwrap();
+                }
+            }
+            NoObjects => {
+                db.execute_batch("DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;").unwrap();
+            }
+        }
+        if !matches!(setup, Untouched) {
+            db.execute(
+                "DELETE FROM registry_migrations WHERE name IN (?1,?2)",
+                [UNPUBLISHED, MERGED],
+            )
+            .unwrap();
+            for (name, present) in [(UNPUBLISHED, unpublished), (MERGED, merged)] {
+                if present {
+                    db.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [name])
+                        .unwrap();
+                }
+            }
+        }
+        let before = image(&db);
+        let rows_before = if matches!(setup, NoObjects) {
+            Vec::new()
+        } else {
+            rows(&db)
+        };
+        let version = schema_version(&db);
+        let opened = RepositoryService::open_at(data.path());
+        let mut problems = Vec::new();
+        if expect == Refused {
+            match opened {
+                Err(ref error) if error.kind == RepositoryErrorKind::RecoveryRequired => {}
+                other => problems.push(format!(
+                    "open must answer recovery_required: {:?}",
+                    other.map(|_| ())
+                )),
+            }
+            if image(&db) != before {
+                problems.push("a refusal changed the registry".to_owned());
+            }
+        } else {
+            match opened {
+                Ok(service) => drop(service),
+                Err(error) => problems.push(format!("open must succeed: {error:?}")),
+            }
+            if problems.is_empty() {
+                if validate_poll_disposition_schema(&db).is_err() {
+                    problems.push("the catalog is not the current one".to_owned());
+                }
+                if markers(&db) != [UNPUBLISHED, MERGED] {
+                    problems.push(format!("markers are {:?}", markers(&db)));
+                }
+                if matches!(expect, Unchanged | Upgraded) && rows(&db) != rows_before {
+                    problems.push("rows changed".to_owned());
+                }
+                if expect == Unchanged && (image(&db) != before || schema_version(&db) != version) {
+                    problems.push("an unchanged registry was rewritten".to_owned());
+                }
+                // One more open changes nothing.
+                let settled = (image(&db), schema_version(&db));
+                match RepositoryService::open_at(data.path()) {
+                    Ok(service) => drop(service),
+                    Err(error) => problems.push(format!("second open failed: {error:?}")),
+                }
+                if settled != (image(&db), schema_version(&db)) {
+                    problems.push("a second open rewrote the registry".to_owned());
+                }
+                // The CHECK holds exactly today's values plus the two new ones.
+                for (ordinal, value, accepted) in [
+                    (100, "merged", true),
+                    (101, "unheld", true),
+                    (102, "substituted", false),
+                ] {
+                    let inserted = db.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,disposition,observed_at) VALUES(1,?1,?2,'malformed',?3,124)", params![op.to_string(), ordinal, value]);
+                    if inserted.is_ok() != accepted {
+                        problems.push(format!("the CHECK on {value}: {inserted:?}"));
+                    }
+                    if inserted.is_ok() {
+                        db.execute(
+                            "DELETE FROM remote_poll_dispositions WHERE ordinal=?1",
+                            [ordinal],
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+        if !problems.is_empty() {
+            failures.push(format!(
+                "{case} (expected {expect:?}): {}",
+                problems.join("; ")
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "truth table rows failed:\n{}",
+        failures.join("\n")
+    );
+}
+
 #[test]
 fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
     let corruptions = [
@@ -818,7 +1145,7 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
         "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES 'REMOTE_POLL_DISPOSITIONS'(repository_id,ordinal) ON DELETE SET NULL); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained set-null payload' FROM remote_poll_dispositions",
     ];
     let cases = corruptions.into_iter().map(|change| (15, change))
-        .chain(dependencies.into_iter().flat_map(|change| [15,16,17,18].map(|profile| (profile,change))))
+        .chain(dependencies.into_iter().flat_map(|change| [15,16,17,18,19].map(|profile| (profile,change))))
         .chain([
             (16, corruptions[7]),
             (16, corruptions[8]),
@@ -827,6 +1154,9 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
             (17, "INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')"),
             (16, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
             (18, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+            (19, "DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'"),
+            (19, "DELETE FROM registry_migrations WHERE name='wave_06_poll_dispositions_merged_v1'"),
+            (18, "INSERT INTO registry_migrations(name) VALUES('wave_06_poll_dispositions_merged_v1')"),
         ]);
     let mut accepted = Vec::new();
     for (profile, change) in cases {
@@ -837,7 +1167,7 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
         // Match the real service connection, including CASCADE effects. The
         // unknown populated child must survive public open, not just our rollback.
         db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
-        if profile != 18 {
+        if profile != 19 {
             install_historical_dispositions(&db, profile);
         }
         db.execute_batch("CREATE TABLE retention_payload(payload TEXT NOT NULL); INSERT INTO retention_payload(rowid,payload) VALUES(91,'retained independent payload')").unwrap();
@@ -2281,7 +2611,7 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
         )
         .unwrap();
     // Reconstruct pre-disposition history, not marked loss of its whole envelope.
-    assert_eq!(connection.execute("DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", []).unwrap(), 1);
+    assert_eq!(connection.execute("DELETE FROM registry_migrations WHERE name IN ('remote_poll_dispositions_unpublished_v1','wave_06_poll_dispositions_merged_v1')", []).unwrap(), 2);
     // Nor marked loss of the attribution columns, which a cycle-04 journal
     // predates: startup adds them to the reconstructed table again.
     assert_eq!(
@@ -4586,6 +4916,8 @@ fn poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent() {
         assert_eq!(rows(&db), before);
         let marked: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", [], |r| r.get(0)).unwrap();
         assert_eq!(marked, 1);
+        let merged: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='wave_06_poll_dispositions_merged_v1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(merged, 1);
         let triggers: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE name='remote_poll_disposition_owner_immutable'", [], |r| r.get(0)).unwrap();
         assert_eq!(triggers, 1);
     }
