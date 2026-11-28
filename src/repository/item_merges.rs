@@ -273,6 +273,36 @@ pub(super) fn rows_for_test(
         .unwrap()
 }
 
+/// What the registry holds of an item's arrival: when the commit that brought
+/// it was made, in unix seconds. The table's check keeps it in the range of a
+/// four-digit year.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ItemMerge {
+    pub merged_at: i64,
+}
+
+/// The arrival this clone recorded for the item `item` of `kind` in the
+/// registration `repository_id`, when it recorded one.
+pub(super) fn merge_of(
+    connection: &rusqlite::Connection,
+    repository_id: i64,
+    kind: AuthoringKind,
+    item: &str,
+) -> rusqlite::Result<Option<ItemMerge>> {
+    connection
+        .query_row(
+            "SELECT merged_at FROM item_merges
+              WHERE repository_id = ?1 AND kind = ?2 AND item_ulid = ?3",
+            params![repository_id, kind_name(kind), item],
+            |row| {
+                Ok(ItemMerge {
+                    merged_at: row.get(0)?,
+                })
+            },
+        )
+        .optional()
+}
+
 /// Writes the arrivals in the caller's transaction: a row for each arrived
 /// item, replacing the item's earlier one unless that row's commit is not an
 /// ancestor of the new one (two sites that recorded one item out of order),

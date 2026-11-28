@@ -365,11 +365,19 @@ pub fn item_list(data: &ItemListDto) -> Human {
 
 pub fn item_show(data: &ItemDto) -> Human {
     let mut output = text(format!(
-        "ID: {}\nKind: {}\nPath: {}\nTitle: {}\nSlug: {}\nType: {}\nStatus: {}\nProject: {}\nTeam: {}\n",
+        "ID: {}\nKind: {}\nPath: {}\nTitle: {}\n",
         optional(data.id.as_deref()),
         data.kind.as_str(),
         field(&data.path),
         optional(data.title.as_deref()),
+    ));
+    if let Some(merged_at) = &data.merged_at {
+        output
+            .stdout
+            .push_str(&format!("Merged at: {}\n", field(merged_at)));
+    }
+    output.stdout.push_str(&format!(
+        "Slug: {}\nType: {}\nStatus: {}\nProject: {}\nTeam: {}\n",
         optional(data.slug.as_deref()),
         optional(data.ticket_type.as_deref()),
         optional(data.status.as_deref()),
@@ -383,6 +391,11 @@ pub fn item_show(data: &ItemDto) -> Human {
             optional(closure.closed_at.as_deref()),
             optional(closure.closed_by.as_deref())
         ));
+        if let Some(merged_at) = &closure.merged_at {
+            output
+                .stdout
+                .push_str(&format!("Merged at: {}\n", field(merged_at)));
+        }
         if let Some(publication) = closure.publication {
             output
                 .stdout

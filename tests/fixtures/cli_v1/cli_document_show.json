@@ -19,6 +19,7 @@
       "state": "current"
     },
     "kind": "document",
+    "merged_at": null,
     "observation": "v1:b97979596442d7b114749e98e56274fe7c014d36b8c77878a216289a631a36f0",
     "parent": null,
     "path": "docs/guide.md",

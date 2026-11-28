@@ -407,6 +407,7 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
             state: ClosureState::Closed,
             closed_at,
             closed_by: Some(p.a.closed_by()),
+            merged_at: None,
             publication: None,
         })
     );

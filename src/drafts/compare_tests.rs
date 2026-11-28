@@ -110,6 +110,7 @@ fn item(title: &str, observation: &str, branch: &str) -> ItemDto {
             state: ClosureState::Open,
             closed_at: None,
             closed_by: None,
+            merged_at: None,
             publication: None,
         }),
         slug: None,
@@ -123,6 +124,7 @@ fn item(title: &str, observation: &str, branch: &str) -> ItemDto {
         }],
         readiness: None,
         pull_request: None,
+        merged_at: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some("Body\n".to_owned()),
         source: Some("---\nsource\n---\nBody\n".to_owned()),
@@ -152,6 +154,7 @@ fn closed(mut item: ItemDto) -> ItemDto {
         state: ClosureState::Closed,
         closed_at: Some("2026-10-01T00:00:00Z".to_owned()),
         closed_by: Some("A <a@example.invalid>".to_owned()),
+        merged_at: None,
         publication: None,
     });
     item

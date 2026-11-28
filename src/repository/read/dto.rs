@@ -565,7 +565,9 @@ pub struct ItemDto {
     /// The pull request link this clone gave a ticket or a document: its
     /// branch, the primary it targets, the forge and the address that opens
     /// it. Only a complete read (`show`, and `show --path`) fills it. A
-    /// ticket's is filled when this clone gave it a link. A document's is
+    /// ticket's is filled when this clone gave it a link and its closure is not
+    /// `closed` (a closed ticket's is null whether or not the row remains). A
+    /// document's is
     /// filled when it is read from its active context, this clone gave it a
     /// link and the primary does not hold the document yet (a cheap check of
     /// the content proof, which differs from promote's only with missing
@@ -573,6 +575,15 @@ pub struct ItemDto {
     /// parse or a document moved on the primary). It is null in every list
     /// (where it reads "not read here"), and for an item that has none.
     pub pull_request: Option<PullRequestDto>,
+    /// When a document's current copy reached the primary, in
+    /// `closure.closed_at`'s format: the time of the first-parent commit that
+    /// brought it, as this clone recorded it. Only a complete read (`show`,
+    /// and `show --path`) of a document this clone has a record for fills it,
+    /// from its primary copy or its active context alike; for an edit in
+    /// progress it is the time of the version the primary holds. Null for a
+    /// ticket (whose time is `closure.merged_at`), for a nonconforming entry,
+    /// for a document with no record, and in every list.
+    pub merged_at: Option<String>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
     /// are not here. A value JSON cannot express, and a list or mapping
@@ -618,6 +629,13 @@ pub struct ClosureDto {
     pub state: ClosureState,
     pub closed_at: Option<String>,
     pub closed_by: Option<String>,
+    /// When the closure reached the primary, in `closed_at`'s format: the
+    /// time of the first-parent commit that brought it, as this clone
+    /// recorded it. Only a complete read (`show`, and `show --path`) of a
+    /// `closed` ticket this clone has a record for fills it. Null for any
+    /// other state, for a closure this clone saw no arrival of, and in every
+    /// list.
+    pub merged_at: Option<String>,
     /// Only a complete read (`show`, and `show --path`) of a closing ticket
     /// in a pull-request repository fills it. Null for any other state, in
     /// direct mode, where a branch-only closure is never published, and in

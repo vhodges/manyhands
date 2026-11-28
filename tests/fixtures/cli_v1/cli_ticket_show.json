@@ -8,6 +8,7 @@
     "closure": {
       "closed_at": "2026-09-30T12:34:56Z",
       "closed_by": "Ada Lovelace <ada@example.invalid>",
+      "merged_at": null,
       "publication": null,
       "state": "closed"
     },
@@ -24,6 +25,7 @@
       "state": "current"
     },
     "kind": "ticket",
+    "merged_at": null,
     "observation": "v1:a21d2c7633dd80c71a3ee16d1bd1c2873bef6fa59b52c21954c2f5caf2e59fe8",
     "parent": null,
     "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC1/ticket.md",

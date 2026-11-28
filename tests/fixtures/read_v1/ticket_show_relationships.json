@@ -8,6 +8,7 @@
     "closure": {
       "closed_at": null,
       "closed_by": null,
+      "merged_at": null,
       "publication": null,
       "state": "open"
     },
@@ -33,6 +34,7 @@
       "state": "current"
     },
     "kind": "ticket",
+    "merged_at": null,
     "observation": "v1:1828b7d8e368fb7b42435b8e9cab9db6015f5e07499710a32e5455f95ed95224",
     "parent": {
       "id": "01ARZ3NDEKTSV4RRFFQ69G5FC1",

@@ -26,6 +26,7 @@
           "state": "current"
         },
         "kind": "document",
+        "merged_at": null,
         "observation": null,
         "parent": null,
         "path": "docs/guide.md",
@@ -61,6 +62,7 @@
           "state": "current"
         },
         "kind": "document",
+        "merged_at": null,
         "observation": null,
         "parent": null,
         "path": "docs/notes/plan.md",

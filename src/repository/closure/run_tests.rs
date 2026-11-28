@@ -1592,6 +1592,10 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
     let item = f.service.show_item(&repository, &id()).unwrap();
     assert_eq!(item.context.kind, ItemContextKind::Primary);
     assert_eq!(item.status.as_deref(), Some("open"));
+    // The close moved the primary, which recorded the arrival that the read
+    // gives: its time is the commit's, so only that it is given is pinned.
+    let merged_at = item.closure.as_ref().and_then(|c| c.merged_at.clone());
+    assert!(merged_at.is_some(), "{:?}", item.closure);
     assert_eq!(
         item.closure,
         Some(ClosureDto {
@@ -1602,6 +1606,7 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
                     .unwrap()
             ),
             closed_by: Some(CLOSED_BY.into()),
+            merged_at,
             publication: None,
         })
     );
@@ -1616,7 +1621,14 @@ fn a_completed_closure_reads_closed_from_the_primary_only() {
         .collect();
     assert_eq!(copies.len(), 1);
     assert_eq!(copies[0].context.kind, ItemContextKind::Primary);
-    assert_eq!(copies[0].closure, item.closure);
+    // A list reads the index only, and gives no arrival time.
+    assert_eq!(
+        copies[0].closure,
+        item.closure.map(|closure| ClosureDto {
+            merged_at: None,
+            ..closure
+        })
+    );
 }
 
 // --- Cleanup with a remote ----------------------------------------------

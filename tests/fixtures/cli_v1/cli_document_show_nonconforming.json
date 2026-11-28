@@ -19,6 +19,7 @@
       "state": "current"
     },
     "kind": "document",
+    "merged_at": null,
     "observation": "v1:947e87df7c41de916b7581dfa2e8683a03aa816781490f3fab1c6172e0580389",
     "parent": null,
     "path": "docs/broken.md",

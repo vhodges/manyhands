@@ -705,6 +705,62 @@ fn refresh_requires_registration_but_rebuild_registers_the_explicit_root() {
     );
 }
 
+/// The arrival record is not index content: a rebuild, which discards and
+/// rewrites the index's own rows, leaves a registration's `item_merges`.
+#[test]
+fn an_item_merge_survives_an_index_rebuild() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let data = enabled.data_directory.path().join("manyhands.sqlite3");
+    let rows = || -> Vec<(String, String, String, i64, String)> {
+        Connection::open(&data)
+            .unwrap()
+            .prepare(
+                "SELECT kind, item_ulid, commit_oid, merged_at, operation_ulid
+                   FROM item_merges ORDER BY kind, item_ulid",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let operation = "01ARZ3NDEKTSV4RRFFQ69G5FA0";
+    let connection = Connection::open(&data).unwrap();
+    for (kind, item, seconds) in [
+        ("ticket", "01ARZ3NDEKTSV4RRFFQ69G5FC0", 1_790_000_000),
+        ("document", "01ARZ3NDEKTSV4RRFFQ69G5FD0", 1_790_000_060),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO item_merges
+                     (repository_id, kind, item_ulid, commit_oid, merged_at, operation_ulid)
+                 SELECT id, ?1, ?2, ?3, ?4, ?5 FROM repositories",
+                params![kind, item, commit, seconds, operation],
+            )
+            .unwrap();
+    }
+    drop(connection);
+    let before = rows();
+    assert_eq!(before.len(), 2);
+
+    enabled
+        .service
+        .rebuild_repository(rebuild_request!(&fixture.root))
+        .unwrap();
+
+    assert_eq!(rows(), before);
+}
+
 #[test]
 fn refresh_persists_primary_metadata_comments_and_activity() {
     let fixture = support::born_repository();

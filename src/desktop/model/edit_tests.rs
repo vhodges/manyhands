@@ -62,6 +62,7 @@ fn ticket() -> ItemDto {
         observation: Some("observed".to_owned()),
         body: Some(RAW.to_owned()),
         source: Some(format!("---\nid: {TICKET}\n---\n{RAW}")),
+        merged_at: None,
         unknown_metadata: serde_json::Map::new(),
         changed_at: None,
         change_source: None,
@@ -93,6 +94,7 @@ fn edit_is_offered_for_an_open_conforming_item_in_its_own_tab_only() {
         state: ClosureState::Closed,
         closed_at: None,
         closed_by: None,
+        merged_at: None,
         publication: None,
     });
     assert!(!edit_offered(&tab(), &closed), "a closed ticket");

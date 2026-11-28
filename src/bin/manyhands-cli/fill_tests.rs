@@ -18,6 +18,7 @@ fn item() -> ItemDto {
         deps: vec![],
         readiness: None,
         pull_request: None,
+        merged_at: None,
         unknown_metadata: Default::default(),
         body: Some("line one\r\nline two\rthree 🦀\nno final newline".into()),
         source: None,

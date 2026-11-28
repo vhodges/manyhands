@@ -6435,3 +6435,233 @@ fn document_show_gives_the_link_while_it_is_outstanding() {
     );
     assert_git_transport_uninitialized();
 }
+
+// ---------------------------------------------------------------------
+// When an item reached the primary, and what a closed ticket's link is.
+// ---------------------------------------------------------------------
+
+/// 2026-09-21T14:13:20Z, and the same time in the second after it.
+const MERGED_SECONDS: i64 = 1_790_000_000;
+const MERGED_AT: &str = "2026-09-21T14:13:20Z";
+
+/// Gives the item `id` of `kind` the row a move of the primary that brought
+/// it records, in the registry's `item_merges`.
+fn give_merge(data_directory: &Path, kind: &str, id: &str, seconds: i64) {
+    let changed = index(data_directory)
+        .execute(
+            "INSERT INTO item_merges
+                 (repository_id, kind, item_ulid, commit_oid, merged_at, operation_ulid)
+             SELECT id, ?1, ?2, ?3, ?4, '01ARZ3NDEKTSV4RRFFQ69G5FA0' FROM repositories",
+            rusqlite::params![
+                kind,
+                id,
+                "0123456789abcdef0123456789abcdef01234567",
+                seconds
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+fn ticket_merged_at(item: &ItemDto) -> Option<&str> {
+    item.closure
+        .as_ref()
+        .expect("a ticket has a closure")
+        .merged_at
+        .as_deref()
+}
+
+#[test]
+fn ticket_show_gives_merged_at_on_its_closure() {
+    let (fixture, enabled) = closure_world(Primary::Closed, Own::None);
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    let repo = service.resolve_repository(root).unwrap();
+    let ticket_file = ticket_path(TICKET_A);
+    let ticket_file = Path::new(&ticket_file);
+    let a = || service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+    let a_by_path = || service.show_path(&repo, None, ticket_file).unwrap();
+
+    // A closed ticket with no row has no time.
+    assert_eq!(a().closure.as_ref().unwrap().state, ClosureState::Closed);
+    assert_eq!(ticket_merged_at(&a()), None);
+    assert_eq!(ticket_merged_at(&a_by_path()), None);
+
+    // A row: the time is on the closure, in `closed_at`'s format, by `show`
+    // and by `show --path`, and the ticket's own `merged_at` stays null. A
+    // row of the other kind, or of another item, gives nothing.
+    give_merge(data, "document", TICKET_A, MERGED_SECONDS + 1);
+    give_merge(data, "ticket", TICKET_B, MERGED_SECONDS + 2);
+    assert_eq!(ticket_merged_at(&a()), None);
+    give_merge(data, "ticket", TICKET_A, MERGED_SECONDS);
+    assert_eq!(ticket_merged_at(&a()), Some(MERGED_AT));
+    assert_eq!(ticket_merged_at(&a_by_path()), Some(MERGED_AT));
+    assert_eq!(a().merged_at, None);
+    assert_eq!(a_by_path().merged_at, None);
+    let closure = a().closure.unwrap();
+    assert_eq!(closure.closed_at.as_deref(), Some("2026-09-30T12:34:56Z"));
+    assert_eq!(
+        closure.closed_by.as_deref(),
+        Some("Ada Lovelace <ada@example.invalid>")
+    );
+
+    // An open ticket with a row has none, since its closure state is open.
+    let b = service.show_item(&repo, &item_id(TICKET_B)).unwrap();
+    assert_eq!(b.closure.as_ref().unwrap().state, ClosureState::Open);
+    assert_eq!(ticket_merged_at(&b), None);
+
+    // No list gives one.
+    let listed = all_tickets(service, &repo);
+    assert_eq!(ticket_merged_at(ticket(&listed, TICKET_A)), None);
+    for item in &listed.items {
+        assert_eq!(item.merged_at, None, "list: {item:?}");
+        assert_eq!(
+            item.closure.as_ref().and_then(|c| c.merged_at.as_ref()),
+            None
+        );
+    }
+
+    // A closing ticket with a row has none: its closure is not on the
+    // primary.
+    let (fixture, enabled) = closure_world(Primary::Open, Own::Closed);
+    let (service, root) = (&enabled.service, &fixture.root);
+    give_merge(
+        enabled.data_directory.path(),
+        "ticket",
+        TICKET_A,
+        MERGED_SECONDS,
+    );
+    let repo = service.resolve_repository(root).unwrap();
+    let closing = service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+    assert_eq!(
+        closing.closure.as_ref().unwrap().state,
+        ClosureState::Closing
+    );
+    assert_eq!(ticket_merged_at(&closing), None);
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn document_show_gives_merged_at() {
+    let (fixture, enabled) = enabled();
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    // DOCUMENT_B is on the primary only, DOCUMENT_C too and with no row;
+    // DOCUMENT_A has an active context.
+    let on_primary = "docs/primary.md";
+    let no_row = "docs/no-row.md";
+    let marker = "docs/marker.md";
+    write(
+        root,
+        on_primary,
+        &document_source(DOCUMENT_B, "Primary", ""),
+    );
+    write(root, no_row, &document_source(DOCUMENT_C, "No row", ""));
+    write(
+        root,
+        marker,
+        "---\nmanyhands_managed: true\n---\nOnly a marker.\n",
+    );
+    commit(&fixture, &[on_primary, no_row, marker], 2_000);
+    let own_path = "docs/active.md";
+    create_document_context(service, root, DOCUMENT_A, own_path);
+    refresh_completely(service, root);
+    let repo = service.resolve_repository(root).unwrap();
+    let own = context_worktree(root, DOCUMENT_A);
+    let shown = |id: &str| service.show_item(&repo, &item_id(id)).unwrap();
+
+    // No row: null for each.
+    for id in [DOCUMENT_A, DOCUMENT_B, DOCUMENT_C] {
+        assert_eq!(shown(id).merged_at, None, "{id}: no row");
+    }
+
+    // A row: the time, whether the read is of the primary's copy or of the
+    // active context, by `show` and by `show --path`. A ticket row of the
+    // same ID gives nothing.
+    give_merge(data, "ticket", DOCUMENT_A, MERGED_SECONDS + 1);
+    assert_eq!(shown(DOCUMENT_A).merged_at, None);
+    give_merge(data, "document", DOCUMENT_A, MERGED_SECONDS);
+    give_merge(data, "document", DOCUMENT_B, MERGED_SECONDS + 60);
+    let a = shown(DOCUMENT_A);
+    assert_eq!(a.context.kind, ItemContextKind::Active);
+    assert_eq!(a.merged_at.as_deref(), Some(MERGED_AT));
+    let a_by_path = service
+        .show_path(&repo, Some(&own), Path::new(own_path))
+        .unwrap();
+    assert_eq!(a_by_path.merged_at.as_deref(), Some(MERGED_AT));
+    let b = shown(DOCUMENT_B);
+    assert_eq!(b.context.kind, ItemContextKind::Primary);
+    assert_eq!(b.merged_at.as_deref(), Some("2026-09-21T14:14:20Z"));
+    let b_by_path = service
+        .show_path(&repo, None, Path::new(on_primary))
+        .unwrap();
+    assert_eq!(b_by_path.merged_at.as_deref(), Some("2026-09-21T14:14:20Z"));
+    assert_eq!(shown(DOCUMENT_C).merged_at, None);
+
+    // A document's closure is null and its time is not on one.
+    assert_eq!(a.closure, None);
+
+    // A nonconforming entry and every list give none.
+    let nonconforming = service.show_path(&repo, None, Path::new(marker)).unwrap();
+    assert_eq!(nonconforming.id, None);
+    assert_eq!(nonconforming.merged_at, None);
+    let documents = service.list_documents(&repo).unwrap();
+    assert!(documents.items.len() >= 4);
+    assert!(documents.items.iter().all(|item| item.merged_at.is_none()));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn a_closed_ticket_s_link_is_no_longer_offered() {
+    // A closing ticket is given its link (as
+    // `ticket_show_gives_the_link_and_the_publication` pins), and a closed one
+    // is not, whether or not the link row remains.
+    let (fixture, enabled) = closure_world(Primary::Closed, Own::None);
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    let repo = service.resolve_repository(root).unwrap();
+    let ticket_file = ticket_path(TICKET_A);
+    let ticket_file = Path::new(&ticket_file);
+    let a = || service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+
+    give_link(data, "ticket", TICKET_A);
+    let rows = |data: &Path| -> i64 {
+        index(data)
+            .query_row("SELECT count(*) FROM pull_request_links", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(rows(data), 1);
+    assert_eq!(a().closure.as_ref().unwrap().state, ClosureState::Closed);
+    assert_eq!(a().pull_request, None);
+    assert_eq!(
+        service
+            .show_path(&repo, None, ticket_file)
+            .unwrap()
+            .pull_request,
+        None
+    );
+    store_mode(data, "pull_request", Some("origin"));
+    assert_eq!(a().pull_request, None);
+    // The row is still there: only the read stopped offering it.
+    assert_eq!(rows(data), 1);
+
+    // Closing and open tickets keep theirs.
+    let (fixture, enabled) = closure_world(Primary::Open, Own::Closed);
+    let (service, root) = (&enabled.service, &fixture.root);
+    let data = enabled.data_directory.path();
+    let repo = service.resolve_repository(root).unwrap();
+    give_link(data, "ticket", TICKET_A);
+    give_link(data, "ticket", TICKET_B);
+    let closing = service.show_item(&repo, &item_id(TICKET_A)).unwrap();
+    assert_eq!(
+        closing.closure.as_ref().unwrap().state,
+        ClosureState::Closing
+    );
+    assert_eq!(closing.pull_request, Some(given_link(TICKET_A)));
+    let open = service.show_item(&repo, &item_id(TICKET_B)).unwrap();
+    assert_eq!(open.closure.as_ref().unwrap().state, ClosureState::Open);
+    assert_eq!(open.pull_request, Some(given_link(TICKET_B)));
+    assert_git_transport_uninitialized();
+}

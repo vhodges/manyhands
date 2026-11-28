@@ -26,6 +26,7 @@
           "state": "current"
         },
         "kind": "ticket",
+        "merged_at": null,
         "observation": null,
         "parent": null,
         "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC2/ticket.md",

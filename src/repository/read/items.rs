@@ -36,6 +36,7 @@ use crate::{
         discovery::{
             ContextKey, ContextObservation, ObservedCommentThread, ObservedItem, UnknownMetadata,
         },
+        item_merges,
         mutation::absent_token,
         pull_request_links,
     },
@@ -1481,6 +1482,7 @@ fn bare_item(
         deps: Vec::new(),
         readiness: None,
         pull_request: None,
+        merged_at: None,
         unknown_metadata: serde_json::Map::new(),
         body: None,
         source: None,
@@ -1515,12 +1517,14 @@ fn closure(
             state,
             closed_at: timestamp(primary.closed_at),
             closed_by: primary.closed_by.clone(),
+            merged_at: None,
             publication: None,
         },
         _ => ClosureDto {
             state,
             closed_at,
             closed_by,
+            merged_at: None,
             publication: None,
         },
     }
@@ -1528,10 +1532,13 @@ fn closure(
 
 /// What a complete read adds to what the index lists: the pull request link
 /// this clone gave the item and, for a closing ticket in a pull-request
-/// repository, whether its closure is on the remote yet. A document's link is
-/// the row's while the primary does not hold the document and the read is of
-/// its active context (design Part E). A list reads the index only, and
-/// leaves both null.
+/// repository, whether its closure is on the remote yet, and when the item
+/// reached the primary, as this clone recorded it. A closed ticket is given
+/// no link, whether or not its row remains. A document's link is the row's
+/// while the primary does not hold the document and the read is of its active
+/// context (design Part E). A ticket's time is on its closure, and only a
+/// closed ticket has one; a document's is on the item, whichever copy is read.
+/// A list reads the index only, and leaves all of them null.
 fn fill_complete_read(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -1544,15 +1551,31 @@ fn fill_complete_read(
         ItemDtoKind::Ticket => AuthoringKind::Ticket,
         ItemDtoKind::Document => AuthoringKind::Document,
     };
+    let ticket_closed = matches!(
+        &item.closure,
+        Some(closure) if closure.state == ClosureState::Closed
+    );
     item.pull_request = pull_request_links::link_of(
         connection,
         repo.registration_id(),
         authoring_kind_name(kind),
         &id,
     )?
-    .filter(|_| kind == AuthoringKind::Ticket || document_link_offered(connection, repo, item, &id))
+    .filter(|_| match kind {
+        AuthoringKind::Ticket => !ticket_closed,
+        AuthoringKind::Document => document_link_offered(connection, repo, item, &id),
+    })
     .as_ref()
     .map(PullRequestDto::from);
+    let merged_at = item_merges::merge_of(connection, repo.registration_id(), kind, &id)?
+        .and_then(|merge| timestamp(merge.merged_at));
+    match (kind, &mut item.closure) {
+        (AuthoringKind::Document, _) => item.merged_at = merged_at,
+        (AuthoringKind::Ticket, Some(closure)) if closure.state == ClosureState::Closed => {
+            closure.merged_at = merged_at;
+        }
+        _ => {}
+    }
     let publication = match &item.closure {
         Some(closure) if closure.state == ClosureState::Closing => {
             publication_of(connection, repo, &id, closure)?

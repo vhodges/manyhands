@@ -56,6 +56,7 @@ fn content_item() -> ItemDto {
         deps: vec![],
         readiness: None,
         pull_request: None,
+        merged_at: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some("\nRequested\t正文\r\n\u{1b}body without final newline".into()),
         source: Some("SOURCE_NOT_BODY".into()),
@@ -91,6 +92,7 @@ fn relationship_ticket() -> ItemDto {
             state: ClosureState::Open,
             closed_at: None,
             closed_by: None,
+            merged_at: None,
             publication: None,
         }),
         readiness: Some(ReadinessDto {
@@ -319,6 +321,7 @@ fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconformi
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        merged_at: None,
         publication: None,
     });
     let data = ItemListDto {
@@ -346,6 +349,7 @@ fn show_names_the_publication_and_the_pull_request_link_when_it_has_them() {
         state: ClosureState::Closing,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada".into()),
+        merged_at: None,
         publication: Some(ClosurePublication::Pending),
     });
     let link = |url: Option<&str>| PullRequestDto {
@@ -390,6 +394,57 @@ fn show_names_the_publication_and_the_pull_request_link_when_it_has_them() {
 }
 
 #[test]
+fn show_prints_merged_at_after_the_closure_lines_or_the_title_when_it_is_set() {
+    let lines = |item: &ItemDto| -> Vec<String> {
+        item_show(item)
+            .stdout
+            .lines()
+            .map(str::to_owned)
+            .take_while(|line| !line.is_empty())
+            .collect()
+    };
+    let after = |lines: &[String], previous: &str| -> Option<String> {
+        let at = lines.iter().position(|line| line.starts_with(previous))?;
+        lines.get(at + 1).cloned()
+    };
+
+    // A ticket: after the closure lines, only when its closure has a time.
+    let mut ticket = content_item();
+    ticket.kind = ItemDtoKind::Ticket;
+    ticket.closure = Some(ClosureDto {
+        state: ClosureState::Closed,
+        closed_at: Some("2026-10-19T12:00:00Z".into()),
+        closed_by: Some("Ada".into()),
+        merged_at: Some("2026-10-20T09:30:00Z".into()),
+        publication: None,
+    });
+    assert_eq!(
+        after(&lines(&ticket), "Closed by:").as_deref(),
+        Some("Merged at: 2026-10-20T09:30:00Z")
+    );
+    ticket.closure.as_mut().unwrap().merged_at = None;
+    assert!(
+        !lines(&ticket)
+            .iter()
+            .any(|line| line.starts_with("Merged at"))
+    );
+
+    // A document: after the title, and not for one without a time.
+    let mut document = content_item();
+    document.merged_at = Some("2026-10-20T09:30:00Z".into());
+    assert_eq!(
+        after(&lines(&document), "Title:").as_deref(),
+        Some("Merged at: 2026-10-20T09:30:00Z")
+    );
+    document.merged_at = None;
+    assert!(
+        !lines(&document)
+            .iter()
+            .any(|line| line.starts_with("Merged at"))
+    );
+}
+
+#[test]
 fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
     let mut item = content_item();
     item.kind = ItemDtoKind::Ticket;
@@ -401,6 +456,7 @@ fn content_show_escapes_metadata_but_preserves_requested_body_bytes() {
         state: ClosureState::Closed,
         closed_at: Some("2026-10-19T12:00:00Z".into()),
         closed_by: Some("Ada\nLovelace".into()),
+        merged_at: None,
         publication: None,
     });
     let output = item_show(&item);

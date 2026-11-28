@@ -13,6 +13,7 @@
             "closure": {
               "closed_at": null,
               "closed_by": null,
+              "merged_at": null,
               "publication": null,
               "state": "open"
             },
@@ -34,6 +35,7 @@
               "state": "current"
             },
             "kind": "ticket",
+            "merged_at": null,
             "observation": null,
             "parent": null,
             "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR1/ticket.md",
@@ -64,6 +66,7 @@
             "closure": {
               "closed_at": null,
               "closed_by": null,
+              "merged_at": null,
               "publication": null,
               "state": "open"
             },
@@ -85,6 +88,7 @@
               "state": "current"
             },
             "kind": "ticket",
+            "merged_at": null,
             "observation": null,
             "parent": {
               "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
@@ -140,6 +144,7 @@
           "closure": {
             "closed_at": null,
             "closed_by": null,
+            "merged_at": null,
             "publication": null,
             "state": "open"
           },
@@ -165,6 +170,7 @@
             "state": "current"
           },
           "kind": "ticket",
+          "merged_at": null,
           "observation": null,
           "parent": null,
           "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR3/ticket.md",
@@ -217,6 +223,7 @@
           "closure": {
             "closed_at": null,
             "closed_by": null,
+            "merged_at": null,
             "publication": null,
             "state": "open"
           },
@@ -238,6 +245,7 @@
             "state": "current"
           },
           "kind": "ticket",
+          "merged_at": null,
           "observation": null,
           "parent": {
             "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
@@ -307,6 +315,7 @@
           "closure": {
             "closed_at": null,
             "closed_by": null,
+            "merged_at": null,
             "publication": null,
             "state": "open"
           },
@@ -328,6 +337,7 @@
             "state": "current"
           },
           "kind": "ticket",
+          "merged_at": null,
           "observation": null,
           "parent": {
             "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
@@ -396,6 +406,7 @@
           "closure": {
             "closed_at": null,
             "closed_by": null,
+            "merged_at": null,
             "publication": null,
             "state": "open"
           },
@@ -417,6 +428,7 @@
             "state": "current"
           },
           "kind": "ticket",
+          "merged_at": null,
           "observation": null,
           "parent": {
             "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",

@@ -189,6 +189,7 @@ fn item(kind: ItemDtoKind, body: &str, deps: Vec<DependencyDto>) -> ItemDto {
         deps,
         readiness: None,
         pull_request: None,
+        merged_at: None,
         unknown_metadata: serde_json::Map::new(),
         body: Some(body.to_owned()),
         source: Some(format!("---\nid: {ITEM}\n---\n{body}")),
