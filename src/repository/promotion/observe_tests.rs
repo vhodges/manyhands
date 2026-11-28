@@ -1312,3 +1312,644 @@ fn an_item_without_its_own_context_takes_its_kind_from_the_primary_rows_or_disk(
         "the primary on disk, once its basis moved"
     );
 }
+
+// --- the pull-request observation (Cycle 04, Task 2) ---
+
+const PULL_REQUEST_CONFIG: &str = "format_version = 2\nintegration = \"pull_request\"\nprimary_branch = \"main\"\npublication_remote = \"origin\"\n";
+
+fn document_source(version: &str) -> Vec<u8> {
+    format!("---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {ID}\ntitle: Document\n---\n\nbody {version}\n").into_bytes()
+}
+
+/// A commit of exactly `files` on `parents`, written without touching a
+/// worktree.
+fn files_commit(repo: &git2::Repository, files: &[(&str, &[u8])], parents: &[Oid]) -> Oid {
+    let mut index = git2::Index::new().unwrap();
+    for (path, bytes) in files {
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: bytes.len() as u32,
+                id: repo.blob(bytes).unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            })
+            .unwrap();
+    }
+    let tree = repo.find_tree(index.write_tree_to(repo).unwrap()).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let parents = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).unwrap())
+        .collect::<Vec<_>>();
+    repo.commit(
+        None,
+        &sig,
+        &sig,
+        "fixture",
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+/// R-3, the content proof: the primary holds the document only by its
+/// content, whatever the merge strategy, judged against the tracking primary
+/// (or a local primary equal to or behind it) and only when the remote copy
+/// is not ahead of or beside the tip. Every refusal of the proof reads not
+/// held.
+#[test]
+fn primary_holds_document_by_the_content_proof() {
+    let item: ItemId = ID.parse().unwrap();
+    holds_rows(|repo, tip, tracking, gone, expected, what| {
+        assert_eq!(
+            primary_holds_document(repo, tip, tracking, "main", "origin", &item, gone),
+            expected,
+            "{what}"
+        );
+    });
+    refusal_rows(|repo, tip, primary, expected, what| {
+        assert_eq!(
+            primary_holds_document(repo, tip, Some(primary), "main", "origin", &item, false),
+            expected,
+            "{what}"
+        );
+    });
+}
+
+/// R-9: the cheap check `document show` makes (`document_link_outstanding`)
+/// agrees with the proof (P3's rows, shared with the test above): the link is
+/// outstanding exactly when the proof does not hold the document. None of the
+/// table's rows is one of K-11's, where the two may differ (missing objects, a
+/// document ID at two paths, a primary copy that does not parse, a document
+/// moved on the primary), so no row is expected to differ.
+#[test]
+fn the_cheap_check_agrees_with_the_proof() {
+    let item: ItemId = ID.parse().unwrap();
+    let mut rows = 0;
+    holds_rows(|repo, tip, tracking, gone, expected, what| {
+        rows += 1;
+        assert_eq!(
+            document_link_outstanding(repo, tip, DOC, tracking, "main", "origin", &item, gone),
+            !expected,
+            "{what}"
+        );
+    });
+    refusal_rows(|repo, tip, primary, expected, what| {
+        rows += 1;
+        assert_eq!(
+            document_link_outstanding(
+                repo,
+                tip,
+                DOC,
+                Some(primary),
+                "main",
+                "origin",
+                &item,
+                false
+            ),
+            !expected,
+            "{what}"
+        );
+    });
+    // 2 documents x 4 merges x 9 scenarios x 6 states of `R`, and the five
+    // rows of the refusals.
+    assert_eq!(rows, 2 * 4 * 9 * 6 + 5);
+}
+
+/// P3's table: for each row `check` gets the repository, the branch tip, the
+/// tracking primary, whether `R` reads as absent, whether the proof can hold
+/// and a label. The local primary is set to the row's.
+fn holds_rows(mut check: impl FnMut(&git2::Repository, Oid, Option<Oid>, bool, bool, &str)) {
+    let remote_ref = format!("refs/remotes/origin/manyhands/document/{ID}");
+    // (the scenario, whether the proof can hold), by where the merge sits.
+    let scenarios: [(&str, bool); 9] = [
+        // on the tracking primary, the local primary behind it
+        ("tracking merged, local behind", true),
+        ("tracking merged, local equal", true),
+        // a local primary ahead of or beside the tracking primary is not used
+        ("tracking merged, local ahead", true),
+        ("tracking merged, local beside", true),
+        // a merge only on a local primary the tracking primary lacks
+        ("only local merged, ahead of tracking", false),
+        ("only local merged, tracking beside it", false),
+        // a local primary behind the tracking primary is a candidate
+        ("local merged, tracking a later commit", true),
+        ("local merged, tracking deleted the document", true),
+        ("no tracking primary", false),
+    ];
+    // (the remote copy relative to the tip, whether it lets the proof hold).
+    let remotes: [(&str, bool); 6] = [
+        ("absent", true),
+        ("equal", true),
+        ("behind", true),
+        ("ahead", false),
+        ("beside", false),
+        ("gone after remote_branch_deleted", true),
+    ];
+    for edit in [false, true] {
+        for merge in ["none", "merge commit", "squash", "fast-forward"] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            let code: &[(&str, &[u8])] = &[("code", b"base")];
+            let old = document_source("old");
+            let new = document_source("new");
+            let base_files: Vec<(&str, &[u8])> = if edit {
+                vec![code[0], (DOC, &old)]
+            } else {
+                code.to_vec()
+            };
+            let tip_files: Vec<(&str, &[u8])> = vec![code[0], (DOC, &new)];
+            // The primary before the merge, the branch tip, and the primary
+            // holding the merge.
+            let base = files_commit(&repo, &base_files, &[]);
+            let tip = files_commit(&repo, &tip_files, &[base]);
+            let merged = match merge {
+                "none" => base,
+                "merge commit" => files_commit(&repo, &tip_files, &[base, tip]),
+                "squash" => files_commit(&repo, &tip_files, &[base]),
+                _ => tip,
+            };
+            let on = |oid: Oid, extra: &str| {
+                let mut files = if oid == base {
+                    base_files.clone()
+                } else {
+                    tip_files.clone()
+                };
+                files.push((extra, b"x"));
+                files_commit(&repo, &files, &[oid])
+            };
+            let delete = files_commit(&repo, &[code[0]], &[merged]);
+            let later = on(merged, "later");
+            let ahead = on(merged, "local-only");
+            let beside = on(base, "beside");
+            let remote_copies: [(Option<Oid>, bool); 6] = [
+                (None, false),
+                (Some(tip), false),
+                (Some(base), false),
+                (Some(on(tip, "r-ahead")), false),
+                (Some(on(base, "r-beside")), false),
+                (Some(on(tip, "r-gone")), true),
+            ];
+            for (scenario, (name, proves)) in scenarios.into_iter().enumerate() {
+                let (tracking, local) = match scenario {
+                    0 => (Some(merged), base),
+                    1 => (Some(merged), merged),
+                    2 => (Some(merged), ahead),
+                    3 => (Some(merged), beside),
+                    4 => (Some(base), merged),
+                    5 => (Some(beside), merged),
+                    6 => (Some(later), merged),
+                    7 => (Some(delete), merged),
+                    _ => (None, merged),
+                };
+                for (index, (remote_name, allows)) in remotes.into_iter().enumerate() {
+                    let (copy, gone) = remote_copies[index];
+                    repo.reference("refs/heads/main", local, true, "fixture")
+                        .unwrap();
+                    match copy {
+                        Some(oid) => {
+                            repo.reference(&remote_ref, oid, true, "fixture").unwrap();
+                        }
+                        None => {
+                            if let Ok(mut reference) = repo.find_reference(&remote_ref) {
+                                reference.delete().unwrap();
+                            }
+                        }
+                    }
+                    // Before the merge the primary never holds it: a new
+                    // document is not on it, and an edit has older content.
+                    let expected = merge != "none" && proves && allows;
+                    check(
+                        &repo,
+                        tip,
+                        tracking,
+                        gone,
+                        expected,
+                        &format!("edit {edit}, merge {merge}, {name}, remote copy {remote_name}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A shallow repository, two merge bases and unrelated history read not
+/// held, whatever else holds: the rows after the held one, each with the
+/// branch tip and the primary, and whether the proof holds.
+fn refusal_rows(mut check: impl FnMut(&git2::Repository, Oid, Oid, bool, &str)) {
+    let doc = document_source("new");
+    let files: Vec<(&str, &[u8])> = vec![("code", b"base"), (DOC, &doc)];
+    // The same state held, then each refusal.
+    let setup = || {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let base = files_commit(&repo, &[("code", b"base")], &[]);
+        let tip = files_commit(&repo, &files, &[base]);
+        let merged = files_commit(&repo, &files, &[base, tip]);
+        repo.reference("refs/heads/main", merged, true, "fixture")
+            .unwrap();
+        (dir, repo, base, tip, merged)
+    };
+    let (_dir, repo, base, tip, merged) = setup();
+    check(&repo, tip, merged, true, "held");
+    // A shallow repository.
+    fs::write(repo.path().join("shallow"), format!("{base}\n")).unwrap();
+    check(&repo, tip, merged, false, "a shallow repository");
+    // Two merge bases: neither side descends from the other, and the
+    // criss-cross has two bases.
+    let (_dir, repo, base, _tip, _merged) = setup();
+    let b = files_commit(&repo, &files, &[base]);
+    let c = files_commit(&repo, &[("code", b"base"), ("c", b"c")], &[base]);
+    let tip = files_commit(&repo, &[files[0], files[1], ("c", b"c")], &[b, c]);
+    let primary = files_commit(&repo, &[files[0], files[1], ("c", b"c")], &[c, b]);
+    assert_eq!(repo.merge_bases(tip, primary).unwrap().len(), 2);
+    check(&repo, tip, primary, false, "two merge bases");
+    // Unrelated history.
+    let unrelated = files_commit(
+        &repo,
+        &[("code", b"other"), (DOC, &document_source("x"))],
+        &[],
+    );
+    check(&repo, tip, unrelated, false, "unrelated history");
+    // A tip the repository lacks.
+    check(
+        &repo,
+        Oid::from_bytes(&[42; 20]).unwrap(),
+        primary,
+        false,
+        "a tip the repository lacks",
+    );
+}
+
+impl Fixture {
+    /// The configuration for pull-request mode, written where the
+    /// observation reads it. It is left uncommitted.
+    fn pull_request(&self) {
+        write(&self.repo, ".manyhands/config.toml", PULL_REQUEST_CONFIG);
+    }
+    fn pull_request_fixture() -> Self {
+        let f = Self::new(true);
+        f.pull_request();
+        f
+    }
+    /// The tracking primary after a forge squashed the context's document
+    /// into the primary.
+    fn squash_merged(&self) -> Oid {
+        let document = fs::read(self.context.workdir().unwrap().join(DOC)).unwrap();
+        let squash = tree_commit(&self.repo, self.base, &[(DOC, Some(&document))]);
+        self.tracking("main", squash);
+        squash
+    }
+    /// A fetch that saw the branch advertised, with no tracking ref made of
+    /// it yet (a first push makes none): its history is unknown, not deleted.
+    fn published_history(&self) {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let configuration = self
+            .service
+            .observation_configuration(self.root.path(), &plan)
+            .unwrap();
+        remote::state::with_transaction(&self.service, self.root.path(), |tx, id| {
+            remote::state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())?;
+            let generation = tx
+                .query_row(
+                    "SELECT configuration_generation FROM remote_polling_state WHERE repository_id=?1",
+                    [id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap();
+            let context = plan.context(AuthoringKind::Document, &ID.parse().unwrap());
+            let observation = RemoteRefObservation::from_advertisement(
+                &plan,
+                context.remote_ref(),
+                self.context_oid(),
+                None,
+            )
+            .unwrap();
+            remote::state::complete_batch(tx, id, &plan, generation, &[observation], 123)
+        })
+        .unwrap();
+    }
+    fn tracking_context(&self, oid: Oid) {
+        self.tracking(&format!("manyhands/document/{ID}"), oid);
+    }
+    fn link_row(&self) {
+        self.db()
+            .execute(
+                "INSERT INTO pull_request_links(repository_id,kind,item_ulid,source,target,forge,url,given_at) SELECT id,'document',?1,?2,'main','github',NULL,1 FROM repositories",
+                rusqlite::params![ID, format!("manyhands/document/{ID}")],
+            )
+            .unwrap();
+    }
+    fn pull_request_facts(&self) -> (DocumentPromotionPreview, PullRequestPromotion) {
+        let ready = self.ready();
+        let facts = ready
+            .pull_request()
+            .expect("a pull-request preview")
+            .clone();
+        (ready, facts)
+    }
+}
+
+/// Part B: the observation of `document promote --prepare` in a
+/// pull-request repository decides its situations in order, keeps some of
+/// the direct promote's blockers and drops the rest, and never blocks on
+/// `history_unknown`.
+#[test]
+fn pull_request_promotion_observation() {
+    use crate::repository::promotion::record::PromotionSituation::{Again, First};
+    use PromotionBlocker::*;
+
+    // The dispatch per mode: the same state in a direct repository is
+    // today's observation.
+    let f = Fixture::new(true);
+    let direct = f.ready();
+    assert!(direct.pull_request().is_none());
+    assert_eq!(direct.integration(), PlannedIntegration::MergeCommit);
+    assert!(!direct.changes().is_empty());
+    f.pull_request();
+    let (ready, facts) = f.pull_request_facts();
+    assert_ne!(ready.expectation(), direct.expectation());
+    // A pull-request promotion integrates nothing, always runs its context
+    // child (even with no tracking context to compare), and needs no
+    // identity.
+    assert_eq!(ready.integration(), PlannedIntegration::AlreadyContained);
+    assert!(ready.changes().is_empty());
+    assert_eq!(
+        ready.cleanup(),
+        PlannedCleanup {
+            remote_branch: false,
+            worktree: false,
+            local_branch: false
+        }
+    );
+    assert_eq!(ready.publication(), PlannedPublication::Publish);
+    assert_eq!(ready.tracking_context(), None);
+    assert!(lifecycle::LifecyclePreview::runs_context_child(&ready));
+    assert!(
+        <lifecycle::DocumentPromotionLifecycle as lifecycle::Lifecycle>::require_identity(
+            &ready, &f.repo, None
+        )
+        .is_ok()
+    );
+    // Situation 6: no link row. The link is the one built now, from the
+    // remote's address (this one names no forge).
+    assert_eq!(facts.situation, First);
+    assert_eq!(
+        facts.link,
+        crate::forge::PullRequestLink {
+            source: format!("manyhands/document/{ID}"),
+            target: "main".into(),
+            forge: None,
+            url: None,
+        }
+    );
+    assert_eq!(facts.unmerged_remote, None);
+    // Situation 5: a link row, which is the previewed link.
+    f.link_row();
+    let (again, facts) = f.pull_request_facts();
+    assert_eq!(facts.situation, Again);
+    assert_eq!(facts.link.forge, Some(crate::canonical::ForgeKind::Github));
+    assert_ne!(again.expectation(), ready.expectation());
+
+    // What is dropped: a dirty root, a root on another branch, a local
+    // primary ahead of its remote, and no local primary at all.
+    write(&f.repo, "ordinary.txt", "dirty root");
+    f.ready();
+    f.repo
+        .reference("refs/heads/other", f.base, true, "fixture")
+        .unwrap();
+    f.repo.set_head("refs/heads/other").unwrap();
+    f.ready();
+    f.repo
+        .reference(
+            "refs/heads/main",
+            tree_commit(&f.repo, f.base, &[("ahead", Some(b"x"))]),
+            true,
+            "fixture",
+        )
+        .unwrap();
+    f.ready();
+    f.repo
+        .find_reference("refs/heads/main")
+        .unwrap()
+        .delete()
+        .unwrap();
+    f.ready();
+
+    // Situation 1 to 2, the blockers kept, each on its own.
+    let blocked = |f: &Fixture, blockers: &[PromotionBlocker]| f.blocked(blockers);
+    let f = Fixture::pull_request_fixture();
+    let path = f.context.workdir().unwrap().join(DOC);
+    fs::remove_file(&path).unwrap();
+    write(
+        &f.context,
+        &format!(".manyhands/tickets/{ID}/ticket.md"),
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ID}\ntitle: Ticket\ntype: task\nstatus: open\n---\n\nBody\n"
+        ),
+    );
+    commit(&f.context);
+    f.context
+        .find_branch(&format!("manyhands/document/{ID}"), git2::BranchType::Local)
+        .unwrap()
+        .rename(&format!("manyhands/ticket/{ID}"), false)
+        .unwrap();
+    blocked(&f, &[NotADocument]);
+
+    let f = Fixture::pull_request_fixture();
+    f.repo
+        .find_worktree(ID)
+        .unwrap()
+        .prune(Some(
+            git2::WorktreePruneOptions::new()
+                .valid(true)
+                .working_tree(true),
+        ))
+        .unwrap();
+    blocked(&f, &[ContextMissing]);
+
+    let f = Fixture::pull_request_fixture();
+    write(&f.context, DOC, "not a managed document\n");
+    commit(&f.context);
+    blocked(&f, &[ContextNonconforming]);
+
+    let f = Fixture::pull_request_fixture();
+    write(&f.context, "ordinary.txt", "dirty");
+    blocked(&f, &[ContextDirty]);
+
+    let f = Fixture::pull_request_fixture();
+    fs::write(f.context.path().join("MERGE_HEAD"), format!("{}\n", f.base)).unwrap();
+    blocked(&f, &[ContextConflicted]);
+
+    let f = Fixture::pull_request_fixture();
+    f.pending_conflict();
+    blocked(&f, &[ConflictPending]);
+
+    let f = Fixture::pull_request_fixture();
+    f.db()
+        .execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    blocked(&f, &[HistoryUnresolved]);
+
+    // No tracking primary: the local primary is no substitute.
+    let f = Fixture::pull_request_fixture();
+    f.repo
+        .find_reference("refs/remotes/origin/main")
+        .unwrap()
+        .delete()
+        .unwrap();
+    blocked(&f, &[PrimaryMissing]);
+
+    // A merge in progress at the root, whichever branch it is on.
+    let f = Fixture::pull_request_fixture();
+    // (Git reads the shared directory's `MERGE_HEAD` for the context too.)
+    fs::write(f.repo.path().join("MERGE_HEAD"), format!("{}\n", f.base)).unwrap();
+    blocked(&f, &[ContextConflicted, PrimaryConflicted]);
+
+    // Step 3: the primary holds the document. The blockers come first.
+    let f = Fixture::pull_request_fixture();
+    f.squash_merged();
+    assert_eq!(f.preview(), DocumentPromotionPreflight::PrimaryHolds);
+    write(&f.context, "ordinary.txt", "dirty");
+    blocked(&f, &[ContextDirty]);
+
+    // The branch deleted on the remote is no blocker of a held document,
+    // and the held document does not need the tracking context.
+    let f = Fixture::pull_request_fixture();
+    f.squash_merged();
+    f.history("observed_published");
+    assert_eq!(f.preview(), DocumentPromotionPreflight::PrimaryHolds);
+    // Another clone's later save is not held until a synchronization merges
+    // it: `R` ahead of the tip.
+    let later = tree_commit(&f.repo, f.context_oid(), &[("later", Some(b"x"))]);
+    f.tracking_context(later);
+    f.ready();
+    // `R` equal to the tip does not matter.
+    f.tracking_context(f.context_oid());
+    assert_eq!(f.preview(), DocumentPromotionPreflight::PrimaryHolds);
+
+    // Step 4: the branch's history is `Deleted`.
+    let f = Fixture::pull_request_fixture();
+    f.history("observed_published");
+    blocked(&f, &[RemoteContextDeleted]);
+    // A tracking context that stands is not deleted.
+    f.tracking_context(f.context_oid());
+    f.ready();
+
+    // `history_unknown` does not block: the context child's fetch settles
+    // it.
+    let f = Fixture::new(true);
+    f.published_history();
+    f.blocked(&[HistoryUnknown]);
+    f.pull_request();
+    let (_, facts) = f.pull_request_facts();
+    assert_eq!(facts.situation, First);
+}
+
+/// R-7: the digest binds what the preview shows and consents to, and not
+/// the moving primaries, nor an `R` a push of the tip settles.
+#[test]
+fn pull_request_promotion_digest_binds_each_field() {
+    use crate::repository::promotion::record::PromotionSituation::{Again, First};
+    let f = Fixture::pull_request_fixture();
+    let (p, facts) = f.pull_request_facts();
+    let original = pull_request_expectation(&p);
+    assert_eq!(original, p.expectation());
+    assert_ne!(original, PromotionExpectation::from_bytes([0; 32]));
+    // The domain is its own: the direct digest of the same state differs,
+    // and so does the same fields hashed under the direct domain.
+    let mut direct = p.clone();
+    direct.pull_request = None;
+    assert_ne!(original, expectation(&direct, &[]));
+    let mut variants = Vec::new();
+    let mut q = p.clone();
+    q.item_id = "01ARZ3NDEKTSV4RRFFQ69G5FAX".parse().unwrap();
+    variants.push(("item", q));
+    let mut q = p.clone();
+    q.document_path = "docs/other.md".into();
+    variants.push(("path", q));
+    let mut q = p.clone();
+    q.context_branch.push_str("-other");
+    variants.push(("branch", q));
+    let mut q = p.clone();
+    q.primary_branch.push_str("-other");
+    variants.push(("primary branch", q));
+    let mut q = p.clone();
+    q.publication_remote = Some("upstream".into());
+    variants.push(("remote", q));
+    let mut q = p.clone();
+    q.context_oid = Oid::from_bytes(&[7; 20]).unwrap();
+    variants.push(("L", q));
+    let mut q = p.clone();
+    q.pull_request.as_mut().unwrap().unmerged_remote = Some(Oid::from_bytes(&[8; 20]).unwrap());
+    variants.push(("R ahead of or beside L", q));
+    let mut q = p.clone();
+    q.pull_request.as_mut().unwrap().situation = match facts.situation {
+        First => Again,
+        Again => First,
+    };
+    variants.push(("situation", q));
+    type Edit = fn(&mut crate::forge::PullRequestLink);
+    let link_edits: [(&str, Edit); 4] = [
+        ("link source", |l| l.source.push('x')),
+        ("link target", |l| l.target.push('x')),
+        ("link forge", |l| {
+            l.forge = Some(crate::canonical::ForgeKind::Gitlab)
+        }),
+        ("link url", |l| {
+            l.url = Some("https://forge.example/pr".into())
+        }),
+    ];
+    for (name, edit) in link_edits {
+        let mut q = p.clone();
+        edit(&mut q.pull_request.as_mut().unwrap().link);
+        variants.push((name, q));
+    }
+    for (name, q) in &variants {
+        assert_ne!(original, pull_request_expectation(q), "{name}");
+    }
+    // Each of those is a distinct consent.
+    for (i, (_, a)) in variants.iter().enumerate() {
+        for (_, b) in &variants[i + 1..] {
+            assert_ne!(pull_request_expectation(a), pull_request_expectation(b));
+        }
+    }
+    // `R` absent, equal to `L` and behind `L` are one state.
+    f.tracking_context(f.context_oid());
+    assert_eq!(f.ready().expectation(), original);
+    f.tracking_context(f.base);
+    assert_eq!(f.ready().expectation(), original);
+    // The tracking primary and the local primary move without consent.
+    let moved = tree_commit(&f.repo, f.base, &[("primary-only", Some(b"x"))]);
+    f.tracking("main", moved);
+    assert_eq!(f.ready().expectation(), original);
+    f.repo
+        .reference("refs/heads/main", moved, true, "fixture")
+        .unwrap();
+    assert_eq!(f.ready().expectation(), original);
+    // `R` ahead of `L` and beside it are other consents, each its own.
+    let ahead = tree_commit(&f.repo, f.context_oid(), &[("r-ahead", Some(b"x"))]);
+    f.tracking_context(ahead);
+    let (ahead_preview, ahead_facts) = f.pull_request_facts();
+    assert_eq!(ahead_facts.unmerged_remote, Some(ahead));
+    let beside = tree_commit(&f.repo, f.base, &[("r-beside", Some(b"x"))]);
+    f.tracking_context(beside);
+    let (beside_preview, beside_facts) = f.pull_request_facts();
+    assert_eq!(beside_facts.unmerged_remote, Some(beside));
+    for other in [&ahead_preview, &beside_preview] {
+        assert_ne!(other.expectation(), original);
+    }
+    assert_ne!(ahead_preview.expectation(), beside_preview.expectation());
+    // The link the preview shows, from the row or from the setting.
+    f.link_row();
+    f.tracking_context(f.base);
+    assert_ne!(f.ready().expectation(), original);
+}

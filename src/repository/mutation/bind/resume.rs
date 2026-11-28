@@ -130,9 +130,10 @@ pub(crate) struct OperationResumeBinding {
     /// This call entered the request again: an earlier call of it
     /// started and its end was not recorded.
     entered_again: bool,
-    /// The ticket whose branch record this resume continued, once it has:
-    /// its answers name that ticket's branch and worktree (decision 17).
-    branch_item: std::sync::OnceLock<ItemId>,
+    /// The item whose branch record this resume continued, once it has, with
+    /// its kind (a ticket's closure or a document's pull-request promotion):
+    /// its answers name that item's branch and worktree (decision 17).
+    branch_item: std::sync::OnceLock<(AuthoringKind, ItemId)>,
 }
 
 impl From<OperationResumeInput> for OperationResumeBinding {
@@ -1332,18 +1333,22 @@ impl OperationResumeBinding {
         let root = self.root.clone();
         let operation = accepted.taking_up(self.operation_id);
         let ran = match command {
-            Command::DocumentPromote => continued(
-                &mut LifecycleBinding::from(DocumentPromoteInput { root, id: item_id }),
-                call,
-                &operation,
-            ),
+            Command::DocumentPromote => {
+                let mut binding = LifecycleBinding::from(DocumentPromoteInput {
+                    root,
+                    id: item_id.clone(),
+                });
+                let ran = continued(&mut binding, call, &operation);
+                self.named_branch(binding.names_branch(), AuthoringKind::Document, item_id);
+                ran
+            }
             Command::TicketClose => {
                 let mut binding = LifecycleBinding::from(TicketCloseInput {
                     root,
                     id: item_id.clone(),
                 });
                 let ran = continued(&mut binding, call, &operation);
-                self.named_branch(binding.names_branch(), item_id);
+                self.named_branch(binding.names_branch(), AuthoringKind::Ticket, item_id);
                 ran
             }
             Command::TicketWithdrawClosure => {
@@ -1352,7 +1357,7 @@ impl OperationResumeBinding {
                     id: item_id.clone(),
                 });
                 let ran = continued(&mut binding, call, &operation);
-                self.named_branch(binding.names_branch(), item_id);
+                self.named_branch(binding.names_branch(), AuthoringKind::Ticket, item_id);
                 ran
             }
             // Unreachable: `lifecycle_standing` names only those three.
@@ -1367,11 +1372,12 @@ impl OperationResumeBinding {
         self.lifecycle_kept(ran, accepted, command)
     }
 
-    /// Remembers that the resume continued the branch record of `item_id`, so
-    /// that its answers name that ticket's branch (decision 17).
-    fn named_branch(&self, branch_record: bool, item_id: ItemId) {
+    /// Remembers that the resume continued the branch record of `item_id`, of
+    /// the given kind, so that its answers name that item's branch (decision
+    /// 17).
+    fn named_branch(&self, branch_record: bool, kind: AuthoringKind, item_id: ItemId) {
         if branch_record {
-            let _ = self.branch_item.set(item_id);
+            let _ = self.branch_item.set((kind, item_id));
         }
     }
 
@@ -1642,11 +1648,11 @@ impl Binding for OperationResumeBinding {
     }
 
     /// The resume's own scope names the repository. One that continued a
-    /// branch record names that ticket's branch and worktree as well, as the
+    /// branch record names that item's branch and worktree as well, as the
     /// record's own request does (decision 17).
     fn scope(&self, repository: Option<String>, _position: Option<&Position>) -> Scope {
         match self.branch_item.get() {
-            Some(id) => lifecycle::branch_scope(&AuthoringKind::Ticket, id, repository, &self.root),
+            Some((kind, id)) => lifecycle::branch_scope(kind, id, repository, &self.root),
             None => Scope {
                 repository,
                 ..Scope::default()
@@ -1657,8 +1663,8 @@ impl Binding for OperationResumeBinding {
     /// A stored answer of a resume that continued a branch record is given
     /// again with the scope it was first given with.
     fn settled(&self, service: &RepositoryService, _accepted: &Accepted) {
-        if let Some(id) = lifecycle::branch_record_of(service, &self.root, self.operation_id) {
-            let _ = self.branch_item.set(id);
+        if let Some(named) = lifecycle::branch_record_of(service, &self.root, self.operation_id) {
+            let _ = self.branch_item.set(named);
         }
     }
 

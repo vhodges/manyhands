@@ -198,11 +198,18 @@ impl OriginalPollSource {
         };
         let mut selection = None;
         // A ticket the closure fence holds (R-17, a direct record and a
-        // branch record alike) keeps its context: a poll that sees it
+        // branch record alike), or a document an unfinished pull-request
+        // promotion holds (Cycle 04 decision 13), keeps its context: a poll that sees it
         // deleted and the closure on the primary leaves it to the record's
         // own request. Read before any resource is selected.
         let held = state::with_transaction(service, &self.root, |tx, id| {
-            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+            Ok(
+                crate::repository::closure::record::written_closure_unfinished(tx, id, item)?
+                    || crate::repository::promotion::record::pull_request_promotion_holder(
+                        tx, id, item,
+                    )?
+                    .is_some(),
+            )
         })?;
         if held {
             c.refusal = Some("recovery_required".into());

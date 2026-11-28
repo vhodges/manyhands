@@ -1526,29 +1526,36 @@ fn closure(
     }
 }
 
-/// What a complete read of a ticket adds to what the index lists: the pull
-/// request link this clone gave it, and, for a closing ticket in a
-/// pull-request repository, whether its closure is on the remote yet. A list
-/// reads the index only, and leaves both null.
+/// What a complete read adds to what the index lists: the pull request link
+/// this clone gave the item and, for a closing ticket in a pull-request
+/// repository, whether its closure is on the remote yet. A document's link is
+/// the row's while the primary does not hold the document and the read is of
+/// its active context (design Part E). A list reads the index only, and
+/// leaves both null.
 fn fill_complete_read(
     connection: &Connection,
     repo: &ResolvedRepository,
     item: &mut ItemDto,
 ) -> Result<(), ReadError> {
-    let (Some(id), ItemDtoKind::Ticket) = (item.id.as_deref(), item.kind) else {
+    let Some(id) = item.id.clone() else {
         return Ok(());
+    };
+    let kind = match item.kind {
+        ItemDtoKind::Ticket => AuthoringKind::Ticket,
+        ItemDtoKind::Document => AuthoringKind::Document,
     };
     item.pull_request = pull_request_links::link_of(
         connection,
         repo.registration_id(),
-        authoring_kind_name(AuthoringKind::Ticket),
-        id,
+        authoring_kind_name(kind),
+        &id,
     )?
+    .filter(|_| kind == AuthoringKind::Ticket || document_link_offered(connection, repo, item, &id))
     .as_ref()
     .map(PullRequestDto::from);
     let publication = match &item.closure {
         Some(closure) if closure.state == ClosureState::Closing => {
-            publication_of(connection, repo, id, closure)?
+            publication_of(connection, repo, &id, closure)?
         }
         _ => None,
     };
@@ -1556,6 +1563,60 @@ fn fill_complete_read(
         closure.publication = publication;
     }
     Ok(())
+}
+
+/// Whether the link row of a document read stays offered: the read is of the
+/// document's active context, and the primary does not hold the document, by
+/// the cheap check of Part E. Whatever cannot be read leaves the primary not
+/// holding it, as the proof's refusals do.
+fn document_link_offered(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    item: &ItemDto,
+    id: &str,
+) -> bool {
+    if item.context.kind != ItemContextKind::Active {
+        return false;
+    }
+    let Some(branch) = item.context.branch.as_deref() else {
+        return true;
+    };
+    // The link is read in either mode; the primary it is judged against is
+    // the configuration's, which is absent when it was never observed.
+    let configuration: Option<(Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT publication_remote, primary_branch
+               FROM configuration_observations
+              WHERE repository_id = ?1 AND state = 'valid'",
+            [repo.registration_id()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let (Some(git), Ok(item_id)) = (open_exactly(repo.root()).ok(), id.parse::<ItemId>()) else {
+        return true;
+    };
+    let tip = git
+        .find_reference(&format!("refs/heads/{branch}"))
+        .and_then(|reference| reference.peel_to_commit())
+        .map(|commit| commit.id());
+    let (Some((Some(remote), Some(primary))), Ok(tip)) = (configuration, tip) else {
+        return true;
+    };
+    let tracking_primary = RemoteRefPlan::from_configuration(&remote, &primary)
+        .ok()
+        .and_then(|plan| git.refname_to_id(plan.primary().tracking_ref()).ok());
+    crate::repository::promotion::observe::document_link_outstanding(
+        &git,
+        tip,
+        &item.path,
+        tracking_primary,
+        &primary,
+        &remote,
+        &item_id,
+        false,
+    )
 }
 
 /// Whether a closing ticket's closure is published: `published` when the

@@ -1040,13 +1040,31 @@ pub(in super::super) fn branch_link(
     remote: &str,
     item: &ItemId,
 ) -> PullRequestLink {
+    context_branch_link(
+        repo,
+        primary,
+        forge_setting,
+        remote,
+        &KIND.context_branch(item),
+    )
+}
+
+/// The link of any item's context branch `branch`, as `branch_link` gives a
+/// ticket's: a document's pull-request promotion gives it too.
+pub(in super::super) fn context_branch_link(
+    repo: &git2::Repository,
+    primary: &str,
+    forge_setting: Option<&ForgeSetting>,
+    remote: &str,
+    branch: &str,
+) -> PullRequestLink {
     let address = repo
         .find_remote(remote)
         .ok()
         .and_then(|remote| remote.url().map(str::to_owned));
     forge::pull_request_link(
         forge::recognise(address.as_deref(), forge_setting).as_ref(),
-        &KIND.context_branch(item),
+        branch,
         primary,
     )
 }

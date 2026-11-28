@@ -13,7 +13,8 @@ use crate::{
 
 use super::{
     Command, LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto,
-    PrepareDataDto, PullRequestClosureAction, PullRequestClosureMutationDto, ResolveHistoryChoice,
+    PrepareDataDto, PullRequestClosureAction, PullRequestClosureMutationDto,
+    PullRequestPromotionMutationDto, ResolveHistoryChoice,
 };
 
 /// One step of the way out of a lifecycle answer. Its IDs are the answer's;
@@ -123,12 +124,16 @@ pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleW
         Some(MutationDataDto::Lifecycle(data)) => route_of(envelope, data),
         // A branch record's own data, which a finished record gives.
         Some(MutationDataDto::PullRequestClosure(data)) => branch_route(envelope, data),
+        // A pull-request promote's own data, which a finished record gives.
+        Some(MutationDataDto::PullRequestPromotion(data)) => promotion_route(envelope, data),
         // A branch record's child that stopped on a conflict answers as `item
         // sync` does (R-5): the conflict verbs take the record's ID, as for a
-        // direct close's child.
+        // direct close's child. A pull-request promote's is the same (R-25);
+        // a direct promote's conflict is the lifecycle's own data.
         Some(MutationDataDto::SynchronizationConflict(_))
             if envelope.command == Command::TicketClose.name()
-                || envelope.command == Command::TicketWithdrawClosure.name() =>
+                || envelope.command == Command::TicketWithdrawClosure.name()
+                || envelope.command == Command::DocumentPromote.name() =>
         {
             child_conflict(envelope)
         }
@@ -185,6 +190,31 @@ fn branch_route(
                 route
             })
             .unwrap_or_default(),
+    }
+}
+
+/// A finished pull-request promote's way out (decision 11, R-22). A deleted
+/// branch is republished, and then promoted by a new request: the record is
+/// finished, so its own request would answer the same again. An unresolved
+/// history is resolved, as `item sync` answers that stop. Every other
+/// answer is the end of it.
+fn promotion_route(
+    envelope: &Envelope<MutationDataDto>,
+    data: &PullRequestPromotionMutationDto,
+) -> Vec<LifecycleWayOut> {
+    match envelope.code {
+        ResultCode::RemoteBranchDeleted => vec![
+            LifecycleWayOut::Republish {
+                item_id: data.item_id.clone(),
+            },
+            LifecycleWayOut::PrepareAgain,
+        ],
+        ResultCode::RecoveryRequired
+            if data.blockers.contains(&LifecycleBlocker::HistoryUnresolved) =>
+        {
+            vec![LifecycleWayOut::ResolveHistory]
+        }
+        _ => Vec::new(),
     }
 }
 
