@@ -16,11 +16,11 @@ manyhands_kind: document
 
 **Spec:** [Cycle 05 design](2026-11-27-wave-06-cycle-05-after-the-merge-design.md) (revision 4), under the [Cycle document](../Cycles/wave-06-cycle-05-after-the-merge.md) and the [Pull-Request Mode RFC](../RFC/pull-request-mode.md).
 
-Status: **draft**, revision 4, for approval. Not approved. Revision 4 has not been independently reviewed.
+Status: **approved** by the owner on 2026-11-28, at revision 4 (Cycle document decision 15). Execution: subagent-driven, with Sonnet 5.5 at high effort as the implementer. Implementation: authorized; not started. Revision 4 has not been independently reviewed.
 
 ## Global Constraints
 
-**Precondition.** The owner has approved the three documents, approved the named test edits, authorized implementation and chosen the execution method. Task 0 does not start before that.
+**Precondition.** The owner has approved the three documents, approved the named test edits, authorized implementation and chosen the execution method. Task 0 does not start before that. Met on 2026-11-28 (decision 15).
 
 **Roles.** The orchestrator runs the tasks, or dispatches one implementer per task and then a fresh reviewer, one at a time. It alone writes the ledger and ticket comments and publishes the ticket branch. Implementers never dispatch subagents and never edit ticket, comment or ledger files.
 
