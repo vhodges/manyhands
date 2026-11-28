@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 pull-request promotion mutation",
+  "description": "The data of a result of document promote in a pull-request repository, or of an operation resume that continued one: a branch record that finished, whatever way. Nothing of it reaches primary, so it has no integration, cleanup or made-ready report. It carries the data in an ok, already_applied or remote_branch_deleted answer, in the recovery_required answer of a record whose child ended on history_unresolved, and in the answer of a record whose context is gone. A prepare that is blocked answers with the lifecycle's blocked data instead, a prepare of a document the primary already holds answers already_applied with no data, and a child of the record that stops carries the synchronization's own. It holds IDs and fixed categories: no title, body or path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "item_id",
+    "publication",
+    "primary_holds",
+    "pull_request",
+    "blockers"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "pull_request_promotion"
+      ]
+    },
+    "item_id": {
+      "description": "The document's ID.",
+      "type": "string"
+    },
+    "publication": {
+      "description": "How the document's branch reached the remote: published when this record's context child pushed it, current when the remote held it already. Null when no child completed.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "published",
+        "current",
+        null
+      ]
+    },
+    "primary_holds": {
+      "description": "Whether the primary already holds the document, so that there is nothing to open a pull request for.",
+      "type": "boolean"
+    },
+    "pull_request": {
+      "description": "Where to open the pull request, from the link record. Null when the document has none.",
+      "$ref": "pull_request.schema.json"
+    },
+    "blockers": {
+      "description": "What stands in the way, as a blocked prepare names it. Empty otherwise; history_unresolved for a record whose child ended on it.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "not_a_document",
+          "not_a_ticket",
+          "context_missing",
+          "context_nonconforming",
+          "context_dirty",
+          "context_conflicted",
+          "conflict_pending",
+          "local_operation_pending",
+          "comment_publication_pending",
+          "primary_missing",
+          "primary_not_checked_out",
+          "primary_dirty",
+          "primary_conflicted",
+          "primary_ahead_of_remote",
+          "context_behind_remote",
+          "integration_conflict",
+          "remote_context_deleted",
+          "history_unknown",
+          "history_unresolved",
+          "already_closed",
+          "primary_reopened",
+          "document_invalid_after_integration",
+          "ticket_invalid_after_closure",
+          "identity_required",
+          "remote_context_unmaterialized"
+        ]
+      }
+    }
+  }
+}

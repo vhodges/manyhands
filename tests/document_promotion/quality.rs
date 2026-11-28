@@ -132,6 +132,8 @@ fn promotion_category(result: &Result<DocumentPromotionResult, DocumentPromotion
         Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => 0,
         Ok(DocumentPromotionResult::Complete(_)) => 1,
         Ok(DocumentPromotionResult::IndexPending(_)) => 2,
+        Ok(DocumentPromotionResult::Branch(_)) => 3,
+        Ok(DocumentPromotionResult::BranchIndexPending(_)) => 4,
         Err(DocumentPromotionError::Repository(_)) => 10,
         Err(DocumentPromotionError::Transport(_)) => 11,
         Err(DocumentPromotionError::Blocked(_)) => 12,

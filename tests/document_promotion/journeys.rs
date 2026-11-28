@@ -258,6 +258,9 @@ fn authoritative(result: DocumentPromotionResult) -> DocumentPromotionOutcome {
     match result {
         DocumentPromotionResult::Complete(o) => o,
         DocumentPromotionResult::IndexPending(p) => p.authoritative,
+        DocumentPromotionResult::Branch(_) | DocumentPromotionResult::BranchIndexPending(_) => {
+            unreachable!("a direct fixture never answers as a pull-request promotion")
+        }
     }
 }
 fn run(

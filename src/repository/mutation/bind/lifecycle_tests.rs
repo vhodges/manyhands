@@ -359,6 +359,120 @@ fn an_index_pending_branch_answer_is_owed_and_offers_its_own_request() {
     assert!(ran.answer.recovery.is_empty());
 }
 
+/// A pull-request promotion's answer is a branch answer: it names the
+/// document's branch, each answer has its code, one whose index step is yet to
+/// run is owed only when it answered `ok`, and what it published is its
+/// effect. No data is built for it here: the data is the answer's own shape.
+#[test]
+fn a_pull_request_promotion_answers_by_its_answer() {
+    use crate::repository::{BranchPromotionOutcome, promotion::record::PromotionAnswer as A};
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let binding = || LifecycleBinding::<Fixed> {
+        root: PathBuf::from("/nowhere"),
+        id: ITEM.parse().unwrap(),
+        expected: None,
+        closure_exists: false,
+        branch_record: AtomicBool::new(false),
+        verb: PhantomData,
+    };
+    let accepted = accepted();
+    let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+    let published = Some(PromotionPublication::Published { oid });
+    let current = Some(PromotionPublication::AlreadyCurrent { oid });
+    // (the answer, its code, what it published, the effect that shows it)
+    for (answer, code, publication, effect) in [
+        (
+            A::Promoted,
+            ResultCode::Ok,
+            published,
+            PublicationEffect::Published,
+        ),
+        (
+            A::AlreadyPromoted,
+            ResultCode::AlreadyApplied,
+            current,
+            PublicationEffect::Current,
+        ),
+        (
+            A::PrimaryHolds,
+            ResultCode::AlreadyApplied,
+            published,
+            PublicationEffect::Published,
+        ),
+        (
+            A::PrimaryHolds,
+            ResultCode::AlreadyApplied,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::RemoteBranchDeleted,
+            ResultCode::RemoteBranchDeleted,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::HistoryUnresolved,
+            ResultCode::RecoveryRequired,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+        (
+            A::ContextGone,
+            ResultCode::ExternalChange,
+            None,
+            PublicationEffect::NotRequested,
+        ),
+    ] {
+        assert_eq!(promotion_branch_code(answer), code, "{answer:?}");
+        let binding = binding();
+        let outcome = BranchPromotionOutcome::for_testing(answer, publication);
+        let ran = binding.promotion_branch_reached(&service, &accepted, &outcome, false);
+        assert_eq!(ran.answer.code, code, "{answer:?}");
+        assert_eq!(ran.answer.effects.publication, effect, "{answer:?}");
+        assert_eq!(
+            ran.answer.effects.commit_oid,
+            (effect == PublicationEffect::Published).then(|| oid.to_string()),
+            "{answer:?}"
+        );
+        assert_eq!(
+            ran.answer.effects.discovery,
+            DiscoveryEffect::Current,
+            "{answer:?}"
+        );
+        assert!(matches!(ran.standing, Standing::Final), "{answer:?}");
+        assert!(ran.answer.recovery.is_empty(), "{answer:?}");
+        assert!(binding.names_branch(), "{answer:?}");
+    }
+    // An index step yet to run is owed for an `ok` answer, and offers the
+    // request that gave it; any other answer is final.
+    let binding_ = binding();
+    let ran = binding_.promotion_branch_reached(
+        &service,
+        &accepted,
+        &BranchPromotionOutcome::for_testing(A::Promoted, published),
+        true,
+    );
+    assert_eq!(ran.answer.code, ResultCode::DiscoveryPending);
+    assert!(matches!(ran.standing, Standing::Owed));
+    assert_eq!(ran.answer.effects.discovery, DiscoveryEffect::Pending);
+    assert_eq!(
+        ran.answer.recovery,
+        vec![crate::repository::mutation::outcome::same_request(
+            accepted.request_id
+        )]
+    );
+    let ran = binding_.promotion_branch_reached(
+        &service,
+        &accepted,
+        &BranchPromotionOutcome::for_testing(A::AlreadyPromoted, current),
+        true,
+    );
+    assert_eq!(ran.answer.code, ResultCode::AlreadyApplied);
+    assert!(matches!(ran.standing, Standing::Final));
+}
+
 /// A registered Git repository, and the link row its ticket was given.
 struct Registered {
     _data: tempfile::TempDir,
@@ -616,6 +730,209 @@ fn a_branch_record_answers_its_own_shape() {
         false,
     );
     assert_eq!(data_of(&ran).unwrap().pull_request, None);
+}
+
+/// Every finished pull-request promote answers with its own data (design Part
+/// D): the publication its context child came to, whether the primary holds the
+/// document, the link record's link of the document's kind, and what stands in
+/// the way. A document the primary holds is given no link, whatever the record
+/// holds; a ticket's link row is never a document's.
+#[test]
+fn a_pull_request_promotion_answer_carries_its_data() {
+    use crate::repository::{
+        BranchPromotionOutcome, PullRequestDto, PullRequestPromotionPublication as P,
+        promotion::record::PromotionAnswer as A,
+    };
+    let oid = git2::Oid::from_bytes(&[3; 20]).unwrap();
+    let published = Some(PromotionPublication::Published { oid });
+    let current = Some(PromotionPublication::AlreadyCurrent { oid });
+    let link = PullRequestDto {
+        source: format!("manyhands/document/{ITEM}"),
+        target: "main".to_owned(),
+        forge: Some("github".to_owned()),
+        url: Some("https://forge.example/document".to_owned()),
+    };
+    // A repository whose ticket of the same ID holds a link row of its own, and
+    // whose document holds another.
+    let registered = Registered::new(true);
+    {
+        let db = rusqlite::Connection::open(
+            registered
+                ._data
+                .path()
+                .join(crate::repository::REGISTRY_FILE),
+        )
+        .unwrap();
+        let id: i64 = db
+            .query_row("SELECT id FROM repositories", [], |row| row.get(0))
+            .unwrap();
+        crate::repository::pull_request_links::upsert_link(
+            &db,
+            id,
+            "document",
+            ITEM,
+            &crate::forge::PullRequestLink {
+                source: link.source.clone(),
+                target: link.target.clone(),
+                forge: Some(crate::canonical::ForgeKind::Github),
+                url: link.url.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    }
+    let bare = Registered::new(false);
+    let data_of = |registered: &Registered, answer, publication| {
+        let binding = registered.binding();
+        let ran = binding.promotion_branch_reached(
+            &registered.service,
+            &registered.accepted(),
+            &BranchPromotionOutcome::for_testing(answer, publication),
+            false,
+        );
+        match ran.answer.data {
+            Some(MutationDataDto::PullRequestPromotion(data)) => *data,
+            other => panic!("{answer:?}: not a promotion's data: {other:?}"),
+        }
+    };
+    // (the answer, what it published, the data's publication and primary_holds,
+    // its link, its blockers): the first four read the document's row.
+    for (answer, publication, expected, primary_holds, linked, blockers) in [
+        (
+            A::Promoted,
+            published,
+            Some(P::Published),
+            false,
+            true,
+            vec![],
+        ),
+        (
+            A::AlreadyPromoted,
+            current,
+            Some(P::Current),
+            false,
+            true,
+            vec![],
+        ),
+        // The primary holds it: no link, whatever the row says.
+        (
+            A::PrimaryHolds,
+            published,
+            Some(P::Published),
+            true,
+            false,
+            vec![],
+        ),
+        (A::PrimaryHolds, None, None, true, false, vec![]),
+        (A::RemoteBranchDeleted, None, None, false, true, vec![]),
+        (
+            A::HistoryUnresolved,
+            None,
+            None,
+            false,
+            true,
+            vec![LifecycleBlocker::HistoryUnresolved],
+        ),
+        (A::ContextGone, None, None, false, true, vec![]),
+    ] {
+        let data = data_of(&registered, answer, publication);
+        assert_eq!(
+            data.r#type,
+            crate::repository::PullRequestPromotionMutationType::PullRequestPromotion
+        );
+        assert_eq!(data.item_id, ITEM, "{answer:?}");
+        assert_eq!(data.publication, expected, "{answer:?}");
+        assert_eq!(data.primary_holds, primary_holds, "{answer:?}");
+        assert_eq!(
+            data.pull_request,
+            linked.then(|| link.clone()),
+            "{answer:?}"
+        );
+        assert_eq!(data.blockers, blockers, "{answer:?}");
+    }
+    // A document with no link row of its own has none to give: another kind's
+    // is not read, and a record this build cannot read builds none.
+    for answer in [A::AlreadyPromoted, A::RemoteBranchDeleted, A::ContextGone] {
+        assert_eq!(
+            data_of(&Registered::new(true), answer, None).pull_request,
+            None,
+            "{answer:?}: a ticket's row"
+        );
+        assert_eq!(
+            data_of(&bare, answer, None).pull_request,
+            None,
+            "{answer:?}: no row"
+        );
+    }
+    assert_eq!(data_of(&bare, A::Promoted, published).pull_request, None);
+}
+
+/// RR8's answer at the binding (design Part D): a `promoted` record that wrote
+/// no link row, because its context was gone when it finished, still answers
+/// with the link, which the answer's data builds from the record's own remote
+/// and primary branch. Without that, the answer would be `ok` with no link to
+/// open. Another answer of the same record gives none, and a record this build
+/// cannot find gives none.
+#[test]
+fn a_promoted_record_without_a_link_row_still_answers_with_its_link() {
+    use crate::repository::{
+        BranchPromotionOutcome,
+        promotion::{
+            PromotionExpectation,
+            record::{
+                PromotionAnswer as A, PromotionSituation, PullRequestBegin,
+                begin_pull_request_record,
+            },
+        },
+        remote::state,
+    };
+    let registered = Registered::new(false);
+    let operation = OperationId::new();
+    state::with_transaction(&registered.service, registered.root.path(), |tx, id| {
+        begin_pull_request_record(
+            tx,
+            id,
+            operation,
+            &ITEM.parse().unwrap(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+            &PullRequestBegin {
+                consented: git2::Oid::from_bytes(&[3; 20]).unwrap(),
+                situation: PromotionSituation::First,
+                primary_branch: "main".to_owned(),
+                endpoint_digest: [9; 32],
+            },
+        )
+        .map(drop)
+    })
+    .unwrap();
+    let data_of = |answer, operation| {
+        let ran = registered.binding().promotion_branch_reached(
+            &registered.service,
+            &registered.accepted(),
+            &BranchPromotionOutcome::for_testing(answer, None).of_operation_for_testing(operation),
+            false,
+        );
+        match ran.answer.data {
+            Some(MutationDataDto::PullRequestPromotion(data)) => *data,
+            other => panic!("{answer:?}: not a promotion's data: {other:?}"),
+        }
+    };
+    let link = data_of(A::Promoted, operation)
+        .pull_request
+        .expect("the built link");
+    assert_eq!(link.source, format!("manyhands/document/{ITEM}"));
+    assert_eq!(link.target, "main");
+    assert_eq!(
+        data_of(A::AlreadyPromoted, operation).pull_request,
+        None,
+        "only a promoted answer builds one"
+    );
+    assert_eq!(
+        data_of(A::Promoted, OperationId::new()).pull_request,
+        None,
+        "no record, no link"
+    );
 }
 
 /// A repository with a configured remote, and a child synchronization of the
@@ -1132,6 +1449,7 @@ fn a_branch_record_s_answers_name_the_ticket_s_branch_and_a_direct_one_s_name_pr
         },
         closure: None,
         record,
+        pull_request: None,
     };
     let branch_ready = || BranchReady {
         action: ClosureAction::Close,
@@ -1281,6 +1599,7 @@ fn a_branch_record_previews_its_own_effects_and_details() {
             retired_oid: retired,
             unheld,
         }),
+        pull_request: None,
     };
     for (action, closure, context_child, cleanup, expected) in [
         (
@@ -2323,4 +2642,119 @@ fn a_resume_of_an_unheld_branch_record_another_process_works_under_is_busy() {
         let free = resume(&registered.service);
         assert_ne!(free.code, ResultCode::Busy, "{action}: {free:?}");
     }
+}
+
+/// A pull-request promotion's preview always lists the three effects the RFC
+/// names (the synchronization may merge the primary in and publish even when
+/// the branch is current), its prepare answers `already_applied` with no data
+/// for a document the primary holds, names the document's branch as a
+/// branch record's does, and a document the primary holds is a state of its
+/// own that no consent was given for: its digest equals no ready digest, nor
+/// a withdraw's, so a confirm that finds it is an external change at the
+/// boundary.
+#[test]
+fn a_pull_request_promotion_previews_its_three_effects_always() {
+    use crate::repository::{
+        PlannedCleanup, PreviewEffect as E, promotion::record::PromotionSituation,
+    };
+    let link = crate::forge::PullRequestLink {
+        source: format!("manyhands/document/{ITEM}"),
+        target: "main".to_owned(),
+        forge: None,
+        url: None,
+    };
+    let ready = |situation| Ready {
+        expected: [3; 32],
+        branch: format!("refs/heads/manyhands/document/{ITEM}"),
+        primary_branch: "main".to_owned(),
+        remote: Some("origin".to_owned()),
+        context_oid: git2::Oid::zero(),
+        primary_oid: git2::Oid::zero(),
+        context_child: true,
+        changes: Vec::new(),
+        integration: PlannedIntegration::AlreadyContained,
+        publication: PlannedPublication::Publish,
+        cleanup: PlannedCleanup {
+            worktree: false,
+            local_branch: false,
+            remote_branch: false,
+        },
+        closure: None,
+        record: None,
+        pull_request: Some(
+            crate::repository::promotion::PullRequestPromotion::for_testing(
+                situation,
+                link.clone(),
+            ),
+        ),
+    };
+    // The effects a ready pull-request preview lists, by the selection the
+    // preview makes: the same three in each situation, and never a promise
+    // to integrate into or publish the primary, which a direct one's plan
+    // (the same `Publish`, here) would make.
+    let three = vec![
+        E::ContextSynchronized,
+        E::ContextPublished,
+        E::PullRequestLink,
+    ];
+    for situation in [PromotionSituation::First, PromotionSituation::Again] {
+        assert_eq!(ready_effects(&ready(situation)), three, "{situation:?}");
+    }
+    let mut direct = ready(PromotionSituation::First);
+    direct.pull_request = None;
+    direct.integration = PlannedIntegration::MergeCommit;
+    assert_eq!(
+        ready_effects(&direct),
+        vec![
+            E::ContextSynchronized,
+            E::PrimaryIntegrated,
+            E::PrimaryPublished
+        ]
+    );
+    // Its prepare learns that its answers name the document's branch.
+    let data = tempfile::tempdir().unwrap();
+    let _service = RepositoryService::open_at(data.path()).unwrap();
+    for situation in [PromotionSituation::First, PromotionSituation::Again] {
+        let binding = LifecycleBinding::<Fixed> {
+            root: PathBuf::from("/repository"),
+            id: ITEM.parse().unwrap(),
+            expected: None,
+            closure_exists: false,
+            branch_record: AtomicBool::new(false),
+            verb: PhantomData,
+        };
+        binding.note_observed(&Observed::Ready(Box::new(ready(situation))));
+        assert!(binding.names_branch());
+    }
+    // The held document's digest is its own.
+    let command = Command::DocumentPromote;
+    let held = digest_of(command, &Observed::PrimaryHoldsDocument);
+    for other in [
+        Observed::Ready(Box::new(ready(PromotionSituation::First))),
+        Observed::NothingToWithdraw,
+        Observed::PublicationRemoteRequired,
+        Observed::Blocked(Vec::new()),
+    ] {
+        assert_ne!(held, digest_of(command, &other));
+    }
+    assert_eq!(held, digest_of(command, &Observed::PrimaryHoldsDocument));
+    // Its prepare answers `already_applied` with nothing to confirm: no data,
+    // no recovery, no effect, as a withdraw with nothing to withdraw does.
+    for observed in [Observed::PrimaryHoldsDocument, Observed::NothingToWithdraw] {
+        let answer = unoffered_answer(&observed).expect("nothing to offer");
+        assert_eq!(answer.code, ResultCode::AlreadyApplied);
+        assert!(answer.data.is_none());
+        assert!(answer.recovery.is_empty());
+        assert!(answer.lifecycle_blocked.is_none());
+        assert!(!answer.local_change);
+        assert_eq!(answer.effects, Effects::not_requested());
+    }
+    assert_eq!(
+        unoffered_answer(&Observed::PublicationRemoteRequired).map(|answer| answer.code),
+        Some(ResultCode::PublicationRemoteRequired)
+    );
+    assert!(unoffered_answer(&Observed::Blocked(Vec::new())).is_none());
+    assert!(
+        unoffered_answer(&Observed::Ready(Box::new(ready(PromotionSituation::First)))).is_none()
+    );
 }

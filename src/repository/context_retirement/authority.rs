@@ -329,6 +329,15 @@ pub(in super::super) fn claim_scoped(
         {
             return Err(crate::repository::closure::record::hold_refusal(holder));
         }
+        // An unfinished pull-request promotion of a document owns its context
+        // the same way (Cycle 04 decision 13).
+        if let Some(holder) = crate::repository::promotion::record::pull_request_promotion_holder(
+            tx,
+            id,
+            &request.item_id,
+        )? {
+            return Err(crate::repository::closure::record::hold_refusal(holder));
+        }
         let blocked: bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR {} OR reconciliation_required!=0))", recovery::holds_remote_index_debt_sql(&call, "")), [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
@@ -431,6 +440,12 @@ pub(in super::super) fn claim_initial(
         // The backstop of `capture_target`: a record the closure fence holds
         // for the ticket (R-17, direct and branch alike) owns its context.
         if crate::repository::closure::record::written_closure_unfinished(tx, id, &request.item_id)?
+            || crate::repository::promotion::record::pull_request_promotion_holder(
+                tx,
+                id,
+                &request.item_id,
+            )?
+            .is_some()
         {
             return Err(recovery_required());
         }

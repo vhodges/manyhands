@@ -121,6 +121,7 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::ResolveCacheLoss(d) => fields(d),
         PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
         PreviewDetailsDto::PullRequestClosure(d) => pull_request_closure_details(d),
+        PreviewDetailsDto::PullRequestPromotion(d) => pull_request_promotion_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -181,6 +182,30 @@ fn pull_request_closure_details(
         ));
     }
     out
+}
+
+/// A pull-request promote's details: its fields, less its tag, then the link
+/// in the words of `PullRequestLink::human_line`, on a line of its own.
+fn pull_request_promotion_details(
+    details: &manyhands::repository::PullRequestPromotionPreviewDto,
+) -> String {
+    format!(
+        "{}{}\n",
+        fields_without(details, &["type", "pull_request"]),
+        field(&link_line(&details.pull_request))
+    )
+}
+
+/// The sentence that says where to open a pull request, from the link
+/// object a result carries: the forge is not part of it.
+pub(crate) fn link_line(link: &manyhands::repository::PullRequestDto) -> String {
+    manyhands::forge::PullRequestLink {
+        source: link.source.clone(),
+        target: link.target.clone(),
+        forge: None,
+        url: link.url.clone(),
+    }
+    .human_line()
 }
 
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {

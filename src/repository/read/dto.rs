@@ -562,12 +562,16 @@ pub struct ItemDto {
     /// differ from the list's until the index is refreshed. Null for a
     /// document and for a nonconforming entry.
     pub readiness: Option<ReadinessDto>,
-    /// The pull request link this clone gave a ticket: its branch, the
-    /// primary it targets, the forge and the address that opens it. Only a
-    /// complete read of a ticket (`show`, and `show --path`) fills it, and
-    /// only for a ticket this clone gave a link; it is null in every list
-    /// (where it reads "not read here"), for a document and for a ticket
-    /// that has none.
+    /// The pull request link this clone gave a ticket or a document: its
+    /// branch, the primary it targets, the forge and the address that opens
+    /// it. Only a complete read (`show`, and `show --path`) fills it. A
+    /// ticket's is filled when this clone gave it a link. A document's is
+    /// filled when it is read from its active context, this clone gave it a
+    /// link and the primary does not hold the document yet (a cheap check of
+    /// the content proof, which differs from promote's only with missing
+    /// objects, a document ID at two paths, a primary copy that does not
+    /// parse or a document moved on the primary). It is null in every list
+    /// (where it reads "not read here"), and for an item that has none.
     pub pull_request: Option<PullRequestDto>,
     /// Front matter keys Manyhands does not define, in key order at every
     /// depth. A ticket's `slug`, `parent` and `deps` are fields above and
