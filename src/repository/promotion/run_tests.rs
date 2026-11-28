@@ -1536,6 +1536,32 @@ fn exit_at(f: &Fixture, req: &PromoteDocumentRequest, point: usize) {
 /// request, sent again, finishes and indexes it, and the index reads
 /// current. One lost before the merge has moved nothing and marks nothing.
 /// With no publication remote, so a cleanup that reserves nothing.
+/// A direct promote's merge of the document's context into the primary is a
+/// move of the primary that records the document's arrival, at the merge
+/// commit, under the promote's operation.
+#[test]
+fn a_direct_promote_records_its_arrival() {
+    let f = Fixture::new();
+    assert_eq!(
+        crate::repository::item_merges::rows_for_test(&f.db()),
+        vec![]
+    );
+    let req = f.request();
+    let operation = req.operation_id;
+    f.run(req).unwrap();
+    let merge = f.primary();
+    assert_eq!(
+        crate::repository::item_merges::rows_for_test(&f.db()),
+        vec![(
+            "document".to_owned(),
+            ITEM.to_owned(),
+            merge.to_string(),
+            f.repo.find_commit(merge).unwrap().time().seconds(),
+            operation.to_string()
+        )]
+    );
+}
+
 #[test]
 fn a_promotion_lost_after_its_merge_leaves_the_primary_owed_until_it_is_sent_again() {
     let mut wrong = Vec::new();

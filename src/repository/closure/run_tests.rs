@@ -455,6 +455,31 @@ fn no_remote_closure_records_merges_and_cleans_with_the_status_kept() {
     f.assert_cleaned();
 }
 
+/// A direct close's merge of the ticket's closure into the primary is a move
+/// of the primary that records the ticket's arrival, at the merge commit, under
+/// the close's operation.
+#[test]
+fn a_direct_close_records_its_arrival() {
+    let f = Fixture::new();
+    assert_eq!(
+        crate::repository::item_merges::rows_for_test(&f.db()),
+        vec![]
+    );
+    let req = f.request();
+    outcome(f.close(&f.service, req.clone()).unwrap());
+    let merge = f.primary();
+    assert_eq!(
+        crate::repository::item_merges::rows_for_test(&f.db()),
+        vec![(
+            "ticket".to_owned(),
+            ID.to_owned(),
+            merge.to_string(),
+            f.repo.find_commit(merge).unwrap().time().seconds(),
+            req.operation_id.to_string()
+        )]
+    );
+}
+
 /// R-T1-4: the hook writes `closing` (with its checkpoint and `closed_at`)
 /// inside the lease; the runner must reload before recording `integrating`,
 /// or its stale snapshot would overwrite those fields.

@@ -664,3 +664,62 @@ fn a_crash_after_the_fast_forward_is_finished_by_the_next_poll_or_the_gate() {
         let _: Oid = squashed;
     }
 }
+
+/// An activation fast-forwards the local primary to the base, a move that
+/// records what it brought, under an operation the activation mints.
+#[test]
+fn a_setup_activation_records_its_arrivals() {
+    const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let world = World::new(SetupKind::Enable, OTHER, true);
+    // The base holds a document the local primary lacks, one commit below the
+    // squash that carries the setup.
+    let remote = world.remote();
+    let tip = remote.find_commit(world.remote_primary()).unwrap();
+    let blob = remote
+        .blob(
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: Fixture\n---\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut docs = remote.treebuilder(None).unwrap();
+    docs.insert("example.md", blob, 0o100644).unwrap();
+    let docs = docs.write().unwrap();
+    let mut tree = remote.treebuilder(Some(&tip.tree().unwrap())).unwrap();
+    tree.insert("docs", docs, 0o040000).unwrap();
+    let tree = remote.find_tree(tree.write().unwrap()).unwrap();
+    let signature = git2::Signature::new(
+        "Fixture",
+        "fixture@example.invalid",
+        &git2::Time::new(5000, 0),
+    )
+    .unwrap();
+    let arrived = remote
+        .commit(
+            Some(&format!("refs/heads/{PRIMARY}")),
+            &signature,
+            &signature,
+            "A document",
+            &tree,
+            &[&tip],
+        )
+        .unwrap();
+    done(world.squash(&merged(&world)));
+    assert_eq!(
+        crate::repository::item_merges::rows_for_test(&world.db()),
+        vec![]
+    );
+
+    let mut stub = world.stub();
+    let report = poll(&world, &mut stub).unwrap();
+    assert_eq!(report.outcome, SetupPollOutcome::Activated);
+    let rows = crate::repository::item_merges::rows_for_test(&world.db());
+    assert_eq!(rows.len(), 1);
+    let (kind, item, commit, merged_at, operation) = &rows[0];
+    assert_eq!(
+        (kind.as_str(), item.as_str(), commit.as_str(), *merged_at),
+        ("document", DOCUMENT, arrived.to_string().as_str(), 5000)
+    );
+    assert!(OperationId::parse(operation).is_ok());
+}

@@ -247,6 +247,32 @@ pub(super) fn fail_record_for_test(on: bool) {
     FAIL_RECORD.with(|fail| fail.set(on));
 }
 
+/// Every row of `item_merges` as (kind, item, commit, time, operation), in
+/// kind and item order, for a site's own test of what it recorded.
+#[cfg(test)]
+pub(super) fn rows_for_test(
+    connection: &rusqlite::Connection,
+) -> Vec<(String, String, String, i64, String)> {
+    connection
+        .prepare(
+            "SELECT kind, item_ulid, commit_oid, merged_at, operation_ulid
+               FROM item_merges ORDER BY kind, item_ulid",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
 /// Writes the arrivals in the caller's transaction: a row for each arrived
 /// item, replacing the item's earlier one unless that row's commit is not an
 /// ancestor of the new one (two sites that recorded one item out of order),

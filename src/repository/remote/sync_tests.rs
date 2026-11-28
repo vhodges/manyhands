@@ -20115,3 +20115,159 @@ mod primary_closure_in_a_ticket_context {
         );
     }
 }
+
+/// Every move of the local primary a synchronization makes records the items
+/// it brought, under the synchronization's operation: a restart that makes
+/// the move the stopped call recorded, and both stages of the ordered
+/// integration (a fast-forward to the incoming tip, and the merge commit of a
+/// divergence). The clean path of `synchronize_remote_observed_inner` runs
+/// only after a fetch over the transport, which no test below SSH reaches; its
+/// call is the one shared by every row here, `record_primary_arrivals`, whose
+/// gate on the target the last assertions pin.
+#[test]
+fn repo_sync_records_its_arrivals() {
+    const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    let document = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: Fixture\n---\n"
+    );
+    let rows = |fixture: &PassFixture| crate::repository::item_merges::rows_for_test(&fixture.db());
+    let row = |fixture: &PassFixture, commit: git2::Oid| {
+        let time = fixture
+            .repository()
+            .find_commit(commit)
+            .unwrap()
+            .time()
+            .seconds();
+        vec![(
+            "document".to_owned(),
+            DOCUMENT.to_owned(),
+            commit.to_string(),
+            time,
+            fixture.operation.to_string(),
+        )]
+    };
+
+    // The `FastForward` stage: the incoming tip descends from the local one.
+    let fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let incoming = child_path(
+        &repository,
+        fixture.local,
+        "docs/example.md",
+        document.as_bytes(),
+    );
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert_eq!(rows(&fixture), vec![]);
+    assert_eq!(fixture.integrate(incoming).unwrap(), incoming);
+    assert_eq!(rows(&fixture), row(&fixture, incoming));
+
+    // The `MergeRequired` stage: the two tips diverged, and the local merge
+    // commit holds the item.
+    let fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let incoming = child_path(
+        &repository,
+        fixture.base,
+        "docs/example.md",
+        document.as_bytes(),
+    );
+    fixture.fetch(incoming, 1);
+    fixture.append_window(1, incoming).unwrap();
+    assert_eq!(rows(&fixture), vec![]);
+    let merged = fixture.integrate(incoming).unwrap();
+    assert_eq!(
+        repository.find_commit(merged).unwrap().parent_ids().count(),
+        2
+    );
+    assert_eq!(rows(&fixture), row(&fixture, merged));
+
+    // A restart that makes the move a stopped call recorded and did not make.
+    let mut fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let local = fixture.local;
+    let incoming = child_file(&repository, fixture.base, "remote.txt", b"remote\n");
+    let held = repository.find_commit(local).unwrap().tree().unwrap();
+    let with_item = child_path(&repository, local, "docs/example.md", document.as_bytes());
+    let tree = repository.find_commit(with_item).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+    let candidate = repository
+        .commit(
+            None,
+            &signature,
+            &signature,
+            "merge",
+            &tree,
+            &[
+                &repository.find_commit(local).unwrap(),
+                &repository.find_commit(incoming).unwrap(),
+            ],
+        )
+        .unwrap();
+    fixture.fetch(incoming, 1);
+    fixture
+        .service
+        .prepare_synchronization_integration(
+            fixture.root.path(),
+            &fixture.owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: merge::IntegrationStage::Primary,
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: held.id(),
+                baseline_index_digest: index_digest(held.id()),
+            },
+        )
+        .unwrap();
+    fixture
+        .service
+        .begin_synchronization_integration_effect(
+            fixture.root.path(),
+            &fixture.owner,
+            0,
+            Some(candidate),
+        )
+        .unwrap();
+    assert_eq!(rows(&fixture), vec![]);
+    fixture.restart();
+    let mut evidence = fixture.record().sync_evidence;
+    assert_eq!(
+        fixture.reconcile(&mut evidence).unwrap().unwrap().oid,
+        candidate
+    );
+    assert_eq!(repository.head().unwrap().target(), Some(candidate));
+    assert_eq!(rows(&fixture), row(&fixture, candidate));
+
+    // The move of a ticket's or a document's branch is not the primary's.
+    let other = SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: DOCUMENT.parse().unwrap(),
+    };
+    let fixture = PassFixture::new("local.txt", b"local\n");
+    let repository = fixture.repository();
+    let incoming = child_path(
+        &repository,
+        fixture.local,
+        "docs/example.md",
+        document.as_bytes(),
+    );
+    record_primary_arrivals(
+        &fixture.service,
+        fixture.root.path(),
+        &other,
+        &fixture.operation,
+        fixture.local,
+        incoming,
+    );
+    assert_eq!(rows(&fixture), vec![]);
+    record_primary_arrivals(
+        &fixture.service,
+        fixture.root.path(),
+        &SynchronizationTarget::Primary,
+        &fixture.operation,
+        fixture.local,
+        incoming,
+    );
+    assert_eq!(rows(&fixture), row(&fixture, incoming));
+}

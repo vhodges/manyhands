@@ -555,6 +555,18 @@ impl<G: Fn(git2::Error) -> RepositoryError> Polling<'_, G> {
                 )
                 .map_err(&self.git)?;
         }
+        // The primary's move, made under the lease and now released, is a
+        // Manyhands fast-forward that records its arrivals; the activation has
+        // no operation of its own, so this one is minted for it.
+        if local != base.id() {
+            crate::repository::item_merges::record_after_move(
+                self.service,
+                self.root,
+                &OperationId::new(),
+                local,
+                base.id(),
+            );
+        }
         if !complete::finish_held(&self.held.lock, self.service, self.root)? {
             // In the way: the registration is not done, and the next poll or
             // gate finishes it.

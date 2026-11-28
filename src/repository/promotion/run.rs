@@ -856,6 +856,9 @@ fn promote_inner<L: Lifecycle>(
         return Ok(recovery::<L>(service, &root, &mut r));
     }
     r.set_base_oid(Some(evidence.base));
+    // The primary as the integration found it, read before `write_commit`
+    // consumes `prepared`: the move's `before`.
+    let old_primary = evidence.old_primary;
     r.set_integration_kind(Some(match evidence.kind {
         PlannedIntegration::MergeCommit => IntegrationKind::Merged,
         PlannedIntegration::AlreadyContained => IntegrationKind::AlreadyContained,
@@ -902,6 +905,18 @@ fn promote_inner<L: Lifecycle>(
     let integrated = L::apply(candidate)?;
     if integrated == integrate::Integrated::RecoveryRequired {
         return Ok(recovery::<L>(service, &root, &mut r));
+    }
+    // The integration's lease is released: record what the move of the primary
+    // brought, a failure of which is dropped. A context the primary already
+    // held moved nothing.
+    if let integrate::Integrated::Merged { oid } = integrated {
+        crate::repository::item_merges::record_after_move(
+            service,
+            &root,
+            &r.operation_id(),
+            old_primary,
+            oid,
+        );
     }
     // F4 may exit after the ref and before SQL. No post-effect error escapes.
     if boundary(service, &root, FailurePoint::AfterIntegrationRef).is_err() {

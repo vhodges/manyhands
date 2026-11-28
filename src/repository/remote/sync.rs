@@ -3573,6 +3573,14 @@ fn reconcile_pending_candidate(
             mark_local_update(service, root, target)?;
             fast_forward(&repository, &branch, head, candidate)?;
             let _ = mark_local_update(service, root, target);
+            record_primary_arrivals(
+                service,
+                root,
+                target,
+                &owner.operation_id(),
+                head,
+                candidate,
+            );
         }
     } else if head != candidate {
         return Err(SynchronizationError::RecoveryRequired);
@@ -3824,6 +3832,14 @@ fn integrate_divergence(
                 mark_local_update(service, root, target)?;
                 fast_forward(&target_repository, &branch, local, incoming)?;
                 let _ = mark_local_update(service, root, target);
+                record_primary_arrivals(
+                    service,
+                    root,
+                    target,
+                    &owner.operation_id(),
+                    local,
+                    incoming,
+                );
                 let tree = target_repository
                     .find_commit(incoming)
                     .map_err(|_| SynchronizationError::RecoveryRequired)?
@@ -3917,6 +3933,14 @@ fn integrate_divergence(
                     mark_local_update(service, root, target)?;
                     fast_forward(&repository, &branch, local, candidate)?;
                     let _ = mark_local_update(service, root, target);
+                    record_primary_arrivals(
+                        service,
+                        root,
+                        target,
+                        &owner.operation_id(),
+                        local,
+                        candidate,
+                    );
                     service.observe_synchronization_integration_effect_in_window(
                         root,
                         owner,
@@ -7204,6 +7228,14 @@ impl RepositoryService {
                     mark_local_update(self, &root, &request.target)?;
                     fast_forward(&fresh, selected.remote_ref(), local, integration.final_oid)?;
                     let _ = mark_local_update(self, &root, &request.target);
+                    record_primary_arrivals(
+                        self,
+                        &root,
+                        &request.target,
+                        &owner.operation_id(),
+                        local,
+                        integration.final_oid,
+                    );
                     updated = vec![hand_off_context(&request.target)];
                     local_target(self, &root, &config.primary_branch, &request.target)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -7937,6 +7969,21 @@ fn hand_off_context(target: &SynchronizationTarget) -> ContextKey {
     match target {
         SynchronizationTarget::Primary => ContextKey::Primary,
         SynchronizationTarget::Context { item_id, .. } => ContextKey::Item(item_id.clone()),
+    }
+}
+/// Records the arrivals of a synchronization's move of the local primary from
+/// `before` to `after`, once it has been made; a move of a ticket's or a
+/// document's branch is not the primary's and records nothing.
+fn record_primary_arrivals(
+    service: &RepositoryService,
+    root: &Path,
+    target: &SynchronizationTarget,
+    operation: &OperationId,
+    before: git2::Oid,
+    after: git2::Oid,
+) {
+    if matches!(target, SynchronizationTarget::Primary) {
+        crate::repository::item_merges::record_after_move(service, root, operation, before, after);
     }
 }
 /// Marks the context a synchronization of `target` updates dirty, as a
