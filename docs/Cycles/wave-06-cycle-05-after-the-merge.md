@@ -17,6 +17,7 @@ Revision history:
 - Revision 3 (Cycle document `b8493b4b`, design `67b86e29`, plan `630859c1`): a scoped re-review (0 Blocking, 9 Important, 8 Minor) and an adversarial round (2 Blocking, 11 Important, 7 Minor) of revision 2, and the owner's decision 11.
 - Revision 4: a third round on revision 3 (scoped re-review: 0 Blocking, 9 Important, 9 Minor; adversarial: 2 Blocking, 5 Important, 6 Minor) and the owner's decisions 12 to 14. Three rounds found blockers in the same mechanism, `context cleanup`'s stops, abandon and configuration fence, so revision 4 states them as required outcomes (design CC1 to CC31) and leaves the rest of the mechanism to Task 7's test-first checkpoint, as the planning skill directs. Not independently reviewed.
 - Revision 4 (Cycle document `9a2502b5`, design `481de52d`, plan `4c226e73`) was approved by the owner on 2026-11-28, without a further round (decision 15). This approval edit changes only the status lines, this history, decision 15 and the Review Record.
+- Execution, 2026-11-28: the owner's decision 16 and the known limit K-22, from Task 7's design checkpoint. Not independently reviewed as a document; the checkpoint it comes from had an independent check (execution ledger, Task 7).
 
 ## Purpose And Authority
 
@@ -115,7 +116,7 @@ Nothing above has been run; every status is planned.
 
 ## Product-Owner Decisions
 
-Decisions 1 to 6 are of 2026-11-27, and 7 to 15 of 2026-11-28.
+Decisions 1 to 6 are of 2026-11-27, and 7 to 16 of 2026-11-28.
 
 1. **One new confirmed verb.** `context cleanup --id <ID> --prepare/--confirm` covers both the deletion of a surviving remote branch and the confirmed manual cleanup. `context retire` and the poll's retirement children stay unconfirmed. Chosen over a confirmed mode of `context retire`, whose confirmation is set per command and would change the poll's `--retire-completed` children, and over two verbs.
 2. **Every Manyhands fast-forward of the local primary records `merged_at`.** The poll's, `repo sync`'s (pull-only and direct) and a direct close's or promote's own integration, through one function over the range. A person's own `git pull` at the root records nothing (K-1). Chosen over the poll's fast-forward and the direct integration only, under which an "Update <primary>" before a poll would lose the range, and over a stored watermark checked at every index observation, which departs further from the RFC and touches the index refresh.
@@ -132,6 +133,7 @@ Decisions 1 to 6 are of 2026-11-27, and 7 to 15 of 2026-11-28.
 13. **Abandon until the delete was observed.** `operation abandon` is allowed at every step up to and including a delete that may have been sent, and refused once the delete was observed, because the same request can always finish the rest locally, with no connection, also after a fence (decision 12). Chosen over abandon at every step, which after the local removal began would leave a half-removed context that no verb finishes.
 14. **The cleanup is refused while any setup is pending,** first-time or a change, as close and promote are; a change cannot begin while a cleanup is unfinished, so a cleanup waits for a pending change to merge or be cancelled. Chosen over refusing it for a first-time setup only, under which a change that activated mid-cleanup would change its remote underneath it.
 15. **Approval** (2026-11-28). The owner approved the three documents at revision 4 without a further review round; approved the named test edits E-1 to E-23; chose subagent-driven execution, with Sonnet 5.5 at high effort as the implementer and the most capable model for Task 7's design checkpoint and the final review, the orchestrator approving Task 7's checkpoint and posting it on the ticket before any code; and authorized implementation.
+16. **A changed configuration after the delete is a known limit** (2026-11-28, at Task 7's design checkpoint, which found that a cleanup's local completion requires the registry's publication remote and primary branch to still match the cleanup's). After a cleanup's remote delete was observed, or once a cleanup with no publication remote began its local removal, a change of the registry's remote or primary (a hand edit of the configuration followed by any poll, which rewrites the plan; `remote select`; `remote remove`) leaves the same request answering `recovery_required`, naming the cause, until the configuration is restored, after which it finishes; abandon stays refused there (decision 13), and the repository stays held as K-12 says (K-22). Chosen over relaxing `retire_context`'s check for cleanup records, which would retire a context under a remote the repository no longer uses, and over allowing abandon there, which would leave a possibly half-removed context for a later `context retire` that planning had not verified.
 
 ## Known Limits
 
@@ -156,6 +158,7 @@ Decisions 1 to 6 are of 2026-11-27, and 7 to 15 of 2026-11-28.
 - K-19: The poll's warning line reads the checkout when the CLI renders the answer, so it can disagree with the primary's disposition when the checkout changed in between, and a replayed answer prints the checkout as it is at replay.
 - K-20: A re-run at `remote_deleting` that finds the branch gone answers `deleted`, also when the forge deleted it before this cleanup's delete reached it.
 - K-21: While a configuration fence interrupts a cleanup's reservation, the repository's writes, synchronizations and polls are no longer held by it (CC24), and its consent re-check and guarded delete are what protect the branch; its holds of the item's prepares and retirements stay (CC3, CC28).
+- K-22: After a cleanup's remote delete was observed, or once a cleanup with no publication remote began its local removal, a change of the registry's publication remote or primary branch leaves the cleanup answering `recovery_required` until the configuration is restored (decision 16).
 
 ## Open Questions
 
@@ -195,5 +198,6 @@ None at this revision.
 | Review round 3, adversarial | A pending setup change can activate mid-cleanup | decision | Refused for any pending setup (decision 14, CC4) | `setup/poll.rs` about 504-560 |
 | Review round 3 (both) | An abandon before any reservation races a live run | ruling | The run ends its own reservation when its record is terminal (design R-40, CC31) | `remote/reservation.rs` about 1599-1790 |
 | Three rounds | Blockers in the same mechanism each round | settled | Required outcomes CC1 to CC31 and Task 7's test-first checkpoint, with stop-for-owner triggers (design R-19, Part E item 8) | The planning skill, step 7 |
+| Execution, Task 7 checkpoint | A cleanup's local completion needs the registry's remote and primary to match the cleanup's, which a changed configuration breaks after the delete | decision | A known limit (decision 16, K-22) | Designer and checker, 2026-11-28; `promotion/lifecycle_record.rs` about 991, `cleanup.rs` `retire_context`, `remote/poll.rs` about 1822 |
 | Approval | Revision 4 presented with no independent review of it | decision | Approved without another round, with the named edits, the execution method and implementation (decision 15) | Owner, 2026-11-28 |
 | Review round 2, adversarial | A stale tracking ref of a deleted branch jammed the local retirement | correction | `R` is the tracking ref's value whenever it exists (design CC7, CC14) | `transport/remote.rs` about 834; `cleanup.rs` about 596-616 |
