@@ -1528,14 +1528,6 @@ fn exit_at(f: &Fixture, req: &PromoteDocumentRequest, point: usize) {
         "boundary {point}"
     );
 }
-/// The final review's F-1 (Review Focus 2, decision 8): a promotion lost
-/// once its merge has moved main, and before its exit's index step, leaves
-/// the primary reading owed an indexing, so `index status` reads stale: the
-/// merge marks the primary before it moves main, under the integration's
-/// lease, and nothing between the merge and the exit stores it. The same
-/// request, sent again, finishes and indexes it, and the index reads
-/// current. One lost before the merge has moved nothing and marks nothing.
-/// With no publication remote, so a cleanup that reserves nothing.
 /// A direct promote's merge of the document's context into the primary is a
 /// move of the primary that records the document's arrival, at the merge
 /// commit, under the promote's operation.
@@ -1562,6 +1554,14 @@ fn a_direct_promote_records_its_arrival() {
     );
 }
 
+/// The final review's F-1 (Review Focus 2, decision 8): a promotion lost
+/// once its merge has moved main, and before its exit's index step, leaves
+/// the primary reading owed an indexing, so `index status` reads stale: the
+/// merge marks the primary before it moves main, under the integration's
+/// lease, and nothing between the merge and the exit stores it. The same
+/// request, sent again, finishes and indexes it, and the index reads
+/// current. One lost before the merge has moved nothing and marks nothing.
+/// With no publication remote, so a cleanup that reserves nothing.
 #[test]
 fn a_promotion_lost_after_its_merge_leaves_the_primary_owed_until_it_is_sent_again() {
     let mut wrong = Vec::new();

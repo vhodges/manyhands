@@ -349,15 +349,70 @@ fn primary_current_fast_forward_local_ahead() -> Result<(), FixtureError> {
     );
     assert_eq!(w.server.receive_updates().len(), n);
     let advanced = advance(&w.peer, "refs/heads/main", "peer-advance")?;
+    // E-33: the peer's tip also adds a managed document, so the fast-forward
+    // below brings an item and records its arrival.
+    let advanced = {
+        const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+        let parent = fixed(w.peer.find_commit(advanced))?;
+        let blob = fixed(w.peer.blob(
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOCUMENT}\ntitle: Fixture\n---\n"
+            )
+            .as_bytes(),
+        ))?;
+        let mut docs = fixed(w.peer.treebuilder(None))?;
+        fixed(docs.insert("example.md", blob, 0o100644))?;
+        let docs = fixed(docs.write())?;
+        let mut tree = fixed(w.peer.treebuilder(Some(&fixed(parent.tree())?)))?;
+        fixed(tree.insert("docs", docs, 0o040000))?;
+        let tree = fixed(w.peer.find_tree(fixed(tree.write())?))?;
+        let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+        let new = fixed(
+            w.peer
+                .commit(None, &sig, &sig, "peer document", &tree, &[&parent]),
+        )?;
+        fixed(w.peer.checkout_tree(
+            &fixed(w.peer.find_object(new, None))?,
+            Some(git2::build::CheckoutBuilder::new().safe()),
+        ))?;
+        fixed(
+            w.peer
+                .reference("refs/heads/main", new, true, "owned fixture advance"),
+        )?;
+        new
+    };
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
     let n = w.server.receive_updates().len();
+    let request = w.primary();
+    let operation = request.operation_id;
     outcome(
-        fixed(w.sync(w.primary()))?,
+        fixed(w.sync(request))?,
         false,
         SynchronizationTarget::Primary,
         advanced,
     );
     assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, advanced);
+    // The fast-forward of the local primary recorded the document's arrival at
+    // the commit that added it, under this synchronization's operation.
+    let rows: Vec<(String, String, String, String)> = {
+        let db = w.db()?;
+        let mut statement = fixed(db.prepare(
+            "SELECT kind, item_ulid, commit_oid, operation_ulid FROM item_merges ORDER BY kind, item_ulid",
+        ))?;
+        let rows = fixed(statement.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        }))?;
+        fixed(rows.collect::<Result<_, _>>())?
+    };
+    assert_eq!(
+        rows,
+        vec![(
+            "document".to_owned(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_owned(),
+            advanced.to_string(),
+            operation.to_string()
+        )]
+    );
     assert_eq!(
         fixed(std::fs::read(w.root.join("peer-advance")))?,
         b"peer-advance"
