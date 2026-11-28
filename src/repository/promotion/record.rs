@@ -33,27 +33,10 @@ impl PromotionStep {
     pub(in super::super) fn terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Abandoned | Self::Superseded)
     }
-    /// A cleanup record's graph (R-28). With a remote, `confirmed` goes to the
-    /// delete (`remote_deleting`) or past it when there is none to make
-    /// (`remote_deleted`); without one it goes to the worktree. It may be
-    /// abandoned before the removal begins. It is never superseded, and
-    /// `complete` is written by the completion's own SQL.
+    /// A cleanup record's graph (R-28), which `parent::cleanup_permits` holds
+    /// for both tables.
     pub(in super::super) fn cleanup_permits(self, next: Self, remote: bool) -> bool {
-        use PromotionStep::*;
-        if self.terminal() {
-            return false;
-        }
-        self == next
-            || match (self, next) {
-                (Confirmed, Abandoned)
-                | (WorktreeRemoving, WorktreeRemoved)
-                | (WorktreeRemoved, BranchDeleted) => true,
-                (Confirmed, RemoteDeleting | RemoteDeleted)
-                | (RemoteDeleting, RemoteDeleted | Abandoned)
-                | (RemoteDeleted, WorktreeRemoving) => remote,
-                (Confirmed, WorktreeRemoving) => !remote,
-                _ => false,
-            }
+        parent::cleanup_permits(self.into(), next.into(), remote)
     }
     /// The step graph of a record in `mode`. A pull-request promotion
     /// synchronizes its context and finishes: it never integrates, publishes
@@ -613,36 +596,19 @@ fn validate_cleanup(r: &PromotionRecord) -> Result<(), RepositoryError> {
                 | PublicationPending
                 | Superseded
         )
-        || r.primary_branch.as_deref().is_none_or(|branch| {
-            branch.is_empty()
-                || branch.len() > 255
-                || r.remote_name.as_deref().is_some_and(|remote| {
-                    crate::repository::RemoteRefPlan::from_configuration(remote, branch).is_err()
-                })
+        || (parent::CleanupFacts {
+            primary_branch: r.primary_branch.as_deref(),
+            remote_name: r.remote_name.as_deref(),
+            remote_branch: r.remote_branch,
+            remote_context_oid: r.remote_context_oid,
+            step: r.step.into(),
+            foreign_refusal: r
+                .refusal
+                .as_ref()
+                .is_some_and(|refusal| *refusal != Refusal::ExternalChange),
+            stopped: r.cleanup.is_some(),
         })
-        // The outcome comes with the step after the delete, whole.
-        || r.remote_branch.is_some()
-            != matches!(
-                r.step,
-                RemoteDeleted | WorktreeRemoving | WorktreeRemoved | BranchDeleted | Complete
-            )
-        || r.remote_branch.is_some_and(|outcome| {
-            (outcome == RemoteBranchOutcome::Unneeded) != r.remote_context_oid.is_none()
-        })
-        || r.step == RemoteDeleting && r.remote_context_oid.is_none()
-        // Only a cleanup that ended refuses, and only for an external change.
-        || r.refusal.as_ref().is_some_and(|refusal| *refusal != Refusal::ExternalChange)
-        // A stop is a cleanup's own, at a step that can stop.
-        || r.cleanup.is_some()
-            && !matches!(
-                r.step,
-                Confirmed
-                    | RemoteDeleting
-                    | RemoteDeleted
-                    | WorktreeRemoving
-                    | WorktreeRemoved
-                    | BranchDeleted
-            )
+        .broken()
     {
         return Err(state::recovery_required());
     }
@@ -1021,20 +987,15 @@ pub(in super::super) fn save_record(
     tx.execute("UPDATE document_promotions SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12),remote_branch=?13 WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now(),r.remote_branch.map(RemoteBranchOutcome::name)]).map_err(|_|state::recovery_required())?;
     Ok(())
 }
-/// Whether a save keeps a record's stored outcome of the remote delete, or
-/// writes it: a cleanup record's goes from none to a value once, with the step
-/// that follows the delete (`confirmed | remote_deleting → remote_deleted`), or
-/// with `confirmed → worktree_removing` when there is no remote, and never
-/// changes after. Every other record keeps none.
+/// Whether a save keeps the stored outcome of the remote delete or writes it
+/// as `parent::remote_branch_kept_or_written` allows.
 fn remote_branch_kept_or_written(old: &PromotionRecord, new: &PromotionRecord) -> bool {
-    use PromotionStep::*;
-    old.remote_branch == new.remote_branch
-        || old.action == PromotionAction::Cleanup
-            && old.remote_branch.is_none()
-            && (matches!(old.step, Confirmed | RemoteDeleting) && new.step == RemoteDeleted
-                || old.step == Confirmed
-                    && new.step == WorktreeRemoving
-                    && new.remote_name.is_none())
+    parent::remote_branch_kept_or_written(
+        (old.remote_branch, new.remote_branch),
+        (old.step.into(), new.step.into()),
+        old.action == PromotionAction::Cleanup,
+        new.remote_name.is_none(),
+    )
 }
 
 /// What a finished pull-request promotion tells the link record, which the

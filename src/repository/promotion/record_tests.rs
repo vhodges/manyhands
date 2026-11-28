@@ -1559,13 +1559,14 @@ const ITEMS: [&str; 5] = [
     "01DX5ZZKBKACTAV9WEVGEMMVRZ",
     "01EX5ZZKBKACTAV9WEVGEMMVRZ",
 ];
-const ALL_STEPS: [PromotionStep; 13] = [
+const ALL_STEPS: [PromotionStep; 14] = [
     PromotionStep::Confirmed,
     PromotionStep::ContextSynchronized,
     PromotionStep::Integrating,
     PromotionStep::Integrated,
     PromotionStep::Published,
     PromotionStep::PublicationPending,
+    PromotionStep::RemoteDeleting,
     PromotionStep::RemoteDeleted,
     PromotionStep::WorktreeRemoving,
     PromotionStep::WorktreeRemoved,
@@ -2425,6 +2426,16 @@ fn pull_request_promotion_steps_and_checks() {
                 expected,
                 "pull request {from:?} -> {to:?}"
             );
+        }
+    }
+    // `remote_deleting` is a cleanup record's step: neither mode's graph
+    // enters it or leaves it.
+    for step in ALL_STEPS {
+        for mode in [Integration::Direct, Integration::PullRequest] {
+            for remote in [true, false] {
+                assert!(!step.permits(RemoteDeleting, remote, mode) || step == RemoteDeleting);
+                assert!(!RemoteDeleting.permits(step, remote, mode) || step == RemoteDeleting);
+            }
         }
     }
     for (from, to, direct) in [
@@ -3382,10 +3393,40 @@ fn cleanup_records_rebuild_once() {
         insert_row(&tx, &r).unwrap();
         old.push((r.operation_id, Integration::PullRequest, step));
     }
-    assert_eq!(old.len(), 17);
+    // A pull-request row that keeps its re-run columns.
+    let mut rerun = pull_request(PromotionStep::Confirmed, &doc_n(30));
+    rerun.accepted_context_oid = Some(git2::Oid::from_str(&"2".repeat(40)).unwrap());
+    rerun.context_pushed = true;
+    insert_row(&tx, &rerun).unwrap();
+    old.push((
+        rerun.operation_id,
+        Integration::PullRequest,
+        PromotionStep::Confirmed,
+    ));
+    assert_eq!(old.len(), 18);
+    // Every step is held by an old row.
+    for step in ALL_STEPS
+        .into_iter()
+        .filter(|s| *s != PromotionStep::RemoteDeleting)
+    {
+        assert!(old.iter().any(|(_, _, held)| *held == step), "{step:?}");
+    }
     tx.commit().unwrap();
     let before = dump(&db, V3_COLUMNS);
-    assert_eq!(before.len(), 17);
+    assert_eq!(before.len(), 18);
+    // The columns that carry values survive the rebuild (byte for byte, by
+    // the dump below): they are set on the rows that hold them.
+    let held = |db: &Connection, column: &str| -> i64 {
+        db.query_row(
+            &format!("SELECT count(*) FROM document_promotions WHERE {column} IS NOT NULL"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(held(&db, "answer_code"), 2);
+    assert_eq!(held(&db, "accepted_context_oid"), 1);
+    assert_eq!(held(&db, "consented_context_oid"), 5);
     assert_eq!(dump(&db, "*")[0].len(), 29);
     assert_eq!(V3_COLUMNS.split(',').count(), 29);
     // A V3 table has no `cleanup` action, and no `remote_deleting` step.

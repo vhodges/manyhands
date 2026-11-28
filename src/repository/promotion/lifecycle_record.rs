@@ -14,7 +14,7 @@ use crate::{
         cleanup::{self, RetirementEvidence},
         closure::record::{ClosureRecord, ClosureStep},
         lifecycle_contexts, mark_registered_lifecycle_contexts_dirty,
-        promotion::record::PromotionRecord,
+        promotion::record::{PromotionRecord, RemoteBranchOutcome},
         remote::{
             reservation::{self, RemoteReservation},
             state,
@@ -63,6 +63,102 @@ impl LifecycleKind {
 impl ParentStep {
     pub(in super::super) fn terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Abandoned | Self::Superseded)
+    }
+}
+
+/// A cleanup record's step graph (R-28), over the shared step view, for both
+/// tables. With a remote, `confirmed` goes to the delete (`remote_deleting`) or
+/// past it when there is none to make (`remote_deleted`); without one it goes
+/// to the worktree. It may be abandoned before the removal begins. It is never
+/// superseded, and `complete` is written by the completion's own SQL. Each
+/// table's step type refuses its own extra steps before it asks.
+pub(in super::super) fn cleanup_permits(from: ParentStep, next: ParentStep, remote: bool) -> bool {
+    use ParentStep::*;
+    if from.terminal() {
+        return false;
+    }
+    from == next
+        || match (from, next) {
+            (Confirmed, Abandoned)
+            | (WorktreeRemoving, WorktreeRemoved)
+            | (WorktreeRemoved, BranchDeleted) => true,
+            (Confirmed, RemoteDeleting | RemoteDeleted)
+            | (RemoteDeleting, RemoteDeleted | Abandoned)
+            | (RemoteDeleted, WorktreeRemoving) => remote,
+            (Confirmed, WorktreeRemoving) => !remote,
+            _ => false,
+        }
+}
+
+/// Whether a save keeps a record's stored outcome of the remote delete, or
+/// writes it: a cleanup record's goes from none to a value once, with the step
+/// that follows the delete (`confirmed | remote_deleting → remote_deleted`), or
+/// with `confirmed → worktree_removing` when there is no remote
+/// (`remote_removed` is the new record's), and never changes after. Every other
+/// record keeps none.
+pub(in super::super) fn remote_branch_kept_or_written(
+    (old, new): (Option<RemoteBranchOutcome>, Option<RemoteBranchOutcome>),
+    (from, to): (ParentStep, ParentStep),
+    cleanup: bool,
+    no_remote: bool,
+) -> bool {
+    use ParentStep::*;
+    old == new
+        || cleanup
+            && old.is_none()
+            && (matches!(from, Confirmed | RemoteDeleting) && to == RemoteDeleted
+                || from == Confirmed && to == WorktreeRemoving && no_remote)
+}
+
+/// What a cleanup record's validation reads past the columns its table
+/// checks for itself: the primary branch, the stored outcome of the remote
+/// delete and the refusal and stop that only a cleanup's own steps may carry.
+pub(in super::super) struct CleanupFacts<'a> {
+    pub primary_branch: Option<&'a str>,
+    pub remote_name: Option<&'a str>,
+    pub remote_branch: Option<RemoteBranchOutcome>,
+    pub remote_context_oid: Option<Oid>,
+    pub step: ParentStep,
+    /// A refusal other than an external change.
+    pub foreign_refusal: bool,
+    /// A stop (`cleanup_category`) is set.
+    pub stopped: bool,
+}
+impl CleanupFacts<'_> {
+    /// Whether the facts break a cleanup record's rules: the same for both
+    /// tables, so each `validate_cleanup` only adds its own columns and steps.
+    pub(in super::super) fn broken(&self) -> bool {
+        use ParentStep::*;
+        self.primary_branch.is_none_or(|branch| {
+            branch.is_empty()
+                || branch.len() > 255
+                || self.remote_name.is_some_and(|remote| {
+                    crate::repository::RemoteRefPlan::from_configuration(remote, branch).is_err()
+                })
+        })
+            // The outcome comes with the step after the delete, whole.
+            || self.remote_branch.is_some()
+                != matches!(
+                    self.step,
+                    RemoteDeleted | WorktreeRemoving | WorktreeRemoved | BranchDeleted | Complete
+                )
+            || self.remote_branch.is_some_and(|outcome| {
+                (outcome == RemoteBranchOutcome::Unneeded) != self.remote_context_oid.is_none()
+            })
+            || self.step == RemoteDeleting && self.remote_context_oid.is_none()
+            // Only a cleanup that ended refuses, and only for an external change.
+            || self.foreign_refusal
+            // A stop is a cleanup's own, at a step that can stop.
+            || self.stopped
+                && !matches!(
+                    self.step,
+                    Confirmed
+                        | RemoteDeleting
+                        | RemoteDeleted
+                        | WorktreeRemoving
+                        | WorktreeRemoved
+                        | BranchDeleted
+                )
     }
 }
 

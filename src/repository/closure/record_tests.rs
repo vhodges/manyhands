@@ -337,9 +337,27 @@ fn steps_permit_only_designed_transitions() {
         );
         assert!(!step.permits(Retired, true, Some(ClosureKind::Record)) || step == Retired);
     }
+    // `remote_deleting` is a cleanup record's step: no direct or branch graph
+    // enters it or leaves it, and the cleanup action has no branch graph.
+    for step in ALL_STEPS {
+        for remote in [true, false] {
+            for kind in [None, Some(ClosureKind::Record), Some(ClosureKind::Existing)] {
+                assert!(!step.permits(RemoteDeleting, remote, kind) || step == RemoteDeleting);
+                assert!(!RemoteDeleting.permits(step, remote, kind) || step == RemoteDeleting);
+            }
+        }
+        for action in [
+            ClosureAction::Close,
+            ClosureAction::Withdraw,
+            ClosureAction::NewBranch,
+        ] {
+            assert!(!step.branch_permits(RemoteDeleting, action) || step == RemoteDeleting);
+            assert!(!RemoteDeleting.branch_permits(step, action) || step == RemoteDeleting);
+        }
+    }
 }
 
-const ALL_STEPS: [ClosureStep; 15] = [
+const ALL_STEPS: [ClosureStep; 16] = [
     ClosureStep::Confirmed,
     ClosureStep::ContextSynchronized,
     ClosureStep::Closing,
@@ -347,6 +365,7 @@ const ALL_STEPS: [ClosureStep; 15] = [
     ClosureStep::Integrated,
     ClosureStep::Published,
     ClosureStep::PublicationPending,
+    ClosureStep::RemoteDeleting,
     ClosureStep::RemoteDeleted,
     ClosureStep::WorktreeRemoving,
     ClosureStep::WorktreeRemoved,
@@ -366,6 +385,7 @@ fn closure_step_round_trips_through_parent_view() {
         ParentStep::Integrated,
         ParentStep::Published,
         ParentStep::PublicationPending,
+        ParentStep::RemoteDeleting,
         ParentStep::RemoteDeleted,
         ParentStep::WorktreeRemoving,
         ParentStep::WorktreeRemoved,
@@ -2780,6 +2800,21 @@ fn cleanup_records_rebuild_once() {
         ("base_oid", &o2[..]),
     ];
     let withdraw = [&existing[..], &[("withdraw_oid", &o5[..])]].concat();
+    // A finished branch record keeps its stored answer and the consented
+    // head, as a refused one keeps its answer beside its refusal.
+    let answered = [
+        &existing[..],
+        &[
+            ("answer_code", "'existing'"),
+            ("consented_context_oid", &o3[..]),
+        ],
+    ]
+    .concat();
+    let refused_with_answer = [
+        ("refusal_category", "'external_change'"),
+        ("answer_code", "'external_change'"),
+        ("consented_context_oid", &o4[..]),
+    ];
     let built = [
         ("closure_kind", "'record'"),
         ("closed_at", ts),
@@ -2803,6 +2838,9 @@ fn cleanup_records_rebuild_once() {
         ("close", "publication_pending", &existing[..]),
         ("withdraw", "closing", &withdraw[..]),
         ("new_branch", "confirmed", &built[..]),
+        ("new_branch", "retired", &built[..]),
+        ("close", "complete", &answered[..]),
+        ("close", "abandoned", &refused_with_answer[..]),
     ]
     .into_iter()
     .enumerate()
@@ -2819,7 +2857,14 @@ fn cleanup_records_rebuild_once() {
             ClosureStep::parse(step).unwrap(),
         ));
     }
-    assert_eq!(old.len(), 17);
+    assert_eq!(old.len(), 20);
+    // Every step is held by an old row, `retired` included.
+    for step in ALL_STEPS
+        .into_iter()
+        .filter(|s| *s != ClosureStep::RemoteDeleting)
+    {
+        assert!(old.iter().any(|(_, _, _, held)| *held == step), "{step:?}");
+    }
     tx.commit().unwrap();
     let dump = |db: &Connection, columns: &str| -> Vec<Vec<rusqlite::types::Value>> {
         let mut q = db
@@ -2838,7 +2883,19 @@ fn cleanup_records_rebuild_once() {
         .unwrap()
     };
     let before = dump(&db, V3_COLUMNS);
-    assert_eq!(before.len(), 17);
+    assert_eq!(before.len(), 20);
+    // The two columns that carry values survive the rebuild (byte for byte,
+    // by the dump below): they are set on the rows that hold them.
+    let held = |db: &Connection, column: &str| -> i64 {
+        db.query_row(
+            &format!("SELECT count(*) FROM ticket_closures WHERE {column} IS NOT NULL"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(held(&db, "answer_code"), 2);
+    assert_eq!(held(&db, "consented_context_oid"), 2);
     assert_eq!(dump(&db, "*")[0].len(), 32);
     assert_eq!(V3_COLUMNS.split(',').count(), 32);
     // A V3 table has no `cleanup` action, and no `remote_deleting` step.
