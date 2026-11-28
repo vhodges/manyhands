@@ -1185,7 +1185,17 @@ fn discoverable() -> Result<(), FixtureError> {
         assert_eq!(listed(ClosureFilter::All)?.len(), 1);
         let shown = fixed(side.service.show_item(&repository, &item()))?;
         assert_eq!(shown.status.as_deref(), Some("open"));
-        assert_eq!(shown.closure, Some(closure));
+        // The close recorded its arrival on A and the poll on B, which only a
+        // complete read gives; a list never does.
+        let merged_at = shown.closure.as_ref().and_then(|c| c.merged_at.clone());
+        assert!(merged_at.is_some());
+        assert_eq!(
+            shown.closure,
+            Some(ClosureDto {
+                merged_at,
+                ..closure
+            })
+        );
     }
     p.privacy()
 }
